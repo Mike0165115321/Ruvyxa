@@ -237,6 +237,71 @@ adapter แบบ serverless ทุกตัวใช้ลำดับเดี
 
 ## Troubleshooting
 
+### CSS / รูป / JS ขึ้น 404 บน Netlify (หน้าไม่มีสไตล์)
+
+```
+Failed to load resource: the server responded with a status of 404 ()
+```
+
+**อาการ** หน้าเว็บขึ้นเป็นตัวหนังสือเปล่า ๆ ไม่มีสไตล์ รูปแตก และ console แจ้ง 404 ของไฟล์ `.css`,
+`.png`, และ `/__ruvyxa/client/*.js` แต่ตัว HTML โหลดปกติ
+
+**สาเหตุ** **ไม่ได้ตั้ง publish directory** — ไฟล์ static ของ Ruvyxa (CSS, รูป, hashed client
+bundle) ถูกเขียนไว้ที่ `.ruvyxa/deploy/netlify/publish` ส่วน SSR/API function
+ถูกหยิบไปใช้อัตโนมัติผ่าน Frameworks API (`.netlify/v1/`) แต่ **Frameworks API ตั้ง publish
+directory ไม่ได้** — Netlify เลือก publish directory จาก `netlify.toml` (หรือ dashboard) _ก่อน_ จะ
+build ถ้าไม่มีตัวชี้ไปที่ output Netlify จะไม่เสิร์ฟ static เลย ทุก request ของ asset จะตกไปที่
+function แล้ว function ตอบ 404 (function เสิร์ฟ route ไม่ได้เสิร์ฟไฟล์) เลยเป็นเหตุผลว่าทำไม HTML
+ขึ้น (function ทำงาน) แต่ static หายหมด
+
+**วิธีแก้ — เลือกอย่างใดอย่างหนึ่ง:**
+
+- **Dashboard** (ไม่ต้อง commit ไฟล์): Site configuration → Build & deploy → ตั้ง **Publish
+  directory** เป็น `.ruvyxa/deploy/netlify/publish` แล้ว redeploy
+- **Config แบบ commit**: ใส่ `netlifyAdapter({ projectConfig: true })` ใน `ruvyxa.config.ts` รัน
+  `npx --no-install ruvyxa build` เพื่อ generate `netlify.toml` ที่ project root แล้ว commit + push
+  — ถ้ามี `netlify.toml` อยู่แล้วจะไม่ถูกเขียนทับ กรณีนั้นต้องเติม
+  `publish = ".ruvyxa/deploy/netlify/publish"` เองในไฟล์
+
+**เช็กว่าแก้ได้จริง** ด้วยการยิงขอ asset ตรง ๆ — ต้องได้ `200` ไม่ใช่ `404`:
+
+```bash
+curl -I https://YOUR-SITE.netlify.app/__ruvyxa/client/
+```
+
+> **ไม่ใช่ error ของ Ruvyxa:** บรรทัดใน console แบบ
+> `A listener indicated an asynchronous response by returning true, but the message channel closed`
+> มาจาก browser extension ไม่ใช่เว็บของคุณ ไม่เกี่ยวกับ 404 ข้ามได้
+
+Vercel กับ Cloudflare ไม่เจอปัญหานี้ เพราะ deploy directory ของมันมี config ครบในตัว
+(`.vercel/output`, `.ruvyxa/deploy/cloudflare/`) และพก static layer ไปด้วย
+
+### Realtime build ไม่ผ่านบน serverless/static adapter
+
+```
+RUV3201 native WebSocket realtime requires a self-hosted Node/Bun build; received target=node adapter=netlify
+```
+
+native WebSocket transport ของ Ruvyxa ต้องใช้ Rust process ที่รันค้างไว้ตัวเดียวคอยถือ connection
+ซึ่ง มีแค่ target แบบ self-hosted เท่านั้น **ใช้ไม่ได้** บน serverless (Vercel, Netlify, Cloudflare)
+หรือ static adapter — guard จะทำให้ build fail ตั้งใจ ไม่ยอม deploy socket ที่ต่อไม่ติด ทางเลือก:
+
+- deploy แอป realtime ด้วย adapter **Node** หรือ **Bun** (`ruvyxa build --adapter node`) บน host ที่
+  รัน process ค้างได้ (VPS, Docker, PaaS)
+- หรือเอา native realtime plugin ออกจาก build นั้น ถ้า route ไม่ได้ต้องใช้ live connection
+
+demo app เปิด native realtime ไว้ เลย build สำหรับ serverless adapter ไม่ได้ — เป็นดีไซน์ ไม่ใช่บั๊ก
+
+### Route ที่ static adapter ไม่รองรับ
+
+```
+RUV2202 adapter static supports ssg, csr; unsupported routes: /api/x (api), /dashboard (ssr)
+```
+
+static adapter publish แค่ไฟล์ ไม่มี server เลย host SSR page, API route, ISR, PPR ไม่ได้ ทางแก้คือ
+เปลี่ยน route พวกนั้นเป็น `ssg`/`csr` หรือเปลี่ยนไปใช้ adapter ที่มี function (node, bun, vercel,
+netlify, cloudflare)
+
 ### Permission Denied Error
 
 ```

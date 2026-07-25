@@ -241,6 +241,74 @@ Two consequences worth knowing:
 
 ## Troubleshooting
 
+### CSS / images / JS 404 on Netlify (unstyled page)
+
+```
+Failed to load resource: the server responded with a status of 404 ()
+```
+
+**Symptom.** The page renders as plain text — no styles, broken images — and the browser console
+shows 404s for `.css`, `.png`, and `/__ruvyxa/client/*.js`. The HTML itself loads fine.
+
+**Cause.** The **publish directory is not set**. Ruvyxa's static asset layer (CSS, images, hashed
+client bundles) is written to `.ruvyxa/deploy/netlify/publish`. The SSR/API function is discovered
+automatically through the Frameworks API (`.netlify/v1/`), but **the Frameworks API cannot declare a
+publish directory** — Netlify resolves that from `netlify.toml` (or the dashboard) _before_ the
+build runs. With no publish directory pointing at the output, Netlify serves nothing static, every
+asset request falls through to the function, and the function 404s it (it serves routes, not files).
+That is why the HTML renders — the function works — but everything static is missing.
+
+**Fix — pick one:**
+
+- **Dashboard** (no committed file): Site configuration → Build & deploy → set **Publish directory**
+  to `.ruvyxa/deploy/netlify/publish`, then redeploy.
+- **Committed config**: set `netlifyAdapter({ projectConfig: true })` in `ruvyxa.config.ts`, run
+  `npx --no-install ruvyxa build` to generate a project-root `netlify.toml`, then commit it and
+  push. An existing `netlify.toml` is never overwritten — add
+  `publish = ".ruvyxa/deploy/netlify/publish"` to it by hand in that case.
+
+**Confirm the fix** by requesting an asset directly — it must return `200`, not `404`:
+
+```bash
+curl -I https://YOUR-SITE.netlify.app/__ruvyxa/client/
+```
+
+> **Not a Ruvyxa error:** a console line like
+> `A listener indicated an asynchronous response by returning true, but the message channel closed`
+> comes from a browser extension, not your site. It is unrelated to the 404 and can be ignored.
+
+Vercel and Cloudflare do not hit this: their deploy directory is self-sufficient (`.vercel/output`,
+`.ruvyxa/deploy/cloudflare/`) and carries the static layer with it.
+
+### Realtime Fails to Build on a Serverless/Static Adapter
+
+```
+RUV3201 native WebSocket realtime requires a self-hosted Node/Bun build; received target=node adapter=netlify
+```
+
+Ruvyxa's native WebSocket transport needs one long-lived Rust process holding the connections, which
+only the self-hosted targets provide. It is **not** available on serverless (Vercel, Netlify,
+Cloudflare) or static adapters — the guard fails the build on purpose rather than deploying a socket
+that can never connect. Options:
+
+- Deploy the realtime app with the **Node** or **Bun** adapter (`ruvyxa build --adapter node`) on a
+  host that keeps the process alive (VPS, Docker, PaaS).
+- Or drop the native realtime plugin from that build if the route set does not need live
+  connections.
+
+The demo app enables native realtime, so it cannot be built for a serverless adapter — this is by
+design, not a bug.
+
+### Unsupported Routes on the Static Adapter
+
+```
+RUV2202 adapter static supports ssg, csr; unsupported routes: /api/x (api), /dashboard (ssr)
+```
+
+The static adapter publishes files only — it has no server, so it cannot host SSR pages, API routes,
+ISR, or PPR. Either convert those routes to `ssg`/`csr`, or switch to an adapter that ships a
+function (node, bun, vercel, netlify, cloudflare).
+
 ### Permission Denied Error
 
 ```
