@@ -188,7 +188,8 @@ jobs:
         run: pnpm release:validate
       - name: Publish JavaScript packages in dependency order
         run: |
-          node scripts/publish-if-new.mjs \
+          VERSION="${{ needs.resolve-version.outputs.version }}"
+          for PACKAGE in \
             @ruvyxa/core \
             @ruvyxa/react \
             @ruvyxa/auth \
@@ -205,7 +206,24 @@ jobs:
             @ruvyxa/adapter-static \
             @ruvyxa/adapter-vercel \
             ruvyxa \
-            create-ruvyxa
+            create-ruvyxa; do
+            if npm view "$PACKAGE@$VERSION" version >/dev/null 2>&1; then
+              echo "$PACKAGE@$VERSION already exists; skipping"
+            else
+              echo "Publishing $PACKAGE@$VERSION"
+              pnpm --filter "$PACKAGE" publish --access public --no-git-checks
+            fi
+            for ATTEMPT in 1 2 3 4 5 6; do
+              if npm view "$PACKAGE@$VERSION" version; then
+                break
+              fi
+              if [ "$ATTEMPT" = 6 ]; then
+                echo "::error::${PACKAGE}@${VERSION} is not available on npm after publish"
+                exit 1
+              fi
+              sleep 10
+            done
+          done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           SKIP_NATIVE_BUILD: '1'
