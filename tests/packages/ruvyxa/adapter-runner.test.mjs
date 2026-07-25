@@ -315,7 +315,11 @@ export default handler
           { kind: 'static-site', path: '.vercel/output/static', scope: 'project' },
           { kind: 'file', path: '.vercel/output/config.json', scope: 'project', contents: '{"version":3}' },
           { kind: 'file', path: 'netlify.toml', scope: 'project', skipIfExists: true, contents: 'generated' },
-          { kind: 'file', path: 'wrangler.jsonc', scope: 'project', skipIfExists: true, contents: '{"name":"app"}' }
+          { kind: 'file', path: 'wrangler.jsonc', scope: 'project', skipIfExists: true, contents: '{"name":"app"}' },
+          { kind: 'file', path: 'railway.json', scope: 'project', skipIfExists: true, contents: '{"build":{}}' },
+          { kind: 'file', path: 'render.yaml', scope: 'project', skipIfExists: true, contents: 'services: []' },
+          { kind: 'file', path: 'firebase.json', scope: 'project', skipIfExists: true, contents: '{"hosting":{}}' },
+          { kind: 'file', path: '.amplify-hosting/deploy-manifest.json', scope: 'project', contents: '{"version":1}' }
         ] } } } }`,
       )
       await writeFile(
@@ -336,6 +340,14 @@ export default handler
         { kind: 'file', path: '.vercel/output/config.json', scope: 'project' },
         { kind: 'file', path: 'netlify.toml', scope: 'project', skipped: true },
         { kind: 'file', path: 'wrangler.jsonc', scope: 'project' },
+        { kind: 'file', path: 'railway.json', scope: 'project' },
+        { kind: 'file', path: 'render.yaml', scope: 'project' },
+        { kind: 'file', path: 'firebase.json', scope: 'project' },
+        {
+          kind: 'file',
+          path: '.amplify-hosting/deploy-manifest.json',
+          scope: 'project',
+        },
       ])
       assert.equal(
         await readFile(path.join(root, '.vercel/output/static/index.html'), 'utf8'),
@@ -347,6 +359,13 @@ export default handler
       )
       assert.equal(await readFile(path.join(root, 'netlify.toml'), 'utf8'), 'user-authored')
       assert.equal(await readFile(path.join(root, 'wrangler.jsonc'), 'utf8'), '{"name":"app"}')
+      assert.equal(await readFile(path.join(root, 'railway.json'), 'utf8'), '{"build":{}}')
+      assert.equal(await readFile(path.join(root, 'render.yaml'), 'utf8'), 'services: []')
+      assert.equal(await readFile(path.join(root, 'firebase.json'), 'utf8'), '{"hosting":{}}')
+      assert.equal(
+        await readFile(path.join(root, '.amplify-hosting/deploy-manifest.json'), 'utf8'),
+        '{"version":1}',
+      )
       await assert.rejects(readFile(path.join(root, '.vercel/output/static/stale.js')))
     } finally {
       await rm(root, { recursive: true, force: true })
@@ -566,6 +585,49 @@ export default loadRouteModule
       await readFile(path.join(outputDir, 'deploy/node/server/index.mjs'), 'utf8')
     } finally {
       await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('resolves and materializes every new zero-config provider adapter', async () => {
+    const providers = [
+      {
+        name: 'railway',
+        expected: 'deploy/railway/server/index.mjs',
+      },
+      {
+        name: 'render',
+        expected: 'deploy/render/server/index.mjs',
+      },
+      {
+        name: 'firebase',
+        expected: 'deploy/firebase/functions/package.json',
+      },
+      {
+        name: 'aws',
+        expected: '.amplify-hosting/deploy-manifest.json',
+      },
+    ]
+
+    for (const provider of providers) {
+      const root = await mkdtemp(path.join(os.tmpdir(), `ruvyxa-${provider.name}-runner-`))
+      const outputDir = path.join(root, '.ruvyxa-staging')
+      try {
+        await mkdir(path.join(outputDir, 'assets'), { recursive: true })
+        await mkdir(path.join(outputDir, 'client'), { recursive: true })
+        await mkdir(path.join(outputDir, 'prerender'), { recursive: true })
+        await writeFile(path.join(outputDir, 'prerender', 'index.html'), '<main>home</main>')
+        await writeFile(path.join(outputDir, 'manifest.json'), JSON.stringify({ routes: [] }))
+
+        const result = await runRunner(root, outputDir, provider.name)
+
+        assert.ok(result.result.length > 0, provider.name)
+        const expectedPath = provider.expected.startsWith('.')
+          ? path.join(root, provider.expected)
+          : path.join(outputDir, provider.expected)
+        await readFile(expectedPath, 'utf8')
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
     }
   })
 })

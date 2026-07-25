@@ -12,12 +12,17 @@ export function realtime(options: RealtimePluginOptions = {}): RuvyxaPlugin {
       onBuildComplete(({ manifest }) => {
         const target = typeof manifest.target === 'string' ? manifest.target : undefined
         const adapter = adapterName(manifest.adapter)
-        const unsupportedAdapter = ['cloudflare', 'netlify', 'static', 'vercel'].includes(
-          adapter ?? '',
-        )
+        const unsupportedAdapter = [
+          'aws',
+          'cloudflare',
+          'firebase',
+          'netlify',
+          'static',
+          'vercel',
+        ].includes(adapter ?? '')
         if (target !== 'node' || unsupportedAdapter) {
           throw new RealtimeDeploymentError(
-            `native WebSocket realtime requires a self-hosted Node/Bun build; received target=${target ?? 'unknown'}${adapter ? ` adapter=${adapter}` : ''}`,
+            `native WebSocket realtime requires a long-lived Node/Bun build; received target=${target ?? 'unknown'}${adapter ? ` adapter=${adapter}` : ''}`,
           )
         }
       })

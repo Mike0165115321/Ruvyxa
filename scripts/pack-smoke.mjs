@@ -23,10 +23,14 @@ const packages = [
   '@ruvyxa/auth',
   '@ruvyxa/database',
   '@ruvyxa/realtime',
+  '@ruvyxa/adapter-aws',
   '@ruvyxa/adapter-node',
   '@ruvyxa/adapter-vercel',
   '@ruvyxa/adapter-cloudflare',
   '@ruvyxa/adapter-netlify',
+  '@ruvyxa/adapter-firebase',
+  '@ruvyxa/adapter-railway',
+  '@ruvyxa/adapter-render',
   '@ruvyxa/adapter-bun',
   '@ruvyxa/adapter-static',
   currentPlatformPackage,
@@ -255,10 +259,14 @@ for (const starter of starters) {
 // unpublished at this point in the release; the freshly packed tarballs must
 // satisfy those ranges instead of the registry.
 const adapterOverrides = [
+  '@ruvyxa/adapter-aws',
   '@ruvyxa/adapter-bun',
   '@ruvyxa/adapter-cloudflare',
+  '@ruvyxa/adapter-firebase',
   '@ruvyxa/adapter-netlify',
   '@ruvyxa/adapter-node',
+  '@ruvyxa/adapter-railway',
+  '@ruvyxa/adapter-render',
   '@ruvyxa/adapter-static',
   '@ruvyxa/adapter-vercel',
 ].map((name) => `  '${name}': ${JSON.stringify(workspaceTarball(packedTarball(name)))}`)

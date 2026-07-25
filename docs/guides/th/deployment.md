@@ -18,12 +18,16 @@ adapter เอง
 | ------------------------------ | ------------------------------------------------------------------------------------------------------- |
 | **Vercel**                     | push repo → import บน Vercel → จบ (Ruvyxa detect Vercel เองแล้ว emit output ให้ถูกแบบ)                  |
 | **Netlify**                    | push repo → import บน Netlify → กรอก **Publish directory** = `.ruvyxa/deploy/netlify/publish` → จบ      |
+| **Railway**                    | push repo → สร้าง Railway service → จบ ระบบ detect และสร้าง standalone server ให้อัตโนมัติ              |
+| **Render**                     | push repo → สร้าง Render Web Service → จบ ระบบ detect และใช้ `PORT` ของ Render อัตโนมัติ                |
+| **Firebase Hosting**           | `ruvyxa build --adapter firebase` → `firebase deploy --only hosting,functions`                          |
+| **AWS Amplify Hosting**        | push repo → import บน Amplify → จบ ระบบสร้าง `.amplify-hosting/` ให้อัตโนมัติ                           |
 | **Cloudflare**                 | `ruvyxa build --adapter cloudflare` → `npx wrangler deploy -c .ruvyxa/deploy/cloudflare/wrangler.jsonc` |
 | **Server ตัวเอง / Docker**     | `ruvyxa build --adapter node` → `node .ruvyxa/deploy/node/server/index.mjs`                             |
 | **Static host (GitHub Pages)** | `ruvyxa build --adapter static` → อัปโหลด `.ruvyxa/static/`                                             |
 
-โปรเจกต์ส่วนใหญ่จบแค่นี้ — ไม่มีไฟล์ config ถูกเขียนที่ project root และบน Vercel/Netlify
-ไม่ต้องเลือก adapter เองด้วยซ้ำ ระบบ detect platform ให้อัตโนมัติ
+โปรเจกต์ส่วนใหญ่จบแค่นี้ — Vercel, Netlify, Railway, Render, Cloudflare Pages และ AWS Amplify เลือก
+adapter จาก environment ให้อัตโนมัติ ส่วน config ที่ระบบ generate จะไม่เขียนทับไฟล์ที่มีอยู่
 
 ## ระบบทำงานยังไง (อ่าน 1 นาที)
 
@@ -31,13 +35,13 @@ adapter เอง
 hosting แต่ละเจ้าต้องการ — serverless function สำหรับ Netlify, Build Output directory สำหรับ Vercel,
 standalone server สำหรับ VPS การเลือก adapter มี 3 ทาง:
 
-1. **อัตโนมัติ** — build บน CI ของ Vercel/Netlify/Cloudflare Pages ระบบเลือก adapter ที่ตรงจาก
-   environment ของ platform เอง ไม่ต้องตั้งอะไรเลย
+1. **อัตโนมัติ** — build บน CI ของ Vercel, Netlify, Cloudflare Pages, Railway, Render หรือ AWS
+   Amplify ระบบเลือก adapter ที่ตรงจาก environment ของ platform เอง ไม่ต้องตั้งอะไรเลย
 2. **Command line** — `ruvyxa build --adapter node` (ไม่ต้องแก้ config ได้ค่า default ของ adapter)
 3. **Config** — ตั้ง `adapter` ใน `ruvyxa.config.ts` เมื่อต้องส่ง option ให้ adapter
 
-Adapter ทางการทั้ง 6 ตัว (`node`, `bun`, `static`, `vercel`, `netlify`, `cloudflare`) มาพร้อมกับ
-แพ็กเกจ `ruvyxa` แล้ว — ไม่ต้องติดตั้งอะไรเพิ่ม
+Adapter ทางการทั้ง 10 ตัว (`node`, `bun`, `static`, `vercel`, `netlify`, `cloudflare`, `railway`,
+`render`, `firebase`, `aws`) มาพร้อมกับแพ็กเกจ `ruvyxa` แล้ว — ไม่ต้องติดตั้งอะไรเพิ่ม
 
 ### Setup
 
@@ -64,9 +68,16 @@ environment แล้วเลือก adapter ให้อัตโนมั�
 | `VERCEL`             | `vercel`     |
 | `NETLIFY`            | `netlify`    |
 | `CF_PAGES`           | `cloudflare` |
+| `RAILWAY_PROJECT_ID` | `railway`    |
+| `RENDER`             | `render`     |
+| `AWS_APP_ID`         | `aws`        |
 
 ตั้ง `RUVYXA_ADAPTER=<name>` เพื่อ override การ detect หรือใช้เลือก adapter บน CI อื่น ๆ — adapter
 ที่ตั้งใน config หรือ flag ชนะการ detect เสมอ
+
+Firebase Hosting deploy ผ่าน Firebase CLI ไม่ได้รันบน hosted build environment ที่มี signal คงที่
+จึงเลือกด้วย `--adapter firebase` หรือ `RUVYXA_ADAPTER=firebase` ส่วนการ login และเลือก project
+ยังเป็นหน้าที่ของ Firebase CLI
 
 Adapter จะสร้าง artifact หลัง build แต่ก่อน commit output จึงหาก adapter ล้มเหลว `.ruvyxa/` ชุดเดิม
 จะไม่ถูกแทนที่ ผลลัพธ์ deploy อยู่ที่ `.ruvyxa/deploy/<platform>/`
@@ -163,6 +174,91 @@ export default config({
 generate `wrangler.jsonc` (path เป็นแบบ relative กับโปรเจกต์) — ถ้ามี `wrangler.jsonc`
 อยู่แล้วจะ**ไม่ถูกเขียนทับ**
 
+### Railway
+
+เชื่อม repository เป็น Railway service ได้เลย Railpack จะรัน script `build` มาตรฐาน ตัวแปร
+`RAILWAY_PROJECT_ID` ทำให้ระบบเลือก `railway` และ standalone server ใช้ `PORT` ของ Railway อัตโนมัติ
+
+```ts
+import { railwayAdapter } from '@ruvyxa/adapter-railway'
+
+export default config({
+  adapter: railwayAdapter(),
+})
+```
+
+adapter สร้าง `.ruvyxa/deploy/railway/server/index.mjs` พร้อม `railway.json` ที่มี build/start
+command ครบ ถ้ามี `railway.json` อยู่แล้วจะไม่เขียนทับ ใช้ `projectConfig: false` เมื่อให้ dashboard
+เป็น source of truth
+
+### Render
+
+สร้าง Render Web Service จาก repository ระบบจะรัน script `build`, ใช้ `RENDER=true` เพื่อเลือก
+adapter และ standalone server จะ bind ที่ `0.0.0.0:$PORT` (ค่า default ปัจจุบันของ Render คือ 10000)
+
+```ts
+import { renderAdapter } from '@ruvyxa/adapter-render'
+
+export default config({
+  adapter: renderAdapter({ serviceName: 'my-web-app' }),
+})
+```
+
+adapter สร้าง `.ruvyxa/deploy/render/server/index.mjs` และ Blueprint `render.yaml` โดยรักษาไฟล์
+Blueprint เดิมเสมอ ใส่ `projectConfig: false` ถ้าจัดการ config ผ่าน dashboard
+
+### Firebase Hosting
+
+Firebase จะเสิร์ฟหน้า SSG/CSR และ asset จาก CDN แล้ว rewrite request ของ SSR, ISR, PPR และ API ไปยัง
+HTTPS function รุ่นที่ 2 ที่ adapter สร้างให้:
+
+```bash
+ruvyxa build --adapter firebase
+firebase deploy --only hosting,functions
+```
+
+build แรกสร้าง `firebase.json` เฉพาะเมื่อยังไม่มีไฟล์นี้ ต้อง login และเลือก/ส่ง Firebase project
+ให้ CLI ก่อน deploy; Ruvyxa ไม่เขียน credential หรือ project ID การ deploy แบบ dynamic ต้องเปิด
+billing เพราะใช้ Cloud Functions
+
+```ts
+import { firebaseAdapter } from '@ruvyxa/adapter-firebase'
+
+export default config({
+  adapter: firebaseAdapter({ region: 'asia-east1' }),
+})
+```
+
+rewrite ที่ generate ใช้ `pinTag` ให้ Hosting กับ function deploy เป็นชุดเดียวกัน ส่วน ISR cache
+เป็นแบบชั่วคราวต่อ warm instance ถ้าต้องแชร์ข้าม instance ให้ใช้ durable application storage
+
+### AWS Amplify Hosting
+
+import repository ใน AWS Amplify Hosting ได้เลย `AWS_APP_ID` ทำให้ระบบเลือก adapter และ
+`ruvyxa build` จะสร้าง deployment specification ของ Amplify โดยตรง:
+
+```text
+.amplify-hosting/
+├── static/
+├── compute/default/
+│   └── server.js
+└── deploy-manifest.json
+```
+
+ไม่ต้องมี `amplify.yml` เมื่อ Amplify ใช้ fallback `.amplify-hosting` มาตรฐาน compute server ฟัง
+port 3000 และเก็บ ISR refresh ไว้ใน `/tmp` ซึ่งเป็นตำแหน่งที่ Amplify compute อนุญาตให้เขียน
+
+```ts
+import { awsAdapter } from '@ruvyxa/adapter-aws'
+
+export default config({
+  adapter: awsAdapter({ runtime: 'nodejs22.x' }),
+})
+```
+
+ชื่อ `aws` ในที่นี้หมายถึง AWS Amplify Hosting ไม่ได้ provision ECS, Lambda, API Gateway, RDS, IAM
+หรือ VPC อื่นให้อัตโนมัติ
+
 ### Self-Hosted (Node.js, Docker, VPS, PaaS)
 
 ```bash
@@ -198,17 +294,20 @@ Static hosting ใช้ได้กับแอปที่ทุกหน้�
 
 ### แต่ละ platform รองรับอะไรบ้าง
 
-| Strategy | Vercel | Netlify | Cloudflare | Node (standalone) | Static |
-| -------- | ------ | ------- | ---------- | ----------------- | ------ |
-| SSG      | ✓      | ✓       | ✓          | ✓                 | ✓      |
-| CSR      | ✓      | ✓       | ✓          | ✓                 | ✓      |
-| SSR      | ✓      | ✓       | ✓          | ✓                 | ✗      |
-| API      | ✓      | ✓       | ✓          | ✓                 | ✗      |
-| ISR      | ✓      | ✓       | ✗*         | ✓                 | ✗      |
-| PPR      | ✓      | ✓       | ✗*         | ✓                 | ✗      |
+| Strategy | Vercel | Netlify | Cloudflare | Railway/Render | Firebase | AWS Amplify | Static |
+| -------- | ------ | ------- | ---------- | -------------- | -------- | ----------- | ------ |
+| SSG      | ✓      | ✓       | ✓          | ✓              | ✓        | ✓           | ✓      |
+| CSR      | ✓      | ✓       | ✓          | ✓              | ✓        | ✓           | ✓      |
+| SSR      | ✓      | ✓       | ✓          | ✓              | ✓        | ✓           | ✗      |
+| API      | ✓      | ✓       | ✓          | ✓              | ✓        | ✓           | ✗      |
+| ISR      | ✓      | ✓       | ✗*         | ✓              | ✓†       | ✓†          | ✗      |
+| PPR      | ✓      | ✓       | ✗*         | ✓              | ✓†       | ✓†          | ✗      |
 
 \* Cloudflare Workers ไม่มี persistent storage สำหรับ ISR cache — route ที่ใช้ ISR/PPR จะถูก reject
 ด้วย `RUV2210` บน Cloudflare ใช้ KV หรือ Durable Objects binding เองถ้าต้องการ
+
+† Firebase Functions และ Amplify compute ใช้ cache ชั่วคราวประจำ instance การ revalidate ทำงาน แต่
+cache ไม่แชร์ข้าม cold start หรือ instance ที่ scale ออกไป
 
 Deploy แบบ static-only (SSG/CSR ล้วนไม่มี API/SSR) ทำงานได้ทุก platform — adapter แบบ serverless จะ
 emit ทั้ง static assets และ serverless function; platform เสิร์ฟ static file ตรง ๆ แล้ว forward
@@ -282,12 +381,12 @@ Vercel กับ Cloudflare ไม่เจอปัญหานี้ เพร
 RUV3201 native WebSocket realtime requires a self-hosted Node/Bun build; received target=node adapter=netlify
 ```
 
-native WebSocket transport ของ Ruvyxa ต้องใช้ Rust process ที่รันค้างไว้ตัวเดียวคอยถือ connection
-ซึ่ง มีแค่ target แบบ self-hosted เท่านั้น **ใช้ไม่ได้** บน serverless (Vercel, Netlify, Cloudflare)
-หรือ static adapter — guard จะทำให้ build fail ตั้งใจ ไม่ยอม deploy socket ที่ต่อไม่ติด ทางเลือก:
+native WebSocket transport ของ Ruvyxa ต้องใช้ process ที่รันค้างไว้คอยถือ connection ใช้ได้บน Node,
+Bun, Railway และ Render แต่ **ใช้ไม่ได้** บน serverless (Vercel, Netlify, Cloudflare, Firebase, AWS
+Amplify) หรือ static adapter — guard จะทำให้ build fail ตั้งใจ ทางเลือก:
 
-- deploy แอป realtime ด้วย adapter **Node** หรือ **Bun** (`ruvyxa build --adapter node`) บน host ที่
-  รัน process ค้างได้ (VPS, Docker, PaaS)
+- deploy แอป realtime ด้วย **Node**, **Bun**, **Railway** หรือ **Render** บน host ที่รัน process
+  ค้างได้
 - หรือเอา native realtime plugin ออกจาก build นั้น ถ้า route ไม่ได้ต้องใช้ live connection
 
 demo app เปิด native realtime ไว้ เลย build สำหรับ serverless adapter ไม่ได้ — เป็นดีไซน์ ไม่ใช่บั๊ก
@@ -299,8 +398,8 @@ RUV2202 adapter static supports ssg, csr; unsupported routes: /api/x (api), /das
 ```
 
 static adapter publish แค่ไฟล์ ไม่มี server เลย host SSR page, API route, ISR, PPR ไม่ได้ ทางแก้คือ
-เปลี่ยน route พวกนั้นเป็น `ssg`/`csr` หรือเปลี่ยนไปใช้ adapter ที่มี function (node, bun, vercel,
-netlify, cloudflare)
+เปลี่ยน route พวกนั้นเป็น `ssg`/`csr` หรือเปลี่ยนไปใช้ adapter ที่มี function/server (node, bun,
+vercel, netlify, cloudflare, railway, render, firebase, aws)
 
 ### Permission Denied Error
 
@@ -404,6 +503,10 @@ actions; MDX; public environment variables; external CSS; และ SSR, SSG, IS
 | `@ruvyxa/adapter-cloudflare` | Cloudflare Workers: `.ruvyxa/deploy/cloudflare/`          |
 | `@ruvyxa/adapter-netlify`    | Netlify functions + static: `.netlify/v1/` + deploy dir   |
 | `@ruvyxa/adapter-vercel`     | Vercel Build Output API: `.vercel/output/`                |
+| `@ruvyxa/adapter-railway`    | Railway standalone server + `railway.json`                |
+| `@ruvyxa/adapter-render`     | Render standalone server + `render.yaml`                  |
+| `@ruvyxa/adapter-firebase`   | Firebase Hosting + Cloud Functions v2                     |
+| `@ruvyxa/adapter-aws`        | AWS Amplify Hosting static + compute primitives           |
 
 Adapter ทางการทั้งหมด bundle มากับแพ็กเกจ `ruvyxa` — `--adapter <name>` และ platform auto-detection
 ใช้ได้โดยไม่ต้องติดตั้งอะไรเพิ่ม ติดตั้งแพ็กเกจ `@ruvyxa/adapter-*` แยกเฉพาะเมื่อต้องส่ง option ใน
@@ -413,11 +516,12 @@ Adapter ทางการทั้งหมด bundle มากับแพ็�
 
 `--adapter` รับค่าได้ 2 แบบ และ override `config.adapter` เฉพาะ build ครั้งนั้น:
 
-**1. ชื่อ built-in** — `node`, `bun`, `static`, `vercel`, `netlify`, `cloudflare` ใช้ได้ทันที
-ด้วยแพ็กเกจ `ruvyxa` ตัวเดียว และได้ค่า default ของ adapter เสมอ
+**1. ชื่อ built-in** — `node`, `bun`, `static`, `vercel`, `netlify`, `cloudflare`, `railway`,
+`render`, `firebase`, `aws` ใช้ได้ทันทีด้วยแพ็กเกจ `ruvyxa` ตัวเดียว และได้ค่า default ของ adapter
+เสมอ
 
 **2. ชื่อแพ็กเกจ adapter ใดก็ได้** — เปิดให้ ecosystem เขียน adapter เองสำหรับ platform ที่ไม่มี
-adapter ทางการ (Deno Deploy, Fastly, AWS Lambda ฯลฯ):
+adapter ทางการ (Deno Deploy, Fastly ฯลฯ):
 
 ```bash
 ruvyxa build --adapter @acme/ruvyxa-adapter-deno   # ชื่อแบบมี scope ใช้ตรง ๆ

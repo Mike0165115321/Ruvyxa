@@ -1,0 +1,155 @@
+import { readFileSync } from 'node:fs'
+
+import type { Adapter, AdapterOutput, BuildContext } from '@ruvyxa/core'
+import {
+  CLIENT_BUNDLE_PREFIX,
+  clientBuildOutput,
+  IMMUTABLE_CACHE_CONTROL,
+  PUBLIC_ASSET_CACHE_CONTROL,
+  standaloneServerSource,
+  validateBuildContext,
+} from '@ruvyxa/core'
+
+type AmplifyRuntime = 'nodejs20.x' | 'nodejs22.x' | 'nodejs24.x'
+
+/** Options for AWS Amplify Hosting deployments. */
+export interface AwsAdapterOptions {
+  /** Amplify compute runtime. @default "nodejs22.x" */
+  runtime?: AmplifyRuntime
+  /**
+   * Emit the project-root `.amplify-hosting/` deployment bundle Amplify discovers.
+   * @default true
+   */
+  projectOutput?: boolean
+}
+
+/** Create an AWS Amplify Hosting static-plus-compute adapter for Ruvyxa. */
+export function awsAdapter(options: AwsAdapterOptions = {}): Adapter {
+  const runtime = options.runtime ?? 'nodejs22.x'
+  const frameworkVersion = packageVersion()
+
+  return {
+    name: 'aws',
+    target: 'serverless',
+    supports: ['ssr', 'ssg', 'csr', 'isr', 'ppr', 'api'],
+    build(ctx: BuildContext): AdapterOutput {
+      validateBuildContext(ctx, 'awsAdapter')
+
+      const manifest = JSON.stringify(
+        {
+          version: 1,
+          routes: [
+            {
+              path: `${CLIENT_BUNDLE_PREFIX}*`,
+              target: { kind: 'Static', cacheControl: IMMUTABLE_CACHE_CONTROL },
+            },
+            {
+              path: '/*.*',
+              target: { kind: 'Static', cacheControl: PUBLIC_ASSET_CACHE_CONTROL },
+              fallback: { kind: 'Compute', src: 'default' },
+            },
+            {
+              path: '/*',
+              target: { kind: 'Compute', src: 'default' },
+            },
+          ],
+          computeResources: [{ name: 'default', runtime, entrypoint: 'server.js' }],
+          framework: { name: 'ruvyxa', version: frameworkVersion },
+        },
+        null,
+        2,
+      )
+      const serverSource = standaloneServerSource({ isrCache: 'tmp' })
+      const deployRoot = 'deploy/aws/.amplify-hosting'
+
+      const projectArtifacts: AdapterOutput['artifacts'] =
+        options.projectOutput === false
+          ? []
+          : [
+              {
+                kind: 'static-site',
+                path: '.amplify-hosting/static',
+                scope: 'project',
+                optional: true,
+                excludeStrategies: ['isr', 'ppr'],
+              },
+              {
+                kind: 'function',
+                path: '.amplify-hosting/compute/default',
+                scope: 'project',
+                handlerSource: serverSource,
+              },
+              {
+                kind: 'file',
+                path: '.amplify-hosting/compute/default/server.js',
+                scope: 'project',
+                contents: "import './index.mjs'\n",
+              },
+              {
+                kind: 'file',
+                path: '.amplify-hosting/deploy-manifest.json',
+                scope: 'project',
+                contents: manifest + '\n',
+              },
+            ]
+
+      return {
+        name: 'aws',
+        target: 'serverless',
+        platform: 'aws',
+        runtime: 'node',
+        entry: `${ctx.outDir}/server/app`,
+        assetsDir: `${ctx.outDir}/assets`,
+        ...clientBuildOutput(ctx),
+        configFiles: ['.amplify-hosting/deploy-manifest.json'],
+        artifacts: [
+          {
+            kind: 'static-site',
+            path: `${deployRoot}/static`,
+            optional: true,
+            excludeStrategies: ['isr', 'ppr'],
+          },
+          {
+            kind: 'function',
+            path: `${deployRoot}/compute/default`,
+            handlerSource: serverSource,
+          },
+          {
+            kind: 'file',
+            path: `${deployRoot}/compute/default/server.js`,
+            contents: "import './index.mjs'\n",
+          },
+          {
+            kind: 'file',
+            path: `${deployRoot}/deploy-manifest.json`,
+            contents: manifest + '\n',
+          },
+          {
+            kind: 'file',
+            path: 'deploy/aws/README.md',
+            contents:
+              '# Ruvyxa on AWS Amplify Hosting\n\n' +
+              'Amplify auto-detects this adapter through `AWS_APP_ID` and deploys\n' +
+              'the generated `.amplify-hosting/` static and compute primitives.\n',
+          },
+          ...projectArtifacts,
+        ],
+      }
+    },
+  }
+}
+
+/** Read the adapter package version so Amplify receives valid framework semver metadata. */
+function packageVersion(): string {
+  const metadata = JSON.parse(
+    readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+  ) as {
+    version?: unknown
+  }
+  if (typeof metadata.version !== 'string' || !/^\d+\.\d+\.\d+/.test(metadata.version)) {
+    throw new Error('[RUV2001] awsAdapter: package version must be valid semantic version metadata')
+  }
+  return metadata.version
+}
+
+export default awsAdapter

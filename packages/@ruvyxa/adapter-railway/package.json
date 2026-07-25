@@ -1,0 +1,42 @@
+{
+  "name": "@ruvyxa/adapter-railway",
+  "version": "1.0.21",
+  "description": "Deploy full-stack Ruvyxa applications to Railway with automatic platform detection and standalone Node output.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "src", "README.md"],
+  "keywords": ["ruvyxa", "adapter", "railway", "deployment"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thirawat27/ruvyxa.git",
+    "directory": "packages/@ruvyxa/adapter-railway"
+  },
+  "bugs": {
+    "url": "https://github.com/thirawat27/ruvyxa/issues"
+  },
+  "homepage": "https://github.com/thirawat27/ruvyxa#readme",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@ruvyxa/core": "workspace:^"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.check.json",
+    "test": "node --test \"../../../tests/packages/adapter-railway/**/*.test.ts\"",
+    "format": "tsc -p tsconfig.check.json",
+    "prepack": "pnpm run build"
+  }
+}

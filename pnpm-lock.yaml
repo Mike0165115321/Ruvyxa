@@ -64,6 +64,16 @@ importers:
         specifier: ^19.2.3
         version: 19.2.3(@types/react@19.2.17)
 
+  packages/@ruvyxa/adapter-aws:
+    dependencies:
+      '@ruvyxa/core':
+        specifier: workspace:^
+        version: link:../core
+    devDependencies:
+      '@types/node':
+        specifier: ^26.1.1
+        version: 26.1.1
+
   packages/@ruvyxa/adapter-bun:
     dependencies:
       '@ruvyxa/core':
@@ -76,6 +86,12 @@ importers:
         specifier: workspace:^
         version: link:../core
 
+  packages/@ruvyxa/adapter-firebase:
+    dependencies:
+      '@ruvyxa/core':
+        specifier: workspace:^
+        version: link:../core
+
   packages/@ruvyxa/adapter-netlify:
     dependencies:
       '@ruvyxa/core':
@@ -83,6 +99,18 @@ importers:
         version: link:../core
 
   packages/@ruvyxa/adapter-node:
+    dependencies:
+      '@ruvyxa/core':
+        specifier: workspace:^
+        version: link:../core
+
+  packages/@ruvyxa/adapter-railway:
+    dependencies:
+      '@ruvyxa/core':
+        specifier: workspace:^
+        version: link:../core
+
+  packages/@ruvyxa/adapter-render:
     dependencies:
       '@ruvyxa/core':
         specifier: workspace:^
@@ -166,18 +194,30 @@ importers:
       '@mdx-js/mdx':
         specifier: ^3.1.1
         version: 3.1.1
+      '@ruvyxa/adapter-aws':
+        specifier: workspace:^
+        version: link:../@ruvyxa/adapter-aws
       '@ruvyxa/adapter-bun':
         specifier: workspace:^
         version: link:../@ruvyxa/adapter-bun
       '@ruvyxa/adapter-cloudflare':
         specifier: workspace:^
         version: link:../@ruvyxa/adapter-cloudflare
+      '@ruvyxa/adapter-firebase':
+        specifier: workspace:^
+        version: link:../@ruvyxa/adapter-firebase
       '@ruvyxa/adapter-netlify':
         specifier: workspace:^
         version: link:../@ruvyxa/adapter-netlify
       '@ruvyxa/adapter-node':
         specifier: workspace:^
         version: link:../@ruvyxa/adapter-node
+      '@ruvyxa/adapter-railway':
+        specifier: workspace:^
+        version: link:../@ruvyxa/adapter-railway
+      '@ruvyxa/adapter-render':
+        specifier: workspace:^
+        version: link:../@ruvyxa/adapter-render
       '@ruvyxa/adapter-static':
         specifier: workspace:^
         version: link:../@ruvyxa/adapter-static

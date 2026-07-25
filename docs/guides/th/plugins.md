@@ -77,11 +77,11 @@ process ฝั่ง browser ของ Auth ต้อง import จาก `@ruvy
 `@ruvyxa/realtime/client`; root import ของ `@ruvyxa/auth` และ `@ruvyxa/database` ใน client graph
 จะถูก ปฏิเสธด้วย `RUV1007`
 
-Native Realtime รองรับ `ruvyxa dev` และ Node/Bun self-host ผ่าน `ruvyxa start` เท่านั้น ส่วน Static,
-Vercel, Netlify, Cloudflare และ Edge จะ fail ตอน build ด้วย `RUV3201` เพราะ adapter เหล่านี้ไม่มี
-persistent WebSocket process กลาง สำหรับ Auth ให้ใช้ `auth.plugin` บน self-host middleware หรือ
-เรียก `auth.handle(request)` จาก API route ของ serverless อ่าน flow, endpoint, security invariant
-และ compatibility matrix ฉบับเต็มได้ที่
+Native Realtime รองรับ `ruvyxa dev` และ Node/Bun process ที่รันค้าง รวมถึง Railway และ Render ส่วน
+Static, Vercel, Netlify, Cloudflare, Firebase, AWS Amplify และ Edge จะ fail ตอน build ด้วย `RUV3201`
+เพราะ adapter เหล่านี้ไม่มี persistent WebSocket process กลาง สำหรับ Auth ให้ใช้ `auth.plugin` บน
+self-host middleware หรือเรียก `auth.handle(request)` จาก API route ของ serverless อ่าน flow,
+endpoint, security invariant และ compatibility matrix ฉบับเต็มได้ที่
 [Official Data, Auth, and Realtime Packages](../../architecture/official-plugins.md)
 
 `ruvyxa/plugins` ยังเป็นชุด zero-install built-in plugin ที่ใช้ public hooks ชุดเดียวกัน:

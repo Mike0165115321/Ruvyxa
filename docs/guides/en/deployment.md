@@ -18,12 +18,17 @@ Pick your platform. Every path assumes your `package.json` has the standard scri
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------- |
 | **Vercel**                     | Push your repo → import it on Vercel → done. Ruvyxa detects Vercel and emits the right output.                |
 | **Netlify**                    | Push your repo → import it on Netlify → set **Publish directory** to `.ruvyxa/deploy/netlify/publish` → done. |
+| **Railway**                    | Push your repo → create a Railway service → done. Ruvyxa detects Railway and emits a standalone server.       |
+| **Render**                     | Push your repo → create a Render Web Service → done. Ruvyxa detects Render and honors its `PORT`.             |
+| **Firebase Hosting**           | `ruvyxa build --adapter firebase` → `firebase deploy --only hosting,functions`                                |
+| **AWS Amplify Hosting**        | Push your repo → import it in Amplify → done. Ruvyxa emits `.amplify-hosting/` automatically.                 |
 | **Cloudflare**                 | `ruvyxa build --adapter cloudflare` → `npx wrangler deploy -c .ruvyxa/deploy/cloudflare/wrangler.jsonc`       |
 | **Your own server / Docker**   | `ruvyxa build --adapter node` → `node .ruvyxa/deploy/node/server/index.mjs`                                   |
 | **Static host (GitHub Pages)** | `ruvyxa build --adapter static` → upload `.ruvyxa/static/`                                                    |
 
-That's it for most projects. No config file is written to your project root, and on Vercel and
-Netlify you don't even choose an adapter — the build detects the platform automatically.
+That's it for most projects. Vercel, Netlify, Railway, Render, Cloudflare Pages, and AWS Amplify
+builds select their adapter automatically. Generated provider config never overwrites a file you
+already own.
 
 ## How It Works (in one minute)
 
@@ -31,13 +36,13 @@ Netlify you don't even choose an adapter — the build detects the platform auto
 the exact shape a hosting platform expects — a serverless function for Netlify, a Build Output
 directory for Vercel, a standalone server for a VPS. You choose an adapter one of three ways:
 
-1. **Automatically** — building on Vercel/Netlify/Cloudflare Pages CI selects the right adapter from
-   the platform's environment. Zero configuration.
+1. **Automatically** — building on Vercel, Netlify, Cloudflare Pages, Railway, Render, or AWS
+   Amplify CI selects the right adapter from the platform's environment. Zero configuration.
 2. **Command line** — `ruvyxa build --adapter node` (no config changes, uses adapter defaults).
 3. **Config** — set `adapter` in `ruvyxa.config.ts` when you need adapter options.
 
-All six official adapters (`node`, `bun`, `static`, `vercel`, `netlify`, `cloudflare`) ship with the
-`ruvyxa` package — nothing extra to install.
+All ten official adapters (`node`, `bun`, `static`, `vercel`, `netlify`, `cloudflare`, `railway`,
+`render`, `firebase`, `aws`) ship with the `ruvyxa` package — nothing extra to install.
 
 ### Setup
 
@@ -64,9 +69,16 @@ platform from its build environment and picks the matching adapter automatically
 | `VERCEL`             | `vercel`     |
 | `NETLIFY`            | `netlify`    |
 | `CF_PAGES`           | `cloudflare` |
+| `RAILWAY_PROJECT_ID` | `railway`    |
+| `RENDER`             | `render`     |
+| `AWS_APP_ID`         | `aws`        |
 
 Set `RUVYXA_ADAPTER=<name>` to override detection, or set it to a specific adapter on any other CI.
 A configured adapter always wins over detection.
+
+Firebase Hosting deploys through the Firebase CLI rather than a hosted build environment, so select
+it with `--adapter firebase` (or `RUVYXA_ADAPTER=firebase`). Authentication and project selection
+remain Firebase CLI responsibilities.
 
 An adapter's post-build lifecycle runs while the build is still in the staging directory, so a
 failed adapter cannot replace a previously successful `.ruvyxa/` build. Generated deploy output
@@ -166,6 +178,95 @@ Prefer a committed root config? Pass `cloudflareAdapter({ projectConfig: true })
 project-root `wrangler.jsonc` (with project-relative paths); an existing `wrangler.jsonc` is **never
 overwritten**.
 
+### Railway
+
+Connect the repository as a Railway service. Railpack runs the standard `build` script, the
+`RAILWAY_PROJECT_ID` environment variable selects `railway`, and the generated standalone server
+uses Railway's `PORT` automatically.
+
+```ts
+import { railwayAdapter } from '@ruvyxa/adapter-railway'
+
+export default config({
+  adapter: railwayAdapter(),
+})
+```
+
+The adapter emits `.ruvyxa/deploy/railway/server/index.mjs` and a safe `railway.json` with the build
+and start commands. An existing project `railway.json` is never overwritten. Pass
+`railwayAdapter({ projectConfig: false })` when dashboard settings are your source of truth.
+
+### Render
+
+Create a Render Web Service from the repository. The standard `build` script runs on Render,
+`RENDER=true` selects the adapter, and the standalone server binds to `0.0.0.0:$PORT` (Render's
+default is currently port 10000).
+
+```ts
+import { renderAdapter } from '@ruvyxa/adapter-render'
+
+export default config({
+  adapter: renderAdapter({ serviceName: 'my-web-app' }),
+})
+```
+
+The adapter emits `.ruvyxa/deploy/render/server/index.mjs` plus a `render.yaml` Blueprint. Existing
+Blueprints are preserved. Pass `projectConfig: false` to keep configuration in the Render dashboard.
+
+### Firebase Hosting
+
+Firebase serves SSG/CSR pages and assets from its CDN, then rewrites SSR, ISR, PPR, and API requests
+to a generated second-generation HTTPS function:
+
+```bash
+ruvyxa build --adapter firebase
+firebase deploy --only hosting,functions
+```
+
+The first build creates `firebase.json` if one does not exist. Select or pass a Firebase project
+with the Firebase CLI before deploying; Ruvyxa never writes credentials or a project ID. Dynamic
+deployments require a Firebase project with billing enabled because they use Cloud Functions.
+
+```ts
+import { firebaseAdapter } from '@ruvyxa/adapter-firebase'
+
+export default config({
+  adapter: firebaseAdapter({ region: 'asia-east1' }),
+})
+```
+
+The generated Hosting rewrite uses `pinTag` so Hosting and the function deploy together. Runtime ISR
+cache is ephemeral per warm function instance; use durable application storage when cross-instance
+cache consistency matters.
+
+### AWS Amplify Hosting
+
+Import the repository in AWS Amplify Hosting. `AWS_APP_ID` selects the adapter and `ruvyxa build`
+emits Amplify's native deployment specification:
+
+```text
+.amplify-hosting/
+├── static/
+├── compute/default/
+│   └── server.js
+└── deploy-manifest.json
+```
+
+No `amplify.yml` is required when Amplify uses its standard `.amplify-hosting` fallback. The compute
+server listens on port 3000 and stores runtime ISR refreshes in `/tmp`, the writable Amplify compute
+location.
+
+```ts
+import { awsAdapter } from '@ruvyxa/adapter-aws'
+
+export default config({
+  adapter: awsAdapter({ runtime: 'nodejs22.x' }),
+})
+```
+
+`aws` means AWS Amplify Hosting support. It does not provision arbitrary ECS, Lambda, API Gateway,
+RDS, IAM, or VPC resources.
+
 ### Self-Hosted (Node.js, Docker, VPS, PaaS)
 
 ```bash
@@ -202,17 +303,20 @@ target for those.
 
 ### What Each Platform Supports
 
-| Strategy | Vercel | Netlify | Cloudflare | Node (standalone) | Static |
-| -------- | ------ | ------- | ---------- | ----------------- | ------ |
-| SSG      | Yes    | Yes     | Yes        | Yes               | Yes    |
-| CSR      | Yes    | Yes     | Yes        | Yes               | Yes    |
-| SSR      | Yes    | Yes     | Yes        | Yes               | No     |
-| API      | Yes    | Yes     | Yes        | Yes               | No     |
-| ISR      | Yes    | Yes     | No*        | Yes               | No     |
-| PPR      | Yes    | Yes     | No*        | Yes               | No     |
+| Strategy | Vercel | Netlify | Cloudflare | Railway/Render | Firebase | AWS Amplify | Static |
+| -------- | ------ | ------- | ---------- | -------------- | -------- | ----------- | ------ |
+| SSG      | Yes    | Yes     | Yes        | Yes            | Yes      | Yes         | Yes    |
+| CSR      | Yes    | Yes     | Yes        | Yes            | Yes      | Yes         | Yes    |
+| SSR      | Yes    | Yes     | Yes        | Yes            | Yes      | Yes         | No     |
+| API      | Yes    | Yes     | Yes        | Yes            | Yes      | Yes         | No     |
+| ISR      | Yes    | Yes     | No*        | Yes            | Yes†     | Yes†        | No     |
+| PPR      | Yes    | Yes     | No*        | Yes            | Yes†     | Yes†        | No     |
 
 \* Cloudflare Workers lack persistent server-side storage for ISR cache. ISR and PPR routes are
 rejected with `RUV2210` on Cloudflare. Use KV or Durable Objects bindings manually if needed.
+
+† Firebase Functions and Amplify compute use instance-local ephemeral caches. Revalidation works,
+but cache entries are not shared across cold starts or scaled instances.
 
 Static-only deployments (SSG/CSR pages without API or SSR routes) work everywhere. The serverless
 adapters emit both static assets and a serverless function; platforms serve static files directly
@@ -286,13 +390,13 @@ Vercel and Cloudflare do not hit this: their deploy directory is self-sufficient
 RUV3201 native WebSocket realtime requires a self-hosted Node/Bun build; received target=node adapter=netlify
 ```
 
-Ruvyxa's native WebSocket transport needs one long-lived Rust process holding the connections, which
-only the self-hosted targets provide. It is **not** available on serverless (Vercel, Netlify,
-Cloudflare) or static adapters — the guard fails the build on purpose rather than deploying a socket
-that can never connect. Options:
+Ruvyxa's native WebSocket transport needs one long-lived process holding the connections. It is
+available on Node, Bun, Railway, and Render, but **not** on serverless (Vercel, Netlify, Cloudflare,
+Firebase, AWS Amplify) or static adapters — the guard fails the build on purpose rather than
+deploying a socket that can never connect. Options:
 
-- Deploy the realtime app with the **Node** or **Bun** adapter (`ruvyxa build --adapter node`) on a
-  host that keeps the process alive (VPS, Docker, PaaS).
+- Deploy the realtime app with **Node**, **Bun**, **Railway**, or **Render** on a host that keeps
+  the process alive.
 - Or drop the native realtime plugin from that build if the route set does not need live
   connections.
 
@@ -307,7 +411,7 @@ RUV2202 adapter static supports ssg, csr; unsupported routes: /api/x (api), /das
 
 The static adapter publishes files only — it has no server, so it cannot host SSR pages, API routes,
 ISR, or PPR. Either convert those routes to `ssg`/`csr`, or switch to an adapter that ships a
-function (node, bun, vercel, netlify, cloudflare).
+function or server (node, bun, vercel, netlify, cloudflare, railway, render, firebase, aws).
 
 ### Permission Denied Error
 
@@ -416,6 +520,10 @@ Everything below is for power users and adapter authors — deploying an app nev
 | `@ruvyxa/adapter-cloudflare` | Cloudflare Workers: `.ruvyxa/deploy/cloudflare/`          |
 | `@ruvyxa/adapter-netlify`    | Netlify functions + static: `.netlify/v1/` + deploy dir   |
 | `@ruvyxa/adapter-vercel`     | Vercel Build Output API: `.vercel/output/`                |
+| `@ruvyxa/adapter-railway`    | Railway standalone server + `railway.json`                |
+| `@ruvyxa/adapter-render`     | Render standalone server + `render.yaml`                  |
+| `@ruvyxa/adapter-firebase`   | Firebase Hosting + Cloud Functions v2                     |
+| `@ruvyxa/adapter-aws`        | AWS Amplify Hosting static + compute primitives           |
 
 All official adapters are bundled with the `ruvyxa` package — `--adapter <name>` and platform
 auto-detection work without installing anything. Install the individual `@ruvyxa/adapter-*` package
@@ -425,11 +533,12 @@ only when you need to pass adapter options in `ruvyxa.config.ts`.
 
 `--adapter` accepts two kinds of value, and overrides `config.adapter` for that build only:
 
-**1. Built-in names** — `node`, `bun`, `static`, `vercel`, `netlify`, `cloudflare`. These work with
-`ruvyxa` alone installed and always use the adapter's defaults.
+**1. Built-in names** — `node`, `bun`, `static`, `vercel`, `netlify`, `cloudflare`, `railway`,
+`render`, `firebase`, `aws`. These work with `ruvyxa` alone installed and always use the adapter's
+defaults.
 
 **2. Any adapter package name** — opens the ecosystem to platforms without an official adapter (Deno
-Deploy, Fastly, AWS Lambda, and so on):
+Deploy, Fastly, and so on):
 
 ```bash
 ruvyxa build --adapter @acme/ruvyxa-adapter-deno   # scoped names are used verbatim

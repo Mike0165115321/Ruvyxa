@@ -34,7 +34,8 @@ Long route names use the same deterministic `route-hash:<id>` mapping in the wor
 Clients reconnect with bounded exponential backoff and receive a `resync` event if their server-side
 broadcast queue lagged, allowing the application to refetch authoritative state.
 
-The native transport is production-ready for self-hosted Node/Bun (`ruvyxa start`) where one Rust
-process owns WebSocket lifecycle. Static, Edge, Vercel, Netlify, and Cloudflare builds fail with
-`RUV3201` instead of silently deploying a non-functional socket. Horizontal multi-instance fan-out
-requires a future external broker adapter and is not claimed by this release.
+The native transport is production-ready for long-lived Node/Bun processes, including Railway and
+Render, where one process owns WebSocket lifecycle. Static, Edge, Vercel, Netlify, Cloudflare,
+Firebase, and AWS Amplify builds fail with `RUV3201` instead of silently deploying a non-functional
+socket. Horizontal multi-instance fan-out requires a future external broker adapter and is not
+claimed by this release.

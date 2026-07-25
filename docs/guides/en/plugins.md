@@ -73,12 +73,12 @@ state from config as a shared store. Browser auth code imports `@ruvyxa/auth/cli
 realtime code imports `@ruvyxa/realtime/client`. Root `@ruvyxa/auth` and `@ruvyxa/database` imports
 are rejected in client graphs with `RUV1007`.
 
-Native realtime supports `ruvyxa dev` and self-hosted Node/Bun through `ruvyxa start`. Static,
-Vercel, Netlify, Cloudflare, and Edge builds fail with `RUV3201` because those adapters do not own a
-persistent portable WebSocket process. Auth uses `auth.plugin` on the self-hosted middleware path or
-`auth.handle(request)` in a serverless API route. See
-[Official Data, Auth, and Realtime Packages](../../architecture/official-plugins.md) for complete
-flows, endpoints, security invariants, and the compatibility matrix.
+Native realtime supports `ruvyxa dev` and long-lived Node/Bun processes, including Railway and
+Render. Static, Vercel, Netlify, Cloudflare, Firebase, AWS Amplify, and Edge builds fail with
+`RUV3201` because those adapters do not own a persistent portable WebSocket process. Auth uses
+`auth.plugin` on the self-hosted middleware path or `auth.handle(request)` in a serverless API
+route. See [Official Data, Auth, and Realtime Packages](../../architecture/official-plugins.md) for
+complete flows, endpoints, security invariants, and the compatibility matrix.
 
 `ruvyxa/plugins` continues to ship zero-install first-party plugins built on the same public hooks:
 

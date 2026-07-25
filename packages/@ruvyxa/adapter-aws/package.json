@@ -1,0 +1,45 @@
+{
+  "name": "@ruvyxa/adapter-aws",
+  "version": "1.0.21",
+  "description": "Deploy full-stack Ruvyxa applications to AWS Amplify Hosting with native static and Node compute deployment output.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "src", "README.md"],
+  "keywords": ["ruvyxa", "adapter", "aws", "amplify", "hosting"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thirawat27/ruvyxa.git",
+    "directory": "packages/@ruvyxa/adapter-aws"
+  },
+  "bugs": {
+    "url": "https://github.com/thirawat27/ruvyxa/issues"
+  },
+  "homepage": "https://github.com/thirawat27/ruvyxa#readme",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@ruvyxa/core": "workspace:^"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.check.json",
+    "test": "node --test \"../../../tests/packages/adapter-aws/**/*.test.ts\"",
+    "format": "tsc -p tsconfig.check.json",
+    "prepack": "pnpm run build"
+  }
+}

@@ -21,7 +21,7 @@ const posts: Record<string, { title: string; date: string; content: string }> = 
     title: 'Deploying Your Ruvyxa App',
     date: '2025-01-01',
     content:
-      'Once your application is ready, you can deploy it to various platforms. Ruvyxa provides adapters for Node, Bun, Vercel, Netlify, Cloudflare, and static hosting.',
+      'Once your application is ready, you can deploy it to various platforms. Ruvyxa provides adapters for Node, Bun, Vercel, Netlify, Cloudflare, Railway, Render, Firebase Hosting, AWS Amplify Hosting, and static hosting.',
   },
 }
 

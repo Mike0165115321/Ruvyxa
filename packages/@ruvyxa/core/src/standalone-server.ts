@@ -5,6 +5,16 @@ import {
   STATIC_ASSET_EXTENSIONS,
 } from './utils.js'
 
+/** Runtime-specific options for the generated standalone HTTP server. */
+export interface StandaloneServerOptions {
+  /**
+   * Store ISR/PPR refreshes in the platform's writable temporary directory.
+   * Use this for immutable server bundles such as AWS Amplify compute.
+   * @default 'bundle'
+   */
+  isrCache?: 'bundle' | 'tmp'
+}
+
 /**
  * Source for the self-contained HTTP server that the node and bun adapters
  * emit.
@@ -18,7 +28,10 @@ import {
  * fallbacks, and cache headers, and those decisions have to stay identical
  * across every runtime that serves a Ruvyxa build.
  */
-export function standaloneServerSource(): string {
+export function standaloneServerSource(options: StandaloneServerOptions = {}): string {
+  const isrCacheDirectory =
+    options.isrCache === 'tmp' ? "path.join(os.tmpdir(), 'ruvyxa-isr-cache')" : 'prerenderDir'
+
   return `import { createServer } from 'node:http';
 import { createHandler, prerenderRelativePath } from './serverless-handler.mjs';
 import { loadRouteModule } from './route-modules.mjs';
@@ -26,10 +39,12 @@ import { loadRouteModule } from './route-modules.mjs';
 // puts in front of it, matching the serverless adapters.
 import manifest from './manifest.mjs';
 import { createReadStream, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 const here = import.meta.dirname;
 const prerenderDir = path.join(here, 'prerender');
+const isrCacheDir = ${isrCacheDirectory};
 const publicDir = path.resolve(here, '..', 'public');
 
 const handler = createHandler({
@@ -41,19 +56,24 @@ const handler = createHandler({
     // location inside prerenderDir, so the cache read can never escape it.
     const relative = prerenderRelativePath(pathname);
     if (relative === null) return null;
-    try {
-      const htmlPath = path.join(prerenderDir, relative);
-      const html = readFileSync(htmlPath, 'utf8');
-      const stale = Date.now() - statSync(htmlPath).mtimeMs >= revalidate * 1000;
-      return { html, stale };
-    } catch {
-      return null;
+    const cacheDirectories =
+      isrCacheDir === prerenderDir ? [prerenderDir] : [isrCacheDir, prerenderDir];
+    for (const cacheDirectory of cacheDirectories) {
+      try {
+        const htmlPath = path.join(cacheDirectory, relative);
+        const html = readFileSync(htmlPath, 'utf8');
+        const stale = Date.now() - statSync(htmlPath).mtimeMs >= revalidate * 1000;
+        return { html, stale };
+      } catch {
+        // try the deploy-time prerender output after the runtime cache
+      }
     }
+    return null;
   },
   writePrerendered: (pathname, html, revalidate) => {
     const relative = prerenderRelativePath(pathname);
     if (relative === null) return;
-    const htmlPath = path.join(prerenderDir, relative);
+    const htmlPath = path.join(isrCacheDir, relative);
     try {
       mkdirSync(path.dirname(htmlPath), { recursive: true });
       writeFileSync(htmlPath, html, 'utf8');

@@ -125,7 +125,8 @@ struct BuildArgs {
     target: Option<BuildTarget>,
 
     /// Deploy adapter to run without editing ruvyxa.config
-    /// (node, bun, static, vercel, netlify, cloudflare, or any
+    /// (node, bun, static, vercel, netlify, cloudflare, railway,
+    /// render, firebase, aws, or any
     /// adapter package name such as @scope/ruvyxa-adapter-deno).
     #[arg(long, value_parser = parse_adapter_name)]
     adapter: Option<String>,
@@ -136,15 +137,29 @@ struct BuildArgs {
     runtime: Option<CliRuntime>,
 }
 
-const KNOWN_ADAPTER_NAMES: [&str; 6] = ["node", "bun", "static", "vercel", "netlify", "cloudflare"];
+const KNOWN_ADAPTER_NAMES: [&str; 10] = [
+    "node",
+    "bun",
+    "static",
+    "vercel",
+    "netlify",
+    "cloudflare",
+    "railway",
+    "render",
+    "firebase",
+    "aws",
+];
 
 /// Hosting platforms that identify themselves through build-environment
 /// variables. When no adapter is configured, the matching adapter is selected
 /// automatically so a fresh project deploys with zero configuration.
-const PLATFORM_ADAPTER_ENV: [(&str, &str); 3] = [
+const PLATFORM_ADAPTER_ENV: [(&str, &str); 6] = [
     ("VERCEL", "vercel"),
     ("NETLIFY", "netlify"),
     ("CF_PAGES", "cloudflare"),
+    ("RAILWAY_PROJECT_ID", "railway"),
+    ("RENDER", "render"),
+    ("AWS_APP_ID", "aws"),
 ];
 
 fn parse_adapter_name(value: &str) -> Result<String, String> {
@@ -5421,6 +5436,10 @@ mod tests {
     fn adapter_names_accept_known_and_package_shapes() {
         assert_eq!(parse_adapter_name("vercel").unwrap(), "vercel");
         assert_eq!(parse_adapter_name(" Netlify ").unwrap(), "netlify");
+        assert_eq!(parse_adapter_name("Railway").unwrap(), "railway");
+        assert_eq!(parse_adapter_name("Render").unwrap(), "render");
+        assert_eq!(parse_adapter_name("Firebase").unwrap(), "firebase");
+        assert_eq!(parse_adapter_name("AWS").unwrap(), "aws");
         assert_eq!(
             parse_adapter_name("@acme/ruvyxa-adapter-deno").unwrap(),
             "@acme/ruvyxa-adapter-deno"
@@ -5466,6 +5485,18 @@ mod tests {
         assert_eq!(
             detect_platform_adapter(env(&[("CF_PAGES", "1")])),
             Some(("cloudflare".to_string(), "CF_PAGES".to_string()))
+        );
+        assert_eq!(
+            detect_platform_adapter(env(&[("RAILWAY_PROJECT_ID", "project-id")])),
+            Some(("railway".to_string(), "RAILWAY_PROJECT_ID".to_string()))
+        );
+        assert_eq!(
+            detect_platform_adapter(env(&[("RENDER", "true")])),
+            Some(("render".to_string(), "RENDER".to_string()))
+        );
+        assert_eq!(
+            detect_platform_adapter(env(&[("AWS_APP_ID", "amplify-app-id")])),
+            Some(("aws".to_string(), "AWS_APP_ID".to_string()))
         );
 
         // Explicit override wins over the platform variable.

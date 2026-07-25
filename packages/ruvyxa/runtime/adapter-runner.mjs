@@ -28,7 +28,18 @@ if (!projectRootArg || !outputDirArg) {
 const projectRoot = path.resolve(projectRootArg)
 const outputDir = path.resolve(outputDirArg)
 const runtimeDir = path.dirname(fileURLToPath(import.meta.url))
-const KNOWN_ADAPTER_NAMES = ['node', 'bun', 'static', 'vercel', 'netlify', 'cloudflare']
+const KNOWN_ADAPTER_NAMES = [
+  'node',
+  'bun',
+  'static',
+  'vercel',
+  'netlify',
+  'cloudflare',
+  'railway',
+  'render',
+  'firebase',
+  'aws',
+]
 // Hosting platforms discover deployment output at fixed project-root
 // locations. Project-scope artifacts are limited to this allowlist so an
 // adapter can enable zero-config deploys without gaining arbitrary write
@@ -39,6 +50,10 @@ const PROJECT_ARTIFACT_ALLOWLIST = [
   'netlify.toml',
   'netlify/functions',
   'wrangler.jsonc',
+  'railway.json',
+  'render.yaml',
+  'firebase.json',
+  '.amplify-hosting',
   '_headers',
   '_redirects',
 ]

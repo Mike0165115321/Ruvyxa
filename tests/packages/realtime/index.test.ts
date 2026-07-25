@@ -48,13 +48,23 @@ describe('@ruvyxa/realtime', () => {
     assert.deepEqual(registered, { path: '/events', heartbeatMs: 10_000, capacity: 64 })
     await buildHook?.({ manifest: { target: 'node', adapter: 'node' } })
     await buildHook?.({ manifest: { target: 'node', adapter: { name: 'bun' } } })
+    await buildHook?.({ manifest: { target: 'node', adapter: 'railway' } })
+    await buildHook?.({ manifest: { target: 'node', adapter: { name: 'render' } } })
     await assert.rejects(
       async () => buildHook?.({ manifest: { target: 'edge', adapter: 'cloudflare' } }),
-      /RUV3201.*self-hosted/,
+      /RUV3201.*long-lived/,
+    )
+    await assert.rejects(
+      async () => buildHook?.({ manifest: { target: 'node', adapter: 'firebase' } }),
+      /RUV3201.*long-lived/,
+    )
+    await assert.rejects(
+      async () => buildHook?.({ manifest: { target: 'node', adapter: 'aws' } }),
+      /RUV3201.*long-lived/,
     )
     await assert.rejects(
       async () => buildHook?.({ manifest: { target: 'node', adapter: 'vercel' } }),
-      /RUV3201.*self-hosted/,
+      /RUV3201.*long-lived/,
     )
   })
 

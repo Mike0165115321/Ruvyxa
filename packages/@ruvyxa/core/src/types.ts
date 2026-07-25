@@ -354,7 +354,17 @@ export interface AdapterOutput {
   clientDir?: string
   /** Chunk graph consumed by deployment tooling when `build.manifest` is enabled. */
   chunkManifest?: string
-  platform?: 'node' | 'vercel' | 'cloudflare' | 'netlify' | 'bun' | 'static'
+  platform?:
+    | 'node'
+    | 'vercel'
+    | 'cloudflare'
+    | 'netlify'
+    | 'bun'
+    | 'static'
+    | 'railway'
+    | 'render'
+    | 'firebase'
+    | 'aws'
   /** Runtime expected by the deployment entrypoint. */
   runtime?: 'node' | 'bun'
   configFiles?: string[]

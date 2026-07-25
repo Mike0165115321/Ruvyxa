@@ -197,8 +197,8 @@
 
 - **Four starters** — `npm create ruvyxa@latest` defaults to the focused `minimal` app, with `blog`,
   `crud`, and `api-backend` available through `--template`.
-- **Six deployment adapters** — `@ruvyxa/adapter-node`, `adapter-vercel`, `adapter-cloudflare`,
-  `adapter-netlify`, `adapter-bun`, and `adapter-static` for typed, serializable output metadata.
+- **Ten deployment adapters** — Node, Bun, static, Vercel, Netlify, Cloudflare, Railway, Render,
+  Firebase Hosting, and AWS Amplify Hosting with provider-native zero-config output.
 
 ---
 
@@ -606,6 +606,10 @@ as a deployment entrypoint.
 | [`@ruvyxa/adapter-netlify`](packages/@ruvyxa/adapter-netlify)       | Netlify functions adapter                                                  |
 | [`@ruvyxa/adapter-bun`](packages/@ruvyxa/adapter-bun)               | Bun runtime adapter                                                        |
 | [`@ruvyxa/adapter-static`](packages/@ruvyxa/adapter-static)         | Static output adapter                                                      |
+| [`@ruvyxa/adapter-railway`](packages/@ruvyxa/adapter-railway)       | Railway standalone service adapter                                         |
+| [`@ruvyxa/adapter-render`](packages/@ruvyxa/adapter-render)         | Render Web Service and Blueprint adapter                                   |
+| [`@ruvyxa/adapter-firebase`](packages/@ruvyxa/adapter-firebase)     | Firebase Hosting and Cloud Functions v2 adapter                            |
+| [`@ruvyxa/adapter-aws`](packages/@ruvyxa/adapter-aws)               | AWS Amplify Hosting static and compute adapter                             |
 
 ---
 
