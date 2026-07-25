@@ -186,35 +186,58 @@ jobs:
           SKIP_NATIVE_BUILD: '1'
       - name: Validate release metadata
         run: pnpm release:validate
-      - name: Publish @ruvyxa/core
-        run: node scripts/publish-if-new.mjs @ruvyxa/core
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: Publish @ruvyxa/react
-        run: node scripts/publish-if-new.mjs @ruvyxa/react
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: Publish adapters
+      - name: Publish JavaScript packages in dependency order
         run: |
           node scripts/publish-if-new.mjs \
+            @ruvyxa/core \
+            @ruvyxa/react \
+            @ruvyxa/auth \
+            @ruvyxa/database \
+            @ruvyxa/realtime \
+            @ruvyxa/adapter-aws \
             @ruvyxa/adapter-bun \
             @ruvyxa/adapter-cloudflare \
+            @ruvyxa/adapter-firebase \
             @ruvyxa/adapter-netlify \
             @ruvyxa/adapter-node \
+            @ruvyxa/adapter-railway \
+            @ruvyxa/adapter-render \
             @ruvyxa/adapter-static \
-            @ruvyxa/adapter-vercel
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: Publish ruvyxa
-        run: node scripts/publish-if-new.mjs ruvyxa
+            @ruvyxa/adapter-vercel \
+            ruvyxa \
+            create-ruvyxa
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           SKIP_NATIVE_BUILD: '1'
-      - name: Publish create-ruvyxa
-        run: node scripts/publish-if-new.mjs create-ruvyxa
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Verify published packages install from npm
+        run: |
+          VERSION="${{ needs.resolve-version.outputs.version }}"
+          for PACKAGE in \
+            @ruvyxa/core \
+            @ruvyxa/react \
+            @ruvyxa/auth \
+            @ruvyxa/database \
+            @ruvyxa/realtime \
+            @ruvyxa/adapter-aws \
+            @ruvyxa/adapter-bun \
+            @ruvyxa/adapter-cloudflare \
+            @ruvyxa/adapter-firebase \
+            @ruvyxa/adapter-netlify \
+            @ruvyxa/adapter-node \
+            @ruvyxa/adapter-railway \
+            @ruvyxa/adapter-render \
+            @ruvyxa/adapter-static \
+            @ruvyxa/adapter-vercel \
+            ruvyxa \
+            create-ruvyxa; do
+            npm view "$PACKAGE@$VERSION" version
+          done
+          VERIFY_DIR="$(mktemp -d)"
+          trap 'rm -rf "$VERIFY_DIR"' EXIT
+          cd "$VERIFY_DIR"
+          npm init --yes
+          npm install --ignore-scripts --no-audit --no-fund --package-lock=false "ruvyxa@$VERSION"
       - name: Release summary
         run: |
           echo "## Release v${{ needs.resolve-version.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "All packages published to npm successfully." >> "$GITHUB_STEP_SUMMARY"
+          echo "All JavaScript packages and every official adapter were published and installed from npm successfully." >> "$GITHUB_STEP_SUMMARY"

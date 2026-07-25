@@ -157,6 +157,15 @@ typos from silently changing deployment behaviour.
 Published tarballs must not contain tests or `workspace:` protocol dependencies. They must include
 every runtime script, template file, platform binary, and launcher required by the public command.
 
+### Releases
+
+`pnpm release:bump <version>` synchronizes every workspace package, Rust crate, and starter
+dependency to one release version. The release workflow then publishes native CLI packages first,
+followed by shared JavaScript packages, every official `@ruvyxa/adapter-*` package, `ruvyxa`, and
+`create-ruvyxa` in that order. The list and the clean `npm install ruvyxa@<version>` verification
+are kept directly in `.github/workflows/release.yml`, so adding an adapter requires updating that
+workflow in the same change.
+
 ## 6. Diagnostics
 
 User-visible framework diagnostics use the `RUV####` format. A new diagnostic should include:
