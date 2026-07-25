@@ -103,6 +103,16 @@ struct Conversion {
     variants: Vec<ImageVariant>,
 }
 
+struct VariantContext<'a> {
+    decoded: &'a DynamicImage,
+    intrinsic_width: u32,
+    relative: &'a Path,
+    assets_dir: &'a Path,
+    cache_dir: &'a Path,
+    source_data: &'a [u8],
+    options: &'a ImageOptimizationOptions,
+}
+
 /// Copy public assets and convert PNG/JPEG files to one WebP output each.
 ///
 /// Image sources are read directly from `public_dir`, avoiding a copy/read/delete
@@ -276,26 +286,37 @@ fn process_one(
     let cached = cache_dir.join(format!("{cache_key}.webp"));
     let cache_hit = cached.is_file();
 
-    if cache_hit {
-        materialize_cached(&cached, &output)?;
-    } else {
-        let encoded = encode_webp(decoded.clone(), options)?;
-        write_cache_entry(&cached, &encoded)?;
-        materialize_cached(&cached, &output)?;
-    }
-
+    // Full-size encoding and responsive variants consume the same immutable
+    // decoded pixels and write distinct content-addressed files. Running them
+    // together removes the primary-then-variants critical path for the common
+    // one-image starter while keeping result reduction deterministic.
+    let (primary_result, variants_result) = rayon::join(
+        || -> anyhow::Result<()> {
+            if cache_hit {
+                materialize_cached(&cached, &output)
+            } else {
+                let encoded = encode_webp(&decoded, options)?;
+                write_cache_entry(&cached, &encoded)?;
+                materialize_cached(&cached, &output)
+            }
+        },
+        || {
+            emit_variants(
+                &decoded,
+                width,
+                relative,
+                assets_dir,
+                cache_dir,
+                &source_data,
+                options,
+            )
+        },
+    );
+    primary_result?;
+    let variants = variants_result?;
     let output_bytes = fs::metadata(&output)
         .with_context(|| format!("failed to inspect image output {}", output.display()))?
         .len();
-    let variants = emit_variants(
-        &decoded,
-        width,
-        relative,
-        assets_dir,
-        cache_dir,
-        &source_data,
-        options,
-    )?;
     Ok(Some(Conversion {
         source: source.to_path_buf(),
         output,
@@ -324,6 +345,15 @@ fn emit_variants(
     source_data: &[u8],
     options: &ImageOptimizationOptions,
 ) -> anyhow::Result<Vec<ImageVariant>> {
+    let context = VariantContext {
+        decoded,
+        intrinsic_width,
+        relative,
+        assets_dir,
+        cache_dir,
+        source_data,
+        options,
+    };
     let mut widths: Vec<u32> = options
         .variant_widths
         .iter()
@@ -340,54 +370,37 @@ fn emit_variants(
     // optimization.
     widths
         .par_iter()
-        .map(|width| {
-            emit_variant(
-                decoded,
-                intrinsic_width,
-                relative,
-                assets_dir,
-                cache_dir,
-                source_data,
-                options,
-                *width,
-            )
-        })
+        .map(|width| emit_variant(&context, *width))
         .collect()
 }
 
-fn emit_variant(
-    decoded: &DynamicImage,
-    intrinsic_width: u32,
-    relative: &Path,
-    assets_dir: &Path,
-    cache_dir: &Path,
-    source_data: &[u8],
-    options: &ImageOptimizationOptions,
-    width: u32,
-) -> anyhow::Result<ImageVariant> {
+fn emit_variant(context: &VariantContext<'_>, width: u32) -> anyhow::Result<ImageVariant> {
     // Preserve aspect ratio; a zero height would make the encoder reject the
     // buffer on extreme aspect ratios.
-    let (_, intrinsic_height) = decoded.dimensions();
-    let height =
-        ((width as u64 * intrinsic_height as u64) / intrinsic_width.max(1) as u64).max(1) as u32;
-    let variant_relative = variant_path(relative, width);
-    let output = assets_dir.join(&variant_relative);
+    let (_, intrinsic_height) = context.decoded.dimensions();
+    let height = ((width as u64 * intrinsic_height as u64) / context.intrinsic_width.max(1) as u64)
+        .max(1) as u32;
+    let variant_relative = variant_path(context.relative, width);
+    let output = context.assets_dir.join(&variant_relative);
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)?;
     }
 
-    let cache_key = variant_cache_key(source_data, options, width);
-    let cached = cache_dir.join(format!("{cache_key}.webp"));
+    let cache_key = variant_cache_key(context.source_data, context.options, width);
+    let cached = context.cache_dir.join(format!("{cache_key}.webp"));
     if !cached.is_file() {
-        let resized = decoded.resize_exact(width, height, image::imageops::FilterType::Lanczos3);
-        let encoded = encode_webp(resized, options)?;
+        let resized =
+            context
+                .decoded
+                .resize_exact(width, height, image::imageops::FilterType::Lanczos3);
+        let encoded = encode_webp(&resized, context.options)?;
         write_cache_entry(&cached, &encoded)?;
     }
     materialize_cached(&cached, &output)?;
 
     Ok(ImageVariant {
         width,
-        output: relative_url(assets_dir, &output),
+        output: relative_url(context.assets_dir, &output),
     })
 }
 
@@ -401,7 +414,7 @@ fn copy_asset(source: &Path, output: &Path) -> anyhow::Result<()> {
 }
 
 fn encode_webp(
-    decoded: DynamicImage,
+    decoded: &DynamicImage,
     options: &ImageOptimizationOptions,
 ) -> anyhow::Result<Vec<u8>> {
     let (width, height) = decoded.dimensions();

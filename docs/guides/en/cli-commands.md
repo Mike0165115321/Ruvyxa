@@ -111,8 +111,9 @@ Pipeline:
 ```
 
 `build.json.timing` records route discovery, validation, preparation, client bundling, prerendering,
-and total build durations in milliseconds. Use it with `ruvyxa bench` to identify the stage to
-investigate before changing build settings.
+and total build durations in milliseconds. Preparation and client bundling overlap, so treat their
+values as per-phase work rather than adding every phase to reconstruct `totalMs`. Use the timings
+with `ruvyxa bench` to identify the stage to investigate before changing build settings.
 
 The client manifest's `budget` lists the ten largest first-load routes against a 250 KiB observation
 budget without failing the build. Each route also exposes `artifactCacheHit` when its

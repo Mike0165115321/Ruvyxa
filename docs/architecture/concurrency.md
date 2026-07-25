@@ -50,24 +50,33 @@ How Ruvyxa uses threads, locks, channels, and parallelism across the Rust layer.
 
 ### Rayon parallelism (CPU-bound)
 
-| Task                            | Pattern                                        | Notes                                                                  |
-| ------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------- |
-| Module resolution (phase 2 BFS) | `frontier.par_iter()`                          | I/O + CPU mix; each frontier level resolved in parallel                |
-| Module compilation              | `compiled.par_iter()` → Oxc transform          | Per-module compilation fully parallel                                  |
-| Linker (parallel)               | `modules.par_chunks()` → IIFE generation       | For >=8 modules; generates segments in parallel, concatenates serially |
-| Image optimization              | `entries.par_iter()` → decode + encode WebP    | Configurable `workers` limits thread pool                              |
-| Build: prepare bundles          | `routes.par_iter()` → `prepare_bundle()`       | All routes resolved+compiled in parallel                               |
-| Prerender rendering             | `route_groups.par_iter()` → worker pool render | Max parallelism 2 (build mode uses dedicated pool)                     |
+| Task                            | Pattern                                                | Notes                                                                  |
+| ------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------- |
+| Module resolution (phase 2 BFS) | `frontier.par_iter()`                                  | I/O + CPU mix; each frontier level resolved in parallel                |
+| Module compilation              | `compiled.par_iter()` → Oxc transform                  | Per-module compilation fully parallel                                  |
+| Linker (parallel)               | `modules.par_chunks()` → IIFE generation               | For >=8 modules; generates segments in parallel, concatenates serially |
+| Image sources                   | `sources.par_iter()` → decode + optimize               | Configurable `workers` limits the enclosing Rayon pool                 |
+| Image outputs per source        | `rayon::join(primary, variants)` + `widths.par_iter()` | Full-size and responsive encoders share immutable decoded pixels       |
+
+### Scoped OS threads (blocking build work)
+
+| Task                     | Pattern                                   | Notes                                                                    |
+| ------------------------ | ----------------------------------------- | ------------------------------------------------------------------------ |
+| Route bundle preparation | `routes.chunks()` → `thread::scope()`     | Bounded by `build.workers`; results sorted back into manifest order      |
+| Build preparation        | nested `thread::scope()` workers          | Style scan, source copies, and public assets use disjoint work units     |
+| Build phase overlap      | preparation worker + client bundle caller | Both read one project snapshot and write separate staging subdirectories |
 
 ### Tokio async parallelism (I/O-bound)
 
-| Task                         | Pattern                               | Notes                               |
-| ---------------------------- | ------------------------------------- | ----------------------------------- |
-| Dev server: request handling | Concurrent Axum handlers              | One task per request                |
-| Worker pool: send to workers | Concurrent `JoinSet`                  | All workers invalidated in parallel |
-| ISR revalidation             | `tokio::spawn()` per revalidation     | Non-blocking background refresh     |
-| File watcher                 | OS notify callback → sync → broadcast | notify runs on dedicated OS thread  |
-| Worker stdin/out/stderr      | 3 concurrent tokio tasks per worker   | Independent reader/writer/drain     |
+| Task                         | Pattern                                     | Notes                                                       |
+| ---------------------------- | ------------------------------------------- | ----------------------------------------------------------- |
+| Dev server: request handling | Concurrent Axum handlers                    | One task per request                                        |
+| Worker pool: send to workers | Concurrent `JoinSet`                        | All workers invalidated in parallel                         |
+| Static-parameter discovery   | `tokio::spawn()` per dynamic route          | Existing worker pool bounds work; awaited in manifest order |
+| Prerender rendering          | bounded `JoinSet`                           | Default max 4; explicit `build.workers` capped at 8         |
+| ISR revalidation             | `tokio::spawn()` per revalidation           | Non-blocking background refresh                             |
+| File watcher                 | OS notify callback → sync → broadcast       | notify runs on dedicated OS thread                          |
+| Worker stdin/out/stderr      | 3 concurrent Tokio tasks per worker process | Independent reader/writer/drain                             |
 
 ---
 
@@ -98,14 +107,18 @@ Same as dev minus HMR + error overlay overhead. Cache TTL is higher (1800s vs 30
 
 1. **Route discovery**: `WalkDir` of `app/`. Typical depth < 5, file count < 500.
 
-2. **Client bundling**: parallel route preparation (dominated by Oxc transforms). Okx is 10-100x
-   faster than Babel/SWC. Typical 50-500ms per route depending on import depth.
+2. **Preparation + client bundling**: source/style/public-asset preparation overlaps client route
+   bundling because both read the same immutable project snapshot and write disjoint staging trees.
+   Style source materialization runs after directory copies where output paths can overlap.
 
-3. **Image optimization**: `image::open()` decode + `webp::Encoder`. Heaviest per-file task.
-   Parallelized via rayon.
+3. **Client bundling**: route preparation is bounded across scoped threads; resolver, compiler, and
+   linker internals use Rayon. Oxc transforms dominate larger graphs.
 
-4. **Prerendering**: Node worker rendering (SSG/ISR/PPR). I/O-bound, max parallelism 2 to avoid
-   worker pool exhaustion.
+4. **Image optimization**: decode + `webp::Encoder` is the heaviest per-file preparation task.
+   Sources, full-size output, and responsive widths use the same bounded Rayon pool.
+
+5. **Prerendering**: dynamic `getStaticParams` calls and render jobs use the Node worker pool
+   concurrently. Deterministic collection keeps manifest and error order stable.
 
 ---
 

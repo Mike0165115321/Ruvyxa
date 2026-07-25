@@ -28,7 +28,7 @@ use tracing::info;
 use walkdir::WalkDir;
 
 mod image_optimizer;
-use image_optimizer::{ImageOptimizationOptions, optimize_public_images};
+use image_optimizer::{ImageOptimizationOptions, ImageOptimizationReport, optimize_public_images};
 
 const ASSET_HASH_ALGORITHM: &str = "blake3-256";
 
@@ -1243,6 +1243,73 @@ async fn build(args: BuildArgs) -> anyhow::Result<()> {
     build_with_output(args, true).await
 }
 
+struct PreparedBuildAssets {
+    styles: ruvyxa_dev_server::StyleCollection,
+    images: ImageOptimizationReport,
+    asset_files: usize,
+    duration: Duration,
+}
+
+fn prepare_build_assets(
+    root: &Path,
+    app_dir: &Path,
+    server_dir: &Path,
+    assets_dir: &Path,
+    style_entries: &[PathBuf],
+    image_cache_dir: &Path,
+    image_options: &ImageOptimizationOptions,
+) -> anyhow::Result<PreparedBuildAssets> {
+    let started = Instant::now();
+    let (styles, images) = std::thread::scope(|scope| -> anyhow::Result<_> {
+        let styles =
+            scope.spawn(|| ruvyxa_dev_server::collect_styles(root, app_dir, style_entries));
+        let app_copy = scope.spawn(|| copy_dir_all(app_dir, &server_dir.join("app")));
+        let components_copy = scope
+            .spawn(|| copy_optional_dir(&root.join("components"), &server_dir.join("components")));
+        let server_copy =
+            scope.spawn(|| copy_optional_dir(&root.join("server"), &server_dir.join("server")));
+        let images = scope.spawn(|| {
+            optimize_public_images(
+                &root.join("public"),
+                assets_dir,
+                image_cache_dir,
+                image_options,
+            )
+        });
+
+        // Join in the original phase order so simultaneous failures remain
+        // deterministic even though the independent work runs concurrently.
+        let styles = styles
+            .join()
+            .map_err(|_| anyhow::anyhow!("style collection worker panicked"))??;
+        app_copy
+            .join()
+            .map_err(|_| anyhow::anyhow!("application copy worker panicked"))??;
+        components_copy
+            .join()
+            .map_err(|_| anyhow::anyhow!("component copy worker panicked"))??;
+        server_copy
+            .join()
+            .map_err(|_| anyhow::anyhow!("server copy worker panicked"))??;
+        let images = images
+            .join()
+            .map_err(|_| anyhow::anyhow!("image optimization worker panicked"))??;
+        Ok((styles, images))
+    })?;
+
+    // Style sources can overlap app/components destinations, so copy them only
+    // after the directory workers finish instead of racing writes to one file.
+    copy_style_sources(root, server_dir, &styles.files)?;
+    let asset_files = count_files(assets_dir);
+
+    Ok(PreparedBuildAssets {
+        styles,
+        images,
+        asset_files,
+        duration: started.elapsed(),
+    })
+}
+
 async fn build_with_output(args: BuildArgs, show_summary: bool) -> anyhow::Result<()> {
     let started = Instant::now();
     let config = load_project_config(&args.root)?;
@@ -1277,10 +1344,6 @@ async fn build_with_output(args: BuildArgs, show_summary: bool) -> anyhow::Resul
     if show_summary {
         print_build_phase("validated", "ok".to_string(), validation_duration);
     }
-    let phase_started = Instant::now();
-    let style_collection =
-        ruvyxa_dev_server::collect_styles(&args.root, &app_dir, &config.style_entries(&args.root))?;
-
     let staging_dir = create_build_staging_dir(&out_dir).with_context(|| {
         format!(
             "failed to create build staging dir in {}",
@@ -1290,25 +1353,53 @@ async fn build_with_output(args: BuildArgs, show_summary: bool) -> anyhow::Resul
     let server_dir = staging_dir.join("server");
     let client_dir = staging_dir.join("client");
     let assets_dir = staging_dir.join("assets");
-
-    copy_dir_all(&app_dir, &server_dir.join("app"))?;
-    copy_optional_dir(
-        &args.root.join("components"),
-        &server_dir.join("components"),
-    )?;
-    copy_optional_dir(&args.root.join("server"), &server_dir.join("server"))?;
-    copy_style_sources(&args.root, &server_dir, &style_collection.files)?;
     let image_cache_dir = build_cache_dir(&args.root, &config.cache).join("images");
-    let image_report = optimize_public_images(
-        &args.root.join("public"),
-        &assets_dir,
-        &image_cache_dir,
-        &config.images,
-    )?;
-    let asset_files = count_files(&assets_dir);
+    let style_entries = config.style_entries(&args.root);
     fs::create_dir_all(&client_dir)?;
     write_manifest(&manifest, &staging_dir.join("manifest.json"))?;
-    let preparation_duration = phase_started.elapsed();
+
+    // Asset preparation and client bundling both read the immutable project
+    // snapshot but write disjoint staging trees. Overlap them, then reduce
+    // results in the historical phase order so errors and output stay stable.
+    let ((prepared_assets, client_manifest), client_bundle_duration) =
+        std::thread::scope(|scope| -> anyhow::Result<_> {
+            let preparation = scope.spawn(|| {
+                prepare_build_assets(
+                    &args.root,
+                    &app_dir,
+                    &server_dir,
+                    &assets_dir,
+                    &style_entries,
+                    &image_cache_dir,
+                    &config.images,
+                )
+            });
+            let bundle_started = Instant::now();
+            let client_manifest = emit_client_bundles_with_runtime(
+                &args.root,
+                &app_dir,
+                &manifest,
+                &client_dir,
+                &config.build,
+                &config.plugins,
+                RuvyxaBuildCache {
+                    dependency_hash: &config.config_dependency_hash,
+                    directory: &build_cache_dir(&args.root, &config.cache),
+                },
+                config.javascript_runtime(),
+            );
+            let client_bundle_duration = bundle_started.elapsed();
+            let prepared_assets = preparation
+                .join()
+                .map_err(|_| anyhow::anyhow!("asset preparation worker panicked"))??;
+            Ok(((prepared_assets, client_manifest?), client_bundle_duration))
+        })?;
+    let PreparedBuildAssets {
+        styles: style_collection,
+        images: image_report,
+        asset_files,
+        duration: preparation_duration,
+    } = prepared_assets;
     if show_summary {
         let mut detail = format!("{asset_files} files");
         if image_report.optimized_images > 0 {
@@ -1325,20 +1416,6 @@ async fn build_with_output(args: BuildArgs, show_summary: bool) -> anyhow::Resul
         print_build_phase("assets prepared", detail, preparation_duration);
     }
 
-    let phase_started = Instant::now();
-    let client_manifest = emit_client_bundles_with_runtime(
-        &args.root,
-        &app_dir,
-        &manifest,
-        &client_dir,
-        &config.build,
-        &config.plugins,
-        RuvyxaBuildCache {
-            dependency_hash: &config.config_dependency_hash,
-            directory: &build_cache_dir(&args.root, &config.cache),
-        },
-        config.javascript_runtime(),
-    )?;
     // The client manifest is machine-read (the server resolves per-route scripts
     // and preloads from it) and never hand-edited, so emit compact JSON: it is
     // part of the deployed artifact and is parsed on the render path.
@@ -1346,7 +1423,6 @@ async fn build_with_output(args: BuildArgs, show_summary: bool) -> anyhow::Resul
         client_dir.join("manifest.json"),
         serde_json::to_string(&client_manifest)?,
     )?;
-    let client_bundle_duration = phase_started.elapsed();
     let client_bundles = client_manifest
         .get("routes")
         .and_then(|routes| routes.as_array())
@@ -1824,8 +1900,48 @@ async fn prerender_static_routes(
 
     let prerendered = async {
         let mut jobs = Vec::new();
+        let static_params_routes = Arc::new(
+            manifest
+                .routes
+                .iter()
+                .map(|entry| ruvyxa_dev_server::StaticParamsRoute {
+                    path: entry.path.clone(),
+                    id: entry.id.clone(),
+                })
+                .collect::<Vec<_>>(),
+        );
+        let mut static_param_tasks = (0..routes_to_prerender.len())
+            .map(|_| None)
+            .collect::<Vec<Option<StaticParamsTask>>>();
 
-        for route in routes_to_prerender {
+        // Static-parameter discovery is independent per dynamic route and the
+        // worker pool already bounds execution. Start all requests together,
+        // then await them in manifest order below to preserve deterministic
+        // errors and job ordering.
+        if needs_static_params_worker {
+            let permits = Arc::new(tokio::sync::Semaphore::new(parallelism));
+            let worker_pool = worker_pool.as_ref().cloned().ok_or_else(|| {
+                anyhow::anyhow!("Static-parameter worker pool was not initialized")
+            })?;
+            for (index, route) in routes_to_prerender.iter().enumerate() {
+                if !route.render.has_static_params || !route_has_dynamic_segments(&route.path) {
+                    continue;
+                }
+                let worker_pool = worker_pool.clone();
+                let root = root.to_path_buf();
+                let route = (*route).clone();
+                let routes = static_params_routes.clone();
+                let permits = permits.clone();
+                static_param_tasks[index] = Some(tokio::spawn(async move {
+                    let _permit = permits.acquire_owned().await.map_err(|_| {
+                        anyhow::anyhow!("Static-parameter concurrency limiter closed")
+                    })?;
+                    resolve_static_params(&worker_pool, &root, &route, routes.as_slice()).await
+                }));
+            }
+        }
+
+        for (route_index, route) in routes_to_prerender.into_iter().enumerate() {
             match route.render.strategy {
                 RenderStrategy::Csr => {
                     jobs.push(PrerenderJob {
@@ -1842,13 +1958,26 @@ async fn prerender_static_routes(
                     let paths_to_render = if route.render.has_static_params
                         && route_has_dynamic_segments(&route.path)
                     {
-                        let worker_pool = worker_pool.as_deref().ok_or_else(|| {
+                        let task = static_param_tasks[route_index].take().ok_or_else(|| {
                             anyhow::anyhow!(
-                                "Static-parameter worker pool was not initialized for {}",
+                                "Static-parameter task was not initialized for {}",
                                 route.path
                             )
                         })?;
-                        resolve_static_params(worker_pool, root, route, manifest).await?
+                        match task.await {
+                            Ok(Ok(paths)) => paths,
+                            Ok(Err(error)) => {
+                                abort_static_param_tasks(&mut static_param_tasks).await;
+                                return Err(error);
+                            }
+                            Err(error) => {
+                                abort_static_param_tasks(&mut static_param_tasks).await;
+                                return Err(anyhow::anyhow!(
+                                    "getStaticParams worker task panicked for {}: {error}",
+                                    route.path
+                                ));
+                            }
+                        }
                     } else if !route_has_dynamic_segments(&route.path) {
                         // Pure static route — render the single path
                         vec![StaticRouteParams {
@@ -2145,23 +2274,26 @@ struct StaticRouteParams {
     params: RouteParams,
 }
 
+type StaticParamsTask = tokio::task::JoinHandle<anyhow::Result<Vec<StaticRouteParams>>>;
+
+async fn abort_static_param_tasks(tasks: &mut [Option<StaticParamsTask>]) {
+    for task in tasks.iter().flatten() {
+        task.abort();
+    }
+    for task in tasks.iter_mut().filter_map(Option::take) {
+        let _ = task.await;
+    }
+}
+
 async fn resolve_static_params(
     worker_pool: &ruvyxa_dev_server::NodeWorkerPool,
     root: &Path,
     route: &RouteEntry,
-    manifest: &RouteManifest,
+    routes: &[ruvyxa_dev_server::StaticParamsRoute],
 ) -> anyhow::Result<Vec<StaticRouteParams>> {
     let segments = static_param_segments(&route.path);
-    let routes = manifest
-        .routes
-        .iter()
-        .map(|entry| ruvyxa_dev_server::StaticParamsRoute {
-            path: entry.path.clone(),
-            id: entry.id.clone(),
-        })
-        .collect::<Vec<_>>();
     let result = worker_pool
-        .resolve_static_params(root, &route.file, &route.path, &segments, &routes)
+        .resolve_static_params(root, &route.file, &route.path, &segments, routes)
         .await
         .map_err(|error| anyhow::anyhow!("getStaticParams failed for {}: {error}", route.path))?;
     if !result.ok {

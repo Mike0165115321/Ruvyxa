@@ -10,10 +10,15 @@
   a project with one large image used only one encoder path. Variant resize and WebP encoding now
   run in parallel while preserving deterministic manifest order, content-addressed cache keys, and
   output filenames.
-- A clean `RUNS=3` comparison through `scripts/bench-frameworks.mjs` measured a **2.1 s** median
-  Ruvyxa build, down from **22.1 s** before the fix. The same run measured Next.js 16.2.11 at 6.4 s
-  and Astro 7.1.3 at 2.3 s. Ruvyxa still emits the complete responsive image set; the improvement
-  does not disable optimization or remove variants.
+- Extended the concurrency pass beyond responsive variants: full-size image encoding now overlaps
+  variant work, asset/style/server preparation overlaps client bundling, and independent dynamic
+  `getStaticParams` requests use the existing bounded worker pool instead of waiting route by route.
+  Results and errors are reduced in deterministic order, and style files that can share an output
+  path remain serialized after directory copies complete.
+- A clean `RUNS=3` comparison through `scripts/bench-frameworks.mjs` measured a **1.5 s** median
+  Ruvyxa build, down from **2.1 s** after the first responsive-image fix and **22.1 s** before it.
+  The same run measured Next.js 16.2.11 at 6.2 s and Astro 7.1.3 at 2.3 s. Ruvyxa still emits the
+  complete responsive image set; the improvement does not disable optimization or remove variants.
 - The v1.0.18 CLI built the same fixture in 1.2 s. The remaining difference is the cost of the
   responsive image outputs introduced after that release, rather than the 20-second serialization
   regression.
@@ -38,9 +43,9 @@
 
 ### Documentation and Verification
 
-- Updated the README benchmark table and methodology with the post-fix clean results, exact
-  framework versions, cold-cache behavior, hardware, and the distinction between median startup
-  measurements and the final throughput run.
+- Updated the README benchmark table, concurrency architecture, and methodology with the post-fix
+  clean results, exact framework versions, cold-cache behavior, hardware, and the distinction
+  between median startup measurements and the final throughput run.
 - Verified with the complete `ruvyxa_cli` test suite, runtime compiler/config tests, TypeScript
   checks for `ruvyxa` and `@ruvyxa/core`, Rust formatting, Prettier, and the three-framework clean
   benchmark.

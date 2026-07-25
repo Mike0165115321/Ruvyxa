@@ -111,8 +111,9 @@ Pipeline:
 └── build.json      # Metadata + timing
 ```
 
-`build.json` บันทึกเวลาแต่ละ phase (discovery, validation, client bundling, prerender, adapter)
-เป็นมิลลิวินาที
+`build.json` บันทึกเวลาแต่ละ phase (discovery, validation, preparation, client bundling, prerender,
+adapter) เป็นมิลลิวินาที โดย preparation กับ client bundling ทำงานซ้อนเวลากัน
+จึงควรใช้ตัวเลขเพื่อดูต้นทุนของแต่ละ phase และไม่ควรนำทุก phase มาบวกเพื่อคำนวณ `totalMs`
 
 ### `check`
 
