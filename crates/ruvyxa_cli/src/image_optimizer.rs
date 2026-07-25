@@ -333,35 +333,62 @@ fn emit_variants(
     widths.sort_unstable();
     widths.dedup();
 
+    // A single large source can produce several variants, so parallelizing only
+    // across source files leaves the common one-image starter on one encoder
+    // thread. Rayon preserves the order of this indexed collection, keeping the
+    // manifest deterministic while using the same worker pool as source-level
+    // optimization.
+    widths
+        .par_iter()
+        .map(|width| {
+            emit_variant(
+                decoded,
+                intrinsic_width,
+                relative,
+                assets_dir,
+                cache_dir,
+                source_data,
+                options,
+                *width,
+            )
+        })
+        .collect()
+}
+
+fn emit_variant(
+    decoded: &DynamicImage,
+    intrinsic_width: u32,
+    relative: &Path,
+    assets_dir: &Path,
+    cache_dir: &Path,
+    source_data: &[u8],
+    options: &ImageOptimizationOptions,
+    width: u32,
+) -> anyhow::Result<ImageVariant> {
+    // Preserve aspect ratio; a zero height would make the encoder reject the
+    // buffer on extreme aspect ratios.
     let (_, intrinsic_height) = decoded.dimensions();
-    let mut variants = Vec::with_capacity(widths.len());
-    for width in widths {
-        // Preserve aspect ratio; a zero height would make the encoder reject
-        // the buffer on extreme aspect ratios.
-        let height = ((width as u64 * intrinsic_height as u64) / intrinsic_width.max(1) as u64)
-            .max(1) as u32;
-        let variant_relative = variant_path(relative, width);
-        let output = assets_dir.join(&variant_relative);
-        if let Some(parent) = output.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        let cache_key = variant_cache_key(source_data, options, width);
-        let cached = cache_dir.join(format!("{cache_key}.webp"));
-        if !cached.is_file() {
-            let resized =
-                decoded.resize_exact(width, height, image::imageops::FilterType::Lanczos3);
-            let encoded = encode_webp(resized, options)?;
-            write_cache_entry(&cached, &encoded)?;
-        }
-        materialize_cached(&cached, &output)?;
-
-        variants.push(ImageVariant {
-            width,
-            output: relative_url(assets_dir, &output),
-        });
+    let height =
+        ((width as u64 * intrinsic_height as u64) / intrinsic_width.max(1) as u64).max(1) as u32;
+    let variant_relative = variant_path(relative, width);
+    let output = assets_dir.join(&variant_relative);
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent)?;
     }
-    Ok(variants)
+
+    let cache_key = variant_cache_key(source_data, options, width);
+    let cached = cache_dir.join(format!("{cache_key}.webp"));
+    if !cached.is_file() {
+        let resized = decoded.resize_exact(width, height, image::imageops::FilterType::Lanczos3);
+        let encoded = encode_webp(resized, options)?;
+        write_cache_entry(&cached, &encoded)?;
+    }
+    materialize_cached(&cached, &output)?;
+
+    Ok(ImageVariant {
+        width,
+        output: relative_url(assets_dir, &output),
+    })
 }
 
 fn copy_asset(source: &Path, output: &Path) -> anyhow::Result<()> {

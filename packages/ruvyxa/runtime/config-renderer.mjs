@@ -104,6 +104,7 @@ async function sanitizeConfig(config) {
     'quality',
     'lossless',
     'keepOriginal',
+    'variantWidths',
     'workers',
   ])
   assertKnownKeys(config.security, 'config.security', [
@@ -181,6 +182,7 @@ async function sanitizeConfig(config) {
       quality: numberValue(config.image?.quality),
       lossless: booleanValue(config.image?.lossless),
       keepOriginal: booleanValue(config.image?.keepOriginal),
+      variantWidths: numberArrayValue(config.image?.variantWidths),
       workers: numberValue(config.image?.workers),
     }),
     security: objectValue(config.security, {
@@ -236,6 +238,7 @@ function assertConfigValueShape(config) {
       quality: 'number',
       lossless: 'boolean',
       keepOriginal: 'boolean',
+      variantWidths: 'number[]',
       workers: 'number',
     },
     security: {
@@ -276,7 +279,10 @@ function assertShape(value, field, shape) {
       (expected === 'array' && Array.isArray(candidate)) ||
       (expected === 'string[]' &&
         Array.isArray(candidate) &&
-        candidate.every((item) => typeof item === 'string'))
+        candidate.every((item) => typeof item === 'string')) ||
+      (expected === 'number[]' &&
+        Array.isArray(candidate) &&
+        candidate.every((item) => Number.isFinite(item)))
     if (!valid) {
       throw new Error(`RUV1602 ${childField} must be ${expected}.`)
     }
@@ -334,6 +340,11 @@ function stringValue(value) {
 
 function numberValue(value) {
   return Number.isFinite(value) ? value : undefined
+}
+
+function numberArrayValue(value) {
+  if (!Array.isArray(value) || !value.every((item) => Number.isFinite(item))) return undefined
+  return value
 }
 
 function booleanValue(value) {

@@ -246,44 +246,47 @@ strategies, see [examples/demo](examples/demo).
 
 ## Benchmarks
 
-Measured head-to-head against the **Next.js** and **Astro** minimal starters that were the latest
-releases on the measurement date (2026-07-22) — real runs, not synthetic claims. Each number is the
-**median of 5 fully cold runs** (all framework caches deleted between runs). Benchmark numbers are
-only valid for the exact versions measured; newer releases of any framework may differ — re-run the
-harness below to refresh them.
+Measured on 2026-07-25 with the repository harness against minimal starters. These figures are valid
+only for the exact versions, machine, and run conditions shown below; re-run the harness when
+comparing newer releases.
 
-| Metric (lower is better)             | **Ruvyxa 1.0.18** | Next.js 16.2.11 | Astro 7.1.3 |
+| Metric (lower is better)             | **Ruvyxa 1.0.23** | Next.js 16.2.11 | Astro 7.1.3 |
 | ------------------------------------ | ----------------: | --------------: | ----------: |
-| Production build (cold)              |         **2.0 s** |          10.9 s |       5.2 s |
-| Dev server → first rendered response |         **1.5 s** |           6.3 s |       9.0 s |
-| Prod server start → first response   |         **1.3 s** |           2.6 s |       3.6 s |
+| Production build (cold-cache median) |         **2.1 s** |           6.4 s |       2.3 s |
+| Dev server → first rendered response |         **1.1 s** |           3.7 s |       4.6 s |
+| Prod server start → first response   |         **0.9 s** |           1.2 s |       1.8 s |
 | Client JS shipped (minimal page)     |          184 KB ¹ |          627 KB |      0 KB ² |
 
-| Throughput (higher is better)        | **Ruvyxa 1.0.18** | Next.js 16.2.11 |   Astro 7.1.3 |
-| ------------------------------------ | ----------------: | --------------: | ------------: |
-| Requests/second (`/`, prod server) ³ |        **31,681** |           2,714 |           803 |
-| Latency p50 / p99                    |  **<1 ms / 1 ms** |    8 ms / 19 ms | 30 ms / 45 ms |
+| Throughput (higher is better)        | **Ruvyxa 1.0.22** | Next.js 16.2.11 | Astro 7.1.3 |
+| ------------------------------------ | ----------------: | --------------: | ----------: |
+| Requests/second (`/`, prod server) ³ |        **45,700** |           3,546 |       3,495 |
+| Latency p50 / p99                    |      **0 / 1 ms** |       6 / 15 ms |   6 / 13 ms |
 
-Ruvyxa's Rust-native pipeline builds **5.4× faster than Next.js**, reaches a working dev server
-**4–6× sooner** than either framework, serves the same prerendered page at **11× Next.js
-throughput**, and ships **3.4× less JavaScript** for the same React-hydrated page.
+In this clean run, Ruvyxa reached a working dev server **3.5× sooner than Next.js** and **4.3×
+sooner than Astro**, started its production server **1.4× sooner than Next.js** and **2.0× sooner
+than Astro**, and served **12.9× / 13.1× more requests per second** than Next.js / Astro
+respectively. The responsive-image fix reduced Ruvyxa's cold-cache build from **22.1 s to 2.1 s** on
+this machine.
 
 ¹ For the interactive React starter page. A content page can opt out entirely with
 `export const hydrate = false` — its HTML then ships **0 KB** of JavaScript and no client bundle is
 emitted. ² Astro's minimal starter is a zero-JS static page by design (no React hydration), so it
-has no client bundle and its `preview` server serves static files only. ³ Both Ruvyxa and Next.js
-serve a prerendered static route; interleaved A/B runs on the same machine, medians of 3+
-alternating rounds. Giving the load generator more workers (`-c 50 -w 4`) pushes Ruvyxa to ~43,700
-req/s while Next.js stays at ~2,800 — its server, not the client, is the ceiling.
+has no client bundle and its `preview` server serves static files only. ³ The harness runs
+`autocannon` once for 10 seconds with 25 connections against the final production server of each
+framework; throughput and latency are not medians.
 
-**Methodology** — measured 2026-07-22 on Windows 11, AMD Ryzen 7 8845HS, 32 GB RAM, Node.js 22.23.1,
-npm-installed release artifacts of each framework's default minimal starter (`npm create ruvyxa` /
-`create-next-app` / `create astro -- --template minimal`). Build = `build` script wall time.
-Dev/prod readiness = time from process spawn to first HTTP 200 on `/`. Throughput =
-`autocannon -c 25` interleaved A/B runs against both production servers on the current repo build.
-Cold = `.ruvyxa`/`.next`/`dist`/`.astro`/ Vite caches removed before every run. Re-run it yourself
-against current framework versions: [`scripts/bench-frameworks.mjs`](scripts/bench-frameworks.mjs) —
-scaffold the three starters (instructions in the file header) and run `node bench-frameworks.mjs`.
+**Methodology** — measured on Windows 11, AMD Ryzen 7 8845HS, 32 GB RAM, Node.js 22.23.1 and npm
+10.9.8. Each framework used a freshly scaffolded minimal starter with a fresh dependency install and
+`RUNS=3` with the same [`scripts/bench-frameworks.mjs`](scripts/bench-frameworks.mjs) harness. Build
+= `build` script wall time. Dev/prod readiness = time from process spawn to first HTTP 200 on `/`.
+Cold-cache runs remove `.ruvyxa`/`.next`/`dist`/`.astro`/Vite caches before each run; dependencies
+remain installed during the harness. Ruvyxa used the repository's rebuilt 1.0.22 native binary
+through the monorepo (the unpublished, post-fix code), because the published 1.0.22 package
+currently declares adapter packages that are not all available on npm. Next.js and Astro used the
+resolved npm packages shown in the table. The same fixture built with the v1.0.18 CLI at commit
+`9a58a8c` took 1.2 s; before this fix, the v1.0.22 monorepo build took 22.1 s because it encoded six
+responsive variants sequentially. To reproduce, scaffold the three starters using the instructions
+in the harness header, set `BENCH_ROOT`, and run `RUNS=3 node scripts/bench-frameworks.mjs`.
 
 ---
 
@@ -470,6 +473,7 @@ export default config({
     optimize: true,
     quality: 82,
     lossless: false,
+    variantWidths: [640, 750, 828, 1080, 1200, 1920, 2048, 3840],
     workers: 0,
   },
   security: {

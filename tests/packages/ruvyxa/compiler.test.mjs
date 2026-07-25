@@ -1338,7 +1338,16 @@ export class contentFormat {}
     await withFixture(async ({ root }) => {
       await writeFile(
         path.join(root, 'ruvyxa.config.ts'),
-        `export default { image: { optimize: true, quality: 91, lossless: true, workers: 2 } }`,
+        `export default {
+          image: {
+            optimize: true,
+            quality: 91,
+            lossless: true,
+            keepOriginal: false,
+            variantWidths: [640, 1280],
+            workers: 2,
+          },
+        }`,
       )
 
       const config = await runJson(configRenderer, [root], {})
@@ -1346,6 +1355,8 @@ export class contentFormat {}
         optimize: true,
         quality: 91,
         lossless: true,
+        keepOriginal: false,
+        variantWidths: [640, 1280],
         workers: 2,
       })
     })

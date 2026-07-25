@@ -1,5 +1,86 @@
 # Changelog
 
+## v1.0.23 (2026-07-26)
+
+### Production Build Performance
+
+- **Fixed a responsive-image regression that increased the minimal production build from roughly 2
+  seconds to 22 seconds.** The 2,000×2,000 starter image produces one full-size WebP and six
+  responsive variants. Variant work was performed sequentially inside a source-level Rayon task, so
+  a project with one large image used only one encoder path. Variant resize and WebP encoding now
+  run in parallel while preserving deterministic manifest order, content-addressed cache keys, and
+  output filenames.
+- A clean `RUNS=3` comparison through `scripts/bench-frameworks.mjs` measured a **2.1 s** median
+  Ruvyxa build, down from **22.1 s** before the fix. The same run measured Next.js 16.2.11 at 6.4 s
+  and Astro 7.1.3 at 2.3 s. Ruvyxa still emits the complete responsive image set; the improvement
+  does not disable optimization or remove variants.
+- The v1.0.18 CLI built the same fixture in 1.2 s. The remaining difference is the cost of the
+  responsive image outputs introduced after that release, rather than the 20-second serialization
+  regression.
+
+### Image Configuration Correctness
+
+- **Fixed: documented `image.variantWidths` configuration was rejected as an unknown field.** The
+  runtime config renderer now validates and forwards finite numeric arrays to the native CLI. Custom
+  breakpoints work again, and `variantWidths: []` disables responsive variant generation as
+  documented.
+- Added config serialization coverage for `keepOriginal`, `variantWidths`, quality, lossless mode,
+  and worker selection alongside the existing native image optimizer tests.
+
+### Release Reliability
+
+- The release workflow publishes every workspace package instead of relying on a recursive publish
+  shape that could omit newly added packages. This prevents the main `ruvyxa` package from
+  referencing an adapter version that was never uploaded to npm.
+- Release jobs now verify every expected npm package and version after publication, turning a
+  partial release into an explicit workflow failure instead of discovering it later through an
+  application install error.
+
+### Documentation and Verification
+
+- Updated the README benchmark table and methodology with the post-fix clean results, exact
+  framework versions, cold-cache behavior, hardware, and the distinction between median startup
+  measurements and the final throughput run.
+- Verified with the complete `ruvyxa_cli` test suite, runtime compiler/config tests, TypeScript
+  checks for `ruvyxa` and `@ruvyxa/core`, Rust formatting, Prettier, and the three-framework clean
+  benchmark.
+
+## v1.0.22 (2026-07-25)
+
+### Four Additional Deployment Adapters
+
+- Added `@ruvyxa/adapter-railway`, which emits a self-contained Railway service deployment with the
+  standalone Node runtime and explicit deployment metadata.
+- Added `@ruvyxa/adapter-render`, including Render Web Service and Blueprint-compatible output for
+  deploying the generated standalone server.
+- Added `@ruvyxa/adapter-firebase`, which packages static assets for Firebase Hosting and dynamic
+  routes for Cloud Functions v2 while preserving Ruvyxa's route and rendering contracts.
+- Added `@ruvyxa/adapter-aws`, which emits AWS Amplify Hosting static and compute artifacts for
+  hybrid Ruvyxa applications.
+- The CLI recognizes Railway, Render, Firebase, and AWS alongside the existing Node, Bun, static,
+  Vercel, Netlify, and Cloudflare targets. The main `ruvyxa` package includes the new adapters in
+  its deployment surface so configured and auto-selected builds use one adapter contract.
+
+### Deployment Contract Alignment
+
+- Extended shared adapter output types and standalone-server helpers for the four new platforms,
+  keeping generated assets, client bundles, function handlers, and runtime metadata aligned with the
+  existing deployment targets.
+- Expanded adapter-runner validation and package smoke coverage so generated deployment artifacts
+  are materialized inside the atomic build staging directory and required runtime files are present
+  in package output.
+- Updated realtime deployment guards and package guidance for targets whose server runtime can host
+  the native self-hosted WebSocket transport.
+
+### Documentation and Packaging
+
+- Added dedicated Railway, Render, Firebase, and AWS package documentation plus an architecture
+  reference for the full adapter matrix.
+- Expanded the English and Thai deployment, CLI, plugin, Netlify, realtime, and static-adapter
+  troubleshooting guides.
+- Bumped all Rust crates, npm packages, platform CLI packages, and starter templates to 1.0.22 and
+  synchronized workspace dependency ranges and the lockfile.
+
 ## v1.0.21 (2026-07-24)
 
 ### Packaging Fix
