@@ -61,6 +61,7 @@ describe('firebaseAdapter', () => {
   })
 
   it('validates function and region identifiers', () => {
+    assert.doesNotThrow(() => firebaseAdapter({ region: 'europe-west10' }))
     assert.throws(() => firebaseAdapter({ functionName: 'bad-name' }), /functionName/)
     assert.throws(() => firebaseAdapter({ region: 'moon-1' }), /region/)
   })

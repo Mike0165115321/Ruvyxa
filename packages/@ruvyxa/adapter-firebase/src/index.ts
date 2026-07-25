@@ -31,7 +31,7 @@ export function firebaseAdapter(options: FirebaseAdapterOptions = {}): Adapter {
       '[RUV2001] firebaseAdapter: "functionName" must be a valid JavaScript identifier',
     )
   }
-  if (!/^[a-z]+-[a-z]+[0-9]$/.test(region)) {
+  if (!/^[a-z]+-[a-z]+[0-9]+$/.test(region)) {
     throw new Error(
       '[RUV2001] firebaseAdapter: "region" must be a Google Cloud region such as asia-east1',
     )

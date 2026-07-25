@@ -53,7 +53,7 @@ const handler = createHandler({
   importApi: loadRouteModule,
   readPrerendered: (pathname, revalidate = 60) => {
     // prerenderRelativePath rejects any request path that cannot be mapped to a
-    // location inside prerenderDir, so the cache read can never escape it.
+    // location inside the selected cache root, so the cache read can never escape it.
     const relative = prerenderRelativePath(pathname);
     if (relative === null) return null;
     const cacheDirectories =
