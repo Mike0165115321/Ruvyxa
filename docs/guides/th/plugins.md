@@ -94,6 +94,291 @@ export default plugin('require-api-key', {
 `definePlugin({ name, setup })` ทุก hook ทำงานใน Node/Bun runtime แบบ persistent ไม่มี ABI แยกหรือ
 คำสั่ง debug แบบเดิม
 
+## คู่มือสร้าง plugin แบบละเอียด
+
+### 1. เข้าใจก่อนว่า plugin ทำงานตรงไหน
+
+Plugin เป็นโค้ดฝั่ง **Node/Bun** ที่ Ruvyxa เรียกระหว่าง request และ build ไม่ใช่ React component
+และ ไม่ได้รันใน browser โดยตรง ดังนั้น scene 2.5D, Canvas หรือปุ่มบนหน้าเว็บควรอยู่ใน `app/` ของแอป
+ส่วน plugin เหมาะกับการกำหนด policy ตาม route, ตรวจหรือเปลี่ยน request/response, เปลี่ยน source
+ระหว่าง build และสร้างไฟล์หลัง build
+
+```mermaid
+flowchart LR
+  C["ruvyxa.config.ts"] --> S["plugin setup"]
+  S --> R["plugin registry"]
+  Q["HTTP request"] --> A["onRequest"]
+  A --> P["app route / API"]
+  P --> B["onResponse"]
+  B --> O["HTTP response"]
+  R --> T["resolveId / transform"]
+  T --> U["production build"]
+  U --> F["onBuildComplete"]
+```
+
+ลำดับใน `plugins: [...]` มีความหมาย: Ruvyxa เรียก `setup` และ hook ที่ลงทะเบียนตามลำดับนั้น ชื่อ
+plugin ต้องไม่ซ้ำกันใน config เดียวกัน
+
+### 2. สร้าง package starter
+
+สร้างใน project root:
+
+```bash
+npx ruvyxa plugin new request-policy
+```
+
+หรือเลือกตำแหน่งเองภายใน project root:
+
+```bash
+npx ruvyxa plugin new request-policy --dir packages/request-policy
+```
+
+CLI จะสร้าง package publishable ดังนี้:
+
+```text
+request-policy/
+├── package.json       ชื่อ package, peer dependency และ build script
+├── tsconfig.json      สร้าง JavaScript และ type declaration ลง dist/
+├── README.md          วิธีแก้ starter, build, ใช้ และ publish
+└── src/
+    └── index.ts       plugin ที่ export default
+```
+
+ชื่อที่ส่งให้ CLI เป็นทั้งชื่อโฟลเดอร์และส่วนท้ายของ package name เช่น `request-policy` จะเป็น
+`ruvyxa-plugin-request-policy` ใช้ชื่อ lowercase คั่นด้วย hyphen เพื่อให้ publish และ import ได้
+สม่ำเสมอ
+
+### 3. Build และลงทะเบียนในแอป
+
+เข้า package แล้ว build หนึ่งครั้งก่อน import local package:
+
+```bash
+cd request-policy
+npm install
+npm run build
+```
+
+จากนั้นเพิ่ม plugin เข้า `ruvyxa.config.ts` ของแอป:
+
+```ts
+import { config } from 'ruvyxa/config'
+import requestPolicy from './request-policy'
+
+export default config({
+  plugins: [requestPolicy],
+})
+```
+
+หลังเผยแพร่ ให้ติดตั้งชื่อ package จาก npm แล้วเปลี่ยน import เป็น:
+
+```ts
+import requestPolicy from 'ruvyxa-plugin-request-policy'
+```
+
+อย่าใส่ module-global cache, counter หรือ session ของ plugin เป็น source of truth ที่ต้องแชร์ระหว่าง
+request: config process, middleware worker และ render/action worker อาจเป็นคนละ process
+
+### 4. เลือก API ให้ตรงงาน
+
+| ต้องการทำอะไร                | ใช้ API                    | ตัวอย่าง                     |
+| ---------------------------- | -------------------------- | ---------------------------- |
+| เพิ่ม header คงที่           | `plugin(..., { headers })` | cache policy, build label    |
+| อนุญาต/บล็อก/แก้ request     | `onRequest`                | API key, locale header       |
+| สร้าง response จากข้อมูลจริง | `onResponse`               | request ID, route metadata   |
+| เปลี่ยน import ก่อน resolver | `resolveId`                | alias หรือ virtual specifier |
+| แก้ source ก่อน compile      | `transform`                | compile-time marker          |
+| เขียน artifact หลัง build    | `onBuildComplete`          | JSON metadata, feed, sitemap |
+
+เริ่มจาก `plugin(name, options)` เสมอ ถ้างานมีเพียง middleware; ใช้ `definePlugin` เมื่อจำเป็นต้องมี
+hook build อย่างน้อยหนึ่งตัว
+
+### 5. กำหนด route ที่ plugin จะทำงาน
+
+`routes` เป็นตัวกรองทั้งความถูกต้องและประสิทธิภาพ เพราะ request ที่ไม่ตรงจะข้ามการ round-trip ไปยัง
+plugin runtime ทั้งหมด
+
+| ค่า               | route ที่ตรง                | ใช้เมื่อ                           |
+| ----------------- | --------------------------- | ---------------------------------- |
+| ไม่ระบุ `routes`  | ทุก route                   | plugin ต้องทำงานทุก request จริง ๆ |
+| `['*']`           | ทุก route                   | ต้องการระบุ global ให้ชัด          |
+| `['/api/health']` | เฉพาะ path นี้              | endpoint เดียว                     |
+| `['/api/*']`      | ทุก path ที่ขึ้นต้น `/api/` | กลุ่ม API                          |
+
+ใช้ได้เฉพาะ `*`, path ที่เริ่มด้วย `/`, หรือ prefix ที่ลงท้ายด้วย `*` เท่านั้น เช่น `/api/*` ใช้ได้
+แต่ `api/*`, `/api/*/items` และ `/*.json` ใช้ไม่ได้และจะ fail ตอนเริ่ม plugin แทนที่จะถูกข้ามเงียบ ๆ
+
+### 6. กรณีง่ายที่สุด: เพิ่ม response header
+
+```ts
+import { plugin } from 'ruvyxa/config'
+
+export default plugin('request-policy', {
+  routes: ['/api/*'],
+  headers: {
+    'cache-control': 'no-store',
+    'x-request-policy': 'enabled',
+  },
+})
+```
+
+`headers` เป็น shorthand ของ response middleware: Ruvyxa copy response เดิม รักษา status/body ไว้
+และแทนค่าหรือเพิ่ม header ให้ จึงเหมาะกับค่าคงที่ที่ไม่ต้องอ่าน request หรือ response
+
+### 7. เปลี่ยนหรือหยุด request ด้วย `onRequest`
+
+`onRequest(request, context)` ได้ `Request` แบบ Fetch และ context `{ plugin, root }`:
+
+```ts
+import { plugin } from 'ruvyxa/config'
+
+export default plugin('require-api-key', {
+  routes: ['/api/*'],
+  onRequest(request, { plugin }) {
+    if (request.headers.has('x-api-key')) return
+    return new Response(`${plugin}: Missing API key`, { status: 401 })
+  },
+})
+```
+
+return value มีความหมายดังนี้:
+
+| return                     | ผล                                  |
+| -------------------------- | ----------------------------------- |
+| `undefined` หรือไม่ return | request เดิมไปต่อยังแอป             |
+| `Request`                  | ใช้ request ใหม่นั้นกับขั้นถัดไป    |
+| `Response`                 | ส่ง response ทันทีและข้าม app route |
+
+ตัวอย่างเพิ่ม metadata โดยไม่แก้ body:
+
+```ts
+onRequest(request) {
+  const headers = new Headers(request.headers)
+  headers.set('x-request-source', 'request-policy')
+  return new Request(request, { headers })
+}
+```
+
+อย่าเชื่อ header จาก client เป็นหลักฐานสิทธิ์เพียงอย่างเดียว และอย่าส่ง secret กลับไปใน `Response`
+
+### 8. เปลี่ยน response แบบ dynamic ด้วย `onResponse`
+
+ใช้ `onResponse` เมื่อค่าที่เพิ่มขึ้นกับ request หรือ response เดิม ตัวอย่างนี้แสดง path ที่ plugin
+จับคู่จริง:
+
+```ts
+import { plugin, withResponseHeader } from 'ruvyxa/config'
+
+export default plugin('route-label', {
+  routes: ['/showcase/*'],
+  onResponse(request, response) {
+    return withResponseHeader(response, 'x-ruvyxa-route', new URL(request.url).pathname)
+  },
+})
+```
+
+`onResponse(request, response, context)` รับ object ที่ clone แล้ว และ return ได้เฉพาะ `Response`
+หรือ `undefined` หาก return `undefined` ระบบจะเก็บ response ก่อนหน้าไว้ ใช้ `withResponseHeader`
+เมื่อ ต้องแก้ header เดียวเพื่อไม่ต้องเขียน response-copy boilerplate เอง
+
+### 9. ใช้ `definePlugin` สำหรับ build hook
+
+เมื่อ plugin ต้องยุ่งกับ module graph หรือ output ให้ใช้ `definePlugin` และลงทะเบียน hook ใน
+`setup`:
+
+```ts
+import path from 'node:path'
+import { definePlugin } from 'ruvyxa/config'
+
+export default definePlugin({
+  name: 'build-label',
+  setup({ resolveId, transform, onBuildComplete }) {
+    resolveId((id, _importer, { root }) => {
+      if (id !== '~build-label') return
+      return path.join(root, 'plugins', 'build-label.ts')
+    })
+
+    transform((code, id, { environment }) => {
+      if (environment !== 'client' || !id.endsWith('/app/build-label.ts')) return
+      return code.replace('BUILD_LABEL', 'built-by-plugin')
+    })
+
+    onBuildComplete(({ outDir, manifest }) => {
+      console.info(`Build written to ${outDir}; manifest entries: ${Object.keys(manifest).length}`)
+    })
+  },
+})
+```
+
+Hook contract:
+
+| Hook              | รับค่า                                  | return ที่ยอมรับ                                  | ข้อควรจำ                                               |
+| ----------------- | --------------------------------------- | ------------------------------------------------- | ------------------------------------------------------ |
+| `resolveId`       | `(id, importer, { root, environment })` | path, `null`, หรือ `undefined`                    | ค่าแรกที่ไม่ใช่ `null`/`undefined` ชนะ                 |
+| `transform`       | `(code, id, { root, environment })`     | string, `{ code, map }`, `null`, หรือ `undefined` | hook ถัดไปจะเห็น source ที่ถูกเปลี่ยนแล้ว              |
+| `onBuildComplete` | `({ root, outDir, manifest })`          | `void` หรือ Promise                               | core output commit แล้ว แต่ adapter ยังไม่ materialize |
+
+runtime plugin ปัจจุบันส่ง `environment` เป็น `client` หรือ `server`; ตรวจ environment และ path
+ทุกครั้ง ก่อนแก้ source เพื่อไม่ให้ transform กระทบ module อื่นโดยไม่ตั้งใจ
+
+สำหรับ artifact สาธารณะที่ต้องติดไปกับ adapter ให้เขียนภายใต้ `outDir/assets` ใน `onBuildComplete`
+อย่าเขียนทับไฟล์ artifact ที่ plugin อื่นเป็นเจ้าของ และอย่าเขียนไฟล์ออกนอก project/output ที่ตั้งใจ
+
+### 10. ทดลองและตรวจ plugin
+
+ตรวจ package ก่อน:
+
+```bash
+cd request-policy
+npm run build
+```
+
+ตรวจร่วมกับแอป:
+
+```bash
+npx ruvyxa dev
+npx ruvyxa check
+```
+
+สำหรับ header plugin ให้เรียก route ที่อยู่ใน `routes` แล้วดู response header ใน Browser DevTools >
+Network หรือใช้:
+
+```bash
+curl -i http://localhost:3000/api/health
+```
+
+ถ้า plugin ไม่ทำงาน ให้ตรวจตามลำดับนี้:
+
+1. plugin ถูก import และอยู่ใน `plugins: [...]` แล้วหรือไม่
+2. ชื่อ plugin ซ้ำกับตัวอื่นหรือไม่
+3. request path ตรง `routes` จริงหรือไม่
+4. local package build เป็น `dist/` ล่าสุดหรือไม่
+5. hook return เป็นชนิดที่รองรับหรือไม่ (`Request`/`Response`/`undefined`)
+6. runtime หรือ terminal แสดง error จาก plugin หรือไม่
+
+### 11. Runtime, deployment และ performance
+
+- middleware ทำงานบน Node/Bun process ที่ persistent โดย default มี worker เดียว
+- ตั้ง `middleware.workers` ได้ 1–8 เฉพาะ middleware ที่ stateless; state ระดับ module ไม่แชร์ข้าม
+  worker
+- hook middleware แต่ละตัวมี `timeoutMs` (default 30,000 ms; ช่วง 1–300,000 ms) อย่าทำ I/O ช้า หรือ
+  side effect ที่ retry แล้วไม่ปลอดภัยใน request path
+- worker ที่ crash จะ restart และ retry hook ที่กำลังทำงานหนึ่งครั้ง แต่ timeout หรือ protocol ผิดจะ
+  เปลี่ยน worker โดยไม่ retry เพราะ side effect อาจเกิดขึ้นแล้ว
+- static host ไม่มี middleware runtime; header/security/cache policy ที่ต้องทำงานบน static host ต้อง
+  ตั้งใน host หรือ adapter ด้วย
+
+### 12. Publish อย่างปลอดภัย
+
+starter มี `prepublishOnly: npm run build` อยู่แล้ว ก่อน publish ให้ทดสอบใน app จริงและตรวจว่า
+`package.json` ชี้ `main`, `types` และ `exports` ไปยัง `dist/` จากนั้นเพิ่ม version และใช้:
+
+```bash
+npm publish
+```
+
+Ruvyxa เป็น `peerDependency` ของ starter: ผู้ใช้ plugin ต้องมี Ruvyxa อยู่แล้ว อย่า bundle framework
+ซ้ำเข้า package ของ plugin
+
 ## Built-in plugins
 
 Ruvyxa มี official package สำหรับ state ของแอปเพิ่มอีก 3 ตัว:
