@@ -5,6 +5,7 @@ import {
   config,
   definePlugin,
   plugin,
+  withResponseHeader,
   type RuvyxaConfig,
 } from '../../../packages/@ruvyxa/core/src/config.ts'
 
@@ -118,5 +119,54 @@ describe('config API', () => {
       enableRealtime() {},
     })
     assert.equal(typeof registered, 'function')
+  })
+
+  it('copies a response when changing one header', async () => {
+    const original = new Response('Hello', {
+      status: 201,
+      statusText: 'Created',
+      headers: { 'x-existing': 'kept' },
+    })
+    const updated = withResponseHeader(original, 'x-plugin', 'active')
+
+    assert.notEqual(updated, original)
+    assert.equal(updated.status, 201)
+    assert.equal(updated.statusText, 'Created')
+    assert.equal(updated.headers.get('x-existing'), 'kept')
+    assert.equal(updated.headers.get('x-plugin'), 'active')
+    assert.equal(await updated.text(), 'Hello')
+  })
+
+  it('turns declarative headers into response middleware', async () => {
+    const responseHeaders = plugin('response-headers', {
+      routes: ['/api/*'],
+      headers: { 'x-plugin': 'active' },
+    })
+    let registered: unknown
+
+    responseHeaders.setup({
+      addMiddleware(value) {
+        registered = value
+      },
+      resolveId() {},
+      transform() {},
+      onBuildComplete() {},
+      enableRealtime() {},
+    })
+
+    const middleware = registered as {
+      routes?: string[]
+      onResponse?: (request: Request, response: Response) => Promise<Response | void>
+    }
+    const response = await middleware.onResponse?.(
+      new Request('https://example.test/api/items'),
+      new Response('OK', { status: 202, headers: { 'x-existing': 'kept' } }),
+    )
+
+    assert.deepEqual(middleware.routes, ['/api/*'])
+    assert.equal(response?.status, 202)
+    assert.equal(response?.headers.get('x-existing'), 'kept')
+    assert.equal(response?.headers.get('x-plugin'), 'active')
+    assert.equal(await response?.text(), 'OK')
   })
 })

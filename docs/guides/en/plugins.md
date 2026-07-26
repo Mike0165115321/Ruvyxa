@@ -24,14 +24,8 @@ import { plugin } from 'ruvyxa/config'
 
 export default plugin('auth', {
   routes: ['/*'],
-  onResponse(_request, response) {
-    const headers = new Headers(response.headers)
-    headers.set('x-auth', 'active')
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers,
-    })
+  headers: {
+    'x-auth': 'active',
   },
 })
 ```
@@ -47,7 +41,52 @@ export default config({ plugins: [auth] })
 
 Use `plugin(name, middleware)` for request/response middleware. It accepts either a middleware
 object (with optional `routes`, `onRequest`, `onResponse`) or just a request handler function.
-Middleware uses standard Fetch `Request` and `Response`.
+Middleware uses standard Fetch `Request` and `Response`. For the common response-header case, pass
+`headers` and Ruvyxa creates the response middleware for you. Start by changing only `routes` and
+`headers`; the generated package README repeats those two settings. Use `onRequest` or `onResponse`
+only when the behavior needs to inspect or change a request/response dynamically.
+
+## Start with these examples
+
+### 1. Add one header (the CLI starter)
+
+```ts
+import { plugin } from 'ruvyxa/config'
+
+export default plugin('api-cache', {
+  routes: ['/api/*'],
+  headers: {
+    'cache-control': 'no-store',
+  },
+})
+```
+
+This runs only for `/api/*` and adds `cache-control: no-store` to matching responses. No hook or
+response-copying code is needed.
+
+### 2. Allow or block a request
+
+```ts
+import { plugin } from 'ruvyxa/config'
+
+export default plugin('require-api-key', {
+  routes: ['/api/*'],
+  onRequest(request) {
+    if (request.headers.has('x-api-key')) return
+    return new Response('Missing API key', { status: 401 })
+  },
+})
+```
+
+| Return value       | What happens                                         |
+| ------------------ | ---------------------------------------------------- |
+| Nothing (`return`) | The request continues to the app.                    |
+| A `Request`        | Ruvyxa continues with the replacement request.       |
+| A `Response`       | Ruvyxa sends it immediately and skips the app route. |
+
+Use `onResponse` only when the response value must depend on the request or the response itself. For
+example, `withResponseHeader(response, name, value)` creates a safe response copy with one changed
+header.
 
 For `resolveId`, `transform`, or `onBuildComplete`, use the advanced `definePlugin({ name, setup })`
 form. All hooks run in the persistent Node/Bun runtime; there is no separate compiler, debug

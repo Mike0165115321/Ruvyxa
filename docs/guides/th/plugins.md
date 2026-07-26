@@ -24,14 +24,8 @@ import { plugin } from 'ruvyxa/config'
 
 export default plugin('auth', {
   routes: ['/*'],
-  onResponse(_request, response) {
-    const headers = new Headers(response.headers)
-    headers.set('x-auth', 'active')
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers,
-    })
+  headers: {
+    'x-auth': 'active',
   },
 })
 ```
@@ -50,6 +44,51 @@ export default config({ plugins: [auth] })
 
 ใช้ `plugin(name, middleware)` สำหรับ request/response middleware ซึ่งรับได้ทั้ง middleware object
 หรือ request handler function โดย Middleware ใช้ Fetch `Request` และ `Response` มาตรฐาน
+สำหรับกรณีทั่วไปที่เพิ่ม response header ให้ใส่ `headers` ได้เลย Ruvyxa จะสร้าง response middleware
+ให้เอง จึงเริ่มจากแก้แค่ `routes` และ `headers`; README ที่ CLI สร้างจะย้ำสองจุดนี้ไว้เหมือนกัน ใช้
+`onRequest` หรือ `onResponse` เฉพาะเมื่อต้องอ่านหรือเปลี่ยน request/response แบบ dynamic
+
+## เริ่มจากตัวอย่างเหล่านี้
+
+### 1. เพิ่ม header หนึ่งค่า (แบบที่ CLI สร้าง)
+
+```ts
+import { plugin } from 'ruvyxa/config'
+
+export default plugin('api-cache', {
+  routes: ['/api/*'],
+  headers: {
+    'cache-control': 'no-store',
+  },
+})
+```
+
+ตัวอย่างนี้ทำงานเฉพาะ `/api/*` และเพิ่ม `cache-control: no-store` ให้ response ที่ตรงกัน โดยไม่ต้อง
+เขียน hook หรือโค้ด copy response
+
+### 2. อนุญาตหรือบล็อก request
+
+```ts
+import { plugin } from 'ruvyxa/config'
+
+export default plugin('require-api-key', {
+  routes: ['/api/*'],
+  onRequest(request) {
+    if (request.headers.has('x-api-key')) return
+    return new Response('Missing API key', { status: 401 })
+  },
+})
+```
+
+| ค่าที่ return        | ผลลัพธ์                                       |
+| -------------------- | --------------------------------------------- |
+| ไม่คืนค่า (`return`) | request ไปต่อยังแอป                           |
+| `Request`            | Ruvyxa ใช้ request ที่ส่งกลับแทน              |
+| `Response`           | Ruvyxa ส่ง response ทันทีและข้าม route ของแอป |
+
+ใช้ `onResponse` เฉพาะเมื่อค่าของ response ต้องขึ้นกับ request หรือ response นั้นจริง ๆ ตัวอย่างเช่น
+`withResponseHeader(response, name, value)` สร้าง response copy ที่ปลอดภัยพร้อมเปลี่ยน header
+หนึ่งค่า
 
 หากต้องใช้ `resolveId`, `transform` หรือ `onBuildComplete` ให้ใช้รูปแบบขั้นสูง
 `definePlugin({ name, setup })` ทุก hook ทำงานใน Node/Bun runtime แบบ persistent ไม่มี ABI แยกหรือ

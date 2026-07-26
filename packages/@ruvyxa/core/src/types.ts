@@ -285,6 +285,12 @@ export interface PluginMiddleware {
   onResponse?: PluginResponseMiddleware
 }
 
+/** Middleware shorthand accepted by `plugin(name, middleware)`. */
+export interface PluginMiddlewareOptions extends PluginMiddleware {
+  /** Response headers to add or replace without writing an `onResponse` hook. */
+  headers?: HeadersInit
+}
+
 export type PluginResolveIdHook = (
   id: string,
   importer: string | undefined,

@@ -1,4 +1,4 @@
-export { config, definePlugin, plugin } from './config.js'
+export { config, definePlugin, plugin, withResponseHeader } from './config.js'
 export type {
   Adapter,
   AdapterArtifact,
@@ -16,6 +16,7 @@ export type {
   PluginBuildContext,
   PluginEnvironment,
   PluginMiddleware,
+  PluginMiddlewareOptions,
   PluginMiddlewareContext,
   PluginRequestMiddleware,
   PluginRequestResult,

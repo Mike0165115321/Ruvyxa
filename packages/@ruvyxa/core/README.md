@@ -184,6 +184,10 @@ export default plugin('auth', {
 })
 ```
 
+For a response middleware that only changes headers, add `headers: { 'x-example': 'active' }` to the
+`plugin()` options. Use `onResponse` only when the header/value needs dynamic request or response
+data.
+
 Use `definePlugin` when one plugin also registers build hooks:
 
 ```ts

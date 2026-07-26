@@ -1,5 +1,6 @@
 import type {
   PluginMiddleware,
+  PluginMiddlewareOptions,
   PluginRequestMiddleware,
   RuvyxaConfig,
   RuvyxaPlugin,
@@ -17,6 +18,7 @@ export type {
   PluginBuildContext,
   PluginEnvironment,
   PluginMiddleware,
+  PluginMiddlewareOptions,
   PluginMiddlewareContext,
   PluginRequestMiddleware,
   PluginRequestResult,
@@ -63,12 +65,44 @@ export function definePlugin(plugin: RuvyxaPlugin): RuvyxaPlugin {
 /** Define a request/response middleware plugin without a setup wrapper. */
 export function plugin(
   name: string,
-  middleware: PluginMiddleware | PluginRequestMiddleware,
+  middleware: PluginMiddlewareOptions | PluginRequestMiddleware,
 ): RuvyxaPlugin {
+  const normalizedMiddleware = normalizePluginMiddleware(middleware)
   return definePlugin({
     name,
     setup({ addMiddleware }) {
-      addMiddleware(middleware)
+      addMiddleware(normalizedMiddleware)
     },
+  })
+}
+
+/** Return a response copy with one header replaced, preserving its status and body. */
+export function withResponseHeader(response: Response, name: string, value: string): Response {
+  return withResponseHeaders(response, new Headers([[name, value]]))
+}
+
+function normalizePluginMiddleware(
+  middleware: PluginMiddlewareOptions | PluginRequestMiddleware,
+): PluginMiddleware | PluginRequestMiddleware {
+  if (typeof middleware === 'function' || middleware.headers === undefined) return middleware
+
+  const { headers: configuredHeaders, onResponse, ...rest } = middleware
+  const responseHeaders = new Headers(configuredHeaders)
+  return {
+    ...rest,
+    async onResponse(request, response, context) {
+      const output = await onResponse?.(request, response, context)
+      return withResponseHeaders(output ?? response, responseHeaders)
+    },
+  }
+}
+
+function withResponseHeaders(response: Response, additions: Headers): Response {
+  const headers = new Headers(response.headers)
+  additions.forEach((value, name) => headers.set(name, value))
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
   })
 }

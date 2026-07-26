@@ -740,7 +740,7 @@ fn scaffold_plugin(args: PluginNewArgs) -> anyhow::Result<()> {
     fs::write(
         src_dir.join("index.ts"),
         format!(
-            "import {{ plugin }} from 'ruvyxa/config'\n\nexport default plugin('{plugin_name}', {{\n  routes: ['/*'],\n  onResponse(_request, response) {{\n    const headers = new Headers(response.headers)\n    headers.set('x-{plugin_name}', 'active')\n    return new Response(response.body, {{\n      status: response.status,\n      statusText: response.statusText,\n      headers,\n    }})\n  }},\n}})\n"
+            "import {{ plugin }} from 'ruvyxa/config'\n\nexport default plugin('{plugin_name}', {{\n  routes: ['/*'],\n  headers: {{\n    'x-{plugin_name}': 'active',\n  }},\n}})\n"
         ),
     )?;
     fs::write(
@@ -757,7 +757,7 @@ fn scaffold_plugin(args: PluginNewArgs) -> anyhow::Result<()> {
     fs::write(
         package_dir.join("README.md"),
         format!(
-            "# ruvyxa-plugin-{plugin_name}\n\nA Ruvyxa plugin package. Works with Node.js and Bun.\n\n## Development\n\n```bash\nnpm install   # or: bun install / pnpm install\nnpm run build # or: bun run build / pnpm build\n```\n\n## Usage\n\n```bash\nnpm install ruvyxa-plugin-{plugin_name}\n```\n\n```ts\nimport {{ config }} from 'ruvyxa/config'\nimport {plugin_name} from 'ruvyxa-plugin-{plugin_name}'\n\nexport default config({{ plugins: [{plugin_name}] }})\n```\n\nThe starter adds `x-{plugin_name}: active` to every matching response, so its activation is directly visible in an HTTP client.\n\nPublish with `npm publish` (or your package manager's publish command) after building.\n"
+            "# ruvyxa-plugin-{plugin_name}\n\nA Ruvyxa plugin package. Works with Node.js and Bun.\n\n## Start here\n\n`src/index.ts` uses the simplest plugin form. Change only these two settings first:\n\n1. `routes` — choose where it runs. `['/*']` means every route; `['/api/*']` limits it to API routes.\n2. `headers` — add or change headers that the plugin sends with matching responses.\n\nThe default adds `x-{plugin_name}: active`, so you can verify activation immediately in an HTTP client.\n\n## Examples\n\n### Add a header to API responses\n\n```ts\nexport default plugin('{plugin_name}', {{\n  routes: ['/api/*'],\n  headers: {{\n    'cache-control': 'no-store',\n  }},\n}})\n```\n\n### Protect an API route\n\nUse `onRequest` only when a request needs a decision. Return nothing to continue, or return a `Response` to stop the request.\n\n```ts\nexport default plugin('{plugin_name}', {{\n  routes: ['/api/*'],\n  onRequest(request) {{\n    if (request.headers.has('x-api-key')) return\n    return new Response('Missing API key', {{ status: 401 }})\n  }},\n}})\n```\n\n## Development\n\n```bash\nnpm install   # or: bun install / pnpm install\nnpm run build # or: bun run build / pnpm build\n```\n\n## Use in an app\n\n```bash\nnpm install ruvyxa-plugin-{plugin_name}\n```\n\n```ts\nimport {{ config }} from 'ruvyxa/config'\nimport {plugin_name} from 'ruvyxa-plugin-{plugin_name}'\n\nexport default config({{ plugins: [{plugin_name}] }})\n```\n\nFor dynamic response changes, transforms, virtual modules, or build-complete work, use `onResponse` or `definePlugin({{ name, setup }})`; the Ruvyxa plugin guide shows those advanced hooks.\n\nPublish with `npm publish` (or your package manager's publish command) after building.\n"
         ),
     )?;
 
@@ -6071,8 +6071,9 @@ mod tests {
         let source = fs::read_to_string(plugin_dir.join("src/index.ts")).unwrap();
         assert!(source.contains("import { plugin }"));
         assert!(source.contains("plugin('request-logger'"));
-        assert!(source.contains("onResponse"));
-        assert!(source.contains("headers.set('x-request-logger', 'active')"));
+        assert!(source.contains("routes: ['/*']"));
+        assert!(source.contains("headers: {"));
+        assert!(source.contains("'x-request-logger': 'active'"));
         let package: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(plugin_dir.join("package.json")).unwrap())
                 .unwrap();
@@ -6082,6 +6083,8 @@ mod tests {
         let readme = fs::read_to_string(plugin_dir.join("README.md")).unwrap();
         assert!(readme.contains("npm install ruvyxa-plugin-request-logger"));
         assert!(readme.contains("x-request-logger: active"));
+        assert!(readme.contains("Change only these two settings first"));
+        assert!(readme.contains("Protect an API route"));
         assert!(!temp.path().join("plugins").exists());
     }
 
