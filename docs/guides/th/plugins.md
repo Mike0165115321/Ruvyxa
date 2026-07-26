@@ -14,18 +14,24 @@ npx ruvyxa plugin new auth
 ```
 
 คำสั่งจะสร้างแพ็กเกจ `auth/` ตรงๆ (ชื่อโฟลเดอร์ = ชื่อ plugin ไม่ต้องใช้ `--dir`) พร้อม
-`package.json`, `tsconfig.json`, `README.md` และ `src/index.ts` ใส่ `--dir <path>` เฉพาะถ้าต้องการ
-ตำแหน่งอื่น plugin รันได้ทั้ง Node.js และ Bun (`--runtime bun` หรือ `RUVYXA_RUNTIME=bun`):
+`package.json`, `tsconfig.json`, `README.md` และ `src/index.ts` ใส่ `--dir <path>` แบบ relative
+เฉพาะเมื่ออยากเปลี่ยนตำแหน่งภายใต้ project root เท่านั้น โดย path แบบ absolute หรือ traversal
+จะถูกปฏิเสธ starter จะเพิ่ม response header เพื่อให้ตรวจได้ทันทีว่า plugin ทำงานอยู่ plugin
+รันได้ทั้ง Node.js และ Bun (`--runtime bun` หรือ `RUVYXA_RUNTIME=bun`):
 
 ```ts
 import { plugin } from 'ruvyxa/config'
 
 export default plugin('auth', {
   routes: ['/*'],
-  onRequest(request) {
-    return request.headers.has('authorization')
-      ? undefined
-      : new Response('Unauthorized', { status: 401 })
+  onResponse(_request, response) {
+    const headers = new Headers(response.headers)
+    headers.set('x-auth', 'active')
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    })
   },
 })
 ```
@@ -33,7 +39,7 @@ export default plugin('auth', {
 นำเข้า package ใน `ruvyxa.config.ts`:
 
 ```ts
-import auth from './plugins/auth'
+import auth from './auth'
 import { config } from 'ruvyxa/config'
 
 export default config({ plugins: [auth] })

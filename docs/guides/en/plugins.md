@@ -14,18 +14,24 @@ npx ruvyxa plugin new auth
 ```
 
 The command creates `auth/` (named after the plugin — no `--dir` flag needed) with `src/index.ts`,
-`package.json`, `tsconfig.json`, and `README.md`. Add `--dir <path>` only if you want a different
-location. Plugins run on both Node.js and Bun (`--runtime bun` or `RUVYXA_RUNTIME=bun`):
+`package.json`, `tsconfig.json`, and `README.md`. Add a relative `--dir <path>` only if you want a
+different location under the project root; absolute and traversal paths are rejected. The starter
+adds a response header so you can see that it is active immediately. Plugins run on both Node.js and
+Bun (`--runtime bun` or `RUVYXA_RUNTIME=bun`):
 
 ```ts
 import { plugin } from 'ruvyxa/config'
 
 export default plugin('auth', {
   routes: ['/*'],
-  onRequest(request) {
-    const headers = new Headers(request.headers)
-    headers.set('x-auth', 'true')
-    return new Request(request, { headers })
+  onResponse(_request, response) {
+    const headers = new Headers(response.headers)
+    headers.set('x-auth', 'active')
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    })
   },
 })
 ```
@@ -33,7 +39,7 @@ export default plugin('auth', {
 Import it from `ruvyxa.config.ts`:
 
 ```ts
-import auth from './plugins/auth'
+import auth from './auth'
 import { config } from 'ruvyxa/config'
 
 export default config({ plugins: [auth] })

@@ -713,11 +713,18 @@ fn scaffold_plugin(args: PluginNewArgs) -> anyhow::Result<()> {
             {
                 anyhow::bail!("--dir must not contain `..` components: {}", dir.display());
             }
-            if dir.is_absolute() {
-                dir.clone()
-            } else {
-                args.root.join(dir)
+            if dir.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::Prefix(_) | std::path::Component::RootDir
+                )
+            }) {
+                anyhow::bail!(
+                    "--dir must be relative to --root without a drive or root prefix: {}",
+                    dir.display()
+                );
             }
+            args.root.join(dir)
         }
         None => args.root.join(&plugin_name),
     };
@@ -733,7 +740,7 @@ fn scaffold_plugin(args: PluginNewArgs) -> anyhow::Result<()> {
     fs::write(
         src_dir.join("index.ts"),
         format!(
-            "import {{ plugin }} from 'ruvyxa/config'\n\nexport default plugin('{plugin_name}', {{\n  routes: ['/*'],\n  onRequest(request) {{\n    const headers = new Headers(request.headers)\n    headers.set('x-{plugin_name}', 'true')\n    return new Request(request, {{ headers }})\n  }},\n}})\n"
+            "import {{ plugin }} from 'ruvyxa/config'\n\nexport default plugin('{plugin_name}', {{\n  routes: ['/*'],\n  onResponse(_request, response) {{\n    const headers = new Headers(response.headers)\n    headers.set('x-{plugin_name}', 'active')\n    return new Response(response.body, {{\n      status: response.status,\n      statusText: response.statusText,\n      headers,\n    }})\n  }},\n}})\n"
         ),
     )?;
     fs::write(
@@ -750,7 +757,7 @@ fn scaffold_plugin(args: PluginNewArgs) -> anyhow::Result<()> {
     fs::write(
         package_dir.join("README.md"),
         format!(
-            "# ruvyxa-plugin-{plugin_name}\n\nA Ruvyxa plugin package. Works with Node.js and Bun.\n\n## Development\n\n```bash\nnpm install   # or: bun install / pnpm install\nnpm run build # or: bun run build / pnpm build\n```\n\n## Usage\n\n```ts\nimport {{ config }} from 'ruvyxa/config'\nimport {plugin_name} from 'ruvyxa-plugin-{plugin_name}'\n\nexport default config({{ plugins: [{plugin_name}] }})\n```\n\nPublish with `npm publish` (or your package manager's publish command) after building.\n"
+            "# ruvyxa-plugin-{plugin_name}\n\nA Ruvyxa plugin package. Works with Node.js and Bun.\n\n## Development\n\n```bash\nnpm install   # or: bun install / pnpm install\nnpm run build # or: bun run build / pnpm build\n```\n\n## Usage\n\n```bash\nnpm install ruvyxa-plugin-{plugin_name}\n```\n\n```ts\nimport {{ config }} from 'ruvyxa/config'\nimport {plugin_name} from 'ruvyxa-plugin-{plugin_name}'\n\nexport default config({{ plugins: [{plugin_name}] }})\n```\n\nThe starter adds `x-{plugin_name}: active` to every matching response, so its activation is directly visible in an HTTP client.\n\nPublish with `npm publish` (or your package manager's publish command) after building.\n"
         ),
     )?;
 
@@ -800,9 +807,10 @@ fn normalize_plugin_name(value: &str) -> anyhow::Result<String> {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
         || value.starts_with('-')
         || value.ends_with('-')
+        || value.contains("--")
     {
         anyhow::bail!(
-            "plugin name must use lowercase letters, digits, and single hyphens (for example `request-logger`)"
+            "plugin name must use lowercase letters and digits separated by single hyphens (for example `request-logger`)"
         );
     }
     Ok(value.to_string())
@@ -6063,14 +6071,17 @@ mod tests {
         let source = fs::read_to_string(plugin_dir.join("src/index.ts")).unwrap();
         assert!(source.contains("import { plugin }"));
         assert!(source.contains("plugin('request-logger'"));
-        assert!(source.contains("onRequest"));
+        assert!(source.contains("onResponse"));
+        assert!(source.contains("headers.set('x-request-logger', 'active')"));
         let package: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(plugin_dir.join("package.json")).unwrap())
                 .unwrap();
         assert_eq!(package["name"], "ruvyxa-plugin-request-logger");
         assert_eq!(package["scripts"]["prepublishOnly"], "npm run build");
         assert!(plugin_dir.join("tsconfig.json").exists());
-        assert!(plugin_dir.join("README.md").exists());
+        let readme = fs::read_to_string(plugin_dir.join("README.md")).unwrap();
+        assert!(readme.contains("npm install ruvyxa-plugin-request-logger"));
+        assert!(readme.contains("x-request-logger: active"));
         assert!(!temp.path().join("plugins").exists());
     }
 
@@ -6109,6 +6120,24 @@ mod tests {
     }
 
     #[test]
+    fn plugin_new_rejects_absolute_custom_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("plugin");
+
+        let error = scaffold_plugin(PluginNewArgs {
+            name: "request-logger".to_string(),
+            root: root.path().to_path_buf(),
+            dir: Some(target.clone()),
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("--dir must be relative to --root"));
+        assert!(!target.exists());
+    }
+
+    #[test]
     fn plugin_new_rejects_unsafe_names() {
         let temp = tempfile::tempdir().unwrap();
         let error = scaffold_plugin(PluginNewArgs {
@@ -6121,6 +6150,21 @@ mod tests {
 
         assert!(error.contains("plugin name must use lowercase"));
         assert!(!temp.path().join("escape").exists());
+    }
+
+    #[test]
+    fn plugin_new_rejects_repeated_hyphens() {
+        let temp = tempfile::tempdir().unwrap();
+        let error = scaffold_plugin(PluginNewArgs {
+            name: "request--logger".to_string(),
+            root: temp.path().to_path_buf(),
+            dir: None,
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("single hyphens"));
+        assert!(!temp.path().join("request--logger").exists());
     }
 
     #[test]
