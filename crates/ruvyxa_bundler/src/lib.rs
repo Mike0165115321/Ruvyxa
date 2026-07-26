@@ -127,6 +127,7 @@ pub fn bundle_with_shared_modules(
         input,
         context.compile_cache(),
         context.graph_cache(),
+        context.incremental(),
         context.build_hooks(),
     )?;
     bundle_prepared(&prepared, shared_modules)
@@ -138,6 +139,7 @@ pub fn prepare_bundle(input: BundleInput, context: &BundleContext) -> Result<Pre
         input,
         context.compile_cache(),
         context.graph_cache(),
+        context.incremental(),
         context.build_hooks(),
     )
 }
@@ -192,7 +194,7 @@ pub fn bundle_shared_route_modules(
         options,
         specials: RouteSpecials::default(),
     };
-    let graph = resolver::resolve_graph_with_hooks(
+    let graph = resolver::resolve_graph_with_incremental(
         &entry_source,
         &entry_label,
         &input.project_root,
@@ -200,6 +202,7 @@ pub fn bundle_shared_route_modules(
         context.graph_cache(),
         context.build_hooks(),
         input.target,
+        Some(context.incremental()),
     )?;
     let (compiled, _) = compiler::compile_graph_with_hooks_and_maps(
         &graph,
@@ -294,6 +297,7 @@ fn prepare_bundle_with_parts(
     input: BundleInput,
     compile_cache: &CompileCache,
     graph_cache: &ResolveGraphCache,
+    incremental: &incremental::IncrementalGraphCache,
     build_hooks: &BuildHookPipeline,
 ) -> Result<PreparedBundle> {
     let started = Instant::now();
@@ -302,7 +306,7 @@ fn prepare_bundle_with_parts(
     let (entry_source, entry_label) = output::build_entry_source(&input);
 
     // 2. Resolve the full dependency graph from the entry.
-    let graph = resolver::resolve_graph_with_hooks(
+    let graph = resolver::resolve_graph_with_incremental(
         &entry_source,
         &entry_label,
         &input.project_root,
@@ -310,6 +314,7 @@ fn prepare_bundle_with_parts(
         graph_cache,
         build_hooks,
         input.target,
+        Some(incremental),
     )?;
 
     // 3. Compile each module (strip TS types, transform JSX).
@@ -606,6 +611,35 @@ mod tests {
         assert!(second.source_map.is_some());
         assert_eq!(context.graph_cache().source_count(), 4);
         assert!(context.graph_cache().resolution_count() >= 1);
+    }
+
+    #[test]
+    fn bundle_context_reuses_persisted_dependency_edges_across_builds() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = ruvyxa_diagnostics::normalized_canonical_path(temp.path());
+        let app = root.join("app");
+        fs::create_dir_all(&app).unwrap();
+        let page = app.join("page.tsx");
+        let shared = app.join("shared.ts");
+        fs::write(&shared, "export const label = 'cached';").unwrap();
+        fs::write(
+            &page,
+            "import { label } from './shared'; export default function Page() { return <main>{label}</main>; }",
+        )
+        .unwrap();
+
+        let first = BundleContext::new(&root);
+        bundle_with_context(
+            client_input(&root, &app, page.clone(), Vec::new(), "/"),
+            &first,
+        )
+        .unwrap();
+        first.save_incremental().unwrap();
+
+        let second = BundleContext::new(&root);
+        bundle_with_context(client_input(&root, &app, page, Vec::new(), "/"), &second).unwrap();
+
+        assert!(second.incremental().edge_hits() >= 2);
     }
 
     #[test]

@@ -47,8 +47,10 @@
   shares immutable CSS across the bounded worker pool.
 - **Async I/O** — file serving uses `tokio::fs` to avoid blocking the async runtime under concurrent
   load.
-- **Incremental bundler cache** — blake3+mtime fingerprinting recompiles only changed modules across
-  dev restarts. Shared compile cache at `.ruvyxa/cache/bundler/` survives clean builds.
+- **Persistent incremental module graph** — production builds persist content-verified dependency
+  edges and reuse unchanged client resolution work on warm builds. The graph is namespaced by the
+  evaluated config dependency hash; build hooks bypass edge reuse so plugin resolution stays
+  correct. Compiled output remains content-addressed under the configured build cache.
 - **plugin pipeline** — one `definePlugin({ setup })` registry provides `resolveId`, `transform`,
   middleware, and build-complete hooks through a persistent Node/Bun subprocess. AST-based
   import/export extraction and CommonJS detection for npm dependencies.
@@ -76,8 +78,9 @@
   boundaries and `onShellReady` streaming.
 - **Incremental Static Regeneration (ISR)** — stale-while-revalidate with configurable TTL.
 - **`getStaticParams`** — generate static paths at build time for dynamic SSG routes.
-- **Zero-JS content pages** — `export const hydrate = false` ships pure HTML with no hydration
-  bundle and no client JavaScript for that route.
+- **Deferred and zero-JS hydration** — route exports accept `hydrate = 'visible'`, `'idle'`, or
+  `false`. Deferred routes do not preload their React bundle; one small shared loader imports it
+  only when the route becomes visible or the browser is idle. `false` emits no client bundle at all.
 - **Simple SSG parameters** — export `staticParams` directly for known values, or return scalar
   values from `getStaticParams` when a route has one dynamic segment. Parameter discovery supports
   opt-in, dependency-aware persistent caching.
@@ -158,7 +161,9 @@
 - **Server action guards** — same-origin checks, Fetch Metadata guards, 1 MB body limit
   (`security.actionLimit`), 10 MB API body limit (`security.apiLimit`), and per-client/action rate
   limiting (600 req/min default via `security.actionRateLimit`).
-- **Security headers** — configurable response headers with sensible production defaults.
+- **Security headers** — native, standalone, and serverless responses receive the same seven safe
+  defaults while explicit application headers win. Static/Cloudflare `_headers` output carries the
+  same policy; CSP and HSTS remain explicit because safe values are application-specific.
 - **Config safety** — unknown configuration keys fail intentionally; typos never silently change
   deployment behavior.
 
@@ -186,8 +191,10 @@
   ISR, PPR, and CSR pages at build time via parallel worker pool (`MAX_PRERENDER_PARALLELISM: 2`).
 - **`check`** — type checking, production build, dev/prod route parity, and page smoke rendering in
   one command.
-- **`analyze`** — structured JSON validation of routes, imports, and server/client boundaries.
-- **`doctor`** — project health check covering dependencies, environment, and Ruvyxa CLI status.
+- **`analyze`** — human, JSON, or SARIF 2.1.0 validation of routes, imports, and server/client
+  boundaries (`--format sarif --output reports/ruvyxa.sarif`).
+- **`doctor`** — project health plus deploy-target inspection: adapter runtime, platform,
+  capabilities, and every route unsupported by the selected adapter (`--json` for CI).
 - **`bench`** — benchmark route discovery, analysis, validation, and production builds.
 - **`test:parity`** — compare dev/prod routes and smoke-render page routes.
 - **Structured diagnostics** — `RUV####` error codes with file locations and suggested fixes. Never

@@ -54,6 +54,22 @@ impl BundleContext {
         }
     }
 
+    /// Create a production context whose compile and dependency-graph caches
+    /// share an explicit root and configuration namespace.
+    pub fn for_build(
+        compile_cache: CompileCache,
+        graph_cache: ResolveGraphCache,
+        cache_dir: &std::path::Path,
+        namespace: &str,
+    ) -> Self {
+        Self {
+            compile_cache,
+            graph_cache,
+            incremental: IncrementalGraphCache::at_dir(cache_dir, namespace, true),
+            build_hooks: BuildHookPipeline::empty(),
+        }
+    }
+
     /// Create a context with explicit caches and a TypeScript build-hook host.
     pub fn with_build_hooks(
         compile_cache: CompileCache,
@@ -83,10 +99,6 @@ impl BundleContext {
 
     pub fn build_hooks(&self) -> &BuildHookPipeline {
         &self.build_hooks
-    }
-
-    pub fn incremental_mut(&mut self) -> &mut IncrementalGraphCache {
-        &mut self.incremental
     }
 
     pub fn save_incremental(&self) -> std::io::Result<()> {

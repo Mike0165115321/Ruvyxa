@@ -68,5 +68,7 @@ describe('nodeAdapter', () => {
     //    immutable.
     assert.match(source, /public, max-age=3600, must-revalidate/)
     assert.match(source, /public, max-age=31536000, immutable/)
+    assert.match(source, /X-Content-Type-Options/)
+    assert.match(source, /applySecurityHeaders\(res\)/)
   })
 })

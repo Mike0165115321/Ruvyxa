@@ -70,6 +70,21 @@ pub enum RenderStrategy {
     Ppr,
 }
 
+/// When a server-rendered route downloads and starts its client runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum HydrationMode {
+    /// Load and hydrate as soon as the document parser reaches the module.
+    #[default]
+    Load,
+    /// Download the route bundle when the browser is idle.
+    Idle,
+    /// Download the route bundle when the document becomes visible.
+    Visible,
+    /// Ship no client bundle for this route.
+    None,
+}
+
 /// Metadata that controls the rendering strategy for a route.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -95,6 +110,10 @@ pub struct RenderMeta {
     /// pages; interactivity ('use client' islands) does not run there.
     #[serde(default = "default_hydrate")]
     pub hydrate: bool,
+    /// Scheduling mode for the client bundle. The legacy `hydrate` boolean is
+    /// retained in manifests for backward compatibility.
+    #[serde(default)]
+    pub hydration: HydrationMode,
 }
 
 fn default_hydrate() -> bool {
@@ -110,6 +129,7 @@ impl Default for RenderMeta {
             static_paths: Vec::new(),
             has_dynamic_slots: false,
             hydrate: true,
+            hydration: HydrationMode::Load,
         }
     }
 }
@@ -1256,9 +1276,10 @@ fn detect_render_strategy(
         };
     }
 
-    // `export const hydrate = false` opts a server-rendered page out of the
-    // client hydration bundle (zero-JS content pages).
-    let hydrate = !has_export_const_bool(&code, "hydrate", false);
+    // Boolean false remains the zero-JS contract; string values add deferred
+    // route-level hydration without changing the default.
+    let hydration = parse_hydration_mode(&source);
+    let hydrate = hydration != HydrationMode::None;
 
     // 2. Check for PPR opt-in: export const ppr = true
     if has_export_const_bool(&code, "ppr", true) {
@@ -1266,6 +1287,7 @@ fn detect_render_strategy(
             strategy: RenderStrategy::Ppr,
             has_dynamic_slots: true,
             hydrate,
+            hydration,
             ..Default::default()
         };
     }
@@ -1278,6 +1300,7 @@ fn detect_render_strategy(
             revalidate: Some(seconds),
             has_static_params,
             hydrate,
+            hydration,
             ..Default::default()
         };
     }
@@ -1288,6 +1311,7 @@ fn detect_render_strategy(
             strategy: RenderStrategy::Ssg,
             has_static_params: true,
             hydrate,
+            hydration,
             ..Default::default()
         };
     }
@@ -1297,6 +1321,7 @@ fn detect_render_strategy(
         return RenderMeta {
             strategy: RenderStrategy::Ssg,
             hydrate,
+            hydration,
             ..Default::default()
         };
     }
@@ -1304,8 +1329,37 @@ fn detect_render_strategy(
     // 6. Default: SSR
     RenderMeta {
         hydrate,
+        hydration,
         ..Default::default()
     }
+}
+
+/// Parse the additive route hydration export while preserving boolean input.
+fn parse_hydration_mode(source: &str) -> HydrationMode {
+    let pattern = "export const hydrate";
+    for line in source.lines() {
+        let trimmed = line.trim();
+        let Some(after) = trimmed.strip_prefix(pattern) else {
+            continue;
+        };
+        let Some(value) = after.trim().strip_prefix('=') else {
+            continue;
+        };
+        let value = value.split("//").next().unwrap_or(value).trim();
+        let value = value
+            .trim_end_matches(';')
+            .trim()
+            .strip_suffix("as const")
+            .unwrap_or(value.trim_end_matches(';').trim())
+            .trim();
+        return match value.trim_matches(['\'', '"']) {
+            "false" | "none" => HydrationMode::None,
+            "idle" => HydrationMode::Idle,
+            "visible" => HydrationMode::Visible,
+            _ => HydrationMode::Load,
+        };
+    }
+    HydrationMode::Load
 }
 
 /// Return all statically reachable route and layout source after stripping strings/comments.
@@ -1724,6 +1778,42 @@ mod tests {
             .unwrap();
         assert_eq!(csr.render.strategy, RenderStrategy::Csr);
         assert!(csr.render.hydrate);
+    }
+
+    #[test]
+    fn hydration_string_exports_select_deferred_modes() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = temp.path().join("app");
+        for (segment, declaration) in [
+            ("idle", "'idle' as const; // wait for idle"),
+            ("visible", "'visible'"),
+        ] {
+            let route = app.join(segment);
+            fs::create_dir_all(&route).unwrap();
+            fs::write(
+                route.join("page.tsx"),
+                format!(
+                    "export const hydrate = {declaration};\nexport default function Page() {{ return <main>{segment}</main> }}"
+                ),
+            )
+            .unwrap();
+        }
+
+        let manifest = discover_routes(DiscoverOptions::new(&app)).unwrap();
+        let idle = manifest
+            .routes
+            .iter()
+            .find(|route| route.path == "/idle")
+            .unwrap();
+        let visible = manifest
+            .routes
+            .iter()
+            .find(|route| route.path == "/visible")
+            .unwrap();
+
+        assert_eq!(idle.render.hydration, HydrationMode::Idle);
+        assert_eq!(visible.render.hydration, HydrationMode::Visible);
+        assert!(idle.render.hydrate && visible.render.hydrate);
     }
 
     #[test]

@@ -33,9 +33,22 @@ pub enum Command {
     Plugin(PluginArgs),           // plugin new <name>
 }
 
-pub struct ProjectArgs { pub root: PathBuf }            // default "."
+pub struct ProjectArgs { pub root: PathBuf, pub runtime: Option<CliRuntime> }
 pub struct ServerArgs { pub root: PathBuf, pub host: Option<String>, pub port: Option<u16> }
 pub struct BuildArgs { pub root: PathBuf, pub target: Option<BuildTarget> }
+pub struct AnalyzeArgs {
+    pub root: PathBuf,
+    pub runtime: Option<CliRuntime>,
+    pub format: AnalyzeFormat, // auto | human | json | sarif
+    pub output: Option<PathBuf>,
+}
+pub struct DoctorArgs {
+    pub root: PathBuf,
+    pub target: Option<BuildTarget>,
+    pub adapter: Option<String>,
+    pub runtime: Option<CliRuntime>,
+    pub json: bool,
+}
 pub struct TraceArgs { pub route: String, pub root: PathBuf }
 pub struct BenchArgs { pub root: PathBuf, pub samples: usize, pub json: bool }
 pub struct PluginArgs { pub command: PluginCommand }
@@ -44,21 +57,21 @@ pub struct PluginNewArgs { pub name: String, pub root: PathBuf }
 
 ```
 
-| Command       | What it does                              |
-| ------------- | ----------------------------------------- |
-| `dev`         | Start dev server with HMR                 |
-| `build`       | Production build → `.ruvyxa/`             |
-| `check`       | `tsc --noEmit` + `test:parity`            |
-| `start`       | Serve production build                    |
-| `preview`     | Preview production build locally          |
-| `routes`      | Print discovered route table              |
-| `analyze`     | Validate routes/imports/boundaries        |
-| `doctor`      | Check project setup                       |
-| `clean`       | Remove `.ruvyxa/`                         |
-| `trace`       | Inspect one route by path (JSON)          |
-| `bench`       | Benchmark (discovery, analysis, build)    |
-| `test:parity` | Dev/prod route comparison + smoke renders |
-| `plugin new`  | Create a publishable plugin package       |
+| Command       | What it does                                              |
+| ------------- | --------------------------------------------------------- |
+| `dev`         | Start dev server with HMR                                 |
+| `build`       | Production build → `.ruvyxa/`                             |
+| `check`       | `tsc --noEmit` + `test:parity`                            |
+| `start`       | Serve production build                                    |
+| `preview`     | Preview production build locally                          |
+| `routes`      | Print discovered route table                              |
+| `analyze`     | Validate routes/imports/boundaries; human, JSON, or SARIF |
+| `doctor`      | Check setup and adapter/route compatibility               |
+| `clean`       | Remove `.ruvyxa/`                                         |
+| `trace`       | Inspect one route by path (JSON)                          |
+| `bench`       | Benchmark (discovery, analysis, build)                    |
+| `test:parity` | Dev/prod route comparison + smoke renders                 |
+| `plugin new`  | Create a publishable plugin package                       |
 
 ---
 

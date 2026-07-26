@@ -2,6 +2,7 @@ export { config, definePlugin, plugin } from './config.js'
 export type {
   Adapter,
   AdapterArtifact,
+  AdapterInspection,
   AdapterOutput,
   BuildContext,
   BuiltinMiddlewareConfig,
@@ -43,6 +44,7 @@ export type { StandaloneServerOptions } from './standalone-server.js'
 export {
   CLIENT_BUNDLE_PREFIX,
   clientBuildOutput,
+  DEFAULT_SECURITY_HEADERS,
   headersFileContents,
   IMMUTABLE_CACHE_CONTROL,
   projectRelativeOutDir,

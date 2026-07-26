@@ -17,6 +17,7 @@ import { routeBoundaryPrelude, routeContextPrelude, routeTreeFunction } from './
 import { prerenderRelativePath } from './serverless-handler.mjs'
 
 const [projectRootArg, outputDirArg, adapterNameArg] = process.argv.slice(2)
+const runnerMode = process.env.RUVYXA_ADAPTER_RUNNER_MODE ?? 'build'
 
 if (!projectRootArg || !outputDirArg) {
   writeResponse(
@@ -61,25 +62,52 @@ const PROJECT_ARTIFACT_ALLOWLIST = [
 try {
   // A named adapter from `ruvyxa build --adapter <name>` overrides the config
   // so a deploy target can be selected without editing ruvyxa.config.
+  const config = adapterNameArg ? null : await loadConfig(projectRoot)
   const adapter = adapterNameArg
     ? await loadNamedAdapter(projectRoot, adapterNameArg)
-    : (await loadConfig(projectRoot)).adapter
+    : config?.adapter
   if (adapter === undefined) {
-    writeResponse(success([]))
+    writeResponse(success(runnerMode === 'inspect' ? null : []))
   } else if (!adapter || typeof adapter !== 'object' || typeof adapter.build !== 'function') {
     writeResponse(failure('RUV2200', 'config.adapter must provide a build(context) function.'))
     process.exitCode = 1
   } else {
-    await assertRoutesSupported(adapter, outputDir)
     const output = await adapter.build({ root: projectRoot, outDir: outputDir })
-    const artifacts = await materializeArtifacts(output, outputDir)
-    writeResponse(success(artifacts))
+    if (runnerMode === 'inspect') {
+      writeResponse(success(inspectAdapter(adapter, output)))
+    } else if (runnerMode === 'build') {
+      await assertRoutesSupported(adapter, outputDir)
+      const artifacts = await materializeArtifacts(output, outputDir)
+      writeResponse(success(artifacts))
+    } else {
+      writeResponse(failure('RUV2200', `Unsupported adapter runner mode: ${runnerMode}.`))
+      process.exitCode = 1
+    }
   }
 } catch (error) {
   writeResponse(
     failure('RUV2200', error instanceof Error ? error.message : String(error), error?.stack),
   )
   process.exitCode = 1
+}
+
+/** Return deployment capabilities without writing any adapter artifacts. */
+function inspectAdapter(adapter, output) {
+  if (!output || typeof output !== 'object') {
+    throw new Error('RUV2200 config.adapter.build(context) must return an output object.')
+  }
+  const target = output.target ?? adapter.target ?? 'unknown'
+  const runtime =
+    output.runtime ?? (target === 'edge' ? 'edge' : target === 'static' ? 'static' : 'node')
+  return {
+    name: output.name ?? adapter.name ?? 'unknown',
+    target,
+    runtime,
+    platform: output.platform ?? null,
+    supports: Array.isArray(adapter.supports)
+      ? adapter.supports
+      : ['ssr', 'ssg', 'csr', 'isr', 'ppr', 'api'],
+  }
 }
 
 /**

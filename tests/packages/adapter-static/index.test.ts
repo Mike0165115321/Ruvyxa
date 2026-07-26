@@ -21,6 +21,8 @@ describe('staticAdapter', () => {
     const contents = headers && 'contents' in headers ? String(headers.contents) : ''
     assert.match(contents, /\/__ruvyxa\/client\/\*\n {2}Cache-Control: public, max-age=31536000/)
     assert.match(contents, /\/\*\.png\n {2}Cache-Control: public, max-age=3600/)
+    assert.match(contents, /\/\*\n {2}X-Content-Type-Options: nosniff/)
+    assert.match(contents, / {2}X-Frame-Options: DENY/)
 
     assert.deepEqual(
       {

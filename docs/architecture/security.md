@@ -207,7 +207,8 @@ Retry-After: <seconds>
 
 ## Security Headers
 
-Applied as Axum middleware on every response via `finalize_security_headers()`:
+Applied to native Axum, generated standalone Node/Bun, and Web-standard serverless responses. Static
+and Cloudflare adapter output includes the same policy in `_headers`:
 
 | Header                              | Framework default                          |
 | ----------------------------------- | ------------------------------------------ |
@@ -219,10 +220,20 @@ Applied as Axum middleware on every response via `finalize_security_headers()`:
 | `X-Frame-Options`                   | `DENY`                                     |
 | `X-Permitted-Cross-Domain-Policies` | `none`                                     |
 
-`security.headers` defaults to `true`. Defaults fill only missing values, so explicit response
-headers from `securityHeaders()` or application middleware win. When defaults are disabled, Ruvyxa
-removes only values equal to its own defaults and preserves explicit policies. CSP and HSTS are not
-native defaults; use `securityHeaders()` or deployment configuration when required.
+`security.headers` defaults to `true` in the native runtime, and low-level serverless handlers
+expose the equivalent `securityHeaders: false` escape hatch. Defaults fill only missing values, so
+explicit response headers from `securityHeaders()` or application middleware win. When native
+defaults are disabled, Ruvyxa removes only values equal to its own defaults and preserves explicit
+policies. CSP and HSTS are not defaults: a universal CSP would break valid inline bootstrap/HMR and
+HSTS requires an application/deployment decision about HTTPS and subdomains.
+
+## SARIF Security Reports
+
+`ruvyxa analyze --format sarif --output reports/ruvyxa.sarif` serializes the existing route,
+environment, and server/client-boundary diagnostics as SARIF 2.1.0. It is not a separate scanner:
+rule IDs remain `RUV####`, locations are project-relative, and suggested fixes, affected routes, and
+import chains are carried as result properties. Analysis still exits non-zero when diagnostics are
+present so a CI job can upload the file and fail the gate from the same execution.
 
 ---
 

@@ -149,6 +149,40 @@ describe('serverless handler route matching', () => {
 })
 
 describe('serverless handler request validation', () => {
+  it('applies security defaults and preserves explicit application headers', async () => {
+    const handler = createHandler({
+      routes: [{ id: 'api', path: '/api', kind: 'api', file: 'api.ts', render: {} }],
+      importPage: async () => ({}),
+      importApi: async () => ({
+        GET: () =>
+          new Response('ok', {
+            headers: { 'permissions-policy': 'camera=(self)' },
+          }),
+      }),
+    })
+
+    const response = await handler(new Request('http://localhost/api'))
+
+    assert.equal(response.headers.get('x-content-type-options'), 'nosniff')
+    assert.equal(response.headers.get('x-frame-options'), 'DENY')
+    assert.equal(response.headers.get('cross-origin-opener-policy'), 'same-origin')
+    assert.equal(response.headers.get('permissions-policy'), 'camera=(self)')
+  })
+
+  it('can disable framework security defaults without removing application headers', async () => {
+    const handler = createHandler({
+      routes: [pageRoute('home', '/')],
+      securityHeaders: false,
+      importPage: async () => ({ render: async () => '<html>home</html>' }),
+      importApi: async () => ({}),
+    })
+
+    const response = await handler(new Request('http://localhost/'))
+
+    assert.equal(response.headers.get('x-content-type-options'), null)
+    assert.equal(response.headers.get('content-type'), 'text/html; charset=utf-8')
+  })
+
   it('rejects paths outside the configured base path instead of slicing them', async () => {
     const rendered = []
     const handler = createHandler({

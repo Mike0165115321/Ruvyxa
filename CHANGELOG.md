@@ -2,6 +2,30 @@
 
 ## v1.0.23 (2026-07-26)
 
+### Incremental Builds and Hydration Control
+
+- Connected the persistent module graph to production client resolution. Warm builds reuse
+  content-verified dependency edges, save graph state only after successful client emission, retain
+  untouched entries when route artifacts hit, and invalidate the namespace when evaluated config or
+  plugin dependencies change. Build telemetry now reports graph hits and tracked modules.
+- Added route-level deferred hydration with `export const hydrate = 'idle'` and `'visible'` while
+  preserving `true`/default eager hydration and `false` zero-JS output. Deferred pages share one
+  content-hashed loader and do not module-preload the route bundle before its trigger. This is a
+  route-level scheduling feature, not component resumability.
+
+### Deployment Compatibility and Security
+
+- Added a read-only adapter inspection protocol and expanded `ruvyxa doctor` with `--target`,
+  `--adapter`, and `--json`. Doctor now reports adapter target/runtime/platform/capabilities and
+  lists routes the selected deployment target cannot host before a build writes artifacts.
+- Unified seven non-breaking security headers across native, standalone, and serverless responses;
+  explicit application values retain precedence. Static and Cloudflare `_headers` output receives
+  the same defaults. CSP and HSTS remain opt-in because framework-wide values would break valid
+  inline bootstrap code or require deployment-specific HTTPS assumptions.
+- Added `ruvyxa analyze --format sarif` with optional `--output`. SARIF 2.1.0 is serialized directly
+  from existing `RUV####` diagnostics, preserving file locations, fixes, affected routes, and the
+  command's non-zero exit status when violations exist.
+
 ### Production Build Performance
 
 - **Fixed a responsive-image regression that increased the minimal production build from roughly 2

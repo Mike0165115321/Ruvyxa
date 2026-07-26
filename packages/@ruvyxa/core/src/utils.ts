@@ -69,6 +69,17 @@ export const IMMUTABLE_CACHE_CONTROL = 'public, max-age=31536000, immutable'
  */
 export const PUBLIC_ASSET_CACHE_CONTROL = 'public, max-age=3600, must-revalidate'
 
+/** Non-breaking response security defaults shared by every Ruvyxa runtime. */
+export const DEFAULT_SECURITY_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Resource-Policy': 'same-origin',
+  'X-Frame-Options': 'DENY',
+  'X-Permitted-Cross-Domain-Policies': 'none',
+} as const
+
 /**
  * Glob list for `_headers`-style host config: images, fonts, and media only.
  *
@@ -87,10 +98,13 @@ export function publicAssetGlobs(): string[] {
 
 /** `_headers` file contents shared by every host that reads one. */
 export function headersFileContents(): string {
+  const securityRules = Object.entries(DEFAULT_SECURITY_HEADERS)
+    .map(([name, value]) => `  ${name}: ${value}\n`)
+    .join('')
   const assetRules = publicAssetGlobs()
     .map((glob) => `${glob}\n  Cache-Control: ${PUBLIC_ASSET_CACHE_CONTROL}\n`)
     .join('')
-  return `${CLIENT_BUNDLE_PREFIX}*\n  Cache-Control: ${IMMUTABLE_CACHE_CONTROL}\n${assetRules}`
+  return `/*\n${securityRules}${CLIENT_BUNDLE_PREFIX}*\n  Cache-Control: ${IMMUTABLE_CACHE_CONTROL}\n${assetRules}`
 }
 
 /** Return the standard client bundle paths consumed by deployment adapters. */

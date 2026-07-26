@@ -10,6 +10,39 @@ const workspaceRoot = path.resolve(fileURLToPath(new URL('../../..', import.meta
 const adapterRunner = path.join(workspaceRoot, 'packages/ruvyxa/runtime/adapter-runner.mjs')
 
 describe('adapter runner', () => {
+  it('inspects adapter capabilities without materializing declared artifacts', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ruvyxa-adapter-runner-'))
+    const outputDir = path.join(root, '.ruvyxa-staging')
+    try {
+      await mkdir(outputDir, { recursive: true })
+      await writeFile(
+        path.join(root, 'ruvyxa.config.mjs'),
+        `export default { adapter: {
+          name: 'fixture', target: 'serverless', supports: ['ssg', 'api'],
+          build() { return {
+            name: 'fixture', target: 'serverless', runtime: 'node', platform: 'aws',
+            artifacts: [{ kind: 'file', path: 'deploy/health.txt', contents: 'ready' }]
+          } }
+        } }`,
+      )
+
+      const result = await runRunner(root, outputDir, undefined, {
+        RUVYXA_ADAPTER_RUNNER_MODE: 'inspect',
+      })
+
+      assert.deepEqual(result.result, {
+        name: 'fixture',
+        target: 'serverless',
+        runtime: 'node',
+        platform: 'aws',
+        supports: ['ssg', 'api'],
+      })
+      await assert.rejects(readFile(path.join(outputDir, 'deploy/health.txt')), /ENOENT/)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('materializes static deployment artifacts from a static-only build', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'ruvyxa-adapter-runner-'))
     const outputDir = path.join(root, '.ruvyxa-staging')
@@ -694,11 +727,14 @@ async function installFakeReact(root) {
   )
 }
 
-function runRunner(root, outputDir, adapterName) {
+function runRunner(root, outputDir, adapterName, env = {}) {
   return new Promise((resolve, reject) => {
     const args = [adapterRunner, root, outputDir]
     if (adapterName) args.push(adapterName)
-    const child = spawn(process.execPath, args, { stdio: 'pipe' })
+    const child = spawn(process.execPath, args, {
+      stdio: 'pipe',
+      env: { ...process.env, ...env },
+    })
     let stdout = ''
     let stderr = ''
     child.stdout.setEncoding('utf8')

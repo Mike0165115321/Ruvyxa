@@ -47,7 +47,21 @@
  * @property {string[]} [supportedStrategies]
  *   Strategies the platform supports. Defaults to ['ssr','ssg','csr','isr','ppr','api'].
  *   Unsupported strategies produce a 501 response.
+ * @property {boolean} [securityHeaders=true]
+ *   Apply Ruvyxa's non-breaking security headers unless the response already
+ *   defines a value for that header.
  */
+
+/** Security defaults shared with the native and standalone runtimes. */
+export const DEFAULT_SECURITY_HEADERS = Object.freeze({
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'strict-origin-when-cross-origin',
+  'permissions-policy': 'camera=(), microphone=(), geolocation=()',
+  'cross-origin-opener-policy': 'same-origin',
+  'cross-origin-resource-policy': 'same-origin',
+  'x-frame-options': 'DENY',
+  'x-permitted-cross-domain-policies': 'none',
+})
 
 /**
  * Create a serverless request handler.
@@ -64,6 +78,7 @@ export function createHandler(options) {
     readPrerendered,
     writePrerendered,
     supportedStrategies = ['ssr', 'ssg', 'csr', 'isr', 'ppr', 'api'],
+    securityHeaders = true,
   } = options
   const pendingRevalidations = new Map()
 
@@ -81,6 +96,11 @@ export function createHandler(options) {
     .sort((left, right) => compareSpecificity(left.specificity, right.specificity))
 
   return async function handle(request, runtimeContext = {}) {
+    const response = await dispatch(request, runtimeContext)
+    return securityHeaders ? withDefaultSecurityHeaders(response) : response
+  }
+
+  async function dispatch(request, runtimeContext = {}) {
     const url = new URL(request.url)
     const pathname = stripBasePath(url.pathname, basePath)
     // A request outside the configured base path is not ours to serve.
@@ -281,6 +301,18 @@ export function createHandler(options) {
     pendingRevalidations.set(pathname, revalidation)
     return revalidation
   }
+}
+
+function withDefaultSecurityHeaders(response) {
+  const headers = new Headers(response.headers)
+  for (const [name, value] of Object.entries(DEFAULT_SECURITY_HEADERS)) {
+    if (!headers.has(name)) headers.set(name, value)
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
 }
 
 function normalizeCacheEntry(value) {

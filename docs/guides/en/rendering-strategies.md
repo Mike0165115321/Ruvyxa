@@ -177,7 +177,24 @@ export default function InteractiveDashboard() {
 
 At build time, a minimal shell HTML is emitted for CSR routes.
 
-## Zero-JS Pages — `export const hydrate = false`
+## Hydration Scheduling and Zero-JS Pages
+
+Server-rendered routes can choose when their route bundle hydrates:
+
+```tsx
+export const hydrate = 'visible' // 'load' (default), 'idle', 'visible', or false
+```
+
+- `'load'` (or `true`/omitted) hydrates eagerly.
+- `'idle'` imports the route bundle through `requestIdleCallback`, with a timeout fallback.
+- `'visible'` waits until the document root intersects the viewport.
+- `false` (or `'none'`) emits no client bundle.
+
+Deferred routes use one content-hashed external loader and do not module-preload their route bundle,
+so the expensive React code is not requested before the selected trigger. Scheduling is route-level:
+the route still hydrates as one React root after import; it is not component-level resumability.
+
+### Zero JavaScript with `hydrate = false`
 
 Any server-rendered page (SSR, SSG, ISR, PPR) can opt out of client hydration entirely:
 
@@ -205,7 +222,7 @@ What changes for that page:
 
 Use it for content that never needs JavaScript — terms, privacy, changelogs, blog posts, docs. It is
 a per-page decision, so an app can mix zero-JS content pages with fully interactive pages freely.
-`'use client'` (CSR) pages ignore the export — the directive wins.
+`'use client'` (CSR) pages ignore the export — the directive wins and hydration remains eager.
 
 ## Pre-render Output
 

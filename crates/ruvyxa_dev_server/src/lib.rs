@@ -71,6 +71,7 @@ use html_document::{
     dev_error_overlay, error_response, plain_error_page, public_internal_error,
     url_encode_component,
 };
+pub use html_document::{hydration_loader_source, hydration_loader_url};
 
 mod plugin_bridge;
 #[cfg(test)]
@@ -694,6 +695,7 @@ pub async fn serve(config: ServerConfig) -> Result<()> {
     let mut app = Router::new()
         .route("/__ruvyxa/hmr", get(hmr_ws))
         .route("/__ruvyxa/client", get(client_bundle))
+        .route("/__ruvyxa/hydration-loader.js", get(hydration_loader))
         .route("/__ruvyxa/client/route-manifest.json", get(client_manifest))
         .route(
             "/__ruvyxa/action",
@@ -1265,6 +1267,18 @@ async fn client_bundle(
                 .into_response()
         }
     };
+    with_security_headers(response)
+}
+
+async fn hydration_loader() -> Response {
+    let mut response = hydration_loader_source().into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/javascript; charset=utf-8"),
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     with_security_headers(response)
 }
 
@@ -2883,6 +2897,39 @@ mod tests {
             client_hydration_script(&config, &no_hydrate, "/", &BTreeMap::new()),
             ""
         );
+    }
+
+    #[test]
+    fn deferred_hydration_uses_loader_without_preloading_route_chunks() {
+        let temp = tempfile::tempdir().unwrap();
+        let client_dir = temp.path().join(".ruvyxa/client");
+        std::fs::create_dir_all(&client_dir).unwrap();
+        std::fs::write(
+            client_dir.join("manifest.json"),
+            r#"{"routes":[{"path":"/","src":"/__ruvyxa/client/home.js","sharedChunks":[{"src":"/__ruvyxa/client/shared.js"}],"hydration":"idle","hydrationLoader":"/__ruvyxa/client/hydration.js"}]}"#,
+        )
+        .unwrap();
+        let config = ServerConfig::production(temp.path(), "localhost", 3000);
+        let route = RouteEntry {
+            id: "page:index".to_string(),
+            path: "/".to_string(),
+            file: temp.path().join("app/page.tsx"),
+            kind: ruvyxa_graph::RouteKind::Page,
+            layout_chain: Vec::new(),
+            server_modules: Vec::new(),
+            client_modules: Vec::new(),
+            runtime: ruvyxa_graph::RuntimeTarget::Node,
+            render: ruvyxa_graph::RenderMeta {
+                hydration: ruvyxa_graph::HydrationMode::Idle,
+                ..Default::default()
+            },
+        };
+
+        let script = client_hydration_script(&config, &route, "/", &BTreeMap::new());
+
+        assert!(!script.contains("modulepreload"), "{script}");
+        assert!(script.contains("hydration.js?strategy=idle&amp;src=/__ruvyxa/client/home.js"));
+        assert!(!script.contains(r#"src="/__ruvyxa/client/home.js""#));
     }
 
     #[tokio::test]

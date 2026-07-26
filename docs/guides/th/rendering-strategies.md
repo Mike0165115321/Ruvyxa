@@ -176,7 +176,24 @@ export default function InteractiveDashboard() {
 
 ณ build time HTML shell แบบ minimal จะถูก emit สำหรับ CSR routes
 
-## หน้า Zero-JS — `export const hydrate = false`
+## การกำหนดเวลา Hydration และหน้า Zero-JS
+
+Route ที่ render ฝั่ง server เลือกเวลาที่จะ hydrate route bundle ได้:
+
+```tsx
+export const hydrate = 'visible' // 'load' (default), 'idle', 'visible' หรือ false
+```
+
+- `'load'` (รวม `true` หรือไม่ export) hydrate ทันที
+- `'idle'` import bundle ผ่าน `requestIdleCallback` และมี timeout fallback
+- `'visible'` รอจน document root เข้ามาใน viewport
+- `false` (หรือ `'none'`) ไม่ emit client bundle
+
+Route แบบ deferred ใช้ external loader ที่ hash แล้วร่วมกัน และไม่ module-preload route bundle
+จึงยังไม่ดาวน์โหลด React code ก่อน trigger ที่เลือก ฟีเจอร์นี้กำหนดเวลาระดับ route: หลัง import ยัง
+hydrate เป็น React root เดียว ไม่ใช่ resumability แยกแต่ละ component
+
+### JavaScript ศูนย์ไบต์ด้วย `hydrate = false`
 
 หน้า server-rendered ทุกแบบ (SSR, SSG, ISR, PPR) เลือกปิด client hydration ได้ทั้งหมด:
 

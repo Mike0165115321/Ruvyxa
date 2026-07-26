@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use axum::http::StatusCode;
 use axum::response::Response;
 use ruvyxa_diagnostics::{Diagnostic, RuvyxaError};
-use ruvyxa_graph::{RouteEntry, RouteParams};
+use ruvyxa_graph::{HydrationMode, RouteEntry, RouteParams};
 use serde::Deserialize;
 
 use crate::{ServerConfig, html_response};
@@ -107,6 +107,10 @@ struct ClientAssetRoute {
     src: String,
     #[serde(rename = "sharedChunks")]
     shared_chunks: Vec<ClientSharedChunk>,
+    #[serde(default)]
+    hydration: HydrationMode,
+    #[serde(default, rename = "hydrationLoader")]
+    hydration_loader: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -118,6 +122,45 @@ struct ClientSharedChunk {
 pub(crate) struct ClientAssets {
     pub(crate) src: String,
     pub(crate) preloads: Vec<String>,
+    pub(crate) hydration: HydrationMode,
+    pub(crate) hydration_loader: Option<String>,
+}
+
+/// Browser module that defers importing a route bundle until its trigger.
+pub fn hydration_loader_source() -> &'static str {
+    r#"const params=new URL(import.meta.url).searchParams;
+const src=params.get('src');
+const strategy=params.get('strategy');
+const load=()=>src?import(src):Promise.resolve();
+if(strategy==='idle'){
+  if(typeof requestIdleCallback==='function')requestIdleCallback(()=>void load());
+  else setTimeout(()=>void load(),1);
+}else if(strategy==='visible'&&typeof IntersectionObserver==='function'){
+  const target=document.body||document.documentElement;
+  const observer=new IntersectionObserver((entries)=>{
+    if(entries.some((entry)=>entry.isIntersecting)){
+      observer.disconnect();
+      void load();
+    }
+  });
+  observer.observe(target);
+}else{
+  void load();
+}
+"#
+}
+
+/// Build the external loader URL for one deferred route bundle.
+pub fn hydration_loader_url(loader_src: &str, client_src: &str, mode: HydrationMode) -> String {
+    let strategy = match mode {
+        HydrationMode::Idle => "idle",
+        HydrationMode::Visible => "visible",
+        HydrationMode::Load | HydrationMode::None => return client_src.to_string(),
+    };
+    format!(
+        "{loader_src}?strategy={strategy}&src={}",
+        url_encode_component(client_src)
+    )
 }
 
 pub(crate) fn client_hydration_script(
@@ -144,6 +187,8 @@ pub(crate) fn client_hydration_script(
                 url_encode_component(request_path)
             ),
             preloads: Vec::new(),
+            hydration: route.render.hydration,
+            hydration_loader: Some("/__ruvyxa/hydration-loader.js".to_string()),
         }
     } else {
         prebuilt_client_assets(config, &route.path).unwrap_or_else(|| ClientAssets {
@@ -152,17 +197,31 @@ pub(crate) fn client_hydration_script(
                 url_encode_component(request_path)
             ),
             preloads: Vec::new(),
+            hydration: route.render.hydration,
+            hydration_loader: Some("/__ruvyxa/hydration-loader.js".to_string()),
         })
     };
-    let preload_links = assets
-        .preloads
-        .iter()
-        .map(|src| {
-            let src = escape_html(src);
-            format!(r#"<link rel="modulepreload" href="{src}">"#)
-        })
-        .collect::<String>();
-    let src = escape_html(&assets.src);
+    let deferred = matches!(
+        assets.hydration,
+        HydrationMode::Idle | HydrationMode::Visible
+    );
+    let preload_links = if deferred {
+        String::new()
+    } else {
+        assets
+            .preloads
+            .iter()
+            .map(|src| {
+                let src = escape_html(src);
+                format!(r#"<link rel="modulepreload" href="{src}">"#)
+            })
+            .collect::<String>()
+    };
+    let script_src = assets.hydration_loader.as_deref().map_or_else(
+        || assets.src.clone(),
+        |loader| hydration_loader_url(loader, &assets.src, assets.hydration),
+    );
+    let src = escape_html(&script_src);
 
     format!(
         r#"{preload_links}<script>globalThis.__RUVYXA_ROUTE_PARAMS__ = {params_json};globalThis.__RUVYXA_REQUEST_PATH__ = {request_path_json};</script><script type="module" src="{src}"></script>"#,
@@ -226,6 +285,8 @@ fn load_client_manifest(manifest_path: &Path) -> Option<Arc<HashMap<String, Clie
             .or_insert_with(move || ClientAssets {
                 src: route.src,
                 preloads: route.shared_chunks.into_iter().map(|c| c.src).collect(),
+                hydration: route.hydration,
+                hydration_loader: route.hydration_loader,
             });
     }
     let routes = Arc::new(routes);

@@ -83,7 +83,7 @@ export default async function ProductsPage() {
       {products.map((product) => (
         <article key={product.id}>
           <h2>{product.title}</h2>
-          <AddToCart productId={product.id} /> {/* hydrate แค่ตัวนี้ */}
+          <AddToCart productId={product.id} /> {/* component นี้ต้องใช้ browser code */}
         </article>
       ))}
     </main>
@@ -93,6 +93,10 @@ export default async function ProductsPage() {
 
 ส่งข้อมูล server **ลงผ่าน props** — props ต้อง serialize เป็น JSON ได้ function และ class instance
 ข้ามเส้นแบ่งไม่ได้
+
+Client boundary ระบุว่า module ไหนต้องมี behavior ใน browser แต่ runtime ปัจจุบัน hydrate route เป็น
+React root เดียว ใช้ export ระดับ route `hydrate = 'idle' | 'visible' | false` เมื่อต้องการ
+เลื่อนทั้ง route หรือไม่ส่ง JavaScript; contract นี้ยังไม่ใช่ resumability แยก root ราย component
 
 ### ต้องใช้โลกไหน?
 

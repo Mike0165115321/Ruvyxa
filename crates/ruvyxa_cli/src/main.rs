@@ -19,10 +19,10 @@ use ruvyxa_dev_server::{
     MAX_ACTION_RATE_LIMIT_WINDOW_SECS, MAX_API_BODY_LIMIT_BYTES,
     MAX_PLUGIN_RESPONSE_BODY_LIMIT_BYTES, ServerConfig, find_runtime_script, render_request, serve,
 };
-use ruvyxa_diagnostics::Diagnostic;
+use ruvyxa_diagnostics::{Diagnostic, diagnostics_to_sarif};
 use ruvyxa_graph::{
-    DiscoverOptions, RenderStrategy, RouteEntry, RouteManifest, RouteParams, discover_routes,
-    validate_app, write_manifest,
+    DiscoverOptions, HydrationMode, RenderStrategy, RouteEntry, RouteManifest, RouteParams,
+    discover_routes, validate_app, write_manifest,
 };
 use tracing::{info, warn};
 use walkdir::WalkDir;
@@ -69,9 +69,9 @@ enum Command {
     #[command(about = "Print the discovered route table")]
     Routes(ProjectArgs),
     #[command(about = "Validate routes, imports, and server/client boundaries")]
-    Analyze(ProjectArgs),
+    Analyze(AnalyzeArgs),
     #[command(about = "Check project setup, dependencies, and runtime compatibility")]
-    Doctor(ProjectArgs),
+    Doctor(DoctorArgs),
     #[command(about = "Remove generated Ruvyxa build output")]
     Clean(ProjectArgs),
     #[command(about = "Inspect one route manifest entry by path")]
@@ -97,6 +97,54 @@ struct ProjectArgs {
     /// and config.runtime.
     #[arg(long, value_enum, ignore_case = true)]
     runtime: Option<CliRuntime>,
+}
+
+#[derive(Debug, Clone, Parser)]
+struct AnalyzeArgs {
+    #[arg(long, default_value = ".")]
+    root: PathBuf,
+
+    /// JavaScript runtime used to evaluate project configuration.
+    #[arg(long, value_enum, ignore_case = true)]
+    runtime: Option<CliRuntime>,
+
+    /// Report format. Auto keeps the existing terminal/pipe behavior.
+    #[arg(long, value_enum, ignore_case = true, default_value_t = AnalyzeFormat::Auto)]
+    format: AnalyzeFormat,
+
+    /// Write the report to a file instead of standard output.
+    #[arg(long)]
+    output: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum AnalyzeFormat {
+    Auto,
+    Human,
+    Json,
+    Sarif,
+}
+
+#[derive(Debug, Clone, Parser)]
+struct DoctorArgs {
+    #[arg(long, default_value = ".")]
+    root: PathBuf,
+
+    /// Production target to evaluate; overrides config.runtime.
+    #[arg(long, value_enum, ignore_case = true)]
+    target: Option<BuildTarget>,
+
+    /// Inspect a deploy adapter without materializing its artifacts.
+    #[arg(long, value_parser = parse_adapter_name)]
+    adapter: Option<String>,
+
+    /// JavaScript runtime used to evaluate configuration and adapters.
+    #[arg(long, value_enum, ignore_case = true)]
+    runtime: Option<CliRuntime>,
+
+    /// Emit the complete compatibility report as JSON.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -427,10 +475,20 @@ struct ConfigRendererOutput {
 #[serde(rename_all = "camelCase")]
 struct AdapterRunnerOutput {
     ok: bool,
-    result: Option<Vec<AdapterArtifactReport>>,
+    result: Option<serde_json::Value>,
     code: Option<String>,
     message: Option<String>,
     stack: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AdapterInspection {
+    name: String,
+    target: String,
+    runtime: String,
+    platform: Option<String>,
+    supports: Vec<String>,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -803,6 +861,10 @@ fn canonical_option_name(option: &str) -> Option<&'static str> {
         "host" => Some("host"),
         "port" => Some("port"),
         "target" => Some("target"),
+        "runtime" => Some("runtime"),
+        "adapter" => Some("adapter"),
+        "format" => Some("format"),
+        "output" => Some("output"),
         "samples" => Some("samples"),
         "json" => Some("json"),
         _ => None,
@@ -1114,7 +1176,68 @@ fn run_adapter_runner(
                 .unwrap_or_else(|| "unknown adapter error".to_string())
         );
     }
-    Ok(result.result.unwrap_or_default())
+    result
+        .result
+        .map(serde_json::from_value)
+        .transpose()
+        .context("adapter runner returned an invalid artifact report")
+        .map(Option::unwrap_or_default)
+}
+
+fn inspect_adapter(
+    root: &Path,
+    out_dir: &Path,
+    runtime: JavaScriptRuntime,
+    adapter_name: Option<&str>,
+) -> anyhow::Result<Option<AdapterInspection>> {
+    let runner = find_runtime_script(root, "adapter-runner.mjs").ok_or_else(|| {
+        anyhow::anyhow!(
+            "adapter inspection requires runtime/adapter-runner.mjs; reinstall the ruvyxa package"
+        )
+    })?;
+    let mut command = ProcessCommand::new(runtime.executable());
+    command
+        .arg(runner)
+        .arg(root)
+        .arg(out_dir)
+        .env("RUVYXA_RUNTIME", runtime.command())
+        .env("RUVYXA_ADAPTER_RUNNER_MODE", "inspect");
+    if let Some(adapter_name) = adapter_name {
+        command.arg(adapter_name);
+    }
+    let output = command.output().with_context(|| {
+        format!(
+            "failed to inspect adapter with {} for {}",
+            runtime.command(),
+            root.display()
+        )
+    })?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let result: AdapterRunnerOutput = serde_json::from_str(&stdout).with_context(|| {
+        format!(
+            "adapter inspector returned invalid output for {}\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+            root.display(),
+            output.status,
+            diagnostic_stream(&stdout),
+            diagnostic_stream(&stderr),
+        )
+    })?;
+    if !result.ok {
+        anyhow::bail!(
+            "adapter inspection failed: {} {}",
+            result.code.unwrap_or_else(|| "RUV2200".to_string()),
+            result
+                .message
+                .or(result.stack)
+                .unwrap_or_else(|| "unknown adapter error".to_string())
+        );
+    }
+    result
+        .result
+        .map(serde_json::from_value)
+        .transpose()
+        .context("adapter inspector returned an invalid capability report")
 }
 
 /// Process-wide runtime override set by the `--runtime` CLI flag. Takes
@@ -1127,10 +1250,10 @@ fn command_runtime(command: &Command) -> Option<CliRuntime> {
         Command::Build(args) => args.runtime,
         Command::Check(args)
         | Command::Routes(args)
-        | Command::Analyze(args)
-        | Command::Doctor(args)
         | Command::Clean(args)
         | Command::TestParity(args) => args.runtime,
+        Command::Analyze(args) => args.runtime,
+        Command::Doctor(args) => args.runtime,
         Command::Trace(_) | Command::Bench(_) | Command::Plugin(_) => None,
     }
 }
@@ -2555,6 +2678,8 @@ fn inject_prerender_styles(html: &str, styles: &str) -> String {
 struct PrerenderClientAssets {
     src: String,
     preloads: Vec<String>,
+    hydration: HydrationMode,
+    hydration_loader: Option<String>,
 }
 
 fn load_prerender_client_assets(client_dir: &Path) -> BTreeMap<String, PrerenderClientAssets> {
@@ -2581,7 +2706,24 @@ fn load_prerender_client_assets(client_dir: &Path) -> BTreeMap<String, Prerender
                 .filter_map(|chunk| chunk.get("src").and_then(|src| src.as_str()))
                 .map(str::to_string)
                 .collect();
-            Some((path, PrerenderClientAssets { src, preloads }))
+            let hydration = route
+                .get("hydration")
+                .cloned()
+                .and_then(|value| serde_json::from_value(value).ok())
+                .unwrap_or_default();
+            let hydration_loader = route
+                .get("hydrationLoader")
+                .and_then(|value| value.as_str())
+                .map(str::to_string);
+            Some((
+                path,
+                PrerenderClientAssets {
+                    src,
+                    preloads,
+                    hydration,
+                    hydration_loader,
+                },
+            ))
         })
         .collect()
 }
@@ -2618,12 +2760,24 @@ fn inject_prerender_client_assets(
     let Some(assets) = client_assets.get(route_path) else {
         return html.to_string();
     };
-    let preload_links = module_preload_links(&assets.preloads);
+    let deferred = matches!(
+        assets.hydration,
+        HydrationMode::Idle | HydrationMode::Visible
+    );
+    let preload_links = if deferred {
+        String::new()
+    } else {
+        module_preload_links(&assets.preloads)
+    };
     let request_path_json = inline_script_json(request_path, "\"/\"");
     let params_json = inline_script_json(params, "{}");
+    let script_src = assets.hydration_loader.as_deref().map_or_else(
+        || assets.src.clone(),
+        |loader| ruvyxa_dev_server::hydration_loader_url(loader, &assets.src, assets.hydration),
+    );
     let scripts = format!(
         r#"<script>globalThis.__RUVYXA_ROUTE_PARAMS__ = {params_json};globalThis.__RUVYXA_REQUEST_PATH__ = {request_path_json};</script><script type="module" src="{}"></script>"#,
-        escape_html_attribute(&assets.src)
+        escape_html_attribute(&script_src)
     );
     let lower = html.to_ascii_lowercase();
     if let (Some(head_end), Some(body_end)) = (lower.find("</head>"), lower.rfind("</body>"))
@@ -2982,10 +3136,11 @@ fn bundle_context_for_build(
         config_dependency_hash,
     );
     if plugins.is_empty() {
-        return Ok(ruvyxa_bundler::BundleContext::with_all_caches(
+        return Ok(ruvyxa_bundler::BundleContext::for_build(
             compile_cache,
             ruvyxa_bundler::resolver::ResolveGraphCache::for_build(),
-            ruvyxa_bundler::incremental::IncrementalGraphCache::new(root, true),
+            cache_dir,
+            config_dependency_hash,
         ));
     }
 
@@ -3005,7 +3160,7 @@ fn bundle_context_for_build(
     Ok(ruvyxa_bundler::BundleContext::with_build_hooks(
         compile_cache,
         ruvyxa_bundler::resolver::ResolveGraphCache::for_build(),
-        ruvyxa_bundler::incremental::IncrementalGraphCache::new(root, true),
+        ruvyxa_bundler::incremental::IncrementalGraphCache::disabled(),
         ruvyxa_bundler::hooks::BuildHookPipeline::new(vec![Arc::new(bridge)]),
     ))
 }
@@ -3312,14 +3467,42 @@ fn emit_client_bundles_with_runtime(
         routes.push(route_info);
     }
 
+    let hydration_loader = page_routes
+        .iter()
+        .any(|route| {
+            matches!(
+                route.render.hydration,
+                HydrationMode::Idle | HydrationMode::Visible
+            )
+        })
+        .then(|| {
+            let source = ruvyxa_dev_server::hydration_loader_source();
+            let file_name = format!("hydration-{}.js", &content_hash(source)[..16]);
+            fs::write(client_dir.join(&file_name), source)?;
+            Ok::<_, std::io::Error>(format!("/__ruvyxa/client/{file_name}"))
+        })
+        .transpose()?;
+
     for route in &mut routes {
         let route_path = route
             .get("path")
             .and_then(|value| value.as_str())
-            .unwrap_or("/");
+            .unwrap_or("/")
+            .to_string();
+        let hydration = page_routes
+            .iter()
+            .find(|entry| entry.path == route_path)
+            .map(|entry| entry.render.hydration)
+            .unwrap_or_default();
+        route["hydration"] = serde_json::to_value(hydration)?;
+        if matches!(hydration, HydrationMode::Idle | HydrationMode::Visible)
+            && let Some(loader) = &hydration_loader
+        {
+            route["hydrationLoader"] = serde_json::Value::String(loader.clone());
+        }
         let route_shared_chunks = shared_route_chunks
             .iter()
-            .filter(|chunk| chunk.routes.iter().any(|path| path == route_path))
+            .filter(|chunk| chunk.routes.iter().any(|path| path == &route_path))
             .map(shared_route_chunk_manifest)
             .collect::<Vec<_>>();
         route["sharedChunks"] = serde_json::Value::Array(route_shared_chunks);
@@ -3351,6 +3534,11 @@ fn emit_client_bundles_with_runtime(
     }
 
     let bundle_budget = bundle_budget_report(&routes);
+    // Persist only after every route artifact has been emitted successfully;
+    // a failed batch leaves the previous dependency graph intact.
+    bundle_context
+        .save_incremental()
+        .context("failed to persist incremental module graph")?;
 
     Ok(serde_json::json!({
         "chunkStrategy": build.split_strategy.as_deref().unwrap_or("route"),
@@ -3376,7 +3564,9 @@ fn emit_client_bundles_with_runtime(
         "cache": {
             "directory": bundle_context.compile_cache().cache_dir(),
             "compileEntries": bundle_context.compile_cache().entry_count(),
-            "compileBytes": bundle_context.compile_cache().total_bytes()
+            "compileBytes": bundle_context.compile_cache().total_bytes(),
+            "graphHits": bundle_context.incremental().edge_hits(),
+            "graphModules": bundle_context.incremental().current_module_count()
         },
         "routes": routes
     }))
@@ -4564,14 +4754,50 @@ fn print_routes(args: ProjectArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn analyze(args: ProjectArgs) -> anyhow::Result<()> {
+fn analyze(args: AnalyzeArgs) -> anyhow::Result<()> {
     let config = load_project_config(&args.root)?;
     let manifest = discover_project_routes(&args.root, &config)?;
     let validation = validate_app(&args.root, &manifest)?;
+    let format = match args.format {
+        AnalyzeFormat::Auto if args.output.is_some() => AnalyzeFormat::Json,
+        AnalyzeFormat::Auto if std::io::stdout().is_terminal() => AnalyzeFormat::Human,
+        AnalyzeFormat::Auto => AnalyzeFormat::Json,
+        explicit => explicit,
+    };
+    if format == AnalyzeFormat::Human && args.output.is_some() {
+        anyhow::bail!("--output requires --format json or --format sarif");
+    }
 
     // Keep the machine-readable JSON contract for pipes and scripts; render the
     // house TUI only when a person is looking at a terminal.
-    if std::io::stdout().is_terminal() {
+    let serialized = match format {
+        AnalyzeFormat::Human => None,
+        AnalyzeFormat::Json => Some(serde_json::to_string_pretty(&validation)?),
+        AnalyzeFormat::Sarif => Some(serde_json::to_string_pretty(&diagnostics_to_sarif(
+            &validation.diagnostics,
+            "Ruvyxa",
+            env!("CARGO_PKG_VERSION"),
+            &args.root,
+        ))?),
+        AnalyzeFormat::Auto => unreachable!("auto format is resolved above"),
+    };
+
+    if let Some(report) = serialized {
+        if let Some(output) = &args.output {
+            if let Some(parent) = output
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                fs::create_dir_all(parent).with_context(|| {
+                    format!("failed to create report directory {}", parent.display())
+                })?;
+            }
+            fs::write(output, format!("{report}\n"))
+                .with_context(|| format!("failed to write analysis report {}", output.display()))?;
+        } else {
+            println!("{report}");
+        }
+    } else {
         print_tui_header("Analyze");
         print_field("root", path_text(&args.root));
         print_field("routes", accent(validation.routes.to_string()));
@@ -4598,8 +4824,6 @@ fn analyze(args: ProjectArgs) -> anyhow::Result<()> {
                 eprintln!("{diagnostic}");
             }
         }
-    } else {
-        println!("{}", serde_json::to_string_pretty(&validation)?);
     }
 
     if !validation.is_ok() {
@@ -4652,11 +4876,80 @@ fn run_typecheck(root: &Path) -> anyhow::Result<()> {
     anyhow::bail!("TypeScript type check failed\nstdout:\n{stdout}\nstderr:\n{stderr}")
 }
 
-fn doctor(args: ProjectArgs) -> anyhow::Result<()> {
+fn doctor(args: DoctorArgs) -> anyhow::Result<()> {
     let config = load_project_config(&args.root)?;
     let app_dir = args.root.join(config.app_dir());
     let package_json = args.root.join("package.json");
     let tsconfig = args.root.join("tsconfig.json");
+    let manifest = discover_project_routes(&args.root, &config)?;
+    let validation = validate_app(&args.root, &manifest)?;
+    let build_target = config.build_target(args.target);
+    let build_target_name = format!("{build_target:?}").to_ascii_lowercase();
+    let detected_adapter = if args.adapter.is_none() && config.adapter.is_none() {
+        detect_platform_adapter(|key| std::env::var(key).ok())
+    } else {
+        None
+    };
+    let adapter_name = args
+        .adapter
+        .as_deref()
+        .or_else(|| detected_adapter.as_ref().map(|(name, _)| name.as_str()));
+    let adapter = if adapter_name.is_some() || config.adapter.is_some() {
+        inspect_adapter(
+            &args.root,
+            &args.root.join(config.out_dir()),
+            config.javascript_runtime(),
+            adapter_name,
+        )?
+    } else {
+        None
+    }
+    .unwrap_or_else(|| AdapterInspection {
+        name: "ruvyxa-native".to_string(),
+        target: build_target_name.clone(),
+        runtime: config.javascript_runtime().command().to_string(),
+        platform: None,
+        supports: vec!["ssr", "ssg", "csr", "isr", "ppr", "api"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+    });
+    let supported = adapter
+        .supports
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let unsupported_routes = manifest
+        .routes
+        .iter()
+        .filter_map(|route| {
+            let capability = match route.kind {
+                ruvyxa_graph::RouteKind::Api => "api".to_string(),
+                ruvyxa_graph::RouteKind::Page => {
+                    format!("{:?}", route.render.strategy).to_ascii_lowercase()
+                }
+            };
+            (!supported.contains(capability.as_str()))
+                .then(|| serde_json::json!({ "path": route.path, "requires": capability }))
+        })
+        .collect::<Vec<_>>();
+
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "frameworkVersion": env!("CARGO_PKG_VERSION"),
+                "root": args.root,
+                "buildTarget": build_target_name,
+                "javascriptRuntime": config.javascript_runtime().command(),
+                "adapter": adapter,
+                "routes": manifest.routes.len(),
+                "unsupportedRoutes": unsupported_routes,
+                "diagnostics": validation.diagnostics,
+            }))?
+        );
+        return Ok(());
+    }
 
     print_tui_header("Doctor");
     print_field("ruvyxa", accent(env!("CARGO_PKG_VERSION")));
@@ -4675,6 +4968,14 @@ fn doctor(args: ProjectArgs) -> anyhow::Result<()> {
     print_field("rustc", tool_status(tool_version("rustc", &["--version"])));
     print_field("cargo", tool_status(tool_version("cargo", &["--version"])));
     print_field("bun", tool_status(bun_version()));
+    print_field("build target", accent(&build_target_name));
+    print_field("adapter", accent(&adapter.name));
+    print_field("adapter target", accent(&adapter.target));
+    print_field("adapter runtime", accent(&adapter.runtime));
+    print_field("adapter supports", accent(adapter.supports.join(", ")));
+    if let Some(platform) = &adapter.platform {
+        print_field("adapter platform", accent(platform));
+    }
 
     if package_json.exists() {
         let package = read_package_json(&package_json)?;
@@ -4703,8 +5004,6 @@ fn doctor(args: ProjectArgs) -> anyhow::Result<()> {
         }
     }
 
-    let manifest = discover_project_routes(&args.root, &config)?;
-    let validation = validate_app(&args.root, &manifest)?;
     print_field("routes", accent(manifest.routes.len().to_string()));
     print_field("page routes", accent(validation.page_routes.to_string()));
     print_field("api routes", accent(validation.api_routes.to_string()));
@@ -4726,6 +5025,22 @@ fn doctor(args: ProjectArgs) -> anyhow::Result<()> {
     );
     print_field("env schema", exists_status(&args.root.join(".env.example")));
     print_field("native binary", ok_text("ok"));
+    if unsupported_routes.is_empty() {
+        print_field("target compatibility", ok_text("all routes supported"));
+    } else {
+        print_field(
+            "target compatibility",
+            warn_text(format!("{} unsupported route(s)", unsupported_routes.len())),
+        );
+        for route in &unsupported_routes {
+            eprintln!(
+                "  {} {} requires {}",
+                warn_text("!"),
+                route["path"].as_str().unwrap_or("/"),
+                route["requires"].as_str().unwrap_or("unknown")
+            );
+        }
+    }
     println!();
     Ok(())
 }
@@ -5819,8 +6134,15 @@ mod tests {
             r#"
 export default {
   adapter: {
+    name: 'fixture',
+    target: 'serverless',
+    supports: ['ssg', 'api'],
     build() {
       return {
+        name: 'fixture',
+        target: 'serverless',
+        runtime: 'node',
+        platform: 'aws',
         artifacts: [
           { kind: 'file', path: 'deploy/health.txt', contents: 'ready\\n' }
         ]
@@ -5831,6 +6153,14 @@ export default {
 "#,
         )
         .unwrap();
+
+        let inspection = inspect_adapter(root, &staging, JavaScriptRuntime::Node, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(inspection.name, "fixture");
+        assert_eq!(inspection.target, "serverless");
+        assert_eq!(inspection.supports, ["ssg", "api"]);
+        assert!(!staging.join("deploy/health.txt").exists());
 
         let artifacts = run_adapter_runner(root, &staging, JavaScriptRuntime::Node, None).unwrap();
 
@@ -6603,6 +6933,31 @@ export default {
     }
 
     #[test]
+    fn prerender_deferred_hydration_loads_bundle_only_through_loader() {
+        let temp = tempfile::tempdir().unwrap();
+        let client_dir = temp.path().join("client");
+        std::fs::create_dir_all(&client_dir).unwrap();
+        std::fs::write(
+            client_dir.join("manifest.json"),
+            r#"{"routes":[{"path":"/","src":"/__ruvyxa/client/home.js","sharedChunks":[{"src":"/__ruvyxa/client/shared.js"}],"hydration":"visible","hydrationLoader":"/__ruvyxa/client/hydration.js"}]}"#,
+        )
+        .unwrap();
+        let assets = load_prerender_client_assets(&client_dir);
+
+        let html = inject_prerender_client_assets(
+            "<!doctype html><html><head></head><body><main>Home</main></body></html>",
+            &assets,
+            "/",
+            "/",
+            &BTreeMap::new(),
+        );
+
+        assert!(!html.contains("modulepreload"), "{html}");
+        assert!(html.contains("hydration.js?strategy=visible&amp;src=/__ruvyxa/client/home.js"));
+        assert!(!html.contains(r#"src="/__ruvyxa/client/home.js""#));
+    }
+
+    #[test]
     fn prerender_html_includes_global_styles_in_the_document_head() {
         let html = inject_prerender_styles(
             "<!doctype html><html><head><title>Docs</title></head><body><main>Guide</main></body></html>",
@@ -6993,6 +7348,25 @@ export default {
             panic!("expected build command");
         };
         assert!(matches!(args.target, Some(BuildTarget::Edge)));
+    }
+
+    #[test]
+    fn parses_analyze_sarif_output_options() {
+        let cli = Cli::try_parse_from(normalized_cli_args(os_args([
+            "Ruvyxa",
+            "ANALYZE",
+            "--FORMAT",
+            "SARIF",
+            "--OUTPUT",
+            "reports/ruvyxa.sarif",
+        ])))
+        .unwrap();
+
+        let Command::Analyze(args) = cli.command else {
+            panic!("expected analyze command");
+        };
+        assert_eq!(args.format, AnalyzeFormat::Sarif);
+        assert_eq!(args.output, Some(PathBuf::from("reports/ruvyxa.sarif")));
     }
 
     #[test]

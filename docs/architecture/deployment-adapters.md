@@ -38,6 +38,22 @@ flowchart LR
 | `packages/@ruvyxa/adapter-*`                     | Provider-native artifact declaration and runtime bridge                                                     | Direct            |
 | `scripts/pack-smoke.mjs`                         | Prove first-party adapters remain resolvable after npm packing                                              | Direct            |
 
+## Read-only Capability Inspection
+
+`adapter-runner.mjs` has separate `build` and `inspect` modes. Inspection evaluates the adapter's
+declarative output to report `name`, `target`, `runtime`, `platform`, and `supports`, but skips
+route artifact validation and materialization. The CLI uses this protocol from `doctor` and compares
+every manifest route with the adapter capability set before deployment:
+
+```text
+doctor --adapter static --json
+  -> adapter.supports = [ssg, csr]
+  -> unsupportedRoutes = [{ path: /api/health, requires: api }]
+```
+
+Adapters that omit `supports` retain the existing full-featured default. The protocol is additive;
+ordinary builds still validate capabilities immediately before materialization.
+
 ## Provider Boundaries
 
 | Provider            | Runtime model                             | Native output                                            | Selection                                                  |

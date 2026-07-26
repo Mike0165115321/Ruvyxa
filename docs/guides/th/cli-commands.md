@@ -157,6 +157,8 @@ Route                    Strategy
 
 ```bash
 npx ruvyxa analyze
+npx ruvyxa analyze --format json
+npx ruvyxa analyze --format sarif --output reports/ruvyxa.sarif
 ```
 
 ตรวจสอบแต่ละ route (รวม imports + layouts):
@@ -170,10 +172,16 @@ npx ruvyxa analyze
 Route conflict detection รันตอน route discovery (ก่อน analyze) Config validation รันตอน config
 loading (ก่อน route discovery)
 
+`--format` รองรับ `auto` (default), `human`, `json` และ `sarif` โดย auto แสดง human output
+เมื่อรันใน terminal และ JSON เมื่อส่งผ่าน pipe ส่วน SARIF เป็นเวอร์ชัน 2.1.0 และใช้ diagnostics กับ
+exit status ชุดเดียวกัน จึง upload report ใน CI ได้แม้ validation gate ไม่ผ่าน
+
 ### `doctor`
 
 ```bash
 npx ruvyxa doctor
+npx ruvyxa doctor --adapter static --target static
+npx ruvyxa doctor --json
 ```
 
 รายงาน:
@@ -185,6 +193,11 @@ npx ruvyxa doctor
 - Dependency status
 - Configuration validity
 - จำนวน routes (total, page, API)
+- Build target รวมถึง target, runtime, platform และ rendering strategies ของ adapter
+- Route ที่ adapter ที่เลือก/configure/auto-detect รองรับไม่ได้ทีละ route
+
+การ inspect ไม่ materialize adapter artifact; `--adapter` override config/host detection และ
+`--target` ใช้ประเมิน production target โดยไม่แก้ config
 
 ### `trace`
 

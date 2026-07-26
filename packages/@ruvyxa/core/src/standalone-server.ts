@@ -1,5 +1,6 @@
 import {
   CLIENT_BUNDLE_PREFIX,
+  DEFAULT_SECURITY_HEADERS,
   IMMUTABLE_CACHE_CONTROL,
   PUBLIC_ASSET_CACHE_CONTROL,
   STATIC_ASSET_EXTENSIONS,
@@ -140,6 +141,13 @@ function resolveStaticFile(pathname) {
 }
 
 const ASSET_EXTENSIONS = new Set(${JSON.stringify(STATIC_ASSET_EXTENSIONS)});
+const DEFAULT_SECURITY_HEADERS = ${JSON.stringify(DEFAULT_SECURITY_HEADERS)};
+
+function applySecurityHeaders(res) {
+  for (const [name, value] of Object.entries(DEFAULT_SECURITY_HEADERS)) {
+    if (!res.hasHeader(name)) res.setHeader(name, value);
+  }
+}
 
 // True when the last path segment names a static asset file. Matches
 // isStaticAssetPath in serverless-handler.mjs.
@@ -179,6 +187,7 @@ async function readRequestBody(req) {
 }
 
 const server = createServer(async (req, res) => {
+  applySecurityHeaders(res);
   try {
     const url = new URL(req.url, \`http://\${req.headers.host || 'localhost'}\`);
     const isRead = req.method === 'GET' || req.method === 'HEAD';

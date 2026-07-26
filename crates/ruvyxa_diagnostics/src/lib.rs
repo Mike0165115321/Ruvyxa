@@ -1,5 +1,6 @@
+use std::collections::BTreeMap;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -136,6 +137,99 @@ impl From<std::io::Error> for RuvyxaError {
 
 pub type Result<T> = std::result::Result<T, RuvyxaError>;
 
+/// Convert framework diagnostics into a deterministic SARIF 2.1.0 log.
+///
+/// This is intentionally a serializer over the existing validation results,
+/// not a second scanner. Human, JSON, and SARIF output therefore share the
+/// same rules, locations, and failure status.
+#[must_use]
+pub fn diagnostics_to_sarif(
+    diagnostics: &[Diagnostic],
+    tool_name: &str,
+    tool_version: &str,
+    project_root: &Path,
+) -> serde_json::Value {
+    let mut rules = BTreeMap::<&str, &Diagnostic>::new();
+    for diagnostic in diagnostics {
+        rules.entry(diagnostic.code).or_insert(diagnostic);
+    }
+
+    let rules = rules
+        .into_iter()
+        .map(|(code, diagnostic)| {
+            let mut rule = serde_json::json!({
+                "id": code,
+                "name": code,
+                "shortDescription": { "text": diagnostic.title },
+                "fullDescription": { "text": diagnostic.explanation },
+                "defaultConfiguration": { "level": "error" },
+            });
+            if let Some(fix) = &diagnostic.suggested_fix {
+                rule["help"] = serde_json::json!({ "text": fix });
+            }
+            rule
+        })
+        .collect::<Vec<_>>();
+
+    let normalized_root = normalized_canonical_path(project_root);
+    let results = diagnostics
+        .iter()
+        .map(|diagnostic| {
+            let locations = diagnostic.span.as_ref().map_or_else(Vec::new, |span| {
+                let normalized_file = normalized_canonical_path(&span.file);
+                let file = normalized_file
+                    .strip_prefix(&normalized_root)
+                    .unwrap_or(&normalized_file)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let mut region = serde_json::Map::new();
+                if let Some(line) = span.line {
+                    region.insert("startLine".to_string(), line.into());
+                }
+                if let Some(column) = span.column {
+                    region.insert("startColumn".to_string(), column.into());
+                }
+                vec![serde_json::json!({
+                    "physicalLocation": {
+                        "artifactLocation": { "uri": file },
+                        "region": region,
+                    }
+                })]
+            });
+            let message = if diagnostic.explanation.is_empty() {
+                diagnostic.title.clone()
+            } else {
+                format!("{}: {}", diagnostic.title, diagnostic.explanation)
+            };
+            serde_json::json!({
+                "ruleId": diagnostic.code,
+                "level": "error",
+                "message": { "text": message },
+                "locations": locations,
+                "properties": {
+                    "suggestedFix": diagnostic.suggested_fix,
+                    "affectedRoutes": diagnostic.affected_routes,
+                    "importChain": diagnostic.import_chain.iter().map(|path| path.to_string_lossy()).collect::<Vec<_>>(),
+                },
+            })
+        })
+        .collect::<Vec<_>>();
+
+    serde_json::json!({
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [{
+            "tool": { "driver": {
+                "name": tool_name,
+                "version": tool_version,
+                "informationUri": "https://github.com/ruvyxa/ruvyxa",
+                "rules": rules,
+            }},
+            "results": results,
+        }],
+    })
+}
+
 /// Windows extended-length ("verbatim") path prefix that `canonicalize` adds.
 #[cfg(windows)]
 const WINDOWS_VERBATIM_PREFIX: &str = "\\\\?\\";
@@ -170,7 +264,7 @@ pub fn normalized_canonical_path(path: &std::path::Path) -> std::path::PathBuf {
 
 #[cfg(test)]
 mod path_tests {
-    use super::normalized_canonical_path;
+    use super::{Diagnostic, diagnostics_to_sarif, normalized_canonical_path};
 
     #[test]
     fn normalized_canonical_path_has_no_verbatim_prefix() {
@@ -185,5 +279,50 @@ mod path_tests {
     fn normalized_canonical_path_keeps_missing_paths_unchanged() {
         let missing = std::path::Path::new("definitely-missing-ruvyxa-path");
         assert_eq!(normalized_canonical_path(missing), missing.to_path_buf());
+    }
+
+    #[test]
+    fn sarif_uses_project_relative_locations_and_deduplicates_rules() {
+        let root = std::path::Path::new("project");
+        let diagnostics = vec![
+            Diagnostic::new("RUV1001", "Private import")
+                .explain("A client module imports server-only code.")
+                .at_file_with_span(root.join("app/page.tsx"), 4, 7)
+                .suggest("Move the import behind a server boundary."),
+            Diagnostic::new("RUV1001", "Private import").at_file(root.join("app/other.tsx")),
+        ];
+
+        let sarif = diagnostics_to_sarif(&diagnostics, "Ruvyxa", "1.0.23", root);
+
+        assert_eq!(sarif["version"], "2.1.0");
+        assert_eq!(
+            sarif["runs"][0]["tool"]["driver"]["rules"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(sarif["runs"][0]["results"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            sarif["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["artifactLocation"]
+                ["uri"],
+            "app/page.tsx"
+        );
+        assert_eq!(
+            sarif["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["region"]["startLine"],
+            4
+        );
+
+        let no_help = diagnostics_to_sarif(
+            &[Diagnostic::new("RUV1002", "No fix available")],
+            "Ruvyxa",
+            "1.0.23",
+            root,
+        );
+        assert!(
+            no_help["runs"][0]["tool"]["driver"]["rules"][0]
+                .get("help")
+                .is_none()
+        );
     }
 }

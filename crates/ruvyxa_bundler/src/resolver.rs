@@ -46,6 +46,7 @@ use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
 use crate::hooks::{BuildHookContext, BuildHookPipeline};
+use crate::incremental::{FreshnessStatus, IncrementalGraphCache};
 use crate::{BundleError, BundleTarget, Result};
 use crate::{ast, minifier};
 
@@ -889,6 +890,30 @@ pub fn resolve_graph_with_hooks(
     build_hooks: &BuildHookPipeline,
     target: BundleTarget,
 ) -> Result<Vec<ResolvedModule>> {
+    resolve_graph_with_incremental(
+        entry_source,
+        entry_label,
+        project_root,
+        _app_dir,
+        cache,
+        build_hooks,
+        target,
+        None,
+    )
+}
+
+/// Walk the import graph with optional persistent dependency-edge reuse.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_graph_with_incremental(
+    entry_source: &str,
+    entry_label: &str,
+    project_root: &Path,
+    _app_dir: &Path,
+    cache: &ResolveGraphCache,
+    build_hooks: &BuildHookPipeline,
+    target: BundleTarget,
+    incremental: Option<&IncrementalGraphCache>,
+) -> Result<Vec<ResolvedModule>> {
     let project_root = ruvyxa_diagnostics::normalized_canonical_path(project_root);
     // A graph is resolved against a single configuration snapshot. Keeping it
     // local to this run avoids repeated I/O and parsing for every module.
@@ -940,19 +965,33 @@ pub fn resolve_graph_with_hooks(
                         .components()
                         .any(|c| c.as_os_str() == "node_modules");
 
-                let source = cache.read_source(dep_path)?;
+                let raw_source = cache.read_source(dep_path)?;
                 let source = if target == BundleTarget::Client
                     && dep_path
                         .components()
                         .any(|component| component.as_os_str() == "node_modules")
                 {
-                    minifier::fold_production_node_env(&source)
+                    minifier::fold_production_node_env(&raw_source)
                 } else {
-                    source
+                    raw_source.clone()
                 };
 
                 let deps = if is_external {
                     Vec::new()
+                } else if target == BundleTarget::Client
+                    && build_hooks.host_count() == 0
+                    && incremental.is_some_and(|cache| {
+                        cache.check_freshness(dep_path, &raw_source) == FreshnessStatus::Fresh
+                    })
+                {
+                    let cached = incremental
+                        .and_then(|cache| cache.cached_deps(dep_path))
+                        .unwrap_or_default()
+                        .to_vec();
+                    if let Some(incremental) = incremental {
+                        incremental.record_edge_hit();
+                    }
+                    cached
                 } else {
                     let resolve_base = dep_path.parent().unwrap_or(&project_root).to_path_buf();
                     let dependency_source = if matches!(
@@ -976,6 +1015,13 @@ pub fn resolve_graph_with_hooks(
                         target,
                     )?
                 };
+
+                if target == BundleTarget::Client
+                    && build_hooks.host_count() == 0
+                    && let Some(incremental) = incremental
+                {
+                    incremental.record_module(dep_path.clone(), &raw_source, deps.clone(), None);
+                }
 
                 Ok((
                     dep_path.clone(),

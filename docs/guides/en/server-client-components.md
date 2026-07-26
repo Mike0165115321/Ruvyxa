@@ -84,7 +84,7 @@ export default async function ProductsPage() {
       {products.map((product) => (
         <article key={product.id}>
           <h2>{product.title}</h2>
-          <AddToCart productId={product.id} /> {/* only this hydrates */}
+          <AddToCart productId={product.id} /> {/* this component needs browser code */}
         </article>
       ))}
     </main>
@@ -94,6 +94,11 @@ export default async function ProductsPage() {
 
 Pass server data **down through props**. Props must be JSON-serializable — functions and class
 instances cannot cross the boundary.
+
+The client boundary controls which modules need browser behavior, but the current runtime hydrates
+the route as one React root. Use the route-level `hydrate = 'idle' | 'visible' | false` export to
+defer the whole route or ship zero JavaScript; independent component-root resumability is not part
+of this contract.
 
 ### Which one do I need?
 

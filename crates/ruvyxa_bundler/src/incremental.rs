@@ -1,36 +1,35 @@
 //! Persistent incremental graph cache with file fingerprinting.
 //!
 //! Stores the resolved module dependency graph on disk as a compact JSON
-//! manifest at `.ruvyxa/cache/graph/manifest.json`. Each module entry records:
+//! manifest at `<configured-cache-dir>/graph-manifest.json`. Each module entry records:
 //!
 //! - Its canonical path
-//! - A content fingerprint (blake3 hash of source + mtime)
+//! - An authoritative blake3 content fingerprint plus mtime/size hints
 //! - Its resolved dependency edges (list of paths)
 //! - Its compiled output cache key
 //!
-//! On subsequent builds, the cache is loaded and each file is checked against
-//! its stored fingerprint. Only modules whose fingerprint has changed — or
-//! whose transitive dependencies have changed — are recompiled.
+//! On subsequent plugin-free client builds, the resolver reuses dependency
+//! edges whose source content is unchanged. Compilation remains independently
+//! content-addressed by `CompileCache`.
 //!
 //! ## Performance impact
 //!
-//! For a 200-module project where only 3 files changed:
-//! - Without incremental: resolve 200 modules, compile 200 modules
-//! - With incremental: stat 200 files (fast), recompile only 3 dirty + their dependents
-//!
-//! The stat check uses mtime+size as a fast-reject: if mtime/size unchanged,
-//! skip the blake3 hash entirely. This makes the "nothing changed" case
-//! nearly free (just N stat calls, typically <1ms for 200 files).
+//! For a warm build, unchanged modules skip import extraction and dependency
+//! resolution. Source bytes are still hashed so timestamp-preserving edits
+//! cannot return stale edges.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::SystemTime;
 
+use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 
 /// Version stamp for the graph manifest format.
-const MANIFEST_VERSION: &str = "ruvyxa_graph_cache:v1";
+const MANIFEST_VERSION: &str = "ruvyxa_graph_cache:v2";
 
 /// A persisted module entry in the graph cache.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,14 +51,18 @@ pub struct CachedModuleEntry {
 pub struct GraphManifest {
     /// Format version — auto-invalidates on incompatible changes.
     pub version: String,
+    /// Build/config namespace used while resolving these dependency edges.
+    #[serde(default)]
+    pub namespace: String,
     /// Module entries keyed by canonical path.
     pub modules: BTreeMap<PathBuf, CachedModuleEntry>,
 }
 
 impl GraphManifest {
-    pub fn new() -> Self {
+    pub fn new(namespace: impl Into<String>) -> Self {
         Self {
             version: MANIFEST_VERSION.to_string(),
+            namespace: namespace.into(),
             modules: BTreeMap::new(),
         }
     }
@@ -67,7 +70,7 @@ impl GraphManifest {
 
 impl Default for GraphManifest {
     fn default() -> Self {
-        Self::new()
+        Self::new(String::new())
     }
 }
 
@@ -89,9 +92,13 @@ pub struct IncrementalGraphCache {
     /// Path to the graph manifest file.
     manifest_path: PathBuf,
     /// The loaded (or empty) manifest from the previous build.
-    previous: GraphManifest,
+    previous: Arc<GraphManifest>,
     /// The manifest being built for the current build.
-    current: GraphManifest,
+    current: Arc<DashMap<PathBuf, CachedModuleEntry>>,
+    /// Identity of the resolver/config contract for this cache generation.
+    namespace: Arc<str>,
+    /// Number of dependency lists reused during this process.
+    edge_hits: Arc<AtomicUsize>,
     /// Whether the cache is enabled.
     enabled: bool,
 }
@@ -103,18 +110,26 @@ impl IncrementalGraphCache {
     /// if it exists and is compatible with the current version.
     pub fn new(project_root: &Path, enabled: bool) -> Self {
         let cache_dir = project_root.join(".ruvyxa").join("cache").join("graph");
-        let manifest_path = cache_dir.join("manifest.json");
+        Self::at_dir(&cache_dir, "default", enabled)
+    }
+
+    /// Create a cache inside an explicit build-cache directory.
+    pub fn at_dir(cache_dir: &Path, namespace: &str, enabled: bool) -> Self {
+        let manifest_path = cache_dir.join("graph-manifest.json");
 
         let previous = if enabled {
-            Self::load_manifest(&manifest_path).unwrap_or_default()
+            Self::load_manifest(&manifest_path, namespace)
+                .unwrap_or_else(|| GraphManifest::new(namespace))
         } else {
-            GraphManifest::default()
+            GraphManifest::new(namespace)
         };
 
         Self {
             manifest_path,
-            previous,
-            current: GraphManifest::new(),
+            previous: Arc::new(previous),
+            current: Arc::new(DashMap::new()),
+            namespace: Arc::from(namespace),
+            edge_hits: Arc::new(AtomicUsize::new(0)),
             enabled,
         }
     }
@@ -123,8 +138,10 @@ impl IncrementalGraphCache {
     pub fn disabled() -> Self {
         Self {
             manifest_path: PathBuf::new(),
-            previous: GraphManifest::default(),
-            current: GraphManifest::new(),
+            previous: Arc::new(GraphManifest::default()),
+            current: Arc::new(DashMap::new()),
+            namespace: Arc::from("disabled"),
+            edge_hits: Arc::new(AtomicUsize::new(0)),
             enabled: false,
         }
     }
@@ -215,7 +232,7 @@ impl IncrementalGraphCache {
 
     /// Record a module in the current build's manifest.
     pub fn record_module(
-        &mut self,
+        &self,
         path: PathBuf,
         source: &str,
         deps: Vec<PathBuf>,
@@ -233,7 +250,7 @@ impl IncrementalGraphCache {
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
-        self.current.modules.insert(
+        self.current.insert(
             path,
             CachedModuleEntry {
                 content_hash: content_hash(source),
@@ -309,7 +326,25 @@ impl IncrementalGraphCache {
             fs::create_dir_all(parent)?;
         }
 
-        let json = serde_json::to_string(&self.current).map_err(std::io::Error::other)?;
+        // Complete route artifacts can skip graph traversal. Overlay modules
+        // observed by this build onto still-existing previous entries instead
+        // of erasing cache state for untouched routes.
+        let mut modules = self
+            .previous
+            .modules
+            .iter()
+            .filter(|(path, _)| path.exists())
+            .map(|(path, entry)| (path.clone(), entry.clone()))
+            .collect::<BTreeMap<_, _>>();
+        for entry in self.current.iter() {
+            modules.insert(entry.key().clone(), entry.value().clone());
+        }
+        let manifest = GraphManifest {
+            version: MANIFEST_VERSION.to_string(),
+            namespace: self.namespace.to_string(),
+            modules,
+        };
+        let json = serde_json::to_string(&manifest).map_err(std::io::Error::other)?;
 
         // Atomic write via temp file + rename.
         let temp_path = self.manifest_path.with_extension("json.tmp");
@@ -341,7 +376,7 @@ impl IncrementalGraphCache {
 
     /// Number of modules recorded in the current build so far.
     pub fn current_module_count(&self) -> usize {
-        self.current.modules.len()
+        self.current.len()
     }
 
     /// Check if the cache is enabled.
@@ -349,13 +384,23 @@ impl IncrementalGraphCache {
         self.enabled
     }
 
+    /// Record one fingerprint-validated dependency-edge reuse.
+    pub(crate) fn record_edge_hit(&self) {
+        self.edge_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Number of persistent dependency lists reused in this process.
+    pub fn edge_hits(&self) -> usize {
+        self.edge_hits.load(Ordering::Relaxed)
+    }
+
     /// Load a manifest from disk, returning None if missing or incompatible.
-    fn load_manifest(path: &Path) -> Option<GraphManifest> {
+    fn load_manifest(path: &Path, namespace: &str) -> Option<GraphManifest> {
         let json = fs::read_to_string(path).ok()?;
         let manifest: GraphManifest = serde_json::from_str(&json).ok()?;
 
         // Version check: if the format changed, start fresh.
-        if manifest.version != MANIFEST_VERSION {
+        if manifest.version != MANIFEST_VERSION || manifest.namespace != namespace {
             return None;
         }
 
@@ -395,7 +440,7 @@ mod tests {
         fs::write(&page, source).unwrap();
 
         // Build the first manifest.
-        let mut cache = IncrementalGraphCache::new(tmp.path(), true);
+        let cache = IncrementalGraphCache::new(tmp.path(), true);
         cache.record_module(page.clone(), source, vec![], Some("key123".to_string()));
         cache.save().unwrap();
 
@@ -417,7 +462,7 @@ mod tests {
         let source_v1 = "export default function Page() { return <main>V1</main> }";
         fs::write(&page, source_v1).unwrap();
 
-        let mut cache = IncrementalGraphCache::new(tmp.path(), true);
+        let cache = IncrementalGraphCache::new(tmp.path(), true);
         cache.record_module(page.clone(), source_v1, vec![], None);
         cache.save().unwrap();
 
@@ -447,7 +492,7 @@ mod tests {
         fs::write(&button, "import { cn } from './utils';").unwrap();
         fs::write(&page, "import Button from './Button';").unwrap();
 
-        let mut cache = IncrementalGraphCache::new(tmp.path(), true);
+        let cache = IncrementalGraphCache::new(tmp.path(), true);
         cache.record_module(utils.clone(), "export function cn() {}", vec![], None);
         cache.record_module(
             button.clone(),
@@ -495,7 +540,7 @@ mod tests {
             fs::write(path, src).unwrap();
         }
 
-        let mut cache = IncrementalGraphCache::new(tmp.path(), true);
+        let cache = IncrementalGraphCache::new(tmp.path(), true);
         cache.record_module(utils.clone(), "export function cn() {}", vec![], None);
         cache.record_module(helpers.clone(), "export function fmt() {}", vec![], None);
         cache.record_module(
@@ -534,7 +579,7 @@ mod tests {
         fs::write(&utils, "export const x = 1;").unwrap();
         fs::write(&page, "import { x } from './utils';").unwrap();
 
-        let mut cache = IncrementalGraphCache::new(tmp.path(), true);
+        let cache = IncrementalGraphCache::new(tmp.path(), true);
         cache.record_module(utils.clone(), "export const x = 1;", vec![], None);
         cache.record_module(
             page.clone(),
@@ -569,10 +614,30 @@ mod tests {
 
         // Write a manifest with a wrong version.
         let bad_manifest = r#"{"version":"old:v0","modules":{}}"#;
-        fs::write(cache_dir.join("manifest.json"), bad_manifest).unwrap();
+        fs::write(cache_dir.join("graph-manifest.json"), bad_manifest).unwrap();
 
         let cache = IncrementalGraphCache::new(tmp.path(), true);
         assert_eq!(cache.previous_module_count(), 0);
+    }
+
+    #[test]
+    fn namespace_mismatch_invalidates_dependency_edges() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache_dir = temp.path().join("cache");
+        let source_file = temp.path().join("page.tsx");
+        fs::write(&source_file, "export default function Page() {}").unwrap();
+
+        let first = IncrementalGraphCache::at_dir(&cache_dir, "config-a", true);
+        first.record_module(
+            source_file,
+            "export default function Page() {}",
+            Vec::new(),
+            None,
+        );
+        first.save().unwrap();
+
+        let second = IncrementalGraphCache::at_dir(&cache_dir, "config-b", true);
+        assert_eq!(second.previous_module_count(), 0);
     }
 
     #[test]
@@ -585,7 +650,7 @@ mod tests {
         let source = "export default function Page() {}";
         fs::write(&page, source).unwrap();
 
-        let mut cache = IncrementalGraphCache::new(tmp.path(), true);
+        let cache = IncrementalGraphCache::new(tmp.path(), true);
         cache.record_module(
             page.clone(),
             source,
@@ -607,7 +672,7 @@ mod tests {
         fs::create_dir_all(page.parent().unwrap()).unwrap();
         fs::write(&page, "export default function Page() {}").unwrap();
 
-        let mut cache = IncrementalGraphCache::new(temp.path(), true);
+        let cache = IncrementalGraphCache::new(temp.path(), true);
         cache.record_module(
             page.clone(),
             "export default function Page() {}",

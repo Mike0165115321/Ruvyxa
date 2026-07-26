@@ -376,6 +376,15 @@ export interface AdapterOutput {
   artifacts?: AdapterArtifact[]
 }
 
+/** Read-only capability report returned by the adapter inspection protocol. */
+export interface AdapterInspection {
+  name: string
+  target: Adapter['target'] | 'unknown'
+  runtime: 'node' | 'bun' | 'edge' | 'static' | 'unknown'
+  platform?: AdapterOutput['platform'] | null
+  supports: Array<RenderStrategy | 'api'>
+}
+
 /** A post-build file or static deployment bundle requested by an adapter. */
 export interface AdapterArtifact {
   /**

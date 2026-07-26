@@ -864,9 +864,11 @@ Constructors: `new(project_root)`, `with_caches(...)`, `with_all_caches(...)`, a
 
 ```rust
 pub struct IncrementalGraphCache {
-    manifest_path: PathBuf,          // .ruvyxa/cache/graph/manifest.json
-    previous: GraphManifest,
-    current: GraphManifest,
+    manifest_path: PathBuf,          // <cache-dir>/graph-manifest.json
+    namespace: Arc<str>,             // evaluated config dependency hash
+    previous: Arc<GraphManifest>,
+    current: Arc<DashMap<PathBuf, CachedModuleEntry>>,
+    edge_hits: AtomicUsize,
     enabled: bool,
 }
 
@@ -879,8 +881,12 @@ pub struct CachedModuleEntry {
 }
 ```
 
-Value: version == 1, dependency_hash match, render_context_hash match, all file fingerprints match.
-Dirty set: BFS over reverse dependency graph from changed paths.
+The client resolver reuses a cached dependency edge only after recomputing the source content hash;
+mtime and size are a fast signal, never the authority. Build hooks disable edge reuse because a
+plugin may change resolution without changing source bytes. The manifest uses version 2 and a config
+namespace; a mismatch discards prior entries. Graph state is saved only after all client route
+artifacts emit successfully, and untouched prior entries are retained when a higher-level route
+artifact cache skips resolution. `client/manifest.json` exposes `graphHits` and `graphModules`.
 
 ### `SourceMapBuilder` (`sourcemap.rs`)
 

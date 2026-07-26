@@ -162,6 +162,8 @@ Route                    Strategy
 
 ```bash
 npx ruvyxa analyze
+npx ruvyxa analyze --format json
+npx ruvyxa analyze --format sarif --output reports/ruvyxa.sarif
 ```
 
 Validates per-route (page + imports + layouts):
@@ -175,12 +177,19 @@ Validates per-route (page + imports + layouts):
 Route conflict detection runs during route discovery (before `analyze`). Config validation runs
 during config loading (before route discovery).
 
+`--format` accepts `auto` (the default), `human`, `json`, or `sarif`. Auto preserves the existing
+contract: human output in an interactive terminal and JSON through a pipe. SARIF is version 2.1.0
+and uses the same diagnostics and exit status as human/JSON output, so CI can upload the report even
+when the command fails the validation gate.
+
 Run after any change to routes, imports, configuration, or environment usage.
 
 ### `doctor`
 
 ```bash
 npx ruvyxa doctor
+npx ruvyxa doctor --adapter static --target static
+npx ruvyxa doctor --json
 ```
 
 Reports:
@@ -192,6 +201,11 @@ Reports:
 - Dependency status
 - Configuration validity
 - Route count (total, page, API)
+- Build target plus adapter target, runtime, platform, and supported rendering strategies
+- Per-route incompatibilities for the selected/configured/auto-detected adapter
+
+Inspection does not materialize adapter artifacts. `--adapter` overrides config and host detection;
+`--target` evaluates a production target without changing configuration.
 
 ### `trace`
 
