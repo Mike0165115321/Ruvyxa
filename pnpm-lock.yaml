@@ -234,8 +234,8 @@ importers:
         specifier: ^4.0.1
         version: 4.0.1
       sass:
-        specifier: ^1.101.3
-        version: 1.101.3
+        specifier: ^1.102.0
+        version: 1.102.0
       yaml:
         specifier: ^2.9.0
         version: 2.9.0
@@ -1596,10 +1596,10 @@ packages:
         integrity: sha512-1OSmLd3awB/t8qdoEOMazZkNsfVTeY4fTsgzcQFdXNq8ToTN4ZGwrMnlda4K6smTFKD+GRV6O48i6Z4iKgPPpw==,
       }
 
-  sass@1.101.3:
+  sass@1.102.0:
     resolution:
       {
-        integrity: sha512-Z1lLHhtAII+dyLNIQB6JQTZMy7sDxk3f5NzbINRc9ks1P0HCGvSuKev0wUhULFpLSaHBIMZrcTs9WDQUZerrgA==,
+        integrity: sha512-NSOyTnaQF7rTAEOtI2fwb386vL+akyiQLBZu8Na7hXCb+umJy0GAqlcMIaqACZ6Z1VgTBS4K9PG6B3IdjHGJsw==,
       }
     engines: { node: '>=20.19.0' }
     hasBin: true
@@ -2765,7 +2765,7 @@ snapshots:
       mdast-util-to-markdown: 2.1.2
       unified: 11.0.5
 
-  sass@1.101.3:
+  sass@1.102.0:
     dependencies:
       chokidar: 5.0.0
       immutable: 5.1.9

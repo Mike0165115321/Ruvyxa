@@ -250,23 +250,23 @@ Measured on 2026-07-26 with the repository harness against minimal starters. The
 only for the exact versions, machine, and run conditions shown below; re-run the harness when
 comparing newer releases.
 
-| Metric (lower is better)             | **Ruvyxa 1.0.23** | Next.js 16.2.11 | Astro 7.1.3 |
+| Metric (lower is better)             | **Ruvyxa 1.0.23** | Next.js 16.2.12 | Astro 7.1.3 |
 | ------------------------------------ | ----------------: | --------------: | ----------: |
-| Production build (cold-cache median) |         **1.5 s** |           6.2 s |       2.3 s |
-| Dev server → first rendered response |         **1.0 s** |           3.6 s |       4.7 s |
-| Prod server start → first response   |         **0.9 s** |           1.2 s |       1.7 s |
+| Production build (cold-cache median) |         **1.6 s** |           7.0 s |       2.4 s |
+| Dev server → first rendered response |         **1.1 s** |           3.9 s |       4.6 s |
+| Prod server start → first response   |         **1.1 s** |           1.2 s |       1.9 s |
 | Client JS shipped (minimal page)     |          184 KB ¹ |          627 KB |      0 KB ² |
 
-| Throughput (higher is better)        | **Ruvyxa 1.0.23** | Next.js 16.2.11 | Astro 7.1.3 |
+| Throughput (higher is better)        | **Ruvyxa 1.0.23** | Next.js 16.2.12 | Astro 7.1.3 |
 | ------------------------------------ | ----------------: | --------------: | ----------: |
-| Requests/second (`/`, prod server) ³ |        **45,185** |           3,623 |       3,017 |
-| Latency p50 / p99                    |      **0 / 1 ms** |       6 / 15 ms |   8 / 13 ms |
+| Requests/second (`/`, prod server) ³ |        **41,991** |           3,653 |       3,398 |
+| Latency p50 / p99                    |      **0 / 1 ms** |       6 / 14 ms |   7 / 11 ms |
 
-In this clean run, Ruvyxa built **4.2× faster than Next.js** and **1.5× faster than Astro**, reached
-a working dev server **3.6× sooner than Next.js** and **4.7× sooner than Astro**, started its
-production server **1.3× sooner than Next.js** and **1.9× sooner than Astro**, and served **12.5× /
-15.0× more requests per second** than Next.js / Astro respectively. Responsive-image and
-build-orchestration fixes reduced Ruvyxa's cold-cache build from **22.1 s to 1.5 s** on this
+In this clean run, Ruvyxa built **4.3× faster than Next.js** and **1.5× faster than Astro**, reached
+a working dev server **3.5× sooner than Next.js** and **4.1× sooner than Astro**, started its
+production server **1.1× sooner than Next.js** and **1.8× sooner than Astro**, and served **11.5× /
+12.4× more requests per second** than Next.js / Astro respectively. Responsive-image and
+build-orchestration fixes reduced Ruvyxa's cold-cache build from **22.1 s to about 1.6 s** on this
 machine.
 
 ¹ For the interactive React starter page. A content page can opt out entirely with
@@ -281,14 +281,14 @@ framework; throughput and latency are not medians.
 `RUNS=3` with the same [`scripts/bench-frameworks.mjs`](scripts/bench-frameworks.mjs) harness. Build
 = `build` script wall time. Dev/prod readiness = time from process spawn to first HTTP 200 on `/`.
 Cold-cache runs remove `.ruvyxa`/`.next`/`dist`/`.astro`/Vite caches before each run; dependencies
-remain installed during the harness. Ruvyxa used `target/release/ruvyxa.exe` rebuilt directly from
-the local 1.0.23 monorepo, so the measurement includes the unpublished code under test rather than
-the npm binary. Next.js and Astro used the resolved npm packages shown in the table. The same
-fixture built with the v1.0.18 CLI at commit `9a58a8c` took 1.2 s; before these fixes, the v1.0.22
-monorepo build took 22.1 s because it encoded six responsive variants sequentially. To reproduce,
-scaffold the three starters using the instructions in the harness header, point the Ruvyxa starter
-scripts at the local release binary, set `BENCH_ROOT`, and run
-`RUNS=3 node scripts/bench-frameworks.mjs`.
+remain installed during the harness. Ruvyxa used `target/release/ruvyxa.exe` plus locally packed
+1.0.23 runtime packages rebuilt directly from the monorepo, so the measurement includes the entire
+unpublished code under test rather than the npm 1.0.22 packages. Next.js and Astro used the resolved
+npm packages shown in the table. The same fixture built with the v1.0.18 CLI at commit `9a58a8c`
+took 1.2 s; before these fixes, the v1.0.22 monorepo build took 22.1 s because it encoded six
+responsive variants sequentially. To reproduce, scaffold the three starters using the instructions
+in the harness header, point the Ruvyxa starter scripts at the local release binary, set
+`BENCH_ROOT`, and run `RUNS=3 node scripts/bench-frameworks.mjs`.
 
 ---
 

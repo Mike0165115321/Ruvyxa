@@ -1,6 +1,6 @@
 import { access, constants, cp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { dirname, resolve, basename } from 'node:path'
+import { basename, dirname, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export { detectPackageManager } from './detect-pm.js'
@@ -30,6 +30,9 @@ const INVALID_DIR_CHARS = /[<>:"|?*\x00-\x1f]/
 
 /** Maximum directory name length (Windows has 260 char path limit). */
 const MAX_DIR_NAME_LENGTH = 128
+
+/** Generated directories that must never escape a starter source tree. */
+const EXCLUDED_TEMPLATE_DIRECTORIES = new Set(['.ruvyxa', 'dist', 'node_modules'])
 
 /** Reserved Windows device names that are invalid as project directory names. */
 const RESERVED_WINDOWS_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i
@@ -150,9 +153,17 @@ export async function createRuvyxaApp(
 
   // --- Locate Template ---
   const here = dirname(fileURLToPath(import.meta.url))
+  const packageRoot = resolve(here, '..')
+  const monorepoRoot = resolve(here, '../../..')
   const packagedTemplateDir = resolve(here, `../template/${template}`)
-  const monorepoTemplateDir = resolve(here, `../../../templates/${template}`)
-  const templateDir = existsSync(packagedTemplateDir) ? packagedTemplateDir : monorepoTemplateDir
+  const monorepoTemplateDir = resolve(monorepoRoot, `templates/${template}`)
+  const isSourceCheckout = packageRoot === resolve(monorepoRoot, 'packages/create-ruvyxa')
+  // `template/` is an ignored prepack artifact. In a source checkout it can
+  // survive a version bump and must never shadow the tracked template source.
+  // Installed packages do not match the repository layout and therefore keep
+  // using their packaged copy.
+  const templateDir =
+    isSourceCheckout && existsSync(monorepoTemplateDir) ? monorepoTemplateDir : packagedTemplateDir
 
   if (!existsSync(templateDir)) {
     throw new Error(
@@ -181,7 +192,10 @@ export async function createRuvyxaApp(
 
   // --- Copy Template ---
   try {
-    await cp(templateDir, resolvedTarget, { recursive: true })
+    await cp(templateDir, resolvedTarget, {
+      recursive: true,
+      filter: (source) => shouldCopyTemplatePath(templateDir, source),
+    })
     await restorePackagedGitignore(resolvedTarget)
     await writeProjectPackageName(resolvedTarget, toPackageName(dirName))
   } catch (error) {
@@ -192,6 +206,14 @@ export async function createRuvyxaApp(
         '  Check disk space and filesystem access.',
     )
   }
+}
+
+/** Keep generated output out even when a local starter was built before scaffolding. */
+function shouldCopyTemplatePath(templateDir: string, source: string): boolean {
+  const path = relative(templateDir, source)
+  if (path === '') return true
+  const [topLevel] = path.split(/[\\/]/)
+  return !EXCLUDED_TEMPLATE_DIRECTORIES.has(topLevel)
 }
 
 /** Detect an existing Ruvyxa app without failing on an unrelated or malformed manifest. */

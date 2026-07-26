@@ -62,7 +62,7 @@ How Ruvyxa uses threads, locks, channels, and parallelism across the Rust layer.
 
 | Task                     | Pattern                                   | Notes                                                                    |
 | ------------------------ | ----------------------------------------- | ------------------------------------------------------------------------ |
-| Route bundle preparation | `routes.chunks()` → `thread::scope()`     | Bounded by `build.workers`; results sorted back into manifest order      |
+| Route bundle preparation | atomic cursor → scoped worker threads     | Dynamic bounded queue; results sorted back into manifest order           |
 | Build preparation        | nested `thread::scope()` workers          | Style scan, source copies, and public assets use disjoint work units     |
 | Build phase overlap      | preparation worker + client bundle caller | Both read one project snapshot and write separate staging subdirectories |
 
@@ -111,8 +111,10 @@ Same as dev minus HMR + error overlay overhead. Cache TTL is higher (1800s vs 30
    bundling because both read the same immutable project snapshot and write disjoint staging trees.
    Style source materialization runs after directory copies where output paths can overlap.
 
-3. **Client bundling**: route preparation is bounded across scoped threads; resolver, compiler, and
-   linker internals use Rayon. Oxc transforms dominate larger graphs.
+3. **Client bundling**: route preparation uses a bounded dynamic queue across scoped OS threads;
+   resolver, compiler, and linker internals use a separate Rayon pool. Keeping the scheduler levels
+   separate prevents nested Rayon work from recursively consuming the route-worker pool, while the
+   shared cursor avoids static-chunk tail imbalance. Oxc transforms dominate larger graphs.
 
 4. **Image optimization**: decode + `webp::Encoder` is the heaviest per-file preparation task.
    Sources, full-size output, and responsive widths use the same bounded Rayon pool.

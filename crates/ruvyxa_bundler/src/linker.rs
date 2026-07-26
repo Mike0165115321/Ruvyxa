@@ -178,7 +178,6 @@ fn link_inner(
         rewrite_module_into(
             &module.js,
             &module.deps,
-            modules,
             dynamic_import_files,
             &mut out,
             true,
@@ -279,7 +278,6 @@ pub(crate) fn link_parallel_with_dynamic_imports_and_shared_modules(
             rewrite_module_into(
                 &module.js,
                 &module.deps,
-                modules,
                 dynamic_import_files,
                 &mut segment,
                 true,
@@ -367,7 +365,6 @@ pub(crate) fn link_shared_route_modules(
         rewrite_module_into(
             &module.js,
             &module.deps,
-            modules,
             &BTreeMap::new(),
             &mut out,
             true,
@@ -481,7 +478,6 @@ pub fn module_id(path: &Path) -> String {
 fn rewrite_module_into(
     source: &str,
     deps: &[PathBuf],
-    all_modules: &[CompiledModule],
     dynamic_import_files: &BTreeMap<PathBuf, String>,
     out: &mut String,
     indent: bool,
@@ -494,9 +490,9 @@ fn rewrite_module_into(
     for line in source.lines() {
         let trimmed = line.trim();
 
-        let rewritten = try_rewrite_import(trimmed, deps, all_modules, drop_external_imports)?
+        let rewritten = try_rewrite_import(trimmed, deps, drop_external_imports)?
             .map(Rewrite::Inline)
-            .or_else(|| try_rewrite_export_statement(trimmed, deps, all_modules));
+            .or_else(|| try_rewrite_export_statement(trimmed, deps));
 
         let content = match rewritten {
             Some(Rewrite::Inline(ref content)) => content.as_str(),
@@ -768,7 +764,6 @@ enum Rewrite {
 fn try_rewrite_import(
     line: &str,
     deps: &[PathBuf],
-    _all_modules: &[CompiledModule],
     drop_external_imports: bool,
 ) -> Result<Option<String>> {
     if !line.starts_with("import ") {
@@ -855,22 +850,14 @@ fn ensure_semicolon(line: &str) -> String {
 
 /// Try to rewrite an export statement. Returns None if the line is not an export.
 #[cfg(test)]
-fn try_rewrite_export(
-    line: &str,
-    deps: &[PathBuf],
-    _all_modules: &[CompiledModule],
-) -> Option<String> {
-    try_rewrite_export_statement(line, deps, _all_modules).map(|rewrite| match rewrite {
+fn try_rewrite_export(line: &str, deps: &[PathBuf]) -> Option<String> {
+    try_rewrite_export_statement(line, deps).map(|rewrite| match rewrite {
         Rewrite::Inline(line) => line,
         Rewrite::Pending { line, assignment } => format!("{line}\n{assignment}"),
     })
 }
 
-fn try_rewrite_export_statement(
-    line: &str,
-    deps: &[PathBuf],
-    _all_modules: &[CompiledModule],
-) -> Option<Rewrite> {
+fn try_rewrite_export_statement(line: &str, deps: &[PathBuf]) -> Option<Rewrite> {
     if !line.starts_with("export ") {
         return None;
     }
@@ -1319,13 +1306,13 @@ mod tests {
 
     #[test]
     fn export_default_expression() {
-        let result = try_rewrite_export("export default MyComponent;", &[], &[]);
+        let result = try_rewrite_export("export default MyComponent;", &[]);
         assert_eq!(result, Some("__exports.default = MyComponent;".into()));
     }
 
     #[test]
     fn export_default_function() {
-        let result = try_rewrite_export("export default function Page() {}", &[], &[]);
+        let result = try_rewrite_export("export default function Page() {}", &[]);
         assert!(result.as_ref().unwrap().contains("function Page() {}"));
         assert!(
             result
@@ -1337,7 +1324,7 @@ mod tests {
 
     #[test]
     fn export_const() {
-        let result = try_rewrite_export("export const helper = () => {};", &[], &[]);
+        let result = try_rewrite_export("export const helper = () => {};", &[]);
         let r = result.unwrap();
         assert!(r.contains("const helper = () => {};"));
         assert!(r.contains("__exports.helper = helper;"));
@@ -1345,7 +1332,7 @@ mod tests {
 
     #[test]
     fn export_named_bindings() {
-        let result = try_rewrite_export("export { foo, bar };", &[], &[]);
+        let result = try_rewrite_export("export { foo, bar };", &[]);
         let r = result.unwrap();
         assert!(r.contains("__exports.foo = foo;"));
         assert!(r.contains("__exports.bar = bar;"));
@@ -1355,8 +1342,7 @@ mod tests {
     fn export_star_from() {
         let dep = PathBuf::from("/app/utils.ts");
         let dep_id = module_id(&dep);
-        let result =
-            try_rewrite_export("export * from \"./utils\"", std::slice::from_ref(&dep), &[]);
+        let result = try_rewrite_export("export * from \"./utils\"", std::slice::from_ref(&dep));
         assert_eq!(result, Some(format!("Object.assign(__exports, {dep_id});")));
     }
 
@@ -1367,7 +1353,6 @@ mod tests {
         let result = try_rewrite_export(
             "export { foo, bar as baz } from \"./helpers\"",
             std::slice::from_ref(&dep),
-            &[],
         );
         let r = result.unwrap();
         assert!(r.contains(&format!("__exports.foo = {dep_id}.foo;")));
@@ -1412,7 +1397,7 @@ mod tests {
 
     #[test]
     fn side_effect_import_commented() {
-        let result = try_rewrite_import("import \"./styles.css\"", &[], &[], false);
+        let result = try_rewrite_import("import \"./styles.css\"", &[], false);
         assert!(result.unwrap().unwrap().starts_with("// [bundled]"));
     }
 

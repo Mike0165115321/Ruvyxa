@@ -9,6 +9,10 @@ import {
   detectPackageManager,
 } from '../../../packages/create-ruvyxa/dist/index.js'
 
+const frameworkVersion = JSON.parse(
+  await readFile(new URL('../../../package.json', import.meta.url), 'utf8'),
+).version as string
+
 describe('detectPackageManager', () => {
   it("recognizes Bun's text lockfile", async () => {
     const root = await mkdtemp(join(tmpdir(), 'ruvyxa-bun-lock-'))
@@ -107,6 +111,8 @@ describe('createRuvyxaApp', () => {
       const packageJson = await readPackageJson(target)
       assert.equal(packageJson.name, 'my-app')
       assert.equal(packageJson.scripts.build, 'ruvyxa build')
+      assert.equal(packageJson.dependencies.ruvyxa, `^${frameworkVersion}`)
+      assert.equal(packageJson.dependencies['@ruvyxa/react'], `^${frameworkVersion}`)
     } finally {
       await rm(tempRoot, { recursive: true, force: true })
     }
@@ -229,6 +235,7 @@ async function listFiles(root: string): Promise<string[]> {
 async function readPackageJson(root: string): Promise<{
   name: string
   scripts: Record<string, string>
+  dependencies: Record<string, string>
 }> {
   return JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
 }

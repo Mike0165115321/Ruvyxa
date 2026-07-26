@@ -15,6 +15,10 @@
   `getStaticParams` requests use the existing bounded worker pool instead of waiting route by route.
   Results and errors are reduced in deterministic order, and style files that can share an output
   path remain serialized after directory copies complete.
+- Replaced static contiguous route-bundle chunks with a bounded dynamic work queue. Outer route
+  workers claim the next available route while nested module resolution and compilation retain their
+  separate Rayon pool, preventing an expensive route tail from leaving peer workers idle without
+  recursively scheduling both levels in one pool.
 - A clean `RUNS=3` comparison through `scripts/bench-frameworks.mjs` measured a **1.5 s** median
   Ruvyxa build, down from **2.1 s** after the first responsive-image fix and **22.1 s** before it.
   The same run measured Next.js 16.2.11 at 6.2 s and Astro 7.1.3 at 2.3 s. Ruvyxa still emits the
@@ -22,6 +26,37 @@
 - The v1.0.18 CLI built the same fixture in 1.2 s. The remaining difference is the cost of the
   responsive image outputs introduced after that release, rather than the 20-second serialization
   regression.
+- A second clean audit run using locally packed, unpublished 1.0.23 packages measured a 1.8 s Ruvyxa
+  build, 1.2 s dev readiness, 1.1 s production readiness, and 30,431 requests/second. The comparison
+  used Next.js 16.2.12 and Astro 7.1.3; exact conditions are recorded in the README.
+- Re-ran the clean benchmark after rebuilding the current release binary: Ruvyxa measured 1.609 s
+  build, 1.123 s dev readiness, 1.056 s production readiness, and 41,991 requests/second. The same
+  run measured Next.js 16.2.12 at 6.991 s / 3.903 s / 1.183 s / 3,653 requests/second and Astro
+  7.1.3 at 2.363 s / 4.624 s / 1.867 s / 3,398 requests/second.
+
+### Build and Scaffolding Correctness
+
+- **Fixed incomplete builds leaving `.build-staging-*` directories behind.** Build staging now has
+  an RAII owner from creation until commit, so every validation, bundle, prerender, plugin, and I/O
+  error path removes partial output. A forced prerender failure verifies that no staging directory
+  remains.
+- **Fixed source checkouts scaffolding from an ignored, stale generated template.** `create-ruvyxa`
+  now prefers tracked root templates when run from the monorepo and uses the packed template only
+  after installation. Both preparation and copy boundaries exclude `.ruvyxa`, `dist`, and
+  `node_modules`, preventing build output from leaking into newly created apps.
+- Removed unused private linker and CLI parameters after tracing every caller; public and trait
+  compatibility parameters remain intact.
+
+### Dependency Compatibility
+
+- Updated direct Rust `base64` usage from 0.22.1 to the latest stable 0.23.0 API. Axum and Oxc
+  continue to bring 0.22 transitively until their own stable releases move forward.
+- Updated Sass from 1.101.3 to 1.102.0. Registry checks found every other direct Rust and npm
+  dependency already at its latest stable release; the Notify 9 line remains prerelease-only.
+- Updated the pinned workspace package manager from pnpm 11.15.1 to 11.17.0 and verified the
+  existing lockfile with the new version.
+- Updated CI/release actions to `actions/checkout` v7, `actions/setup-node` v7, and
+  `pnpm/action-setup` v6 so the automation dependency surface is current as well.
 
 ### Image Configuration Correctness
 
@@ -49,6 +84,10 @@
 - Verified with the complete `ruvyxa_cli` test suite, runtime compiler/config tests, TypeScript
   checks for `ruvyxa` and `@ruvyxa/core`, Rust formatting, Prettier, and the three-framework clean
   benchmark.
+- Made `scripts/bench-frameworks.mjs` process cleanup portable and exception-safe. POSIX runs now
+  own a detached process group, Windows uses tree/port cleanup only on Windows, and every readiness
+  or load-test path terminates its server in `finally`, preventing stale listeners from corrupting
+  later samples.
 
 ## v1.0.22 (2026-07-25)
 

@@ -24,7 +24,7 @@ use ruvyxa_graph::{
     DiscoverOptions, RenderStrategy, RouteEntry, RouteManifest, RouteParams, discover_routes,
     validate_app, write_manifest,
 };
-use tracing::info;
+use tracing::{info, warn};
 use walkdir::WalkDir;
 
 mod image_optimizer;
@@ -1250,6 +1250,34 @@ struct PreparedBuildAssets {
     duration: Duration,
 }
 
+/// Owns an in-progress staging tree so every pre-commit error path cleans it.
+///
+/// A successful commit moves the named outputs and removes the now-empty tree;
+/// the existence check keeps the guard a no-op on that path.
+struct BuildStagingCleanup {
+    path: PathBuf,
+}
+
+impl BuildStagingCleanup {
+    fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+}
+
+impl Drop for BuildStagingCleanup {
+    fn drop(&mut self) {
+        if self.path.exists()
+            && let Err(error) = fs::remove_dir_all(&self.path)
+        {
+            warn!(
+                path = %self.path.display(),
+                %error,
+                "failed to clean incomplete build staging directory"
+            );
+        }
+    }
+}
+
 fn prepare_build_assets(
     root: &Path,
     app_dir: &Path,
@@ -1350,6 +1378,7 @@ async fn build_with_output(args: BuildArgs, show_summary: bool) -> anyhow::Resul
             out_dir.display()
         )
     })?;
+    let _staging_cleanup = BuildStagingCleanup::new(staging_dir.clone());
     let server_dir = staging_dir.join("server");
     let client_dir = staging_dir.join("client");
     let assets_dir = staging_dir.join("assets");
@@ -2945,7 +2974,6 @@ fn bundle_context_for_build(
     plugins: &[BuildPluginConfig],
     config_dependency_hash: &str,
     cache_dir: &Path,
-    _parallelism: usize,
     runtime: JavaScriptRuntime,
 ) -> anyhow::Result<ruvyxa_bundler::BundleContext> {
     let compile_cache = ruvyxa_bundler::cache::CompileCache::at_dir_with_namespace(
@@ -3067,7 +3095,6 @@ fn emit_client_bundles_with_runtime(
         plugins,
         cache.dependency_hash,
         cache.directory,
-        parallelism,
         runtime,
     )?;
     let artifact_cache_dir = cache.directory.to_path_buf();
@@ -3368,35 +3395,55 @@ where
         return Ok(Vec::new());
     }
 
-    let chunk_size = routes.len().div_ceil(parallelism.max(1));
-    let mut bundles = std::thread::scope(|scope| -> anyhow::Result<Vec<_>> {
-        let mut handles = Vec::new();
-        for (chunk_index, chunk) in routes.chunks(chunk_size).enumerate() {
+    if parallelism <= 1 || routes.len() == 1 {
+        return routes
+            .iter()
+            .enumerate()
+            .map(|(index, route)| bundle_route(route).map(|bundle| (index, bundle)))
+            .collect();
+    }
+
+    // Route complexity varies substantially, so static contiguous chunks can
+    // leave one worker processing an expensive tail while its peers sit idle.
+    // A shared atomic cursor gives the bounded outer workers dynamic scheduling.
+    // Keep them as scoped OS threads rather than Rayon workers: nested bundler
+    // jobs can then use Rayon's global module pool instead of recursively
+    // competing with route jobs in the same scheduler.
+    let next_route = AtomicUsize::new(0);
+    let worker_count = parallelism.min(routes.len());
+    let mut outcomes = std::thread::scope(|scope| -> anyhow::Result<Vec<_>> {
+        let mut handles = Vec::with_capacity(worker_count);
+        for _ in 0..worker_count {
+            let next_route = &next_route;
             let bundle_route = &bundle_route;
             handles.push(scope.spawn(move || {
-                let offset = chunk_index * chunk_size;
-                chunk
-                    .iter()
-                    .enumerate()
-                    .map(|(index, route)| {
-                        bundle_route(route).map(|bundle| (offset + index, bundle))
-                    })
-                    .collect::<anyhow::Result<Vec<_>>>()
+                let mut local = Vec::new();
+                loop {
+                    let index = next_route.fetch_add(1, Ordering::Relaxed);
+                    let Some(route) = routes.get(index) else {
+                        break;
+                    };
+                    local.push((index, bundle_route(route)));
+                }
+                local
             }));
         }
 
-        let mut bundles = Vec::with_capacity(routes.len());
+        let mut outcomes = Vec::with_capacity(routes.len());
         for handle in handles {
-            bundles.extend(
+            outcomes.extend(
                 handle
                     .join()
-                    .map_err(|_| anyhow::anyhow!("client bundler worker panicked"))??,
+                    .map_err(|_| anyhow::anyhow!("client bundler worker panicked"))?,
             );
         }
-        Ok(bundles)
+        Ok(outcomes)
     })?;
-    bundles.sort_by_key(|(index, _)| *index);
-    Ok(bundles)
+    outcomes.sort_by_key(|(index, _)| *index);
+    outcomes
+        .into_iter()
+        .map(|(index, outcome)| outcome.map(|bundle| (index, bundle)))
+        .collect()
 }
 
 /// Summarize first-load bundle offenders without turning a build observation
@@ -3433,9 +3480,9 @@ fn bundle_budget_report(routes: &[serde_json::Value]) -> serde_json::Value {
 }
 
 fn build_parallelism(configured: Option<usize>, work_items: usize) -> usize {
-    let available = std::thread::available_parallelism()
-        .map(usize::from)
-        .unwrap_or(1);
+    // Match the outer route budget to the nested Rayon module budget, including
+    // an operator's RAYON_NUM_THREADS cap, unless config sets it explicitly.
+    let available = rayon::current_num_threads();
     configured.unwrap_or(available).clamp(1, work_items.max(1))
 }
 
@@ -7077,6 +7124,22 @@ export default {
         assert!(out_dir.join("build.json").exists());
         assert!(!staging_dir.exists());
         assert!(!has_temp_build_dir(&out_dir, ".build-rollback"));
+    }
+
+    #[test]
+    fn incomplete_build_staging_is_removed_when_its_owner_drops() {
+        let temp = tempfile::tempdir().unwrap();
+        let out_dir = temp.path().join(".ruvyxa");
+        let staging_dir = create_build_staging_dir(&out_dir).unwrap();
+
+        {
+            let _cleanup = BuildStagingCleanup::new(staging_dir.clone());
+            fs::write(staging_dir.join("partial-output.txt"), "incomplete").unwrap();
+            assert!(staging_dir.exists());
+        }
+
+        assert!(!staging_dir.exists());
+        assert!(!has_temp_build_dir(&out_dir, ".build-staging"));
     }
 
     #[test]

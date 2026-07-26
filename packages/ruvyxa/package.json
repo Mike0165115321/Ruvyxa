@@ -85,7 +85,7 @@
     "@ruvyxa/core": "workspace:^",
     "oxc-transform": "0.141.0",
     "remark-gfm": "^4.0.1",
-    "sass": "^1.101.3",
+    "sass": "^1.102.0",
     "yaml": "^2.9.0"
   },
   "devDependencies": {

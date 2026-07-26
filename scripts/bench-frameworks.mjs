@@ -10,7 +10,8 @@
 //   node bench-frameworks.mjs                       (BENCH_ROOT=<dir> to point elsewhere)
 //
 // Results in the README were produced by this script; medians of RUNS (default 3) cold runs.
-import { spawn, execSync } from 'node:child_process'
+import { spawn, execFileSync, execSync } from 'node:child_process'
+import { once } from 'node:events'
 import { rmSync, readdirSync, statSync, existsSync } from 'node:fs'
 import path from 'node:path'
 
@@ -67,11 +68,13 @@ function startServer([cmd, args], dir) {
     cwd: dir,
     shell: true,
     stdio: 'ignore',
-    detached: false,
+    // A separate POSIX process group lets cleanup terminate the shell and all
+    // server grandchildren. Windows uses taskkill /T below instead.
+    detached: process.platform !== 'win32',
   })
 }
 
-async function timeToFirst200(child, url, timeoutMs = 120_000) {
+async function timeToFirst200(url, timeoutMs = 120_000) {
   const started = performance.now()
   while (performance.now() - started < timeoutMs) {
     try {
@@ -86,20 +89,51 @@ async function timeToFirst200(child, url, timeoutMs = 120_000) {
   throw new Error(`server never answered 200 at ${url}`)
 }
 
-function killTree(child, url) {
-  try {
-    execSync(`taskkill /F /T /PID ${child.pid}`, { stdio: 'ignore' })
-  } catch {}
-  // Some dev servers (Astro/Vite) detach from the npm process tree; kill by port too,
-  // otherwise the next "cold start" run measures a stale server answering instantly.
-  if (url) {
-    const port = new URL(url).port
+async function killTree(child, url) {
+  if (!child.pid) return
+
+  if (process.platform === 'win32') {
     try {
-      execSync(
-        `powershell -Command "Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | ForEach-Object { taskkill /F /T /PID $_.OwningProcess }"`,
-        { stdio: 'ignore' },
-      )
+      execFileSync('taskkill', ['/F', '/T', '/PID', String(child.pid)], { stdio: 'ignore' })
     } catch {}
+    // Some dev servers (Astro/Vite) can escape the npm process tree. Kill a
+    // remaining listener by the benchmark-owned port so the next cold start
+    // cannot measure a stale process.
+    if (url) {
+      const port = new URL(url).port
+      try {
+        execFileSync(
+          'powershell',
+          [
+            '-NoProfile',
+            '-Command',
+            `Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | ForEach-Object { taskkill /F /T /PID $_.OwningProcess }`,
+          ],
+          { stdio: 'ignore' },
+        )
+      } catch {}
+    }
+    return
+  }
+
+  const signalGroup = (signal) => {
+    try {
+      process.kill(-child.pid, signal)
+    } catch {
+      try {
+        child.kill(signal)
+      } catch {}
+    }
+  }
+  signalGroup('SIGTERM')
+  if (child.exitCode === null && child.signalCode === null) {
+    await Promise.race([
+      once(child, 'exit').catch(() => {}),
+      new Promise((resolve) => setTimeout(resolve, 1500)),
+    ])
+  }
+  if (child.exitCode === null && child.signalCode === null) {
+    signalGroup('SIGKILL')
   }
 }
 
@@ -143,9 +177,13 @@ for (const [name, app] of Object.entries(apps)) {
   for (let i = 0; i < RUNS; i++) {
     clean(app) // cold dev: no caches
     const child = startServer(app.dev.cmd, app.dir)
-    const ms = await timeToFirst200(child, app.dev.url)
-    devTimes.push(ms)
-    killTree(child, app.dev.url)
+    let ms
+    try {
+      ms = await timeToFirst200(app.dev.url)
+      devTimes.push(ms)
+    } finally {
+      await killTree(child, app.dev.url)
+    }
     console.log(`dev-ready[${i}] ${Math.round(ms)}ms`)
     await new Promise((resolve) => setTimeout(resolve, 750))
   }
@@ -157,19 +195,22 @@ for (const [name, app] of Object.entries(apps)) {
   const prodTimes = []
   for (let i = 0; i < RUNS; i++) {
     const child = startServer(app.prod.cmd, app.dir)
-    const ms = await timeToFirst200(child, app.prod.url)
-    prodTimes.push(ms)
-    if (i < RUNS - 1) {
-      killTree(child, app.prod.url)
-      await new Promise((resolve) => setTimeout(resolve, 750))
-    } else {
-      // keep the last instance alive for the load test
-      console.log(`prod-ready[${i}] ${Math.round(ms)}ms (load test starting)`)
-      const load = await throughput(app.prod.url)
-      results[name] = { builds, devTimes, prodTimes, load }
-      killTree(child, app.prod.url)
+    let ms
+    try {
+      ms = await timeToFirst200(app.prod.url)
+      prodTimes.push(ms)
+      if (i === RUNS - 1) {
+        // Keep the last instance alive for the load test. The finally block
+        // still owns cleanup if readiness or autocannon throws.
+        console.log(`prod-ready[${i}] ${Math.round(ms)}ms (load test starting)`)
+        const load = await throughput(app.prod.url)
+        results[name] = { builds, devTimes, prodTimes, load }
+      }
+    } finally {
+      await killTree(child, app.prod.url)
     }
     console.log(`prod-ready[${i}] ${Math.round(ms)}ms`)
+    if (i < RUNS - 1) await new Promise((resolve) => setTimeout(resolve, 750))
   }
 
   const clientBytes = app.clientDirs.reduce(
