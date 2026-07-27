@@ -30,6 +30,8 @@ pub struct CompiledModule {
     pub js: String,
     /// Dependency paths preserved from the resolver stage.
     pub deps: Vec<PathBuf>,
+    /// Exact source specifier to resolved path bindings from the resolver.
+    pub dependency_aliases: BTreeMap<String, PathBuf>,
     /// Whether this module comes from `node_modules` (external).
     pub is_external: bool,
     /// Whether this module's compiled output came from the compile cache.
@@ -118,6 +120,7 @@ fn compile_module(
                 path: module.path.clone(),
                 js,
                 deps: module.deps.clone(),
+                dependency_aliases: module.dependency_aliases.clone(),
                 is_external: false,
                 cache_hit: false,
             },
@@ -140,7 +143,7 @@ fn compile_module(
     let hook_output =
         build_hooks.transform_with_map(&content_source, &module.path, &hook_context)?;
     let source = hook_output.code;
-    let hook_source_map = hook_output.map;
+    let hook_source_map = hook_output.map.or_else(|| module.load_source_map.clone());
 
     // Virtual entries and plain JavaScript pass through after registered transforms.
     if matches!(ext, "js" | "mjs" | "cjs") || module.path.to_string_lossy().contains("ruvyxa:") {
@@ -149,6 +152,7 @@ fn compile_module(
                 path: module.path.clone(),
                 js: source,
                 deps: module.deps.clone(),
+                dependency_aliases: module.dependency_aliases.clone(),
                 is_external: module.is_external,
                 cache_hit: false,
             },
@@ -166,6 +170,7 @@ fn compile_module(
                 path: module.path.clone(),
                 js: cached_js,
                 deps: module.deps.clone(),
+                dependency_aliases: module.dependency_aliases.clone(),
                 is_external: module.is_external,
                 cache_hit: true,
             },
@@ -183,6 +188,7 @@ fn compile_module(
                     path: module.path.clone(),
                     js,
                     deps: module.deps.clone(),
+                    dependency_aliases: module.dependency_aliases.clone(),
                     is_external: module.is_external,
                     cache_hit: false,
                 },

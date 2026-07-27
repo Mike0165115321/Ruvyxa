@@ -269,9 +269,9 @@ process as the config renderer. Rust never evaluates plugin source directly.
 
 ### Communication boundary
 
-1. Plugin setup runs in the config renderer process (`ruvyxa.config.ts` evaluation).
-2. Build hooks (`resolveId`, `transform`, `onBuildComplete`) and HTTP middleware hooks go through
-   the same persistent Node/Bun subprocess via NDJSON (newline-delimited JSON) over stdin/stdout.
+1. Config validation requires a named API-v2 plugin with `register(api)`.
+2. Build sockets (start, resolve, load, transform, complete) and HTTP sockets go through versioned
+   Node/Bun hosts via NDJSON (newline-delimited JSON) over stdin/stdout.
 3. Request and response bodies crossing the bridge are base64-encoded.
 4. All payloads are bounded by `security.pluginLimit` (configurable) to prevent runaway memory.
 

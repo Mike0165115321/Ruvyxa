@@ -40,8 +40,8 @@ Then open `http://localhost:3000`. For a standalone published-package applicatio
 
 The demo config loads `plugins/index.ts`, which contains intentionally different plugin scenarios:
 
-- `page-observability.ts` uses the simple `plugin(name, middleware)` helper to add request and
-  response headers on a page route.
+- `page-observability.ts` uses `definePlugin({ name, register })` with the `http` socket to add
+  request and response headers on a page route.
 - `render-mode-badges.ts` applies the same middleware to static, SSG, ISR, CSR, and PPR pages so
   each rendering strategy can be inspected independently.
 - `build-pipeline.ts` uses advanced hooks to resolve `~demo-plugin`, transform a client module, and

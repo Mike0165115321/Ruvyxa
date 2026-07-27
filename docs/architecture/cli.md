@@ -30,7 +30,7 @@ pub enum Command {
     Trace(TraceArgs),             // <route> --root
     Bench(BenchArgs),             // --root, --samples (3), --json
     TestParity(ProjectArgs),      // --root  (alias: parity)
-    Plugin(PluginArgs),           // plugin new <name>
+    Plugin(PluginArgs),           // plugin create <name> [--dir <relative-path>]
 }
 
 pub struct ProjectArgs { pub root: PathBuf, pub runtime: Option<CliRuntime> }
@@ -52,26 +52,26 @@ pub struct DoctorArgs {
 pub struct TraceArgs { pub route: String, pub root: PathBuf }
 pub struct BenchArgs { pub root: PathBuf, pub samples: usize, pub json: bool }
 pub struct PluginArgs { pub command: PluginCommand }
-pub enum PluginCommand { New(PluginNewArgs) }
-pub struct PluginNewArgs { pub name: String, pub root: PathBuf }
+pub enum PluginCommand { Create(PluginCreateArgs) }
+pub struct PluginCreateArgs { pub name: String, pub root: PathBuf, pub dir: Option<PathBuf> }
 
 ```
 
-| Command       | What it does                                              |
-| ------------- | --------------------------------------------------------- |
-| `dev`         | Start dev server with HMR                                 |
-| `build`       | Production build → `.ruvyxa/`                             |
-| `check`       | `tsc --noEmit` + `test:parity`                            |
-| `start`       | Serve production build                                    |
-| `preview`     | Preview production build locally                          |
-| `routes`      | Print discovered route table                              |
-| `analyze`     | Validate routes/imports/boundaries; human, JSON, or SARIF |
-| `doctor`      | Check setup and adapter/route compatibility               |
-| `clean`       | Remove `.ruvyxa/`                                         |
-| `trace`       | Inspect one route by path (JSON)                          |
-| `bench`       | Benchmark (discovery, analysis, build)                    |
-| `test:parity` | Dev/prod route comparison + smoke renders                 |
-| `plugin new`  | Create a publishable plugin package                       |
+| Command         | What it does                                              |
+| --------------- | --------------------------------------------------------- |
+| `dev`           | Start dev server with HMR                                 |
+| `build`         | Production build → `.ruvyxa/`                             |
+| `check`         | `tsc --noEmit` + `test:parity`                            |
+| `start`         | Serve production build                                    |
+| `preview`       | Preview production build locally                          |
+| `routes`        | Print discovered route table                              |
+| `analyze`       | Validate routes/imports/boundaries; human, JSON, or SARIF |
+| `doctor`        | Check setup and adapter/route compatibility               |
+| `clean`         | Remove `.ruvyxa/`                                         |
+| `trace`         | Inspect one route by path (JSON)                          |
+| `bench`         | Benchmark (discovery, analysis, build)                    |
+| `test:parity`   | Dev/prod route comparison + smoke renders                 |
+| `plugin create` | Copy the canonical publishable v2 plugin package          |
 
 ---
 
@@ -652,8 +652,8 @@ pub struct BuildHookPipeline {
 - `transform_with_map`: chains transforms — each host receives previous output; last non-None source
   map is preserved.
 
-One persistent Node/Bun runtime owns the setup registry, so closures and module-level plugin state
-are shared across build calls. `onBuildComplete` runs after the committed production output.
+Each Node/Bun host owns a protocol-v2 `register()` registry, so closures and module-level state are
+shared only inside that host. `build.onComplete` runs after committed production output.
 
 ---
 

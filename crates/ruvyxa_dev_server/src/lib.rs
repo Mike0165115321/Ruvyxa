@@ -633,7 +633,7 @@ pub async fn serve(config: ServerConfig) -> Result<()> {
     };
     let realtime = plugin_runtime
         .as_ref()
-        .and_then(|runtime| runtime.descriptor().realtime.as_ref())
+        .and_then(|runtime| runtime.descriptor().realtime())
         .map(|descriptor| {
             if !descriptor.path.starts_with('/')
                 || descriptor.path.contains(['?', '#', '*'])
@@ -680,11 +680,15 @@ pub async fn serve(config: ServerConfig) -> Result<()> {
         Some(start_watcher(
             &config.root,
             &watch_paths(&config),
-            state.reload_tx.clone(),
-            state.runtime_cache.clone(),
-            watcher_pool,
-            watcher_render_cache,
-            state.hmr_tracker.clone(),
+            WatcherRuntime {
+                reload_tx: state.reload_tx.clone(),
+                runtime_cache: state.runtime_cache.clone(),
+                worker_pool: watcher_pool,
+                render_cache: watcher_render_cache,
+                hmr_tracker: state.hmr_tracker.clone(),
+                plugin_runtime: state.plugin_runtime.clone(),
+                tokio_handle: tokio::runtime::Handle::current(),
+            },
         )?)
     } else {
         None
@@ -888,15 +892,30 @@ fn local_display_url(config: &ServerConfig, address: SocketAddr) -> String {
     format!("http://{}:{}", display_host, address.port())
 }
 
-fn start_watcher(
-    root: &Path,
-    watch_paths: &[PathBuf],
+struct WatcherRuntime {
     reload_tx: broadcast::Sender<String>,
     runtime_cache: Arc<RuntimeCache>,
     worker_pool: Arc<NodeWorkerPool>,
     render_cache: Arc<RenderCache>,
     hmr_tracker: Arc<HmrTracker>,
+    plugin_runtime: Option<Arc<PluginHost>>,
+    tokio_handle: tokio::runtime::Handle,
+}
+
+fn start_watcher(
+    root: &Path,
+    watch_paths: &[PathBuf],
+    runtime: WatcherRuntime,
 ) -> Result<RecommendedWatcher> {
+    let WatcherRuntime {
+        reload_tx,
+        runtime_cache,
+        worker_pool,
+        render_cache,
+        hmr_tracker,
+        plugin_runtime,
+        tokio_handle,
+    } = runtime;
     let root = root.to_path_buf();
     let mut watcher =
         notify::recommended_watcher(move |event: notify::Result<notify::Event>| match event {
@@ -944,6 +963,15 @@ fn start_watcher(
                 if worker_result.is_err() {
                     hmr_update.full_reload = true;
                     hmr_update.event_type = HmrEventType::FullReload;
+                }
+
+                if let Some(plugin_runtime) = plugin_runtime.clone() {
+                    let plugin_paths = plugin_watch_paths(&root, &paths);
+                    tokio_handle.spawn(async move {
+                        if let Err(error) = plugin_runtime.notify_file_change(&plugin_paths).await {
+                            warn!(%error, "plugin dev.fileChange hook failed");
+                        }
+                    });
                 }
 
                 // Send targeted HMR payload with affected routes.
@@ -1013,6 +1041,14 @@ fn ignored_watch_path(root: &Path, path: &Path) -> bool {
         || components
             .iter()
             .any(|component| matches!(component.as_ref(), ".ruvyxa" | "node_modules"))
+}
+
+fn plugin_watch_paths(root: &Path, paths: &[PathBuf]) -> Vec<String> {
+    paths
+        .iter()
+        .map(|path| path.strip_prefix(root).unwrap_or(path))
+        .map(|path| path.display().to_string().replace('\\', "/"))
+        .collect()
 }
 
 fn format_update_elapsed(elapsed: Duration) -> String {
@@ -3142,6 +3178,17 @@ mod tests {
             temp.path(),
             &temp.path().join("app/.ruvyxa-action-test-helper.ts")
         ));
+    }
+
+    #[test]
+    fn plugin_file_change_paths_are_project_relative_and_portable() {
+        let root = PathBuf::from("C:/workspace/app");
+        let paths = vec![root.join("content/guide.md"), root.join("app/page.tsx")];
+
+        assert_eq!(
+            plugin_watch_paths(&root, &paths),
+            vec!["content/guide.md", "app/page.tsx"]
+        );
     }
 
     #[test]

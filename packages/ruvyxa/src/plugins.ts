@@ -32,8 +32,8 @@ import {
 import path from 'node:path'
 import { isMap, isScalar, isSeq, parseDocument } from 'yaml'
 
-import { definePlugin } from '@ruvyxa/core/config'
-import type { PluginBuildContext, RuvyxaPlugin } from '@ruvyxa/core/config'
+import { definePlugin } from '@ruvyxa/core/plugin'
+import type { PluginBuildContext, RuvyxaPlugin } from '@ruvyxa/core/plugin'
 
 // ─── redirects ────────────────────────────────────────────────────────────────
 
@@ -74,10 +74,10 @@ export function redirects(rules: RedirectRule[]): RuvyxaPlugin {
 
   return definePlugin({
     name: 'ruvyxa:redirects',
-    setup({ addMiddleware }) {
-      addMiddleware({
-        routes: normalized.map((rule) => rule.source),
-        onRequest(request) {
+    register({ http }) {
+      http.onRequest({
+        match: normalized.map((rule) => rule.source),
+        handler({ request }) {
           const url = new URL(request.url)
           for (const rule of normalized) {
             const remainder = matchSource(rule.source, url.pathname)
@@ -208,10 +208,10 @@ export function headers(rules: HeaderRule[]): RuvyxaPlugin {
 
   return definePlugin({
     name: 'ruvyxa:headers',
-    setup({ addMiddleware }) {
-      addMiddleware({
-        ...(scoped ? { routes: normalized.map((rule) => rule.source as string) } : {}),
-        onResponse(request, response) {
+    register({ http }) {
+      http.onResponse({
+        ...(scoped ? { match: normalized.map((rule) => rule.source as string) } : {}),
+        handler({ request, response }) {
           const pathname = new URL(request.url).pathname
           let output: Headers | undefined
           for (const rule of normalized) {
@@ -280,10 +280,10 @@ export function observability(options: ObservabilityOptions = {}): RuvyxaPlugin 
 
   return definePlugin({
     name: 'ruvyxa:observability',
-    setup({ addMiddleware }) {
-      addMiddleware({
-        ...(routes ? { routes } : {}),
-        onRequest(request) {
+    register({ http }) {
+      http.onRequest({
+        ...(routes ? { match: routes } : {}),
+        handler({ request }) {
           const headers = new Headers(request.headers)
           const incomingRequestId = headers.get(requestIdHeader)
           if (!incomingRequestId || !REQUEST_ID_PATTERN.test(incomingRequestId)) {
@@ -300,7 +300,10 @@ export function observability(options: ObservabilityOptions = {}): RuvyxaPlugin 
           headers.set(OBSERVABILITY_START_HEADER, String(Date.now()))
           return new Request(request, { headers })
         },
-        onResponse(request, response) {
+      })
+      http.onResponse({
+        ...(routes ? { match: routes } : {}),
+        handler({ request, response }) {
           const headers = new Headers(response.headers)
           const requestId = request.headers.get(requestIdHeader) ?? randomUUID()
           const traceparent = traceContext
@@ -397,10 +400,10 @@ export function securityHeaders(options: SecurityHeadersOptions = {}): RuvyxaPlu
 
   return definePlugin({
     name: 'ruvyxa:security-headers',
-    setup({ addMiddleware }) {
-      addMiddleware({
-        ...(routes ? { routes } : {}),
-        onResponse(_request, response) {
+    register({ http }) {
+      http.onResponse({
+        ...(routes ? { match: routes } : {}),
+        handler({ response }) {
           const output = new Headers(response.headers)
           configured.forEach((value, name) => output.set(name, value))
           return cloneResponse(response, output)
@@ -469,10 +472,10 @@ export function cacheRules(rules: CacheRule[]): RuvyxaPlugin {
 
   return definePlugin({
     name: 'ruvyxa:cache-rules',
-    setup({ addMiddleware }) {
-      addMiddleware({
-        ...(scoped ? { routes: normalized.map((rule) => rule.source as string) } : {}),
-        onResponse(request, response) {
+    register({ http }) {
+      http.onResponse({
+        ...(scoped ? { match: normalized.map((rule) => rule.source as string) } : {}),
+        handler({ request, response }) {
           const pathname = new URL(request.url).pathname
           let output: Headers | undefined
           for (const rule of normalized) {
@@ -594,10 +597,10 @@ export function pwa(options: PwaOptions): RuvyxaPlugin {
 
   return definePlugin({
     name: 'ruvyxa:pwa',
-    setup({ addMiddleware, onBuildComplete }) {
-      addMiddleware({
-        routes: middlewareRoutes,
-        onRequest(request) {
+    register({ http, build }) {
+      http.onRequest({
+        match: middlewareRoutes,
+        handler({ request }) {
           const pathname = new URL(request.url).pathname
           if (pathname === manifestPath) {
             return new Response(manifestBody, {
@@ -623,7 +626,10 @@ export function pwa(options: PwaOptions): RuvyxaPlugin {
           }
           return undefined
         },
-        async onResponse(request, response) {
+      })
+      http.onResponse({
+        match: middlewareRoutes,
+        async handler({ request, response }) {
           const pathname = new URL(request.url).pathname
           if (!htmlRoutes.some((route) => matchSource(route, pathname) !== null)) return undefined
           if (!response.headers.get('content-type')?.toLowerCase().includes('text/html')) {
@@ -641,7 +647,7 @@ export function pwa(options: PwaOptions): RuvyxaPlugin {
           })
         },
       })
-      onBuildComplete((context) => {
+      build.onComplete((context) => {
         writePublicAsset(context, manifestPath, manifestBody)
         writePublicAsset(context, serviceWorkerPath, serviceWorkerBody)
         writePublicAsset(context, registerPath, registerBody)
@@ -753,8 +759,8 @@ export function sitemap(options: SitemapOptions): RuvyxaPlugin {
 
   return definePlugin({
     name: 'ruvyxa:sitemap',
-    setup({ onBuildComplete }) {
-      onBuildComplete((context) => {
+    register({ build }) {
+      build.onComplete((context) => {
         const paths = manifestPagePaths(context).filter(
           (routePath) => !exclude.some((pattern) => matchSource(pattern, routePath) !== null),
         )
@@ -816,8 +822,8 @@ export function robots(options: RobotsOptions = {}): RuvyxaPlugin {
 
   return definePlugin({
     name: 'ruvyxa:robots',
-    setup({ onBuildComplete }) {
-      onBuildComplete((context) => {
+    register({ build }) {
+      build.onComplete((context) => {
         const blocks = rules.map((rule) => {
           const lines = [`User-agent: ${rule.userAgent ?? '*'}`]
           for (const value of rule.allow ?? []) lines.push(`Allow: ${value}`)
@@ -874,8 +880,8 @@ export function feed(options: FeedOptions): RuvyxaPlugin {
 
   return definePlugin({
     name: 'ruvyxa:feed',
-    setup({ onBuildComplete }) {
-      onBuildComplete(async (context) => {
+    register({ build }) {
+      build.onComplete(async (context) => {
         const items =
           typeof options.items === 'function' ? await options.items() : [...options.items]
         if (!Array.isArray(items)) throw new TypeError('feed: item loader must return an array')
@@ -971,8 +977,8 @@ export function searchIndex(options: SearchIndexOptions): RuvyxaPlugin {
 
   return definePlugin({
     name: 'ruvyxa:search-index',
-    setup({ onBuildComplete }) {
-      onBuildComplete(async (context) => {
+    register({ build }) {
+      build.onComplete(async (context) => {
         const input =
           typeof options.documents === 'function'
             ? await options.documents()
@@ -1162,14 +1168,14 @@ export function contentEngine(options: ContentEngineOptions): RuvyxaPlugin {
 
   return definePlugin({
     name: 'ruvyxa:content-engine',
-    setup({ addMiddleware, onBuildComplete }) {
-      addMiddleware({
-        routes: outputPaths,
-        onRequest(request, context) {
+    register({ http, build }) {
+      http.onRequest({
+        match: outputPaths,
+        handler({ request, root }) {
           if (request.method !== 'GET' && request.method !== 'HEAD') return undefined
-          const appRoot = path.resolve(context.root, normalized.appDir)
+          const appRoot = path.resolve(root, normalized.appDir)
           if (!isDirectory(appRoot)) return undefined
-          const artifact = developmentArtifacts(context.root).get(new URL(request.url).pathname)
+          const artifact = developmentArtifacts(root).get(new URL(request.url).pathname)
           if (!artifact) return undefined
           return new Response(request.method === 'HEAD' ? null : artifact.body, {
             headers: {
@@ -1179,7 +1185,7 @@ export function contentEngine(options: ContentEngineOptions): RuvyxaPlugin {
           })
         },
       })
-      onBuildComplete((context) => {
+      build.onComplete((context) => {
         for (const [outputPath, artifact] of createContentEngineArtifacts(
           context.root,
           normalized,
@@ -1811,17 +1817,17 @@ export function openApi(options: OpenApiOptions): RuvyxaPlugin {
 
   return definePlugin({
     name: 'ruvyxa:openapi',
-    setup({ addMiddleware, onBuildComplete }) {
-      addMiddleware({
-        routes: [outputPath],
-        onRequest(request) {
+    register({ http, build }) {
+      http.onRequest({
+        match: [outputPath],
+        handler({ request }) {
           if (new URL(request.url).pathname !== outputPath) return undefined
           return new Response(body, {
             headers: { 'content-type': 'application/json; charset=utf-8' },
           })
         },
       })
-      onBuildComplete((context) => writePublicAsset(context, outputPath, body))
+      build.onComplete((context) => writePublicAsset(context, outputPath, body))
     },
   })
 }
@@ -1843,10 +1849,10 @@ export function alias(map: Record<string, string>): RuvyxaPlugin {
 
   return definePlugin({
     name: 'ruvyxa:alias',
-    setup({ resolveId }) {
-      resolveId((id, _importer, context) => {
+    register({ build }) {
+      build.onResolve(({ id, root }) => {
         for (const [specifier, target] of entries) {
-          if (id === specifier) return path.resolve(context.root, target)
+          if (id === specifier) return path.resolve(root, target)
         }
         return undefined
       })
@@ -1881,8 +1887,8 @@ export function bundleBudget(options: BundleBudgetOptions): RuvyxaPlugin {
 
   return definePlugin({
     name: 'ruvyxa:bundle-budget',
-    setup({ onBuildComplete }) {
-      onBuildComplete((context) => {
+    register({ build }) {
+      build.onComplete((context) => {
         const clientDir = path.join(context.outDir, 'client')
         const files = clientJavaScriptSizes(clientDir)
         const failures: string[] = []
@@ -1945,8 +1951,8 @@ export function requireEnv(names: string[]): RuvyxaPlugin {
 
   return definePlugin({
     name: 'ruvyxa:require-env',
-    setup({ onBuildComplete }) {
-      onBuildComplete(() => {
+    register({ build }) {
+      build.onComplete(() => {
         const missing = names.filter((name) => {
           const value = process.env[name]
           return value === undefined || value === ''

@@ -1,5 +1,3 @@
-import { definePlugin } from '@ruvyxa/core/config'
-
 import type {
   AuthOptions,
   AuthProvider,
@@ -10,8 +8,10 @@ import type {
   OAuthProvider,
   OAuthTokenSet,
 } from './types.js'
+import { createAuthPlugin } from './plugin.js'
 
 export * from './providers.js'
+export * from './plugin.js'
 export * from './stores.js'
 export type * from './types.js'
 
@@ -32,26 +32,19 @@ const RESERVED_OAUTH_PARAMETERS = new Set([
 /** Create an isolated auth runtime, its direct Request handler, and its Ruvyxa plugin. */
 export function createAuth(options: AuthOptions): AuthRuntime {
   const settings = normalizeOptions(options)
-  const plugin = definePlugin({
-    name: 'ruvyxa:auth',
-    setup({ addMiddleware, onBuildComplete }) {
-      addMiddleware({
-        routes: [`${settings.basePath}/*`],
-        onRequest(request) {
-          return handle(request)
-        },
-      })
-      onBuildComplete(({ manifest }) => {
-        if (manifest.profile === 'production') {
-          if (!settings.store.durable || !settings.rateLimitStore.durable) {
-            throw new AuthError(
-              'RUV3105',
-              'production auth requires durable session/token and rate-limit stores',
-              500,
-            )
-          }
+  const plugin = createAuthPlugin({
+    basePath: settings.basePath,
+    handle,
+    validateBuild(manifest) {
+      if (manifest.profile === 'production') {
+        if (!settings.store.durable || !settings.rateLimitStore.durable) {
+          throw new AuthError(
+            'RUV3105',
+            'production auth requires durable session/token and rate-limit stores',
+            500,
+          )
         }
-      })
+      }
     },
   })
 

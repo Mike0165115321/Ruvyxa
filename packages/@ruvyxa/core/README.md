@@ -15,6 +15,7 @@ npm install @ruvyxa/core
 
 ```ts
 import { config } from '@ruvyxa/core/config'
+import { definePlugin } from '@ruvyxa/core/plugin'
 import {
   action,
   cache,
@@ -29,8 +30,8 @@ import type {
   Adapter,
   AdapterOutput,
   BuildContext,
-  PluginSetupContext,
-  PluginMiddlewareContext,
+  PluginRegistrationApi,
+  PluginHttpRequestContext,
   RuvyxaConfig,
   RuvyxaPlugin,
   TransformResult,
@@ -168,43 +169,42 @@ export function customAdapter(): Adapter {
 
 ## Plugin Contract
 
-Plugins are ordinary TypeScript modules. For middleware-only plugins, use the compact `plugin`
-helper:
+Plugins are ordinary TypeScript modules using the sole v2 contract:
 
 ```ts
-import { plugin } from '@ruvyxa/core/config'
+import { definePlugin } from '@ruvyxa/core/plugin'
 
-export default plugin('auth', {
-  routes: ['/api/*'],
-  onRequest(request) {
-    return request.headers.has('authorization')
-      ? undefined
-      : new Response('Unauthorized', { status: 401 })
+export default definePlugin({
+  name: 'auth',
+  register({ http }) {
+    http.onRequest({
+      match: ['/api/*'],
+      handler({ request }) {
+        return request.headers.has('authorization')
+          ? undefined
+          : new Response('Unauthorized', { status: 401 })
+      },
+    })
   },
 })
 ```
 
-For a response middleware that only changes headers, add `headers: { 'x-example': 'active' }` to the
-`plugin()` options. Use `onResponse` only when the header/value needs dynamic request or response
-data.
-
-Use `definePlugin` when one plugin also registers build hooks:
+One plugin may combine any socket groups it needs:
 
 ```ts
-import { definePlugin } from '@ruvyxa/core/config'
-import type { RuvyxaPlugin } from '@ruvyxa/core'
+import { definePlugin, type RuvyxaPlugin } from '@ruvyxa/core/plugin'
 
 export function bannerPlugin(): RuvyxaPlugin {
   return definePlugin({
     name: 'banner',
-    setup({ transform, addMiddleware }) {
-      transform((code, id, ctx) => {
-        if (ctx.environment !== 'client' || !id.endsWith('.tsx')) return null
+    register({ build, http }) {
+      build.onTransform(({ code, id, environment }) => {
+        if (environment !== 'client' || !id.endsWith('.tsx')) return null
         return { code: `/* client bundle */\n${code}` }
       })
-      addMiddleware({
-        routes: ['/api/*'],
-        onRequest(request: Request, _context: PluginMiddlewareContext) {
+      http.onRequest({
+        match: ['/api/*'],
+        handler({ request }) {
           return request
         },
       })
@@ -213,9 +213,9 @@ export function bannerPlugin(): RuvyxaPlugin {
 }
 ```
 
-Request middleware returns `undefined` to continue, a `Request` to replace the request, or a
-`Response` to short-circuit. Response middleware receives cloned Fetch objects and returns a new
-`Response` when it needs to replace the output. Build hooks (`resolveId`, `transform`, and
-`onBuildComplete`) run in registration order in one persistent runtime.
+Request hooks return `undefined` to continue, a `Request` to replace the request, or a `Response` to
+short-circuit. Grouped `http`, `build`, `dev`, `diagnostics`, and `native` sockets run in
+declaration and registration order. `definePlugin()` stamps `apiVersion: 2`; other versions are
+rejected.
 
 This package is published as ESM with generated TypeScript declarations.

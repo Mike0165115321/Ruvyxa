@@ -29,6 +29,17 @@ Register `auth.plugin` in `ruvyxa.config.ts` for the self-hosted Node/Bun middle
 serverless/edge hosts, expose `auth.handle(request)` from an API route so authentication runs in the
 same platform request lifecycle. Both paths use the same endpoints under `/__ruvyxa/auth`.
 
+```ts
+import { config } from 'ruvyxa/config'
+import { auth } from './server/auth.js'
+
+export default config({ plugins: [auth.plugin] })
+```
+
+The package exposes `@ruvyxa/auth/plugin` for integration authors who need `createAuthPlugin()` with
+an explicit request/build bridge. Normal applications should use the v2 `auth.plugin` value created
+by `createAuth()` so the handler, store validation, and plugin stay aligned.
+
 The session cookie is opaque, HttpOnly, SameSite, and Secure on HTTPS. Session and one-time token
 keys are HMAC-derived. `AuthStore.take()` and `AuthRateLimitStore.consume()` must be atomic; the
 included memory implementations require `{ development: true }` and production builds reject them.

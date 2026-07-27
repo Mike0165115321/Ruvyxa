@@ -120,10 +120,9 @@ alias และจะใช้ Node รัน JavaScript สำหรับง�
 
 ### plugins
 
-ใช้ `plugin(name, middleware)` สำหรับ request/response middleware และใช้
-`definePlugin({ name, setup })` เมื่อต้องลงทะเบียน `resolveId`, `transform` หรือ `onBuildComplete`
-ทุก hook ทำงานตามลำดับที่ลงทะเบียนใน persistent plugin runtime และ middleware ใช้ Fetch
-`Request`/`Response`
+ลงทะเบียนค่าที่สร้างด้วย `definePlugin({ name, register })` จาก `ruvyxa/plugin` Plugin หนึ่งตัวใช้
+กลุ่ม `http`, `build`, `dev`, `diagnostics`, `native` ร่วมกันได้ตามต้องการ ทุก hook ทำงานตามลำดับ
+ที่ประกาศและต้องเป็น API/protocol version 2 ดูรายละเอียดที่ [คู่มือ plugin](../../plugin.md)
 
 ### css
 
@@ -191,9 +190,9 @@ Netlify, Cloudflare, S3) ไม่มี fallback แบบนั้น ดั�
 - `workers`: จำนวน TypeScript middleware processes 1–8 (ค่าเริ่มต้น 1 และ state แยกต่อ process)
 - `timeoutMs`: เวลาสูงสุดต่อ hook 1–300,000 ms (ค่าเริ่มต้น 30,000 ms) เมื่อ timeout ระบบจะเปลี่ยน
   worker โดยไม่ retry เพื่อป้องกัน side effect ซ้ำ
-- `addMiddleware` รับ `onRequest` และ `onResponse` callbacks ที่ใช้ Fetch `Request` และ `Response`
-  objects `resolveId`, `transform` และ `onBuildComplete` ใช้คู่กับ middleware ได้ ทุก hook
-  ทำงานตามลำดับการลงทะเบียนผ่าน persistent plugin runtime
+- Socket `http` v2 รับ `onRequest`, `onResponse`, `route` โดยใช้ Fetch objects ส่วน socket `build`
+  มี start, resolve, load, transform, complete ทุก handler ทำงานตามลำดับที่ประกาศ/ลงทะเบียนผ่าน
+  plugin runtime ที่ตรวจ protocol version
 
 ### adapter
 

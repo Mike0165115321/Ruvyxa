@@ -253,6 +253,10 @@ export function runtimeAliases(runtimeDir = path.dirname(fileURLToPath(import.me
       path.join(packageRoot, 'src', 'config.ts'),
       path.join(packageRoot, 'dist', 'config.js'),
     ),
+    'ruvyxa/plugin': preferExisting(
+      path.join(packageRoot, 'src', 'plugin.ts'),
+      path.join(packageRoot, 'dist', 'plugin.js'),
+    ),
     'ruvyxa/plugins': preferExisting(
       path.join(packageRoot, 'src', 'plugins.ts'),
       path.join(packageRoot, 'dist', 'plugins.js'),
@@ -268,6 +272,10 @@ export function runtimeAliases(runtimeDir = path.dirname(fileURLToPath(import.me
     '@ruvyxa/core/config': preferExisting(
       path.join(coreRoot, 'src', 'config.ts'),
       path.join(coreRoot, 'dist', 'config.js'),
+    ),
+    '@ruvyxa/core/plugin': preferExisting(
+      path.join(coreRoot, 'src', 'plugin.ts'),
+      path.join(coreRoot, 'dist', 'plugin.js'),
     ),
   }
 }

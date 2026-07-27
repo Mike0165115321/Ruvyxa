@@ -30,20 +30,50 @@ import {
   sitemap,
 } from '../../../packages/ruvyxa/dist/plugins.js'
 
-/** Runs a plugin's setup with a capturing registration context. */
+/** Runs a plugin's v2 registration with adapters for the focused hook tests below. */
 function register(plugin) {
   const registered = { middleware: [], resolveId: [], buildComplete: [] }
-  plugin.setup({
-    addMiddleware(value) {
-      registered.middleware.push(typeof value === 'function' ? { onRequest: value } : value)
+  plugin.register({
+    http: {
+      onRequest(value) {
+        const registration = typeof value === 'function' ? { handler: value } : value
+        registered.middleware.push({
+          routes: registration.match,
+          onRequest(request, context = middlewareContext) {
+            return registration.handler({ ...context, request, next() {} })
+          },
+        })
+      },
+      onResponse(value) {
+        const registration = typeof value === 'function' ? { handler: value } : value
+        const existing = [...registered.middleware]
+          .reverse()
+          .find(
+            (entry) =>
+              entry.onResponse === undefined &&
+              JSON.stringify(entry.routes) === JSON.stringify(registration.match),
+          )
+        const target = existing ?? { routes: registration.match }
+        target.onResponse = (request, response, context = middlewareContext) =>
+          registration.handler({ ...context, request, response, next() {} })
+        if (!existing) registered.middleware.push(target)
+      },
+      route() {},
     },
-    resolveId(hook) {
-      registered.resolveId.push(hook)
+    build: {
+      onStart() {},
+      onResolve(hook) {
+        registered.resolveId.push((id, importer, context) => hook({ ...context, id, importer }))
+      },
+      onLoad() {},
+      onTransform() {},
+      onComplete(hook) {
+        registered.buildComplete.push(hook)
+      },
     },
-    transform() {},
-    onBuildComplete(hook) {
-      registered.buildComplete.push(hook)
-    },
+    dev: { onFileChange() {} },
+    diagnostics: { report() {} },
+    native: { claim() {} },
   })
   return registered
 }

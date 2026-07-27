@@ -1,4 +1,5 @@
-export { config, definePlugin, plugin, withResponseHeader } from './config.js'
+export { config } from './config.js'
+export { definePlugin, PLUGIN_API_VERSION, withResponseHeader } from './plugin.js'
 export type {
   Adapter,
   AdapterArtifact,
@@ -12,27 +13,12 @@ export type {
   ImageConfig,
   MiddlewareConfig,
   PageProps,
-  PluginBuildCompleteHook,
-  PluginBuildContext,
-  PluginEnvironment,
-  PluginMiddleware,
-  PluginMiddlewareOptions,
-  PluginMiddlewareContext,
-  PluginRequestMiddleware,
-  PluginRequestResult,
-  PluginResolveIdHook,
-  PluginResponseMiddleware,
-  PluginSetupContext,
-  PluginTransformContext,
-  PluginTransformHook,
   RateLimitConfig,
-  RealtimePluginOptions,
   RenderConfig,
   RenderStrategy,
   RouteParamValue,
   RouteParams,
   RuvyxaConfig,
-  RuvyxaPlugin,
   StaticParamsContext,
   StaticParamSegment,
   StaticParamsCacheDuration,
@@ -40,6 +26,7 @@ export type {
   StaticParamsValues,
   TransformResult,
 } from './types.js'
+export type * from './plugin.js'
 export { standaloneServerSource } from './standalone-server.js'
 export type { StandaloneServerOptions } from './standalone-server.js'
 export {

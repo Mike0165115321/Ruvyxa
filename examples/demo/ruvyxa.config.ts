@@ -1,5 +1,5 @@
 import { config, type RuvyxaConfig } from 'ruvyxa/config'
-import { realtime } from '@ruvyxa/realtime'
+import { realtime } from '@ruvyxa/realtime/plugin'
 import { demoPlugins } from './plugins'
 
 const settings: RuvyxaConfig = {

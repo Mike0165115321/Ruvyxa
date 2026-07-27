@@ -51,8 +51,8 @@
   edges and reuse unchanged client resolution work on warm builds. The graph is namespaced by the
   evaluated config dependency hash; build hooks bypass edge reuse so plugin resolution stays
   correct. Compiled output remains content-addressed under the configured build cache.
-- **plugin pipeline** — one `definePlugin({ setup })` registry provides `resolveId`, `transform`,
-  middleware, and build-complete hooks through a persistent Node/Bun subprocess. AST-based
+- **plugin pipeline** — one `definePlugin({ name, register })` registry provides grouped HTTP,
+  build, dev, diagnostic, and native sockets through a versioned Node/Bun subprocess. AST-based
   import/export extraction and CommonJS detection for npm dependencies.
 - **Gzip + Brotli compression** — all responses compressed automatically via tower-http middleware.
 - **ETag / 304 support** — static assets include BLAKE3-256-based ETags for efficient browser
@@ -408,17 +408,18 @@ Metadata guards, per-client/action rate limiting (600 req/min), module isolation
 Ruvyxa ships a tower-based middleware system configurable via `ruvyxa.config.ts`:
 
 ```ts
-import { config, definePlugin } from 'ruvyxa/config'
+import { config } from 'ruvyxa/config'
+import { definePlugin } from 'ruvyxa/plugin'
 
 export default config({
   middleware: { builtin: { timing: true, log: true } },
   plugins: [
     definePlugin({
       name: 'auth-guard',
-      setup({ addMiddleware }) {
-        addMiddleware({
-          routes: ['/api/*'],
-          onRequest(request) {
+      register({ http }) {
+        http.onRequest({
+          match: ['/api/*'],
+          handler({ request }) {
             return request.headers.has('authorization')
               ? undefined
               : new Response('Unauthorized', { status: 401 })

@@ -18,23 +18,23 @@ Everything else on this page is diagnostics and tooling you can reach for when y
 
 ## Quick Reference
 
-| Command                         | Purpose                                                            |
-| ------------------------------- | ------------------------------------------------------------------ |
-| `npm run dev`                   | Development server with hot reload and route watching              |
-| `npm run build`                 | Build the application for production output                        |
-| `npm run start`                 | Serve an existing production build                                 |
-| `npm run typecheck`             | Run `tsc --noEmit`                                                 |
-| `npm run check`                 | Run app-level production readiness checks                          |
-| `npx ruvyxa preview`            | Preview an existing production build locally                       |
-| `npx ruvyxa routes`             | Print routes and their discovered render strategy                  |
-| `npx ruvyxa analyze`            | Validate routes, imports, and server/client boundaries             |
-| `npx ruvyxa doctor`             | Inspect project setup, tools, dependencies, and diagnostics        |
-| `npx ruvyxa trace /blog/[slug]` | Inspect one route manifest entry                                   |
-| `npx ruvyxa bench`              | Benchmark route discovery, analysis, and production build          |
-| `npx ruvyxa test:parity`        | Compare development and production routes, then smoke render pages |
-| `npx ruvyxa parity`             | Alias for `test:parity`                                            |
-| `npx ruvyxa clean`              | Remove generated `.ruvyxa/` output                                 |
-| `npx ruvyxa plugin new <name>`  | Create a plugin starter                                            |
+| Command                           | Purpose                                                            |
+| --------------------------------- | ------------------------------------------------------------------ |
+| `npm run dev`                     | Development server with hot reload and route watching              |
+| `npm run build`                   | Build the application for production output                        |
+| `npm run start`                   | Serve an existing production build                                 |
+| `npm run typecheck`               | Run `tsc --noEmit`                                                 |
+| `npm run check`                   | Run app-level production readiness checks                          |
+| `npx ruvyxa preview`              | Preview an existing production build locally                       |
+| `npx ruvyxa routes`               | Print routes and their discovered render strategy                  |
+| `npx ruvyxa analyze`              | Validate routes, imports, and server/client boundaries             |
+| `npx ruvyxa doctor`               | Inspect project setup, tools, dependencies, and diagnostics        |
+| `npx ruvyxa trace /blog/[slug]`   | Inspect one route manifest entry                                   |
+| `npx ruvyxa bench`                | Benchmark route discovery, analysis, and production build          |
+| `npx ruvyxa test:parity`          | Compare development and production routes, then smoke render pages |
+| `npx ruvyxa parity`               | Alias for `test:parity`                                            |
+| `npx ruvyxa clean`                | Remove generated `.ruvyxa/` output                                 |
+| `npx ruvyxa plugin create <name>` | Create a canonical v2 plugin package                               |
 
 ## Common Options
 
@@ -244,19 +244,20 @@ npx ruvyxa clean
 
 Removes the `.ruvyxa/` output directory entirely.
 
-### `plugin new`
+### `plugin create`
 
 ```bash
-npx ruvyxa plugin new request-logger
+npx ruvyxa plugin create request-logger
 ```
 
-`plugin new` creates a publishable package directly under `request-logger/` (named after the plugin,
-no wrapping folder), with `src/index.ts`, `package.json`, `tsconfig.json`, and `README.md`. Pass
-`--dir <path>` only if you want a different location (relative to `--root`; `..` segments are
-rejected). The scaffold works with Node.js and Bun — build it with `npm run build` (or
-`bun run build`), then publish with your package manager. Import the package entry from
-`ruvyxa.config.ts` and register it in `config({ plugins: [...] })`. See [Plugins](plugins.md) for
-the complete workflow.
+`plugin create` copies the canonical publishable package directly under `request-logger/` (named
+after the plugin, no wrapping folder), with `src/index.ts`, `package.json`, `tsconfig.json`, and
+`README.md`. Pass `--dir <path>` only if you want a different location (relative to `--root`; `..`
+segments are rejected). The scaffold works with Node.js and Bun — build it with `npm run build` (or
+`bun run build`), then publish with your package manager. The package exports a protocol-v2
+`definePlugin({ name, register })` value. Import the package entry from `ruvyxa.config.ts` and
+register it in `config({ plugins: [...] })`. See [Plugins](../../plugin.md) for the complete
+workflow.
 
 ---
 

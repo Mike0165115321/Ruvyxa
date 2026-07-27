@@ -301,11 +301,11 @@ struct PluginArgs {
 #[derive(Debug, Subcommand)]
 enum PluginCommand {
     #[command(about = "Create a publishable plugin package")]
-    New(PluginNewArgs),
+    Create(PluginCreateArgs),
 }
 
 #[derive(Debug, Parser)]
-struct PluginNewArgs {
+struct PluginCreateArgs {
     name: String,
 
     #[arg(long, default_value = ".")]
@@ -453,6 +453,7 @@ struct CacheConfigOptions {
 #[serde(rename_all = "camelCase")]
 struct BuildPluginConfig {
     name: String,
+    api_version: u8,
 }
 
 struct RuvyxaBuildCache<'a> {
@@ -696,11 +697,38 @@ async fn main() -> anyhow::Result<()> {
 
 fn plugin(args: PluginArgs) -> anyhow::Result<()> {
     match args.command {
-        PluginCommand::New(args) => scaffold_plugin(args),
+        PluginCommand::Create(args) => scaffold_plugin(args),
     }
 }
 
-fn scaffold_plugin(args: PluginNewArgs) -> anyhow::Result<()> {
+const PLUGIN_TEMPLATE_FILES: &[(&str, &str)] = &[
+    (
+        "src/index.ts",
+        include_str!("../../../templates/plugin/src/index.ts"),
+    ),
+    (
+        "test/plugin.test.mjs",
+        include_str!("../../../templates/plugin/test/plugin.test.mjs"),
+    ),
+    (
+        "package.json",
+        include_str!("../../../templates/plugin/package.json"),
+    ),
+    (
+        "tsconfig.json",
+        include_str!("../../../templates/plugin/tsconfig.json"),
+    ),
+    (
+        "README.md",
+        include_str!("../../../templates/plugin/README.md"),
+    ),
+    (
+        ".gitignore",
+        include_str!("../../../templates/plugin/.gitignore"),
+    ),
+];
+
+fn scaffold_plugin(args: PluginCreateArgs) -> anyhow::Result<()> {
     let plugin_name = normalize_plugin_name(&args.name)?;
     let package_dir = match &args.dir {
         Some(dir) => {
@@ -735,31 +763,18 @@ fn scaffold_plugin(args: PluginNewArgs) -> anyhow::Result<()> {
         );
     }
 
-    let src_dir = package_dir.join("src");
-    fs::create_dir_all(&src_dir)?;
-    fs::write(
-        src_dir.join("index.ts"),
-        format!(
-            "import {{ plugin }} from 'ruvyxa/config'\n\nexport default plugin('{plugin_name}', {{\n  routes: ['/*'],\n  headers: {{\n    'x-{plugin_name}': 'active',\n  }},\n}})\n"
-        ),
-    )?;
-    fs::write(
-        package_dir.join("package.json"),
-        format!(
-            "{{\n  \"name\": \"ruvyxa-plugin-{plugin_name}\",\n  \"version\": \"0.1.0\",\n  \"description\": \"Ruvyxa plugin: {plugin_name}\",\n  \"type\": \"module\",\n  \"files\": [\"dist\", \"README.md\"],\n  \"main\": \"./dist/index.js\",\n  \"types\": \"./dist/index.d.ts\",\n  \"exports\": {{\n    \".\": {{\n      \"types\": \"./dist/index.d.ts\",\n      \"import\": \"./dist/index.js\"\n    }}\n  }},\n  \"scripts\": {{\n    \"build\": \"tsc\",\n    \"prepublishOnly\": \"npm run build\"\n  }},\n  \"peerDependencies\": {{\n    \"ruvyxa\": \"^{version}\"\n  }},\n  \"devDependencies\": {{\n    \"ruvyxa\": \"^{version}\",\n    \"typescript\": \"^5.0.0\"\n  }}\n}}\n",
-            version = env!("CARGO_PKG_VERSION")
-        ),
-    )?;
-    fs::write(
-        package_dir.join("tsconfig.json"),
-        "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"NodeNext\",\n    \"moduleResolution\": \"NodeNext\",\n    \"declaration\": true,\n    \"outDir\": \"dist\",\n    \"strict\": true,\n    \"skipLibCheck\": true\n  },\n  \"include\": [\"src\"]\n}\n",
-    )?;
-    fs::write(
-        package_dir.join("README.md"),
-        format!(
-            "# ruvyxa-plugin-{plugin_name}\n\nA Ruvyxa plugin package. Works with Node.js and Bun.\n\n## Start here\n\n`src/index.ts` uses the simplest plugin form. Change only these two settings first:\n\n1. `routes` — choose where it runs. `['/*']` means every route; `['/api/*']` limits it to API routes.\n2. `headers` — add or change headers that the plugin sends with matching responses.\n\nThe default adds `x-{plugin_name}: active`, so you can verify activation immediately in an HTTP client.\n\n## Examples\n\n### Add a header to API responses\n\n```ts\nexport default plugin('{plugin_name}', {{\n  routes: ['/api/*'],\n  headers: {{\n    'cache-control': 'no-store',\n  }},\n}})\n```\n\n### Protect an API route\n\nUse `onRequest` only when a request needs a decision. Return nothing to continue, or return a `Response` to stop the request.\n\n```ts\nexport default plugin('{plugin_name}', {{\n  routes: ['/api/*'],\n  onRequest(request) {{\n    if (request.headers.has('x-api-key')) return\n    return new Response('Missing API key', {{ status: 401 }})\n  }},\n}})\n```\n\n## Development\n\n```bash\nnpm install   # or: bun install / pnpm install\nnpm run build # or: bun run build / pnpm build\n```\n\n## Use in an app\n\n```bash\nnpm install ruvyxa-plugin-{plugin_name}\n```\n\n```ts\nimport {{ config }} from 'ruvyxa/config'\nimport {plugin_name} from 'ruvyxa-plugin-{plugin_name}'\n\nexport default config({{ plugins: [{plugin_name}] }})\n```\n\nFor dynamic response changes, transforms, virtual modules, or build-complete work, use `onResponse` or `definePlugin({{ name, setup }})`; the Ruvyxa plugin guide shows those advanced hooks.\n\nPublish with `npm publish` (or your package manager's publish command) after building.\n"
-        ),
-    )?;
+    let plugin_identifier = plugin_name.replace('-', "_");
+    for (relative_path, template) in PLUGIN_TEMPLATE_FILES {
+        let destination = package_dir.join(relative_path);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let contents = template
+            .replace("__PLUGIN_NAME__", &plugin_name)
+            .replace("__PLUGIN_IDENTIFIER__", &plugin_identifier)
+            .replace("__RUVYXA_VERSION__", env!("CARGO_PKG_VERSION"));
+        fs::write(destination, contents)?;
+    }
 
     print_tui_header("Plugin");
     print_field("status", ok_text("created"));
@@ -771,6 +786,7 @@ fn scaffold_plugin(args: PluginNewArgs) -> anyhow::Result<()> {
     println!("  {} package.json", dim("├─"));
     println!("  {} README.md", dim("├─"));
     println!("  {} tsconfig.json", dim("├─"));
+    println!("  {} test/plugin.test.mjs", dim("├─"));
     println!("  {} src", dim("└─"));
     println!("     {} {}", dim("└─"), accent("index.ts"));
     println!();
@@ -785,11 +801,7 @@ fn scaffold_plugin(args: PluginNewArgs) -> anyhow::Result<()> {
         dim("2."),
         accent("npm install  (or: bun install)")
     );
-    println!(
-        "  {} {}",
-        dim("3."),
-        accent("npm run build  (or: bun run build)")
-    );
+    println!("  {} {}", dim("3."), accent("npm test  (or: bun test)"));
     println!();
     println!(
         "  {} Plugin {} is ready to develop\n",
@@ -1503,6 +1515,12 @@ async fn build_with_output(args: BuildArgs, show_summary: bool) -> anyhow::Resul
     if show_summary {
         print_build_phase("validated", "ok".to_string(), validation_duration);
     }
+    run_plugin_build_start(
+        &args.root,
+        &out_dir,
+        &config.plugins,
+        config.javascript_runtime(),
+    )?;
     let staging_dir = create_build_staging_dir(&out_dir).with_context(|| {
         format!(
             "failed to create build staging dir in {}",
@@ -2933,6 +2951,7 @@ struct TypeScriptPluginWorker {
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PluginRuntimeOutput {
+    protocol_version: u8,
     ok: bool,
     result: Option<serde_json::Value>,
     code: Option<String>,
@@ -2956,7 +2975,7 @@ impl ruvyxa_bundler::hooks::BuildHooks for TypeScriptPluginBridge {
             "importer": importer.map(|path| path.display().to_string()),
             "environment": plugin_environment(ctx.target)
         });
-        let Some(value) = self.call_runner("resolveId", payload)? else {
+        let Some(value) = self.call_runner("build.resolve", payload)? else {
             return Ok(None);
         };
         let Some(path) = value.as_str() else {
@@ -2975,6 +2994,30 @@ impl ruvyxa_bundler::hooks::BuildHooks for TypeScriptPluginBridge {
         )))
     }
 
+    fn load(
+        &self,
+        id: &Path,
+        ctx: &ruvyxa_bundler::hooks::BuildHookContext,
+    ) -> ruvyxa_bundler::Result<Option<ruvyxa_bundler::hooks::TransformOutput>> {
+        let payload = serde_json::json!({
+            "id": id.display().to_string(),
+            "environment": plugin_environment(ctx.target)
+        });
+        let Some(value) = self.call_runner("build.load", payload)? else {
+            return Ok(None);
+        };
+        let Some(code) = value.get("code").and_then(serde_json::Value::as_str) else {
+            return Ok(None);
+        };
+        Ok(Some(ruvyxa_bundler::hooks::TransformOutput {
+            code: code.to_string(),
+            map: value
+                .get("map")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+        }))
+    }
+
     fn transform(
         &self,
         code: &str,
@@ -2986,7 +3029,7 @@ impl ruvyxa_bundler::hooks::BuildHooks for TypeScriptPluginBridge {
             "id": id.display().to_string(),
             "environment": plugin_environment(ctx.target)
         });
-        let Some(value) = self.call_runner("transform", payload)? else {
+        let Some(value) = self.call_runner("build.transform", payload)? else {
             return Ok(None);
         };
         let Some(code) = value.get("code").and_then(|value| value.as_str()) else {
@@ -3012,6 +3055,8 @@ impl TypeScriptPluginBridge {
         mut payload: serde_json::Value,
     ) -> ruvyxa_bundler::Result<Option<serde_json::Value>> {
         payload["hook"] = serde_json::Value::String(hook.to_string());
+        payload["protocolVersion"] =
+            serde_json::Value::from(ruvyxa_middleware::PLUGIN_PROTOCOL_VERSION);
         let worker_index = self.next_worker.fetch_add(1, Ordering::Relaxed) % self.workers.len();
         let mut worker = self.workers[worker_index].lock().map_err(|_| {
             ruvyxa_bundler::BundleError::Compiler(
@@ -3019,6 +3064,14 @@ impl TypeScriptPluginBridge {
             )
         })?;
         let result = worker.call(&payload)?;
+
+        if result.protocol_version != ruvyxa_middleware::PLUGIN_PROTOCOL_VERSION {
+            return Err(ruvyxa_bundler::BundleError::Compiler(format!(
+                "RUV1701 TypeScript plugin worker returned protocol version {}; expected {}",
+                result.protocol_version,
+                ruvyxa_middleware::PLUGIN_PROTOCOL_VERSION
+            )));
+        }
 
         if result.ok {
             return Ok(result.result);
@@ -3190,13 +3243,21 @@ fn run_plugin_build_complete(
         .map_err(|error| anyhow::anyhow!("failed to start TypeScript plugin runtime: {error}"))?;
     let result = worker
         .call(&serde_json::json!({
-            "hook": "buildComplete",
+            "protocolVersion": ruvyxa_middleware::PLUGIN_PROTOCOL_VERSION,
+            "hook": "build.complete",
             "outDir": out_dir,
             "manifest": manifest,
         }))
         .map_err(|error| {
             anyhow::anyhow!("TypeScript plugin build-complete hook failed: {error}")
         })?;
+    if result.protocol_version != ruvyxa_middleware::PLUGIN_PROTOCOL_VERSION {
+        anyhow::bail!(
+            "RUV1701 TypeScript plugin worker returned protocol version {}; expected {}",
+            result.protocol_version,
+            ruvyxa_middleware::PLUGIN_PROTOCOL_VERSION
+        );
+    }
     if !result.ok {
         anyhow::bail!(
             "{} {}",
@@ -3205,6 +3266,47 @@ fn run_plugin_build_complete(
                 .message
                 .or(result.stack)
                 .unwrap_or_else(|| "TypeScript plugin build-complete hook failed".to_string())
+        );
+    }
+    Ok(())
+}
+
+fn run_plugin_build_start(
+    root: &Path,
+    out_dir: &Path,
+    plugins: &[BuildPluginConfig],
+    runtime: JavaScriptRuntime,
+) -> anyhow::Result<()> {
+    if plugins.is_empty() {
+        return Ok(());
+    }
+    let runner = find_runtime_script(root, "plugin-runtime.mjs")
+        .ok_or_else(|| anyhow::anyhow!("RUV1701 TypeScript plugin runtime not found"))?;
+    let project_root = ruvyxa_diagnostics::normalized_canonical_path(root);
+    let mut worker = TypeScriptPluginWorker::spawn(&runner, &project_root, runtime)
+        .map_err(|error| anyhow::anyhow!("failed to start TypeScript plugin runtime: {error}"))?;
+    let result = worker
+        .call(&serde_json::json!({
+            "protocolVersion": ruvyxa_middleware::PLUGIN_PROTOCOL_VERSION,
+            "hook": "build.start",
+            "outDir": out_dir,
+        }))
+        .map_err(|error| anyhow::anyhow!("TypeScript plugin build-start hook failed: {error}"))?;
+    if result.protocol_version != ruvyxa_middleware::PLUGIN_PROTOCOL_VERSION {
+        anyhow::bail!(
+            "RUV1701 TypeScript plugin worker returned protocol version {}; expected {}",
+            result.protocol_version,
+            ruvyxa_middleware::PLUGIN_PROTOCOL_VERSION
+        );
+    }
+    if !result.ok {
+        anyhow::bail!(
+            "{} {}",
+            result.code.unwrap_or_else(|| "RUV1700".to_string()),
+            result
+                .message
+                .or(result.stack)
+                .unwrap_or_else(|| "TypeScript plugin build-start hook failed".to_string())
         );
     }
     Ok(())
@@ -3699,7 +3801,7 @@ fn build_plugin_manifest(plugins: &[BuildPluginConfig]) -> serde_json::Value {
     serde_json::Value::Array(
         plugins
             .iter()
-            .map(|plugin| serde_json::json!({ "name": plugin.name }))
+            .map(|plugin| serde_json::json!({ "name": plugin.name, "apiVersion": plugin.api_version }))
             .collect(),
     )
 }
@@ -6057,10 +6159,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plugin_new_scaffolds_a_plugin_starter() {
+    fn plugin_create_scaffolds_the_canonical_plugin() {
         let temp = tempfile::tempdir().unwrap();
 
-        scaffold_plugin(PluginNewArgs {
+        scaffold_plugin(PluginCreateArgs {
             name: "request-logger".to_string(),
             root: temp.path().to_path_buf(),
             dir: None,
@@ -6069,30 +6171,35 @@ mod tests {
 
         let plugin_dir = temp.path().join("request-logger");
         let source = fs::read_to_string(plugin_dir.join("src/index.ts")).unwrap();
-        assert!(source.contains("import { plugin }"));
-        assert!(source.contains("plugin('request-logger'"));
-        assert!(source.contains("routes: ['/*']"));
-        assert!(source.contains("headers: {"));
-        assert!(source.contains("'x-request-logger': 'active'"));
+        assert!(source.contains("import { definePlugin } from 'ruvyxa/plugin'"));
+        assert!(source.contains("name: 'request-logger'"));
+        assert!(source.contains("register({ http })"));
+        assert!(source.contains("match: ['/*']"));
+        assert!(source.contains("headers.set('x-request-logger', 'active')"));
         let package: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(plugin_dir.join("package.json")).unwrap())
                 .unwrap();
         assert_eq!(package["name"], "ruvyxa-plugin-request-logger");
-        assert_eq!(package["scripts"]["prepublishOnly"], "npm run build");
+        assert_eq!(package["ruvyxa"]["apiVersion"], 2);
+        assert_eq!(
+            package["peerDependencies"]["ruvyxa"],
+            format!("^{}", env!("CARGO_PKG_VERSION"))
+        );
+        assert_eq!(package["scripts"]["prepublishOnly"], "npm test");
         assert!(plugin_dir.join("tsconfig.json").exists());
+        assert!(plugin_dir.join("test/plugin.test.mjs").exists());
+        assert!(plugin_dir.join(".gitignore").exists());
         let readme = fs::read_to_string(plugin_dir.join("README.md")).unwrap();
-        assert!(readme.contains("npm install ruvyxa-plugin-request-logger"));
+        assert!(readme.contains("ruvyxa-plugin-request-logger"));
         assert!(readme.contains("x-request-logger: active"));
-        assert!(readme.contains("Change only these two settings first"));
-        assert!(readme.contains("Protect an API route"));
         assert!(!temp.path().join("plugins").exists());
     }
 
     #[test]
-    fn plugin_new_scaffolds_into_a_custom_directory() {
+    fn plugin_create_scaffolds_into_a_custom_directory() {
         let temp = tempfile::tempdir().unwrap();
 
-        scaffold_plugin(PluginNewArgs {
+        scaffold_plugin(PluginCreateArgs {
             name: "request-logger".to_string(),
             root: temp.path().to_path_buf(),
             dir: Some(PathBuf::from("tools/my-logger")),
@@ -6109,9 +6216,9 @@ mod tests {
     }
 
     #[test]
-    fn plugin_new_rejects_custom_directory_traversal() {
+    fn plugin_create_rejects_custom_directory_traversal() {
         let temp = tempfile::tempdir().unwrap();
-        let error = scaffold_plugin(PluginNewArgs {
+        let error = scaffold_plugin(PluginCreateArgs {
             name: "request-logger".to_string(),
             root: temp.path().to_path_buf(),
             dir: Some(PathBuf::from("../outside")),
@@ -6123,12 +6230,12 @@ mod tests {
     }
 
     #[test]
-    fn plugin_new_rejects_absolute_custom_directory() {
+    fn plugin_create_rejects_absolute_custom_directory() {
         let root = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let target = outside.path().join("plugin");
 
-        let error = scaffold_plugin(PluginNewArgs {
+        let error = scaffold_plugin(PluginCreateArgs {
             name: "request-logger".to_string(),
             root: root.path().to_path_buf(),
             dir: Some(target.clone()),
@@ -6141,9 +6248,9 @@ mod tests {
     }
 
     #[test]
-    fn plugin_new_rejects_unsafe_names() {
+    fn plugin_create_rejects_unsafe_names() {
         let temp = tempfile::tempdir().unwrap();
-        let error = scaffold_plugin(PluginNewArgs {
+        let error = scaffold_plugin(PluginCreateArgs {
             name: "../escape".to_string(),
             root: temp.path().to_path_buf(),
             dir: None,
@@ -6156,9 +6263,9 @@ mod tests {
     }
 
     #[test]
-    fn plugin_new_rejects_repeated_hyphens() {
+    fn plugin_create_rejects_repeated_hyphens() {
         let temp = tempfile::tempdir().unwrap();
-        let error = scaffold_plugin(PluginNewArgs {
+        let error = scaffold_plugin(PluginCreateArgs {
             name: "request--logger".to_string(),
             root: temp.path().to_path_buf(),
             dir: None,
@@ -6168,6 +6275,29 @@ mod tests {
 
         assert!(error.contains("single hyphens"));
         assert!(!temp.path().join("request--logger").exists());
+    }
+
+    #[test]
+    fn plugin_cli_exposes_only_create_without_a_template_selector() {
+        let cli = Cli::try_parse_from(["ruvyxa", "plugin", "create", "request-logger"])
+            .expect("plugin create should parse");
+        let Command::Plugin(plugin) = cli.command else {
+            panic!("expected plugin command");
+        };
+        assert!(matches!(plugin.command, PluginCommand::Create(_)));
+
+        assert!(Cli::try_parse_from(["ruvyxa", "plugin", "new", "request-logger"]).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "ruvyxa",
+                "plugin",
+                "create",
+                "request-logger",
+                "--template",
+                "http"
+            ])
+            .is_err()
+        );
     }
 
     #[test]
@@ -6623,7 +6753,8 @@ export default {
         let config: ProjectConfig = serde_json::from_value(json!({
             "plugins": [
                 {
-                    "name": "banner"
+                    "name": "banner",
+                    "apiVersion": 2
                 }
             ]
         }))
@@ -6631,10 +6762,12 @@ export default {
 
         assert_eq!(config.plugins.len(), 1);
         assert_eq!(config.plugins[0].name, "banner");
+        assert_eq!(config.plugins[0].api_version, 2);
 
         let manifest = build_plugin_manifest(&config.plugins);
         assert_eq!(manifest[0]["name"], "banner");
-        assert_eq!(manifest[0].as_object().unwrap().len(), 1);
+        assert_eq!(manifest[0]["apiVersion"], 2);
+        assert_eq!(manifest[0].as_object().unwrap().len(), 2);
     }
 
     #[test]
@@ -7026,13 +7159,15 @@ export default {
         std::fs::create_dir_all(&client_dir).unwrap();
         std::fs::write(
             app.join("page.tsx"),
-            "export default function Page() { return <main>Before</main>; }",
+            "import { virtualLabel } from 'virtual:label'; export default function Page() { return <main>{virtualLabel} Before</main>; }",
         )
         .unwrap();
         std::fs::write(
             root.join("ruvyxa.config.ts"),
             r#"
-import { config, definePlugin } from "ruvyxa/config"
+import { config } from "ruvyxa/config"
+import { definePlugin } from "ruvyxa/plugin"
+import path from "node:path"
 
 export default config({
   build: {
@@ -7042,9 +7177,17 @@ export default config({
   },
   plugins: [definePlugin({
     name: "replace-before",
-    setup({ transform }) {
-      transform((code, id, ctx) => {
-        if (ctx.environment !== "client" || !id.endsWith("page.tsx")) return null
+    register({ build }) {
+      build.onResolve(({ id, root }) =>
+        id === "virtual:label" ? path.join(root, "virtual-label.ts") : undefined
+      )
+      build.onLoad(({ id }) =>
+        id.endsWith("virtual-label.ts")
+          ? 'export const virtualLabel = "LoadedByPlugin"'
+          : undefined
+      )
+      build.onTransform(({ code, id, environment }) => {
+        if (environment !== "client" || !id.endsWith("page.tsx")) return null
         return {
           code: code.replace("Before", "After"),
           map: {
@@ -7082,6 +7225,7 @@ export default config({
         let output = std::fs::read_to_string(client_dir.join(route_file)).unwrap();
 
         assert!(output.contains("After"), "{output}");
+        assert!(output.contains("LoadedByPlugin"), "{output}");
         assert!(!output.contains("Before"), "{output}");
         assert_eq!(client_manifest["plugins"][0]["name"], "replace-before");
         let source_map_file = client_manifest["routes"][0]["sourceMap"].as_str().unwrap();
@@ -7125,11 +7269,11 @@ export default { build: { minify: false }, plugins: [plugin] }
             std::fs::write(
                 &plugin_file,
                 format!(
-                    r#"import {{ definePlugin }} from "ruvyxa/config"
+                    r#"import {{ definePlugin }} from "ruvyxa/plugin"
 export const plugin = definePlugin({{
   name: "replace-label",
-  setup({{ transform }}) {{
-    transform((code, id) => {{
+  register({{ build }}) {{
+    build.onTransform(({{ code, id }}) => {{
       if (!id.endsWith("page.tsx")) return null
     return {{ code: code.replace("Before", "{replacement}") }}
     }})
@@ -7195,13 +7339,13 @@ export const plugin = definePlugin({{
         std::fs::write(
             root.join("ruvyxa.config.mjs"),
             r#"
-import { definePlugin } from "ruvyxa/config"
+import { definePlugin } from "ruvyxa/plugin"
 let calls = 0
 export default {
   plugins: [definePlugin({
     name: "counter",
-    setup({ transform }) {
-      transform((code) => {
+    register({ build }) {
+      build.onTransform(({ code }) => {
         calls += 1
         return {
           code: `${code}\nexport const pluginCall = ${calls}`,
@@ -7266,12 +7410,12 @@ export default {
         std::fs::write(
             root.join("ruvyxa.config.mjs"),
             r#"
-import { definePlugin } from "ruvyxa/config"
+import { definePlugin } from "ruvyxa/plugin"
 export default {
   plugins: [definePlugin({
     name: "complete",
-    setup({ onBuildComplete }) {
-      onBuildComplete(async ({ outDir, manifest }) => {
+    register({ build }) {
+      build.onComplete(async ({ outDir, manifest }) => {
         await import("node:fs/promises").then(({ writeFile }) =>
           writeFile(`${outDir}/plugin-complete.json`, JSON.stringify(manifest)))
       })
@@ -7283,6 +7427,7 @@ export default {
         .unwrap();
         let plugins = vec![BuildPluginConfig {
             name: "complete".to_string(),
+            api_version: 2,
         }];
 
         run_plugin_build_complete(

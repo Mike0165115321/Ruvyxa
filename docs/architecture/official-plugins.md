@@ -107,8 +107,8 @@ code imports `createAuthClient` and public session types from `@ruvyxa/auth/clie
 
 ## `@ruvyxa/realtime`
 
-`realtime()` registers exactly one native transport through `enableRealtime()`. The descriptor is
-validated on both the TypeScript and Rust sides. A server action opts in with:
+`realtime()` registers exactly one native transport through `native.claim('realtime@1', options)`.
+The descriptor is validated on both the TypeScript and Rust sides. A server action opts in with:
 
 ```ts
 export const updateTodo = action.realtime('todos').handler(async ({ input }) => {

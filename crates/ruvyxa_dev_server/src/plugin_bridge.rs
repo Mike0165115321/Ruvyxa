@@ -10,7 +10,7 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::response::Response;
 use futures_core::Stream;
 use ruvyxa_diagnostics::{Result, RuvyxaError};
-use ruvyxa_middleware::{MiddlewareRequestResult, PluginHttpRequest, PluginHttpResponse};
+use ruvyxa_middleware::{PluginHttpRequest, PluginHttpRequestResult, PluginHttpResponse};
 
 use crate::AppState;
 
@@ -22,10 +22,10 @@ pub(crate) async fn apply_request_plugins(
         return Ok((None, request));
     };
     match runtime.execute_request(&request).await? {
-        MiddlewareRequestResult::Response { response } => {
+        PluginHttpRequestResult::Response { response } => {
             Ok((Some(plugin_response_into_response(response)?), request))
         }
-        MiddlewareRequestResult::Request { request } => Ok((None, request)),
+        PluginHttpRequestResult::Request { request } => Ok((None, request)),
     }
 }
 
@@ -37,7 +37,7 @@ pub(crate) async fn apply_response_plugins(
     let Some(runtime) = &state.plugin_runtime else {
         return Ok(response);
     };
-    if runtime.descriptor().middleware.response == 0 {
+    if runtime.descriptor().http.response == 0 {
         return Ok(response);
     }
     let limit_bytes = state.config.plugin_response_body_limit_bytes;

@@ -1,6 +1,3 @@
-import { definePlugin } from '@ruvyxa/core/config'
-import type { RuvyxaPlugin } from '@ruvyxa/core/config'
-
 import { DatabaseAdapterError, DATABASE_OPERATION_KINDS } from './adapters.js'
 import type {
   DatabaseAdapter,
@@ -11,39 +8,8 @@ import type {
 } from './types.js'
 
 export * from './adapters.js'
+export * from './plugin.js'
 export type * from './types.js'
-
-export interface DatabasePluginOptions {
-  /** Private environment variables that must exist for production builds. */
-  requiredEnv?: readonly string[]
-}
-
-/** Register build-time database configuration validation with Ruvyxa. */
-export function databasePlugin(options: DatabasePluginOptions = {}): RuvyxaPlugin {
-  const names = [...new Set(options.requiredEnv ?? [])]
-  for (const [index, name] of names.entries()) {
-    if (!/^[A-Z_][A-Z0-9_]*$/.test(name)) {
-      throw new TypeError(`databasePlugin() requiredEnv[${index}] is not a valid variable name`)
-    }
-    if (name.startsWith('RUVYXA_PUBLIC_')) {
-      throw new TypeError(`databasePlugin() refuses public database variable ${name}`)
-    }
-  }
-  return definePlugin({
-    name: 'ruvyxa:database',
-    setup({ onBuildComplete }) {
-      onBuildComplete(() => {
-        const missing = names.filter((name) => !process.env[name]?.trim())
-        if (missing.length > 0) {
-          throw new DatabaseAdapterError(
-            'RUV3001',
-            `missing private database environment variables: ${missing.join(', ')}`,
-          )
-        }
-      })
-    },
-  })
-}
 
 /** Create a typed database facade over one production adapter. */
 export function createDatabase<TSchema extends { [TKey in keyof TSchema]: DatabaseRecord }>(

@@ -65,6 +65,10 @@
       "types": "./types/config.d.ts",
       "default": "./dist/config.js"
     },
+    "./plugin": {
+      "types": "./types/plugin.d.ts",
+      "default": "./dist/plugin.js"
+    },
     "./plugins": {
       "types": "./types/plugins.d.ts",
       "default": "./dist/plugins.js"

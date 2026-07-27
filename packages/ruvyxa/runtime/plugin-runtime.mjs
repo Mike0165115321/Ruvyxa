@@ -11,16 +11,15 @@ import {
   toImportPath,
 } from './compiler.mjs'
 
+const PROTOCOL_VERSION = 2
 const [projectRootArg, mode] = process.argv.slice(2)
 
 if (!projectRootArg || !mode) {
-  writeResponse(
-    failure('RUV1701', 'Plugin runtime requires project root and hook or mode arguments.'),
-  )
+  writeResponse(failure('RUV1701', 'Plugin runtime requires project root and mode arguments.'))
   process.exit(1)
 }
 
-// Stdout is the NDJSON protocol. Application-style plugin logging belongs on stderr.
+// Stdout is reserved for the versioned NDJSON protocol.
 console.log = console.info = console.debug = (...args) => console.error(...args)
 
 const projectRoot = path.resolve(projectRootArg)
@@ -28,20 +27,17 @@ const runtimeDir = path.dirname(fileURLToPath(import.meta.url))
 
 try {
   const registry = await loadRegistry(projectRoot)
-
   if (mode === '--persistent') {
     await runPersistent(registry)
   } else {
     const payload = JSON.parse(readFileSync(0, 'utf8'))
+    assertProtocol(payload)
     const response = await handleHook(registry, mode, payload)
     writeResponse(response)
     if (!response.ok) process.exitCode = 1
   }
 } catch (error) {
-  writeResponse(
-    failure('RUV1700', error instanceof Error ? error.message : String(error), error?.stack),
-    mode === '--persistent',
-  )
+  writeResponse(failureFromError(error), mode === '--persistent')
   process.exitCode = 1
 }
 
@@ -55,7 +51,7 @@ async function loadRegistry(root) {
     '.ruvyxa',
     'cache',
     'config',
-    cacheFileName([moduleCode, configFile, 'plugin-runtime'], 'mjs'),
+    cacheFileName([moduleCode, configFile, 'plugin-runtime-v2'], 'mjs'),
   )
   await compileBundle({
     projectRoot: root,
@@ -68,8 +64,7 @@ async function loadRegistry(root) {
   })
 
   const mod = await import(pathToFileURL(outfile).href + `?t=${Date.now()}`)
-  const config = mod.default ?? {}
-  return createRegistry(root, config.plugins)
+  return createRegistry(root, (mod.default ?? {}).plugins)
 }
 
 function findConfig(root) {
@@ -88,77 +83,250 @@ function findConfig(root) {
 async function createRegistry(root, pluginsValue) {
   const plugins = Array.isArray(pluginsValue) ? pluginsValue : []
   const names = new Set()
+  const routeOwners = new Map()
   const registry = {
     root,
     plugins: [],
-    middleware: [],
-    resolveId: [],
-    transform: [],
+    httpRequest: [],
+    httpResponse: [],
+    buildStart: [],
+    buildResolve: [],
+    buildLoad: [],
+    buildTransform: [],
     buildComplete: [],
-    realtime: null,
+    devFileChange: [],
+    diagnostics: [],
+    capabilities: new Map(),
   }
 
   for (const [index, plugin] of plugins.entries()) {
-    if (!plugin || typeof plugin !== 'object') {
-      throw new TypeError(`config.plugins[${index}] must be an object`)
+    if (!plugin || typeof plugin !== 'object' || Array.isArray(plugin)) {
+      throw new TypeError(`config.plugins[${index}] must be a plugin object`)
     }
     const name = typeof plugin.name === 'string' ? plugin.name.trim() : ''
     if (!name) throw new TypeError(`config.plugins[${index}] must have a non-empty name`)
     if (names.has(name)) throw new TypeError(`duplicate plugin name: ${name}`)
-    if (typeof plugin.setup !== 'function') {
-      throw new TypeError(`plugin "${name}" must provide setup(context)`)
+    if (plugin.apiVersion !== PROTOCOL_VERSION) {
+      throw new TypeError(
+        `plugin "${name}" uses unsupported apiVersion ${String(plugin.apiVersion)}; expected ${PROTOCOL_VERSION}`,
+      )
+    }
+    if (typeof plugin.register !== 'function') {
+      throw new TypeError(`plugin "${name}" must provide register(api)`)
     }
     names.add(name)
     registry.plugins.push(name)
-
-    const setupContext = Object.freeze({
-      addMiddleware(value) {
-        registry.middleware.push(normalizeMiddleware(name, value))
-      },
-      resolveId(hook) {
-        assertHook(name, 'resolveId', hook)
-        registry.resolveId.push({ plugin: name, hook })
-      },
-      transform(hook) {
-        assertHook(name, 'transform', hook)
-        registry.transform.push({ plugin: name, hook })
-      },
-      onBuildComplete(hook) {
-        assertHook(name, 'onBuildComplete', hook)
-        registry.buildComplete.push({ plugin: name, hook })
-      },
-      enableRealtime(options = {}) {
-        if (registry.realtime) {
-          throw new TypeError(
-            `plugin "${name}" cannot enable realtime because plugin "${registry.realtime.plugin}" already owns the transport`,
-          )
-        }
-        registry.realtime = normalizeRealtime(name, options)
-      },
-    })
-    await plugin.setup(setupContext)
+    await plugin.register(createRegistrationApi(registry, name, routeOwners))
   }
 
+  const errors = registry.diagnostics.filter((diagnostic) => diagnostic.level === 'error')
+  if (errors.length > 0) {
+    throw new TypeError(
+      errors.map((diagnostic) => `${diagnostic.code} ${diagnostic.message}`).join('\n'),
+    )
+  }
   return registry
+}
+
+function createRegistrationApi(registry, plugin, routeOwners) {
+  const api = {
+    http: Object.freeze({
+      onRequest(value) {
+        const registration = normalizeHttpHook(plugin, 'onRequest', value)
+        registry.httpRequest.push({ plugin, kind: 'hook', ...registration })
+      },
+      onResponse(value) {
+        registry.httpResponse.push({
+          plugin,
+          ...normalizeHttpHook(plugin, 'onResponse', value),
+        })
+      },
+      route(value) {
+        const route = normalizeHttpRoute(plugin, value)
+        for (const method of route.methods) {
+          const key = `${method} ${route.path}`
+          const wildcardKey = `* ${route.path}`
+          const conflict = routeOwners.get(key) ?? routeOwners.get(wildcardKey)
+          if (conflict) {
+            throw new TypeError(
+              `plugin "${plugin}" route ${key} conflicts with plugin "${conflict}"`,
+            )
+          }
+          if (method === '*') {
+            const pathConflict = [...routeOwners.entries()].find(([candidate]) =>
+              candidate.endsWith(` ${route.path}`),
+            )
+            if (pathConflict) {
+              throw new TypeError(
+                `plugin "${plugin}" route ${key} conflicts with plugin "${pathConflict[1]}"`,
+              )
+            }
+          }
+          routeOwners.set(key, plugin)
+        }
+        registry.httpRequest.push({ plugin, kind: 'route', ...route })
+      },
+    }),
+    build: Object.freeze({
+      onStart(hook) {
+        registerHook(registry.buildStart, plugin, 'build.onStart', hook)
+      },
+      onResolve(hook) {
+        registerHook(registry.buildResolve, plugin, 'build.onResolve', hook)
+      },
+      onLoad(hook) {
+        registerHook(registry.buildLoad, plugin, 'build.onLoad', hook)
+      },
+      onTransform(hook) {
+        registerHook(registry.buildTransform, plugin, 'build.onTransform', hook)
+      },
+      onComplete(hook) {
+        registerHook(registry.buildComplete, plugin, 'build.onComplete', hook)
+      },
+    }),
+    dev: Object.freeze({
+      onFileChange(value) {
+        const registration = normalizeDevFileChange(plugin, value)
+        registry.devFileChange.push({ plugin, ...registration })
+      },
+    }),
+    diagnostics: Object.freeze({
+      report(value) {
+        registry.diagnostics.push(normalizeDiagnostic(plugin, value))
+      },
+    }),
+    native: Object.freeze({
+      claim(capability, options = {}) {
+        if (capability !== 'realtime@1') {
+          throw new TypeError(
+            `plugin "${plugin}" requested unsupported native capability "${String(capability)}"`,
+          )
+        }
+        const owner = registry.capabilities.get(capability)
+        if (owner) {
+          throw new TypeError(
+            `plugin "${plugin}" cannot claim ${capability}; it is already owned by plugin "${owner.plugin}"`,
+          )
+        }
+        registry.capabilities.set(capability, normalizeRealtime(plugin, options))
+      },
+    }),
+  }
+  return Object.freeze(api)
+}
+
+function registerHook(collection, plugin, socket, hook) {
+  if (typeof hook !== 'function') {
+    throw new TypeError(`plugin "${plugin}" ${socket}() expects a function`)
+  }
+  collection.push({ plugin, hook })
+}
+
+function normalizeHttpHook(plugin, socket, value) {
+  const registration = typeof value === 'function' ? { handler: value } : value
+  if (!registration || typeof registration !== 'object' || Array.isArray(registration)) {
+    throw new TypeError(`plugin "${plugin}" http.${socket}() expects a handler or options object`)
+  }
+  if (typeof registration.handler !== 'function') {
+    throw new TypeError(`plugin "${plugin}" http.${socket}() requires handler`)
+  }
+  return {
+    match: normalizePatterns(plugin, `http.${socket}().match`, registration.match),
+    handler: registration.handler,
+  }
+}
+
+function normalizeHttpRoute(plugin, value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError(`plugin "${plugin}" http.route() expects an options object`)
+  }
+  if (typeof value.path !== 'string' || !isExactApplicationPath(value.path)) {
+    throw new TypeError(`plugin "${plugin}" http.route().path must be an exact absolute path`)
+  }
+  if (typeof value.handler !== 'function') {
+    throw new TypeError(`plugin "${plugin}" http.route() requires handler`)
+  }
+  const input =
+    value.method === undefined ? ['*'] : Array.isArray(value.method) ? value.method : [value.method]
+  if (input.length === 0 || input.some((method) => typeof method !== 'string' || !method.trim())) {
+    throw new TypeError(`plugin "${plugin}" http.route().method must contain HTTP method names`)
+  }
+  return {
+    path: value.path,
+    methods: [...new Set(input.map((method) => method.trim().toUpperCase()))],
+    handler: value.handler,
+  }
+}
+
+function normalizeDevFileChange(plugin, value) {
+  const registration = typeof value === 'function' ? { handler: value } : value
+  if (!registration || typeof registration !== 'object' || Array.isArray(registration)) {
+    throw new TypeError(`plugin "${plugin}" dev.onFileChange() expects a handler or options object`)
+  }
+  if (typeof registration.handler !== 'function') {
+    throw new TypeError(`plugin "${plugin}" dev.onFileChange() requires handler`)
+  }
+  return {
+    match: normalizePatterns(plugin, 'dev.onFileChange().match', registration.match, false),
+    handler: registration.handler,
+  }
+}
+
+function normalizePatterns(plugin, field, value, requireSlash = true) {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || value.some((pattern) => typeof pattern !== 'string')) {
+    throw new TypeError(`plugin "${plugin}" ${field} must be an array of strings`)
+  }
+  for (const [index, pattern] of value.entries()) {
+    const wildcard = pattern.indexOf('*')
+    const validStart = !requireSlash || pattern === '*' || pattern.startsWith('/')
+    const validWildcard =
+      wildcard === -1 || (wildcard === pattern.length - 1 && wildcard === pattern.lastIndexOf('*'))
+    if (!pattern || !validStart || !validWildcard) {
+      throw new TypeError(
+        `plugin "${plugin}" ${field}[${index}] must ${requireSlash ? 'start with "/" and ' : ''}use a wildcard only at the end`,
+      )
+    }
+  }
+  return [...value]
+}
+
+function isExactApplicationPath(value) {
+  return (
+    value.startsWith('/') && !value.includes('?') && !value.includes('#') && !value.includes('*')
+  )
+}
+
+function normalizeDiagnostic(plugin, value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError(`plugin "${plugin}" diagnostics.report() expects an object`)
+  }
+  if (!['info', 'warning', 'error'].includes(value.level)) {
+    throw new TypeError(`plugin "${plugin}" diagnostic level must be info, warning, or error`)
+  }
+  if (typeof value.code !== 'string' || !/^[A-Z][A-Z0-9_-]{2,31}$/.test(value.code)) {
+    throw new TypeError(`plugin "${plugin}" diagnostic code must be an uppercase identifier`)
+  }
+  if (typeof value.message !== 'string' || !value.message.trim()) {
+    throw new TypeError(`plugin "${plugin}" diagnostic message must be non-empty`)
+  }
+  return Object.freeze({
+    plugin,
+    level: value.level,
+    code: value.code,
+    message: value.message.trim(),
+  })
 }
 
 function normalizeRealtime(plugin, value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new TypeError(`plugin "${plugin}" enableRealtime() expects an options object`)
+    throw new TypeError(`plugin "${plugin}" native.claim('realtime@1') expects an options object`)
   }
   const pathValue = value.path ?? '/__ruvyxa/realtime'
   const heartbeatMs = value.heartbeatMs ?? 25_000
   const capacity = value.capacity ?? 256
-  if (
-    typeof pathValue !== 'string' ||
-    !pathValue.startsWith('/') ||
-    pathValue.includes('?') ||
-    pathValue.includes('#') ||
-    pathValue.includes('*')
-  ) {
-    throw new TypeError(
-      `plugin "${plugin}" realtime path must be an absolute path without query, fragment, or wildcard`,
-    )
+  if (!isExactApplicationPath(pathValue)) {
+    throw new TypeError(`plugin "${plugin}" realtime path must be an exact absolute path`)
   }
   if (!Number.isInteger(heartbeatMs) || heartbeatMs < 5_000 || heartbeatMs > 120_000) {
     throw new TypeError(`plugin "${plugin}" realtime heartbeatMs must be between 5000 and 120000`)
@@ -172,48 +340,7 @@ function normalizeRealtime(plugin, value) {
       `plugin "${plugin}" realtime path "${pathValue}" collides with a reserved framework route`,
     )
   }
-  return Object.freeze({ plugin, path: pathValue, heartbeatMs, capacity })
-}
-
-function normalizeMiddleware(plugin, value) {
-  const middleware = typeof value === 'function' ? { onRequest: value } : value
-  if (!middleware || typeof middleware !== 'object') {
-    throw new TypeError(
-      `plugin "${plugin}" addMiddleware() expects a function or middleware object`,
-    )
-  }
-  const onRequest = middleware.onRequest
-  const onResponse = middleware.onResponse
-  if (typeof onRequest !== 'function' && typeof onResponse !== 'function') {
-    throw new TypeError(`plugin "${plugin}" middleware must provide onRequest and/or onResponse`)
-  }
-  const routes = middleware.routes
-  if (
-    routes !== undefined &&
-    (!Array.isArray(routes) || routes.some((route) => typeof route !== 'string'))
-  ) {
-    throw new TypeError(`plugin "${plugin}" middleware routes must be an array of strings`)
-  }
-  if (routes) {
-    for (const [index, route] of routes.entries()) {
-      const wildcard = route.indexOf('*')
-      const validStart = route === '*' || route.startsWith('/')
-      const validWildcard =
-        wildcard === -1 || (wildcard === route.length - 1 && wildcard === route.lastIndexOf('*'))
-      if (!validStart || !validWildcard) {
-        throw new TypeError(
-          `plugin "${plugin}" middleware routes[${index}] must start with "/" or equal "*", with a wildcard only at the end`,
-        )
-      }
-    }
-  }
-  return { plugin, routes, onRequest, onResponse }
-}
-
-function assertHook(plugin, name, hook) {
-  if (typeof hook !== 'function') {
-    throw new TypeError(`plugin "${plugin}" ${name}() expects a function`)
-  }
+  return Object.freeze({ id: 'realtime@1', plugin, path: pathValue, heartbeatMs, capacity })
 }
 
 async function runPersistent(registry) {
@@ -223,132 +350,145 @@ async function runPersistent(registry) {
     let response
     try {
       const payload = JSON.parse(line)
+      assertProtocol(payload)
       response = await handleHook(registry, payload.hook, payload)
     } catch (error) {
-      response = failure(
-        'RUV1700',
-        error instanceof Error ? error.message : String(error),
-        error?.stack,
-      )
+      response = failureFromError(error)
     }
     writeResponse(response, true)
+  }
+}
+
+function assertProtocol(payload) {
+  if (payload?.protocolVersion !== PROTOCOL_VERSION) {
+    const error = new TypeError(
+      `RUV1701 plugin protocol version mismatch: received ${String(payload?.protocolVersion)}, expected ${PROTOCOL_VERSION}`,
+    )
+    error.pluginCode = 'RUV1701'
+    throw error
   }
 }
 
 async function handleHook(registry, hook, payload) {
   switch (hook) {
     case 'describe':
-      return success({
-        plugins: registry.plugins,
-        middleware: {
-          request: registry.middleware.filter((entry) => entry.onRequest).length,
-          response: registry.middleware.filter((entry) => entry.onResponse).length,
-          requestRoutes: middlewareRouteUnion(registry.middleware, 'onRequest'),
-          responseRoutes: middlewareRouteUnion(registry.middleware, 'onResponse'),
-        },
-        resolveId: registry.resolveId.length,
-        transform: registry.transform.length,
-        buildComplete: registry.buildComplete.length,
-        realtime: registry.realtime,
-      })
-    case 'resolveId':
-      return success(await runResolveId(registry, payload))
-    case 'transform':
-      return success(await runTransform(registry, payload))
-    case 'middlewareRequest':
-      return success(await runRequestMiddleware(registry, payload))
-    case 'middlewareResponse':
-      return success(await runResponseMiddleware(registry, payload))
-    case 'buildComplete':
+      return success(describeRegistry(registry))
+    case 'http.request':
+      return success(await runHttpRequest(registry, payload))
+    case 'http.response':
+      return success(await runHttpResponse(registry, payload))
+    case 'build.start':
+      await runBuildStart(registry, payload)
+      return success(null)
+    case 'build.resolve':
+      return success(await runBuildResolve(registry, payload))
+    case 'build.load':
+      return success(await runBuildLoad(registry, payload))
+    case 'build.transform':
+      return success(await runBuildTransform(registry, payload))
+    case 'build.complete':
       await runBuildComplete(registry, payload)
+      return success(null)
+    case 'dev.fileChange':
+      await runDevFileChange(registry, payload)
       return success(null)
     default:
       return failure('RUV1701', `Unknown plugin hook: ${hook}`)
   }
 }
 
-async function runResolveId(registry, payload) {
-  const context = transformContext(registry, payload)
-  for (const entry of registry.resolveId) {
-    const result = await entry.hook(payload.id, payload.importer ?? undefined, context)
+function describeRegistry(registry) {
+  return {
+    protocolVersion: PROTOCOL_VERSION,
+    plugins: registry.plugins,
+    http: {
+      request: registry.httpRequest.length,
+      response: registry.httpResponse.length,
+      routes: registry.httpRequest.filter((entry) => entry.kind === 'route').length,
+      requestMatch: patternUnion(registry.httpRequest),
+      responseMatch: patternUnion(registry.httpResponse),
+    },
+    build: {
+      start: registry.buildStart.length,
+      resolve: registry.buildResolve.length,
+      load: registry.buildLoad.length,
+      transform: registry.buildTransform.length,
+      complete: registry.buildComplete.length,
+    },
+    dev: { fileChange: registry.devFileChange.length },
+    diagnostics: registry.diagnostics,
+    capabilities: [...registry.capabilities.values()],
+  }
+}
+
+async function runBuildResolve(registry, payload) {
+  const base = buildContext(registry, payload)
+  const context = Object.freeze({
+    ...base,
+    id: String(payload.id ?? ''),
+    importer: payload.importer ?? undefined,
+  })
+  for (const entry of registry.buildResolve) {
+    const result = await entry.hook(context)
     if (typeof result === 'string') return result
+    if (result !== null && result !== undefined)
+      throw unsupportedReturn(entry.plugin, 'build.onResolve')
   }
   return null
 }
 
-async function runTransform(registry, payload) {
+async function runBuildLoad(registry, payload) {
+  const context = Object.freeze({
+    ...buildContext(registry, payload),
+    id: String(payload.id ?? ''),
+  })
+  for (const entry of registry.buildLoad) {
+    const result = await entry.hook(context)
+    const normalized = normalizeCodeResult(entry.plugin, 'build.onLoad', result)
+    if (normalized) return normalized
+  }
+  return null
+}
+
+async function runBuildTransform(registry, payload) {
   let code = String(payload.code ?? '')
   let map
   let changed = false
-  const context = transformContext(registry, payload)
-
-  for (const entry of registry.transform) {
-    const result = await entry.hook(code, String(payload.id ?? ''), context)
-    if (typeof result === 'string') {
-      code = result
-      changed = true
-    } else if (result && typeof result === 'object' && typeof result.code === 'string') {
-      code = result.code
-      if (result.map !== undefined && result.map !== null) {
-        map = typeof result.map === 'string' ? result.map : JSON.stringify(result.map)
-      }
-      changed = true
-    }
+  const base = buildContext(registry, payload)
+  for (const entry of registry.buildTransform) {
+    const context = Object.freeze({ ...base, code, id: String(payload.id ?? '') })
+    const result = normalizeCodeResult(entry.plugin, 'build.onTransform', await entry.hook(context))
+    if (!result) continue
+    code = result.code
+    if (result.map !== undefined) map = result.map
+    changed = true
   }
   return changed ? { code, ...(map === undefined ? {} : { map }) } : null
 }
 
-function transformContext(registry, payload) {
-  return Object.freeze({
-    root: registry.root,
-    environment: payload.environment === 'server' ? 'server' : 'client',
-  })
-}
-
-async function runRequestMiddleware(registry, payload) {
-  let request = requestFromPayload(payload.request)
-  for (const middleware of registry.middleware) {
-    if (!middleware.onRequest || !matchesRoutes(middleware.routes, new URL(request.url).pathname)) {
-      continue
-    }
-    const context = middlewareContext(registry, middleware)
-    const result = await middleware.onRequest(request.clone(), context)
-    if (result instanceof Response) {
-      return { kind: 'response', response: await responseToPayload(result) }
-    }
-    if (result instanceof Request) request = result
-    else if (result !== undefined) {
-      throw new TypeError(
-        `plugin "${middleware.plugin}" request middleware returned an unsupported value`,
-      )
+function normalizeCodeResult(plugin, socket, result) {
+  if (result === null || result === undefined) return null
+  if (typeof result === 'string') return { code: result }
+  if (result && typeof result === 'object' && typeof result.code === 'string') {
+    return {
+      code: result.code,
+      ...(result.map === undefined || result.map === null
+        ? {}
+        : { map: typeof result.map === 'string' ? result.map : JSON.stringify(result.map) }),
     }
   }
-  return { kind: 'request', request: await requestToPayload(request) }
+  throw unsupportedReturn(plugin, socket)
 }
 
-async function runResponseMiddleware(registry, payload) {
-  const request = requestFromPayload(payload.request)
-  let response = responseFromPayload(payload.response)
-  for (const middleware of registry.middleware) {
-    if (
-      !middleware.onResponse ||
-      !matchesRoutes(middleware.routes, new URL(request.url).pathname)
-    ) {
-      continue
-    }
-    const result = await middleware.onResponse(
-      request.clone(),
-      response.clone(),
-      middlewareContext(registry, middleware),
-    )
-    if (result instanceof Response) response = result
-    else if (result !== undefined) {
-      throw new TypeError(
-        `plugin "${middleware.plugin}" response middleware returned an unsupported value`,
-      )
-    }
-  }
-  return { response: await responseToPayload(response) }
+function buildContext(registry, payload) {
+  const allowed = new Set(['client', 'server', 'edge', 'worker', 'shared'])
+  const environment = allowed.has(payload.environment) ? payload.environment : 'client'
+  return { root: registry.root, environment }
+}
+
+async function runBuildStart(registry, payload) {
+  const context = Object.freeze({ root: registry.root, outDir: path.resolve(payload.outDir) })
+  for (const entry of registry.buildStart) await entry.hook(context)
 }
 
 async function runBuildComplete(registry, payload) {
@@ -360,31 +500,105 @@ async function runBuildComplete(registry, payload) {
   for (const entry of registry.buildComplete) await entry.hook(context)
 }
 
-function middlewareContext(registry, middleware) {
-  return Object.freeze({ plugin: middleware.plugin, root: registry.root })
+async function runHttpRequest(registry, payload) {
+  let request = requestFromPayload(payload.request)
+  for (const entry of registry.httpRequest) {
+    const pathname = new URL(request.url).pathname
+    if (entry.kind === 'route') {
+      if (
+        entry.path !== pathname ||
+        (!entry.methods.includes('*') && !entry.methods.includes(request.method))
+      )
+        continue
+      const result = await entry.handler(
+        Object.freeze({ plugin: entry.plugin, root: registry.root, request: request.clone() }),
+      )
+      if (!(result instanceof Response)) throw unsupportedReturn(entry.plugin, 'http.route')
+      return { kind: 'response', response: await responseToPayload(result) }
+    }
+    if (!matchesPatterns(entry.match, pathname)) continue
+    let continued = request
+    const context = Object.freeze({
+      plugin: entry.plugin,
+      root: registry.root,
+      request: request.clone(),
+      next(value = request) {
+        if (!(value instanceof Request))
+          throw new TypeError(`plugin "${entry.plugin}" http.onRequest().next() expects a Request`)
+        continued = value
+      },
+    })
+    const result = await entry.handler(context)
+    if (result instanceof Response)
+      return { kind: 'response', response: await responseToPayload(result) }
+    if (result instanceof Request) request = result
+    else if (result === undefined) request = continued
+    else throw unsupportedReturn(entry.plugin, 'http.onRequest')
+  }
+  return { kind: 'request', request: await requestToPayload(request) }
 }
 
-/**
- * Union of route patterns for one middleware direction, used by the native
- * server to skip the plugin round-trip for paths no middleware can match.
- * `null` means at least one middleware matches every route.
- */
-function middlewareRouteUnion(middleware, hookName) {
+async function runHttpResponse(registry, payload) {
+  const request = requestFromPayload(payload.request)
+  let response = responseFromPayload(payload.response)
+  for (const entry of registry.httpResponse) {
+    if (!matchesPatterns(entry.match, new URL(request.url).pathname)) continue
+    let continued = response
+    const context = Object.freeze({
+      plugin: entry.plugin,
+      root: registry.root,
+      request: request.clone(),
+      response: response.clone(),
+      next(value = response) {
+        if (!(value instanceof Response))
+          throw new TypeError(
+            `plugin "${entry.plugin}" http.onResponse().next() expects a Response`,
+          )
+        continued = value
+      },
+    })
+    const result = await entry.handler(context)
+    if (result instanceof Response) response = result
+    else if (result === undefined) response = continued
+    else throw unsupportedReturn(entry.plugin, 'http.onResponse')
+  }
+  return { response: await responseToPayload(response) }
+}
+
+async function runDevFileChange(registry, payload) {
+  const paths = Array.isArray(payload.paths) ? payload.paths.map(String) : []
+  for (const entry of registry.devFileChange) {
+    const selected = entry.match
+      ? paths.filter((value) => matchesPatterns(entry.match, value))
+      : paths
+    if (selected.length === 0) continue
+    await entry.handler(Object.freeze({ root: registry.root, paths: Object.freeze(selected) }))
+  }
+}
+
+function unsupportedReturn(plugin, socket) {
+  return new TypeError(`plugin "${plugin}" ${socket} returned an unsupported value`)
+}
+
+function patternUnion(entries) {
   const patterns = new Set()
-  for (const entry of middleware) {
-    if (typeof entry[hookName] !== 'function') continue
-    if (!entry.routes || entry.routes.length === 0 || entry.routes.includes('*')) return null
-    for (const route of entry.routes) patterns.add(route)
+  for (const entry of entries) {
+    if (entry.kind === 'route') {
+      patterns.add(entry.path)
+      continue
+    }
+    if (!entry.match || entry.match.length === 0 || entry.match.includes('*')) return null
+    for (const pattern of entry.match) patterns.add(pattern)
   }
   return [...patterns]
 }
 
-function matchesRoutes(routes, pathname) {
-  if (!routes || routes.length === 0) return true
-  return routes.some((route) => {
-    if (route === '*') return true
-    if (route.endsWith('*')) return pathname.startsWith(route.slice(0, -1))
-    return pathname === route
+function matchesPatterns(patterns, value) {
+  if (!patterns || patterns.length === 0) return true
+  return patterns.some((pattern) => {
+    if (pattern === '*') return true
+    if (pattern.endsWith('*')) return value.startsWith(pattern.slice(0, -1))
+    return value === pattern
   })
 }
 
@@ -451,11 +665,19 @@ async function encodeBody(message) {
 }
 
 function success(result) {
-  return { ok: true, result }
+  return { protocolVersion: PROTOCOL_VERSION, ok: true, result }
 }
 
 function failure(code, message, stack) {
-  return { ok: false, code, message, stack }
+  return { protocolVersion: PROTOCOL_VERSION, ok: false, code, message, stack }
+}
+
+function failureFromError(error) {
+  return failure(
+    error?.pluginCode === 'RUV1701' ? 'RUV1701' : 'RUV1700',
+    error instanceof Error ? error.message : String(error),
+    error?.stack,
+  )
 }
 
 function writeResponse(response, newline = false) {

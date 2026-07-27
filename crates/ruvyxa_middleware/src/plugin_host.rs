@@ -14,6 +14,9 @@ use ruvyxa_diagnostics::{Result, RuvyxaError};
 
 use crate::config::DEFAULT_PLUGIN_HOOK_TIMEOUT_MS;
 
+/// Wire/API version shared by the Rust hosts and the Node/Bun registry.
+pub const PLUGIN_PROTOCOL_VERSION: u8 = 2;
+
 /// HTTP request representation transported losslessly over the plugin protocol.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -38,24 +41,9 @@ pub struct PluginHttpResponse {
 /// Request-middleware continuation returned by the TypeScript registry.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "lowercase")]
-pub enum MiddlewareRequestResult {
+pub enum PluginHttpRequestResult {
     Request { request: PluginHttpRequest },
     Response { response: PluginHttpResponse },
-}
-
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct MiddlewareHookCounts {
-    pub request: usize,
-    pub response: usize,
-    /// Union of request-middleware route patterns. `None` means every path can
-    /// match, either because a middleware declared no routes or because the
-    /// runtime predates route reporting.
-    #[serde(default)]
-    pub request_routes: Option<Vec<String>>,
-    /// Union of response-middleware route patterns with the same semantics.
-    #[serde(default)]
-    pub response_routes: Option<Vec<String>>,
 }
 
 /// Mirror of the TypeScript registry's route matching: `*` matches everything,
@@ -75,22 +63,74 @@ fn matches_route_patterns(patterns: Option<&[String]>, pathname: &str) -> bool {
     })
 }
 
-/// Hook counts reported after the TypeScript registry has completed setup.
+/// HTTP socket registrations reported after every plugin has registered.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct PluginRegistryDescriptor {
-    pub plugins: Vec<String>,
-    pub middleware: MiddlewareHookCounts,
-    pub resolve_id: usize,
-    pub transform: usize,
-    pub build_complete: usize,
+pub struct PluginHttpDescriptor {
+    pub request: usize,
+    pub response: usize,
+    pub routes: usize,
     #[serde(default)]
-    pub realtime: Option<RealtimeDescriptor>,
+    pub request_match: Option<Vec<String>>,
+    #[serde(default)]
+    pub response_match: Option<Vec<String>>,
 }
 
-/// Native realtime registration reported by the TypeScript plugin registry.
+/// Build socket registrations reported by the TypeScript registry.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginBuildDescriptor {
+    pub start: usize,
+    pub resolve: usize,
+    pub load: usize,
+    pub transform: usize,
+    pub complete: usize,
+}
+
+/// Development socket registrations reported by the TypeScript registry.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginDevDescriptor {
+    pub file_change: usize,
+}
+
+/// Registration-time diagnostic emitted by a plugin.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct PluginDiagnosticDescriptor {
+    pub plugin: String,
+    pub level: String,
+    pub code: String,
+    pub message: String,
+}
+
+/// Framework-owned native capabilities. Unknown IDs fail deserialization.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(tag = "id")]
+pub enum NativeCapabilityDescriptor {
+    #[serde(rename = "realtime@1", rename_all = "camelCase")]
+    Realtime {
+        plugin: String,
+        path: String,
+        heartbeat_ms: u64,
+        capacity: usize,
+    },
+}
+
+/// Descriptor for the sole versioned plugin registry contract.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct PluginRegistryDescriptor {
+    pub protocol_version: u8,
+    pub plugins: Vec<String>,
+    pub http: PluginHttpDescriptor,
+    pub build: PluginBuildDescriptor,
+    pub dev: PluginDevDescriptor,
+    pub diagnostics: Vec<PluginDiagnosticDescriptor>,
+    pub capabilities: Vec<NativeCapabilityDescriptor>,
+}
+
+/// Native realtime registration exposed to the development server.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RealtimeDescriptor {
     pub plugin: String,
     pub path: String,
@@ -98,8 +138,30 @@ pub struct RealtimeDescriptor {
     pub capacity: usize,
 }
 
+impl PluginRegistryDescriptor {
+    pub fn realtime(&self) -> Option<RealtimeDescriptor> {
+        self.capabilities
+            .first()
+            .map(|capability| match capability {
+                NativeCapabilityDescriptor::Realtime {
+                    plugin,
+                    path,
+                    heartbeat_ms,
+                    capacity,
+                } => RealtimeDescriptor {
+                    plugin: plugin.clone(),
+                    path: path.clone(),
+                    heartbeat_ms: *heartbeat_ms,
+                    capacity: *capacity,
+                },
+            })
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct RuntimeOutput {
+    #[serde(rename = "protocolVersion")]
+    protocol_version: u8,
     ok: bool,
     result: Option<serde_json::Value>,
     code: Option<String>,
@@ -184,12 +246,28 @@ impl PluginHost {
                     "RUV1701 TypeScript plugin host returned an invalid registry descriptor: {error}"
                 ))
             })?;
+        if descriptor.protocol_version != PLUGIN_PROTOCOL_VERSION {
+            return Err(RuvyxaError::Message(format!(
+                "RUV1701 TypeScript plugin descriptor uses protocol version {}; expected {}",
+                descriptor.protocol_version, PLUGIN_PROTOCOL_VERSION
+            )));
+        }
+        for diagnostic in &descriptor.diagnostics {
+            warn!(
+                target: "ruvyxa::plugin",
+                plugin = %diagnostic.plugin,
+                code = %diagnostic.code,
+                level = %diagnostic.level,
+                "{}",
+                diagnostic.message
+            );
+        }
 
         let mut workers = vec![Mutex::new(worker)];
         // Extra workers only pay off for middleware traffic; a registry
         // without middleware never fans out.
-        let middleware_hooks = descriptor.middleware.request + descriptor.middleware.response;
-        if middleware_hooks > 0 {
+        let http_hooks = descriptor.http.request + descriptor.http.response;
+        if http_hooks > 0 {
             for _ in 1..pool_size.max(1) {
                 workers.push(Mutex::new(spawn_worker(&spawn)?));
             }
@@ -216,27 +294,22 @@ impl PluginHost {
     /// Whether any request middleware could match this pathname. Lets the
     /// server skip the plugin round-trip entirely for non-matching requests.
     pub fn wants_request(&self, pathname: &str) -> bool {
-        let middleware = &self.descriptor.middleware;
-        middleware.request > 0
-            && matches_route_patterns(middleware.request_routes.as_deref(), pathname)
+        let http = &self.descriptor.http;
+        http.request > 0 && matches_route_patterns(http.request_match.as_deref(), pathname)
     }
 
     /// Whether any response middleware could match this pathname.
     pub fn wants_response(&self, pathname: &str) -> bool {
-        let middleware = &self.descriptor.middleware;
-        middleware.response > 0
-            && matches_route_patterns(middleware.response_routes.as_deref(), pathname)
+        let http = &self.descriptor.http;
+        http.response > 0 && matches_route_patterns(http.response_match.as_deref(), pathname)
     }
 
     pub async fn execute_request(
         &self,
         request: &PluginHttpRequest,
-    ) -> Result<MiddlewareRequestResult> {
+    ) -> Result<PluginHttpRequestResult> {
         let value = self
-            .call(
-                "middlewareRequest",
-                serde_json::json!({ "request": request }),
-            )
+            .call("http.request", serde_json::json!({ "request": request }))
             .await?;
         serde_json::from_value(value).map_err(|error| {
             RuvyxaError::Message(format!(
@@ -252,7 +325,7 @@ impl PluginHost {
     ) -> Result<PluginHttpResponse> {
         let value = self
             .call(
-                "middlewareResponse",
+                "http.response",
                 serde_json::json!({ "request": request, "response": response }),
             )
             .await?;
@@ -263,6 +336,16 @@ impl PluginHost {
                 ))
             },
         )
+    }
+
+    /// Notify development-only file-change hooks after the framework invalidates its caches.
+    pub async fn notify_file_change(&self, paths: &[String]) -> Result<()> {
+        if self.descriptor.dev.file_change == 0 {
+            return Ok(());
+        }
+        self.call("dev.fileChange", serde_json::json!({ "paths": paths }))
+            .await?;
+        Ok(())
     }
 
     async fn call(&self, hook: &str, payload: serde_json::Value) -> Result<serde_json::Value> {
@@ -418,6 +501,7 @@ async fn call_worker(
     mut payload: serde_json::Value,
 ) -> std::result::Result<serde_json::Value, CallFailure> {
     payload["hook"] = serde_json::Value::String(hook.to_string());
+    payload["protocolVersion"] = serde_json::Value::from(PLUGIN_PROTOCOL_VERSION);
     let mut encoded = serde_json::to_vec(&payload).map_err(|error| {
         CallFailure::Hook(RuvyxaError::Message(format!(
             "Failed to encode TypeScript plugin request: {error}"
@@ -454,6 +538,12 @@ async fn call_worker(
         ))));
     }
     let output = decode_runtime_output(line.trim())?;
+    if output.protocol_version != PLUGIN_PROTOCOL_VERSION {
+        return Err(CallFailure::WorkerPoisoned(RuvyxaError::Message(format!(
+            "RUV1701 TypeScript plugin host returned protocol version {}; expected {}",
+            output.protocol_version, PLUGIN_PROTOCOL_VERSION
+        ))));
+    }
     if output.ok {
         return Ok(output.result.unwrap_or(serde_json::Value::Null));
     }
@@ -497,82 +587,53 @@ mod tests {
     }
 
     #[test]
-    fn descriptor_route_unions_are_optional_for_older_runtimes() {
-        let counts: MiddlewareHookCounts = serde_json::from_value(serde_json::json!({
-            "request": 2,
-            "response": 1
-        }))
-        .unwrap();
-        assert_eq!(counts.request_routes, None);
-        assert_eq!(counts.response_routes, None);
-
-        let counts: MiddlewareHookCounts = serde_json::from_value(serde_json::json!({
-            "request": 1,
-            "response": 1,
-            "requestRoutes": ["/admin/*"],
-            "responseRoutes": null
-        }))
-        .unwrap();
-        assert_eq!(counts.request_routes, Some(vec!["/admin/*".to_string()]));
-        assert_eq!(counts.response_routes, None);
-    }
-
-    #[test]
-    fn realtime_descriptor_is_additive_for_older_runtimes() {
+    fn version_two_descriptor_decodes_grouped_sockets_and_capabilities() {
         let descriptor: PluginRegistryDescriptor = serde_json::from_value(serde_json::json!({
-            "plugins": [],
-            "middleware": { "request": 0, "response": 0 },
-            "resolveId": 0,
-            "transform": 0,
-            "buildComplete": 0
-        }))
-        .unwrap();
-        assert_eq!(descriptor.realtime, None);
-
-        let descriptor: PluginRegistryDescriptor = serde_json::from_value(serde_json::json!({
+            "protocolVersion": 2,
             "plugins": ["ruvyxa:realtime"],
-            "middleware": { "request": 0, "response": 0 },
-            "resolveId": 0,
-            "transform": 0,
-            "buildComplete": 1,
-            "realtime": {
+            "http": { "request": 1, "response": 0, "routes": 1, "requestMatch": ["/events"] },
+            "build": { "start": 0, "resolve": 0, "load": 0, "transform": 0, "complete": 1 },
+            "dev": { "fileChange": 1 },
+            "diagnostics": [],
+            "capabilities": [{
+                "id": "realtime@1",
                 "plugin": "ruvyxa:realtime",
                 "path": "/__ruvyxa/realtime",
                 "heartbeatMs": 25000,
                 "capacity": 256
-            }
+            }]
         }))
         .unwrap();
+        assert_eq!(descriptor.protocol_version, PLUGIN_PROTOCOL_VERSION);
+        assert_eq!(descriptor.http.routes, 1);
+        assert_eq!(descriptor.dev.file_change, 1);
         assert_eq!(
-            descriptor
-                .realtime
-                .as_ref()
-                .map(|value| value.path.as_str()),
-            Some("/__ruvyxa/realtime")
+            descriptor.realtime().map(|value| value.path),
+            Some("/__ruvyxa/realtime".to_string())
         );
     }
 
     #[test]
     fn decodes_request_and_response_continuations() {
-        let request: MiddlewareRequestResult = serde_json::from_value(serde_json::json!({
+        let request: PluginHttpRequestResult = serde_json::from_value(serde_json::json!({
             "kind": "request",
             "request": { "method": "GET", "path": "/", "headers": [] }
         }))
         .unwrap();
-        assert!(matches!(request, MiddlewareRequestResult::Request { .. }));
+        assert!(matches!(request, PluginHttpRequestResult::Request { .. }));
 
-        let response: MiddlewareRequestResult = serde_json::from_value(serde_json::json!({
+        let response: PluginHttpRequestResult = serde_json::from_value(serde_json::json!({
             "kind": "response",
             "response": { "status": 204, "headers": [] }
         }))
         .unwrap();
-        assert!(matches!(response, MiddlewareRequestResult::Response { .. }));
+        assert!(matches!(response, PluginHttpRequestResult::Response { .. }));
     }
 
     #[tokio::test]
     async fn hanging_hook_times_out_as_a_poisoned_worker_without_retry() {
         let failure = enforce_call_timeout(
-            "middlewareRequest",
+            "http.request",
             Duration::from_millis(5),
             std::future::pending(),
         )
@@ -581,7 +642,7 @@ mod tests {
 
         match failure {
             CallFailure::WorkerPoisoned(RuvyxaError::Message(message)) => {
-                assert!(message.contains("middlewareRequest"), "{message}");
+                assert!(message.contains("http.request"), "{message}");
                 assert!(message.contains("5 ms"), "{message}");
             }
             _ => panic!("a timed-out call must poison its protocol stream"),
@@ -612,10 +673,11 @@ mod tests {
             r#"
 export default {
   plugins: [{
+    apiVersion: 2,
     name: "recovery",
-    setup({ addMiddleware }) {
-      addMiddleware({
-        async onRequest(request) {
+    register({ http }) {
+      http.onRequest({
+        async handler({ request }) {
           const pathname = new URL(request.url).pathname
           if (pathname === "/hang") await new Promise(() => {})
           if (pathname === "/corrupt") process.stdout.write("protocol-noise\n")
@@ -657,14 +719,14 @@ export default {
         assert!(corrupt.to_string().contains("invalid JSON"), "{corrupt}");
         assert!(matches!(
             host.execute_request(&request("/ok-after-corrupt")).await,
-            Ok(MiddlewareRequestResult::Request { .. })
+            Ok(PluginHttpRequestResult::Request { .. })
         ));
 
         let timeout = host.execute_request(&request("/hang")).await.unwrap_err();
         assert!(timeout.to_string().contains("timed out"), "{timeout}");
         assert!(matches!(
             host.execute_request(&request("/ok-after-timeout")).await,
-            Ok(MiddlewareRequestResult::Request { .. })
+            Ok(PluginHttpRequestResult::Request { .. })
         ));
 
         drop(host);
@@ -689,10 +751,11 @@ import { writeFileSync } from "node:fs"
 
 export default {
   plugins: [{
+    apiVersion: 2,
     name: "pool-selection",
-    setup({ addMiddleware }) {
-      addMiddleware({
-        async onRequest(request, { root }) {
+    register({ http }) {
+      http.onRequest({
+        async handler({ request, root }) {
           if (new URL(request.url).pathname === "/slow") {
             writeFileSync(root + "/slow-started", "yes")
             await new Promise((resolve) => setTimeout(resolve, 10_000))

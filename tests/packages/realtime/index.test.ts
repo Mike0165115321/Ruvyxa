@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 
 import { realtime } from '../../../packages/@ruvyxa/realtime/dist/index.js'
 import { createRealtimeClient } from '../../../packages/@ruvyxa/realtime/dist/client.js'
+import { realtime as realtimeEntry } from '../../../packages/@ruvyxa/realtime/dist/plugin.js'
 
 class FakeSocket {
   readyState = 0
@@ -31,18 +32,27 @@ class FakeSocket {
 
 describe('@ruvyxa/realtime', () => {
   it('registers one validated native transport and rejects unsupported builds', async () => {
-    const plugin = realtime({ path: '/events', heartbeatMs: 10_000, capacity: 64 })
+    assert.equal(realtimeEntry, realtime)
+    const plugin = realtimeEntry({ path: '/events', heartbeatMs: 10_000, capacity: 64 })
     let registered: unknown
     let buildHook: ((context: any) => void | Promise<void>) | undefined
-    await plugin.setup({
-      addMiddleware() {},
-      resolveId() {},
-      transform() {},
-      enableRealtime(value) {
-        registered = value
+    await plugin.register({
+      http: { onRequest() {}, onResponse() {}, route() {} },
+      build: {
+        onStart() {},
+        onResolve() {},
+        onLoad() {},
+        onTransform() {},
+        onComplete(value) {
+          buildHook = value
+        },
       },
-      onBuildComplete(value) {
-        buildHook = value
+      dev: { onFileChange() {} },
+      diagnostics: { report() {} },
+      native: {
+        claim(_capability, value) {
+          registered = value
+        },
       },
     })
     assert.deepEqual(registered, { path: '/events', heartbeatMs: 10_000, capacity: 64 })

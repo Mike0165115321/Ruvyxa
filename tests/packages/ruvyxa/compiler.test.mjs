@@ -998,16 +998,17 @@ export class contentFormat {}
       await writeFile(
         path.join(root, 'ruvyxa.config.ts'),
         `
-          import { config, definePlugin } from "ruvyxa/config"
+          import { config } from "ruvyxa/config"
+          import { definePlugin } from "ruvyxa/plugin"
 
           export default config({
             css: { entries: ["styles/global.css"] },
             plugins: [
               definePlugin({
                 name: "replace-label",
-                setup({ transform }) {
-                  transform((code, id, ctx) => {
-                    if (ctx.environment !== "client" || !id.endsWith("page.tsx")) return null
+                register({ build }) {
+                  build.onTransform(({ code, id, environment }) => {
+                    if (environment !== "client" || !id.endsWith("page.tsx")) return null
                     return { code: code.replace("Original", "Transformed") }
                   })
                 },
@@ -1022,7 +1023,7 @@ export class contentFormat {}
       assert.deepEqual(config.config.css.entries, ['styles/global.css'])
       assert.equal(config.config.plugins[0].name, 'replace-label')
 
-      const transformed = await runJson(pluginRuntime, [root, 'transform'], {
+      const transformed = await runJson(pluginRuntime, [root, 'build.transform'], {
         code: await readFile(pageFile, 'utf8'),
         id: pageFile,
         environment: 'client',
@@ -1039,26 +1040,29 @@ export class contentFormat {}
         path.join(root, 'ruvyxa.config.ts'),
         `
           import { writeFile } from "node:fs/promises"
-          import { definePlugin } from "ruvyxa/config"
+          import { definePlugin } from "ruvyxa/plugin"
 
           export default {
             plugins: [definePlugin({
               name: "native-hooks",
-              setup({ addMiddleware, onBuildComplete }) {
-                addMiddleware({
-                  routes: ["/api/*"],
-                  onRequest(request, { plugin }) {
+              register({ http, build }) {
+                http.onRequest({
+                  match: ["/api/*"],
+                  handler({ request, plugin }) {
                     const headers = new Headers(request.headers)
                     headers.set("x-plugin", plugin)
                     return new Request(request, { headers })
                   },
-                  onResponse(_request, response) {
+                })
+                http.onResponse({
+                  match: ["/api/*"],
+                  handler({ response }) {
                     const headers = new Headers(response.headers)
                     headers.set("x-after", "yes")
                     return new Response(response.body, { status: response.status, headers })
                   },
                 })
-                onBuildComplete(({ outDir, manifest }) =>
+                build.onComplete(({ outDir, manifest }) =>
                   writeFile(outDir + "/plugin-complete.json", JSON.stringify(manifest))
                 )
               },
@@ -1069,27 +1073,29 @@ export class contentFormat {}
 
       const described = await runJson(pluginRuntime, [root, 'describe'], {})
       assert.deepEqual(described.result, {
+        protocolVersion: 2,
         plugins: ['native-hooks'],
-        middleware: {
+        http: {
           request: 1,
           response: 1,
-          requestRoutes: ['/api/*'],
-          responseRoutes: ['/api/*'],
+          routes: 0,
+          requestMatch: ['/api/*'],
+          responseMatch: ['/api/*'],
         },
-        resolveId: 0,
-        transform: 0,
-        buildComplete: 1,
-        realtime: null,
+        build: { start: 0, resolve: 0, load: 0, transform: 0, complete: 1 },
+        dev: { fileChange: 0 },
+        diagnostics: [],
+        capabilities: [],
       })
 
-      const request = await runJson(pluginRuntime, [root, 'middlewareRequest'], {
+      const request = await runJson(pluginRuntime, [root, 'http.request'], {
         request: { method: 'GET', path: '/api/users?active=1', headers: [] },
       })
       assert.equal(request.result.kind, 'request')
       assert.deepEqual(request.result.request.headers, [['x-plugin', 'native-hooks']])
       assert.equal(request.result.request.path, '/api/users?active=1')
 
-      const response = await runJson(pluginRuntime, [root, 'middlewareResponse'], {
+      const response = await runJson(pluginRuntime, [root, 'http.response'], {
         request: request.result.request,
         response: {
           status: 200,
@@ -1114,12 +1120,142 @@ export class contentFormat {}
       const outDir = path.join(root, 'dist')
       await mkdir(outDir)
       const manifest = { routes: [{ path: '/' }] }
-      const complete = await runJson(pluginRuntime, [root, 'buildComplete'], { outDir, manifest })
+      const complete = await runJson(pluginRuntime, [root, 'build.complete'], { outDir, manifest })
       assert.equal(complete.ok, true)
       assert.deepEqual(
         JSON.parse(await readFile(path.join(outDir, 'plugin-complete.json'), 'utf8')),
         manifest,
       )
+    })
+  })
+
+  it('connects route, build, dev, and diagnostic sockets through protocol v2', async () => {
+    await withFixture(async ({ root }) => {
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `
+          import path from "node:path"
+          import { writeFile } from "node:fs/promises"
+          import { definePlugin } from "ruvyxa/plugin"
+
+          export default {
+            plugins: [definePlugin({
+              name: "all-sockets",
+              register({ http, build, dev, diagnostics }) {
+                http.route({
+                  method: "GET",
+                  path: "/plugin-health",
+                  handler: () => Response.json({ ok: true }),
+                })
+                build.onStart(({ outDir }) => writeFile(path.join(outDir, "started.txt"), "yes"))
+                build.onResolve(({ id, root }) =>
+                  id === "virtual:greeting" ? path.join(root, "virtual-greeting.ts") : undefined
+                )
+                build.onLoad(({ id }) =>
+                  id.endsWith("virtual-greeting.ts")
+                    ? { code: 'export const greeting = "hello"', map: { version: 3, mappings: "" } }
+                    : undefined
+                )
+                dev.onFileChange({
+                  match: ["content/*"],
+                  handler: ({ root, paths }) =>
+                    writeFile(path.join(root, "changed.json"), JSON.stringify(paths)),
+                })
+                diagnostics.report({
+                  level: "warning",
+                  code: "ALL001",
+                  message: "All sockets are active",
+                })
+              },
+            })],
+          }
+        `,
+      )
+
+      const described = await runJson(pluginRuntime, [root, 'describe'], {})
+      assert.equal(described.result.http.routes, 1)
+      assert.deepEqual(described.result.build, {
+        start: 1,
+        resolve: 1,
+        load: 1,
+        transform: 0,
+        complete: 0,
+      })
+      assert.deepEqual(described.result.dev, { fileChange: 1 })
+      assert.deepEqual(described.result.diagnostics, [
+        {
+          plugin: 'all-sockets',
+          level: 'warning',
+          code: 'ALL001',
+          message: 'All sockets are active',
+        },
+      ])
+
+      const route = await runJson(pluginRuntime, [root, 'http.request'], {
+        request: { method: 'GET', path: '/plugin-health', headers: [] },
+      })
+      assert.equal(route.result.kind, 'response')
+      assert.deepEqual(
+        JSON.parse(Buffer.from(route.result.response.bodyBase64, 'base64').toString('utf8')),
+        { ok: true },
+      )
+
+      const outDir = path.join(root, 'dist')
+      await mkdir(outDir)
+      await runJson(pluginRuntime, [root, 'build.start'], { outDir })
+      assert.equal(await readFile(path.join(outDir, 'started.txt'), 'utf8'), 'yes')
+
+      const resolved = await runJson(pluginRuntime, [root, 'build.resolve'], {
+        id: 'virtual:greeting',
+        environment: 'server',
+      })
+      assert.equal(resolved.result, path.join(root, 'virtual-greeting.ts'))
+      const loaded = await runJson(pluginRuntime, [root, 'build.load'], {
+        id: resolved.result,
+        environment: 'server',
+      })
+      assert.match(loaded.result.code, /greeting = "hello"/)
+      assert.equal(JSON.parse(loaded.result.map).version, 3)
+
+      await runJson(pluginRuntime, [root, 'dev.fileChange'], {
+        paths: ['content/guide.md', 'app/page.tsx'],
+      })
+      assert.deepEqual(JSON.parse(await readFile(path.join(root, 'changed.json'), 'utf8')), [
+        'content/guide.md',
+      ])
+    })
+  })
+
+  it('rejects obsolete contracts, protocol mismatches, and duplicate plugin routes', async () => {
+    await withFixture(async ({ root }) => {
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `export default { plugins: [{ name: "obsolete", setup() {} }] }`,
+      )
+      const obsolete = await runJsonResult(pluginRuntime, [root, 'describe'], {})
+      assert.equal(obsolete.exitCode, 1)
+      assert.match(obsolete.parsed.message, /unsupported apiVersion undefined; expected 2/)
+
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `export default {
+          plugins: [
+            { apiVersion: 2, name: "one", register({ http }) { http.route({ method: "GET", path: "/same", handler: () => new Response() }) } },
+            { apiVersion: 2, name: "two", register({ http }) { http.route({ method: "GET", path: "/same", handler: () => new Response() }) } },
+          ],
+        }`,
+      )
+      const duplicate = await runJsonResult(pluginRuntime, [root, 'describe'], {})
+      assert.equal(duplicate.exitCode, 1)
+      assert.match(duplicate.parsed.message, /route GET \/same conflicts with plugin "one"/)
+
+      await writeFile(path.join(root, 'ruvyxa.config.ts'), `export default { plugins: [] }`)
+      const mismatch = await runJsonResult(pluginRuntime, [root, 'describe'], {
+        protocolVersion: 1,
+      })
+      assert.equal(mismatch.exitCode, 1)
+      assert.equal(mismatch.parsed.code, 'RUV1701')
+      assert.match(mismatch.parsed.message, /received 1, expected 2/)
     })
   })
 
@@ -1149,11 +1285,13 @@ export class contentFormat {}
 
       const described = await runJson(pluginRuntime, [root, 'describe'], {})
       assert.deepEqual(described.result, {
+        protocolVersion: 2,
         plugins: ['ruvyxa:observability', 'ruvyxa:content-engine', 'ruvyxa:openapi'],
-        middleware: {
+        http: {
           request: 3,
           response: 1,
-          requestRoutes: [
+          routes: 0,
+          requestMatch: [
             '/api/*',
             '/content.json',
             '/search-index.json',
@@ -1162,12 +1300,12 @@ export class contentFormat {}
             '/llms.txt',
             '/openapi.json',
           ],
-          responseRoutes: ['/api/*'],
+          responseMatch: ['/api/*'],
         },
-        resolveId: 0,
-        transform: 0,
-        buildComplete: 2,
-        realtime: null,
+        build: { start: 0, resolve: 0, load: 0, transform: 0, complete: 2 },
+        dev: { fileChange: 0 },
+        diagnostics: [],
+        capabilities: [],
       })
       const configCache = path.join(root, '.ruvyxa', 'cache', 'config')
       const compiledConfigs = await Promise.all(
@@ -1177,7 +1315,7 @@ export class contentFormat {}
       )
       assert.doesNotMatch(compiledConfigs.join('\n'), /^import \* as \w+ from ["']yaml["'];$/m)
 
-      const requestResult = await runJson(pluginRuntime, [root, 'middlewareRequest'], {
+      const requestResult = await runJson(pluginRuntime, [root, 'http.request'], {
         request: { method: 'GET', path: '/api/health', headers: [] },
       })
       assert.equal(requestResult.result.kind, 'request')
@@ -1186,7 +1324,7 @@ export class contentFormat {}
         /^[0-9a-f-]{36}$/,
       )
 
-      const specResult = await runJson(pluginRuntime, [root, 'middlewareRequest'], {
+      const specResult = await runJson(pluginRuntime, [root, 'http.request'], {
         request: { method: 'GET', path: '/openapi.json', headers: [] },
       })
       assert.equal(specResult.result.kind, 'response')
@@ -1203,9 +1341,10 @@ export class contentFormat {}
         path.join(root, 'ruvyxa.config.ts'),
         `export default {
           plugins: [{
+            apiVersion: 2,
             name: 'invalid-route',
-            setup({ addMiddleware }) {
-              addMiddleware({ routes: ['api/*'], onRequest() {} })
+            register({ http }) {
+              http.onRequest({ match: ['api/*'], handler() {} })
             },
           }],
         }`,
@@ -1214,7 +1353,7 @@ export class contentFormat {}
       const failed = await runJsonResult(pluginRuntime, [root, 'describe'], {})
       assert.equal(failed.exitCode, 1)
       assert.equal(failed.parsed.ok, false)
-      assert.match(failed.parsed.message, /middleware routes\[0\].*start with "\/" or equal "\*"/)
+      assert.match(failed.parsed.message, /onRequest\(\)\.match\[0\].*start with "\/"/)
     })
   })
 
@@ -1224,16 +1363,18 @@ export class contentFormat {}
         path.join(root, 'ruvyxa.config.ts'),
         `export default {
           plugins: [{
+            apiVersion: 2,
             name: 'realtime',
-            setup({ enableRealtime }) {
-              enableRealtime({ path: '/events', heartbeatMs: 10000, capacity: 64 })
+            register({ native }) {
+              native.claim('realtime@1', { path: '/events', heartbeatMs: 10000, capacity: 64 })
             },
           }],
         }`,
       )
 
       const described = await runJson(pluginRuntime, [root, 'describe'], {})
-      assert.deepEqual(described.result.realtime, {
+      assert.deepEqual(described.result.capabilities[0], {
+        id: 'realtime@1',
         plugin: 'realtime',
         path: '/events',
         heartbeatMs: 10_000,
@@ -1248,20 +1389,20 @@ export class contentFormat {}
         path.join(root, 'ruvyxa.config.ts'),
         `export default {
           plugins: [
-            { name: 'one', setup({ enableRealtime }) { enableRealtime({ path: 'events' }) } },
-            { name: 'two', setup({ enableRealtime }) { enableRealtime() } },
+            { apiVersion: 2, name: 'one', register({ native }) { native.claim('realtime@1', { path: 'events' }) } },
+            { apiVersion: 2, name: 'two', register({ native }) { native.claim('realtime@1') } },
           ],
         }`,
       )
       const invalid = await runJsonResult(pluginRuntime, [root, 'describe'], {})
       assert.equal(invalid.exitCode, 1)
-      assert.match(invalid.parsed.message, /realtime path must be an absolute path/)
+      assert.match(invalid.parsed.message, /realtime path must be an exact absolute path/)
 
       await writeFile(
         path.join(root, 'ruvyxa.config.ts'),
         `export default {
           plugins: [
-            { name: 'one', setup({ enableRealtime }) { enableRealtime({ path: '/__ruvyxa/hmr' }) } },
+            { apiVersion: 2, name: 'one', register({ native }) { native.claim('realtime@1', { path: '/__ruvyxa/hmr' }) } },
           ],
         }`,
       )
@@ -1273,14 +1414,14 @@ export class contentFormat {}
         path.join(root, 'ruvyxa.config.ts'),
         `export default {
           plugins: [
-            { name: 'one', setup({ enableRealtime }) { enableRealtime() } },
-            { name: 'two', setup({ enableRealtime }) { enableRealtime() } },
+            { apiVersion: 2, name: 'one', register({ native }) { native.claim('realtime@1') } },
+            { apiVersion: 2, name: 'two', register({ native }) { native.claim('realtime@1') } },
           ],
         }`,
       )
       const duplicate = await runJsonResult(pluginRuntime, [root, 'describe'], {})
       assert.equal(duplicate.exitCode, 1)
-      assert.match(duplicate.parsed.message, /already owns the transport/)
+      assert.match(duplicate.parsed.message, /already owned by plugin "one"/)
     })
   })
 
@@ -1296,13 +1437,13 @@ export class contentFormat {}
       )
       await writeFile(
         pluginFile,
-        `export const plugin = { name: "label", setup({ transform }) { transform(code => code + "\\n// one") } }\n`,
+        `export const plugin = { apiVersion: 2, name: "label", register({ build }) { build.onTransform(({ code }) => code + "\\n// one") } }\n`,
       )
 
       const first = await runJson(configRenderer, [root], {})
       await writeFile(
         pluginFile,
-        `export const plugin = { name: "label", setup({ transform }) { transform(code => code + "\\n// two") } }\n`,
+        `export const plugin = { apiVersion: 2, name: "label", register({ build }) { build.onTransform(({ code }) => code + "\\n// two") } }\n`,
       )
       const second = await runJson(configRenderer, [root], {})
 
@@ -1585,7 +1726,9 @@ function runJson(script, args, payload) {
         )
       }
     })
-    child.stdin.end(JSON.stringify(payload))
+    child.stdin.end(
+      JSON.stringify(script === pluginRuntime ? { protocolVersion: 2, ...payload } : payload),
+    )
   })
 }
 
@@ -1616,7 +1759,9 @@ function runJsonResult(script, args, payload) {
         )
       }
     })
-    child.stdin.end(JSON.stringify(payload))
+    child.stdin.end(
+      JSON.stringify(script === pluginRuntime ? { protocolVersion: 2, ...payload } : payload),
+    )
   })
 }
 

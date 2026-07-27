@@ -178,6 +178,7 @@ fn link_inner(
         rewrite_module_into(
             &module.js,
             &module.deps,
+            &module.dependency_aliases,
             dynamic_import_files,
             &mut out,
             true,
@@ -278,6 +279,7 @@ pub(crate) fn link_parallel_with_dynamic_imports_and_shared_modules(
             rewrite_module_into(
                 &module.js,
                 &module.deps,
+                &module.dependency_aliases,
                 dynamic_import_files,
                 &mut segment,
                 true,
@@ -365,6 +367,7 @@ pub(crate) fn link_shared_route_modules(
         rewrite_module_into(
             &module.js,
             &module.deps,
+            &module.dependency_aliases,
             &BTreeMap::new(),
             &mut out,
             true,
@@ -478,6 +481,7 @@ pub fn module_id(path: &Path) -> String {
 fn rewrite_module_into(
     source: &str,
     deps: &[PathBuf],
+    dependency_aliases: &BTreeMap<String, PathBuf>,
     dynamic_import_files: &BTreeMap<PathBuf, String>,
     out: &mut String,
     indent: bool,
@@ -490,9 +494,10 @@ fn rewrite_module_into(
     for line in source.lines() {
         let trimmed = line.trim();
 
-        let rewritten = try_rewrite_import(trimmed, deps, drop_external_imports)?
-            .map(Rewrite::Inline)
-            .or_else(|| try_rewrite_export_statement(trimmed, deps));
+        let rewritten =
+            try_rewrite_import(trimmed, deps, dependency_aliases, drop_external_imports)?
+                .map(Rewrite::Inline)
+                .or_else(|| try_rewrite_export_statement(trimmed, deps, dependency_aliases));
 
         let content = match rewritten {
             Some(Rewrite::Inline(ref content)) => content.as_str(),
@@ -506,11 +511,17 @@ fn rewrite_module_into(
             None => line,
         };
 
-        let dynamic_rewritten =
-            rewrite_dynamic_imports(content, deps, dynamic_import_files, &mut in_block_comment);
+        let dynamic_rewritten = rewrite_dynamic_imports(
+            content,
+            deps,
+            dependency_aliases,
+            dynamic_import_files,
+            &mut in_block_comment,
+        );
         let commonjs_rewritten = rewrite_commonjs_requires_with_state(
             &dynamic_rewritten,
             deps,
+            dependency_aliases,
             &mut in_commonjs_block_comment,
         );
         write_rewritten_line(out, &commonjs_rewritten, indent);
@@ -525,12 +536,13 @@ fn rewrite_module_into(
 
 #[cfg(test)]
 fn rewrite_commonjs_requires(line: &str, deps: &[PathBuf]) -> String {
-    rewrite_commonjs_requires_with_state(line, deps, &mut false)
+    rewrite_commonjs_requires_with_state(line, deps, &BTreeMap::new(), &mut false)
 }
 
 fn rewrite_commonjs_requires_with_state(
     line: &str,
     deps: &[PathBuf],
+    dependency_aliases: &BTreeMap<String, PathBuf>,
     in_block_comment: &mut bool,
 ) -> String {
     let mut out = String::with_capacity(line.len());
@@ -583,7 +595,8 @@ fn rewrite_commonjs_requires_with_state(
         if bytes[index..].starts_with(b"require")
             && is_import_boundary(bytes, index)
             && let Some((specifier, after_call)) = require_call(line, index + "require".len())
-            && let Some(dep_path) = find_dep_for_specifier(&specifier, deps)
+            && let Some(dep_path) =
+                find_dep_for_specifier_with_aliases(&specifier, deps, dependency_aliases)
         {
             out.push_str(&module_id(dep_path));
             index = after_call;
@@ -619,6 +632,7 @@ fn require_call(line: &str, mut index: usize) -> Option<(String, usize)> {
 fn rewrite_dynamic_imports(
     line: &str,
     deps: &[PathBuf],
+    dependency_aliases: &BTreeMap<String, PathBuf>,
     dynamic_import_files: &BTreeMap<PathBuf, String>,
     in_block_comment: &mut bool,
 ) -> String {
@@ -672,7 +686,8 @@ fn rewrite_dynamic_imports(
         if bytes[index..].starts_with(b"import")
             && is_import_boundary(bytes, index)
             && let Some((specifier, after_call)) = dynamic_import_call(line, index + "import".len())
-            && let Some(dep_path) = find_dep_for_specifier(&specifier, deps)
+            && let Some(dep_path) =
+                find_dep_for_specifier_with_aliases(&specifier, deps, dependency_aliases)
         {
             if let Some(file_name) = dynamic_import_files.get(dep_path) {
                 // Chunks export their original module namespace as the default export, keeping
@@ -764,6 +779,7 @@ enum Rewrite {
 fn try_rewrite_import(
     line: &str,
     deps: &[PathBuf],
+    dependency_aliases: &BTreeMap<String, PathBuf>,
     drop_external_imports: bool,
 ) -> Result<Option<String>> {
     if !line.starts_with("import ") {
@@ -781,7 +797,8 @@ fn try_rewrite_import(
     };
 
     // Find the matching dep by specifier.
-    let Some(dep_path) = find_dep_for_specifier(&specifier, deps) else {
+    let Some(dep_path) = find_dep_for_specifier_with_aliases(&specifier, deps, dependency_aliases)
+    else {
         return Ok(if drop_external_imports {
             Some(String::new())
         } else {
@@ -823,7 +840,13 @@ fn collect_external_imports(modules: &[&CompiledModule]) -> Vec<String> {
                 continue;
             }
 
-            if find_dep_for_specifier(&specifier, &module.deps).is_none() {
+            if find_dep_for_specifier_with_aliases(
+                &specifier,
+                &module.deps,
+                &module.dependency_aliases,
+            )
+            .is_none()
+            {
                 imports.insert(ensure_semicolon(trimmed));
             }
         }
@@ -851,13 +874,17 @@ fn ensure_semicolon(line: &str) -> String {
 /// Try to rewrite an export statement. Returns None if the line is not an export.
 #[cfg(test)]
 fn try_rewrite_export(line: &str, deps: &[PathBuf]) -> Option<String> {
-    try_rewrite_export_statement(line, deps).map(|rewrite| match rewrite {
+    try_rewrite_export_statement(line, deps, &BTreeMap::new()).map(|rewrite| match rewrite {
         Rewrite::Inline(line) => line,
         Rewrite::Pending { line, assignment } => format!("{line}\n{assignment}"),
     })
 }
 
-fn try_rewrite_export_statement(line: &str, deps: &[PathBuf]) -> Option<Rewrite> {
+fn try_rewrite_export_statement(
+    line: &str,
+    deps: &[PathBuf],
+    dependency_aliases: &BTreeMap<String, PathBuf>,
+) -> Option<Rewrite> {
     if !line.starts_with("export ") {
         return None;
     }
@@ -884,7 +911,7 @@ fn try_rewrite_export_statement(line: &str, deps: &[PathBuf]) -> Option<Rewrite>
     // `export { a, b } from "./mod"` — re-export from another module
     if line.contains(" from ") {
         let (before_from, specifier) = split_from_specifier(line)?;
-        let dep_path = find_dep_for_specifier(&specifier, deps)?;
+        let dep_path = find_dep_for_specifier_with_aliases(&specifier, deps, dependency_aliases)?;
         let dep_id = module_id(dep_path);
 
         let clause = before_from.strip_prefix("export ")?.trim();
@@ -1090,6 +1117,17 @@ fn quoted_value_with_len(s: &str) -> Option<(String, usize)> {
 ///
 /// Matches by checking if the dep path ends with the specifier (after
 /// stripping extensions and normalizing separators).
+pub(crate) fn find_dep_for_specifier_with_aliases<'a>(
+    specifier: &str,
+    deps: &'a [PathBuf],
+    dependency_aliases: &'a BTreeMap<String, PathBuf>,
+) -> Option<&'a PathBuf> {
+    if let Some(path) = dependency_aliases.get(specifier) {
+        return Some(path);
+    }
+    find_dep_for_specifier(specifier, deps)
+}
+
 pub(crate) fn find_dep_for_specifier<'a>(
     specifier: &str,
     deps: &'a [PathBuf],
@@ -1397,7 +1435,7 @@ mod tests {
 
     #[test]
     fn side_effect_import_commented() {
-        let result = try_rewrite_import("import \"./styles.css\"", &[], false);
+        let result = try_rewrite_import("import \"./styles.css\"", &[], &BTreeMap::new(), false);
         assert!(result.unwrap().unwrap().starts_with("// [bundled]"));
     }
 
@@ -1409,6 +1447,7 @@ mod tests {
         let result = rewrite_dynamic_imports(
             "const mod = await import(\"./lazy\");",
             std::slice::from_ref(&dep),
+            &BTreeMap::new(),
             &BTreeMap::new(),
             &mut in_block_comment,
         );
@@ -1427,6 +1466,7 @@ mod tests {
         let result = rewrite_dynamic_imports(
             "const mod = await import(\"./lazy\");",
             std::slice::from_ref(&dep),
+            &BTreeMap::new(),
             &files,
             &mut in_block_comment,
         );
@@ -1453,6 +1493,7 @@ mod tests {
                 rewrite_dynamic_imports(
                     line,
                     std::slice::from_ref(&dep),
+                    &BTreeMap::new(),
                     &BTreeMap::new(),
                     &mut in_block_comment,
                 )
@@ -1493,6 +1534,7 @@ mod tests {
             path: entry,
             js: "import React from \"react\";\nexport default function Page() {}".to_string(),
             deps: Vec::new(),
+            dependency_aliases: BTreeMap::new(),
             is_external: false,
             cache_hit: false,
         };
@@ -1551,6 +1593,7 @@ mod tests {
             path,
             js: "module.exports = { answer: 42 };".to_string(),
             deps: Vec::new(),
+            dependency_aliases: BTreeMap::new(),
             is_external: false,
             cache_hit: false,
         };
@@ -1583,6 +1626,7 @@ mod tests {
                 js: "import { label } from \"./helper\";\nexport default function Page() { return label; }"
                     .to_string(),
                 deps: vec![helper.clone()],
+                dependency_aliases: BTreeMap::new(),
                 is_external: false,
                 cache_hit: false,
             },
@@ -1590,6 +1634,7 @@ mod tests {
                 path: helper.clone(),
                 js: "export const label = \"ready\";".to_string(),
                 deps: Vec::new(),
+                dependency_aliases: BTreeMap::new(),
                 is_external: false,
                 cache_hit: false,
             },
@@ -1625,6 +1670,7 @@ export default function Layout({ children }) {
 }"#
             .to_string(),
             deps: Vec::new(),
+            dependency_aliases: BTreeMap::new(),
             is_external: false,
             cache_hit: false,
         };
@@ -1656,6 +1702,7 @@ export default function Layout({ children }) {
             path: entry.clone(),
             js: "export async function render(ctx) {\n  return String(ctx.path);\n}".to_string(),
             deps: Vec::new(),
+            dependency_aliases: BTreeMap::new(),
             is_external: false,
             cache_hit: false,
         };
@@ -1678,6 +1725,7 @@ export default function Layout({ children }) {
                 path: a.clone(),
                 js: "import B from './b';".into(),
                 deps: vec![b.clone()],
+                dependency_aliases: BTreeMap::new(),
                 is_external: false,
                 cache_hit: false,
             },
@@ -1685,6 +1733,7 @@ export default function Layout({ children }) {
                 path: b.clone(),
                 js: "import A from './a';".into(),
                 deps: vec![a.clone()],
+                dependency_aliases: BTreeMap::new(),
                 is_external: false,
                 cache_hit: false,
             },
@@ -1712,6 +1761,7 @@ export default function Layout({ children }) {
                 path: page.clone(),
                 js: String::new(),
                 deps: vec![a.clone(), b.clone()],
+                dependency_aliases: BTreeMap::new(),
                 is_external: false,
                 cache_hit: false,
             },
@@ -1719,6 +1769,7 @@ export default function Layout({ children }) {
                 path: a.clone(),
                 js: String::new(),
                 deps: vec![shared.clone()],
+                dependency_aliases: BTreeMap::new(),
                 is_external: false,
                 cache_hit: false,
             },
@@ -1726,6 +1777,7 @@ export default function Layout({ children }) {
                 path: b.clone(),
                 js: String::new(),
                 deps: vec![shared.clone()],
+                dependency_aliases: BTreeMap::new(),
                 is_external: false,
                 cache_hit: false,
             },
@@ -1733,6 +1785,7 @@ export default function Layout({ children }) {
                 path: shared.clone(),
                 js: String::new(),
                 deps: vec![],
+                dependency_aliases: BTreeMap::new(),
                 is_external: false,
                 cache_hit: false,
             },

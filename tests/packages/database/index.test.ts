@@ -8,6 +8,7 @@ import {
   prismaAdapter,
   type DatabaseAdapter,
 } from '../../../packages/@ruvyxa/database/dist/index.js'
+import { databasePlugin as databasePluginEntry } from '../../../packages/@ruvyxa/database/dist/plugin.js'
 
 interface TestSchema {
   users: { id: string; age: number; name: string }
@@ -100,16 +101,23 @@ describe('@ruvyxa/database', () => {
       () => databasePlugin({ requiredEnv: ['RUVYXA_PUBLIC_DATABASE_URL'] }),
       /refuses public database variable/,
     )
-    const plugin = databasePlugin({ requiredEnv: ['RUVYXA_TEST_DATABASE_URL'] })
+    assert.equal(databasePluginEntry, databasePlugin)
+    const plugin = databasePluginEntry({ requiredEnv: ['RUVYXA_TEST_DATABASE_URL'] })
     let hook: (() => void) | undefined
-    plugin.setup({
-      addMiddleware() {},
-      resolveId() {},
-      transform() {},
-      enableRealtime() {},
-      onBuildComplete(value) {
-        hook = value as () => void
+    plugin.register({
+      http: { onRequest() {}, onResponse() {}, route() {} },
+      build: {
+        onStart() {},
+        onResolve() {},
+        onLoad() {},
+        onTransform() {},
+        onComplete(value) {
+          hook = value as () => void
+        },
       },
+      dev: { onFileChange() {} },
+      diagnostics: { report() {} },
+      native: { claim() {} },
     })
     assert.throws(() => hook?.(), /RUV3001.*RUVYXA_TEST_DATABASE_URL/)
   })

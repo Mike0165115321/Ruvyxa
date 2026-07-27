@@ -1,4 +1,4 @@
-import type { RuvyxaPlugin } from '@ruvyxa/core/config'
+import type { RuvyxaPlugin } from '@ruvyxa/core/plugin'
 
 export interface AuthUser {
   id: string

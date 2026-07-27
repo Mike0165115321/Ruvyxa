@@ -6,7 +6,7 @@ application-owned WebSocket server is required.
 ```ts
 // ruvyxa.config.ts
 import { config } from 'ruvyxa/config'
-import { realtime } from '@ruvyxa/realtime'
+import { realtime } from '@ruvyxa/realtime/plugin'
 
 export default config({ plugins: [realtime()] })
 ```
@@ -39,3 +39,7 @@ Render, where one process owns WebSocket lifecycle. Static, Edge, Vercel, Netlif
 Firebase, and AWS Amplify builds fail with `RUV3201` instead of silently deploying a non-functional
 socket. Horizontal multi-instance fan-out requires a future external broker adapter and is not
 claimed by this release.
+
+`realtime()` is a protocol-v2 plugin that exclusively claims the framework-owned `realtime@1` native
+socket and validates the deployment during build completion. The main package also re-exports the
+factory; `./plugin` makes the lifecycle entry explicit.

@@ -18,23 +18,23 @@ npm run start   # รัน production build ในเครื่อง
 
 ## ตารางคำสั่ง
 
-| คำสั่ง                          | หน้าที่                                           |
-| ------------------------------- | ------------------------------------------------- |
-| `npm run dev`                   | Development server + HMR + file watching          |
-| `npm run build`                 | Build production output                           |
-| `npm run start`                 | Serve production build                            |
-| `npm run typecheck`             | รัน `tsc --noEmit`                                |
-| `npm run check`                 | รัน production readiness checks                   |
-| `npx ruvyxa preview`            | ดู production build ในเครื่อง                     |
-| `npx ruvyxa routes`             | แสดงตาราง routes + rendering strategy             |
-| `npx ruvyxa analyze`            | ตรวจสอบ routes, imports, server/client boundaries |
-| `npx ruvyxa doctor`             | ตรวจสอบ tools, dependencies, environment          |
-| `npx ruvyxa trace /blog/[slug]` | ดู manifest entry ของ route                       |
-| `npx ruvyxa bench`              | Benchmark discovery, analysis, production build   |
-| `npx ruvyxa test:parity`        | เปรียบเทียบ dev/prod routes + smoke-render        |
-| `npx ruvyxa parity`             | alias ของ `test:parity`                           |
-| `npx ruvyxa clean`              | ลบ `.ruvyxa/`                                     |
-| `npx ruvyxa plugin new <name>`  | สร้าง plugin starter                              |
+| คำสั่ง                            | หน้าที่                                           |
+| --------------------------------- | ------------------------------------------------- |
+| `npm run dev`                     | Development server + HMR + file watching          |
+| `npm run build`                   | Build production output                           |
+| `npm run start`                   | Serve production build                            |
+| `npm run typecheck`               | รัน `tsc --noEmit`                                |
+| `npm run check`                   | รัน production readiness checks                   |
+| `npx ruvyxa preview`              | ดู production build ในเครื่อง                     |
+| `npx ruvyxa routes`               | แสดงตาราง routes + rendering strategy             |
+| `npx ruvyxa analyze`              | ตรวจสอบ routes, imports, server/client boundaries |
+| `npx ruvyxa doctor`               | ตรวจสอบ tools, dependencies, environment          |
+| `npx ruvyxa trace /blog/[slug]`   | ดู manifest entry ของ route                       |
+| `npx ruvyxa bench`                | Benchmark discovery, analysis, production build   |
+| `npx ruvyxa test:parity`          | เปรียบเทียบ dev/prod routes + smoke-render        |
+| `npx ruvyxa parity`               | alias ของ `test:parity`                           |
+| `npx ruvyxa clean`                | ลบ `.ruvyxa/`                                     |
+| `npx ruvyxa plugin create <name>` | สร้างแพ็กเกจ plugin v2 มาตรฐาน                    |
 
 ## Common Options
 
@@ -238,10 +238,10 @@ npx ruvyxa clean
 
 ลบ `.ruvyxa/` ทั้งหมด
 
-### `plugin new`
+### `plugin create`
 
 ```bash
-npx ruvyxa plugin new request-logger
+npx ruvyxa plugin create request-logger
 ```
 
 สร้าง plugin package ที่ `request-logger/` ตรงๆ (ชื่อโฟลเดอร์ = ชื่อ plugin ไม่มีชั้น `plugins/`
@@ -249,7 +249,7 @@ npx ruvyxa plugin new request-logger
 ต้องการเลือกตำแหน่งอื่น (relative จาก `--root` และห้ามมี `..`) scaffold ใช้ได้ทั้ง Node.js และ Bun —
 build ด้วย `npm run build` (หรือ `bun run build`) แล้ว publish ด้วย package manager ที่ใช้ import
 package entry จาก `ruvyxa.config.ts` และลงทะเบียนใน `config({ plugins: [...] })` ดู workflow
-เต็มได้ที่ [Plugins](plugins.md)
+เต็มได้ที่ [Plugins](../../plugin.md)
 
 ## Environment Variables
 

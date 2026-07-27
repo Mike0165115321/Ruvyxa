@@ -46,6 +46,11 @@ pub trait BuildHooks: Send + Sync {
         Ok(None)
     }
 
+    /// Supply source for a resolved module before the filesystem is read.
+    fn load(&self, _id: &Path, _context: &BuildHookContext) -> Result<Option<TransformOutput>> {
+        Ok(None)
+    }
+
     fn transform(
         &self,
         _code: &str,
@@ -103,6 +108,20 @@ impl BuildHookPipeline {
                 })?
             {
                 return Ok(Some(path));
+            }
+        }
+        Ok(None)
+    }
+
+    pub fn load(&self, id: &Path, context: &BuildHookContext) -> Result<Option<TransformOutput>> {
+        for host in self.hosts.iter() {
+            if let Some(source) = host.load(id, context).map_err(|error| {
+                BundleError::Compiler(format!(
+                    "build hook host `{}` load failed: {error}",
+                    host.host_name()
+                ))
+            })? {
+                return Ok(Some(source));
             }
         }
         Ok(None)

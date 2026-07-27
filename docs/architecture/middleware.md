@@ -1,69 +1,76 @@
 # Middleware Architecture
 
-Ruvyxa has one middleware model with two implementation locations:
+Ruvyxa has two HTTP middleware locations with one deterministic request pipeline:
 
-1. Built-in middleware is native Rust/Tower and remains the low-overhead path for CORS, rate
-   limiting, timing, logging, compression, and security headers.
-2. Plugins register request/response middleware through `definePlugin` in `ruvyxa.config.ts`. They
-   execute in the same persistent Node/Bun runtime as build hooks.
-
-## Configuration
+1. Built-in policies use native Rust/Tower layers for CORS, rate limiting, timing, logging,
+   compression, and security headers.
+2. Application and package plugins use the v2 `http` socket with standard Fetch primitives.
 
 ```ts
-import { config, definePlugin } from 'ruvyxa/config'
+import { config } from 'ruvyxa/config'
+import { definePlugin } from 'ruvyxa/plugin'
+
+const auth = definePlugin({
+  name: 'auth',
+  register({ http }) {
+    http.onRequest({
+      match: ['/api/*'],
+      handler({ request }) {
+        if (!request.headers.has('authorization')) {
+          return new Response('Unauthorized', { status: 401 })
+        }
+      },
+    })
+    http.onResponse({
+      match: ['/api/*'],
+      handler({ response, plugin }) {
+        const headers = new Headers(response.headers)
+        headers.set('x-plugin', plugin)
+        return new Response(response.body, { status: response.status, headers })
+      },
+    })
+  },
+})
 
 export default config({
   middleware: { builtin: { timing: true, log: true } },
-  plugins: [
-    definePlugin({
-      name: 'auth',
-      setup({ addMiddleware }) {
-        addMiddleware({
-          routes: ['/api/*'],
-          onRequest(request, context) {
-            if (request.headers.has('authorization')) return
-            return new Response('Unauthorized', { status: 401 })
-          },
-          onResponse(request, response) {
-            const output = new Response(response.body, response)
-            output.headers.set('x-plugin', context.plugin)
-            return output
-          },
-        })
-      },
-    }),
-  ],
+  plugins: [auth],
 })
 ```
 
-`undefined` continues the chain. A returned `Request` replaces the request and a returned `Response`
-short-circuits request processing. Response hooks receive cloned Fetch objects and may return a
-replacement `Response`; `undefined` preserves the current response.
+Returning nothing continues. A returned `Request` replaces the request; a returned `Response`
+short-circuits request hooks and application routing. Response hooks may replace the response.
+`next()` and `next(replacement)` provide the same continuation behavior when it is clearer inside a
+branch.
 
 ## Runtime boundary
 
-The Rust dev server owns the HTTP socket, route matching, request body limits, and Axum response.
-`PluginHost` starts `runtime/plugin-runtime.mjs` once per server and exchanges NDJSON:
+The Rust server owns the socket, Axum routing, body limits, and final response. A bounded
+`PluginHost` worker pool executes callbacks in Node or Bun over protocol v2 NDJSON:
 
 ```text
-Rust request -> { hook: "middlewareRequest", method, path, headers, bodyBase64 }
-Node result  -> { kind: "request", request: ... } | { kind: "response", response: ... }
-Rust response -> { hook: "middlewareResponse", request: ..., response: ... }
-Node result  -> { response: ... }
+Rust -> { protocolVersion: 2, hook: "http.request", request: ... }
+Node -> { protocolVersion: 2, ok: true, result: { kind: "request" | "response", ... } }
+
+Rust -> { protocolVersion: 2, hook: "http.response", request: ..., response: ... }
+Node -> { protocolVersion: 2, ok: true, result: { response: ... } }
 ```
 
-Headers are passed as ordered pairs so duplicate values survive the bridge. Bodies are base64
-encoded for lossless binary transport. Rust validates every result before converting to Axum types
-and enforces `security.pluginLimit` when buffering response hooks. Connection middleware runs before
-request processing; response middleware runs before security headers are applied.
+Headers use ordered pairs and bodies use base64. Rust validates every result and enforces
+`security.pluginLimit` before response buffering. Plugin-owned exact routes are registered through
+`http.route()` and participate in the request phase; duplicate method/path ownership is rejected
+when the registry starts.
 
 ## Ordering and failures
 
-Built-in Tower layers are installed by `MiddlewareStack` in a deterministic order. Plugin middleware
-runs in plugin registration order after the request enters the server and before the response leaves
-it. Hook exceptions terminate the current call with a Ruvyxa diagnostic; they do not silently become
-a malformed HTTP response. The runtime reports plugin names and hook phases so a failure is
-actionable.
+Plugin request handlers run in config and source order. The first explicit response stops the
+request chain. Response handlers run sequentially on the current response. Connection middleware
+runs before plugin request processing; native security headers are filled after plugin response
+processing so explicit application/plugin values are preserved.
 
-There is no custom-layer configuration or separate plugin ABI. This keeps framework middleware
-native while making application middleware ordinary code with standard Fetch primitives.
+Exceptions and unsupported return values fail the call with a named diagnostic. A timeout does not
+retry a possibly side-effecting handler; the poisoned worker is replaced. Console output remains
+visible on stderr while stdout stays reserved for the protocol.
+
+There is no separate middleware-plugin object model. HTTP behavior is one socket on the same v2
+plugin that may also register build, dev, diagnostic, or native behavior.

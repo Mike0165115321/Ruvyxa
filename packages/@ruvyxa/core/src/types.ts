@@ -249,7 +249,8 @@ export interface TransformResult {
   map?: unknown
 }
 
-export type PluginEnvironment = 'client' | 'server'
+/** Execution target exposed to build plugin hooks. */
+export type PluginEnvironment = 'client' | 'server' | 'edge' | 'worker' | 'shared'
 
 export interface PluginTransformContext {
   /** Absolute application root. */
@@ -257,50 +258,91 @@ export interface PluginTransformContext {
   environment: 'client' | 'server' | 'edge' | 'worker' | 'shared'
 }
 
-export interface PluginMiddlewareContext {
-  /** Name of the plugin that registered this middleware. */
-  plugin: string
+/** Exact pathname or a prefix pattern ending in `*`. */
+export type PluginRoutePattern = string
+
+export interface PluginHttpContext {
+  /** Name of the plugin that registered this hook. */
+  readonly plugin: string
   /** Absolute application root. */
-  root: string
+  readonly root: string
 }
 
-export type PluginRequestResult = Request | Response | void
+export interface PluginHttpRequestContext extends PluginHttpContext {
+  readonly request: Request
+  /** Continue to the next hook, optionally with a replacement request. */
+  next(request?: Request): void
+}
 
-export type PluginRequestMiddleware = (
-  request: Request,
-  context: PluginMiddlewareContext,
-) => PluginRequestResult | Promise<PluginRequestResult>
+export interface PluginHttpResponseContext extends PluginHttpContext {
+  readonly request: Request
+  readonly response: Response
+  /** Continue to the next hook, optionally with a replacement response. */
+  next(response?: Response): void
+}
 
-export type PluginResponseMiddleware = (
-  request: Request,
-  response: Response,
-  context: PluginMiddlewareContext,
+export type PluginHttpRequestHandler = (
+  context: PluginHttpRequestContext,
+) => Request | Response | void | Promise<Request | Response | void>
+
+export type PluginHttpResponseHandler = (
+  context: PluginHttpResponseContext,
 ) => Response | void | Promise<Response | void>
 
-/** Request/response middleware registered by a plugin. */
-export interface PluginMiddleware {
-  /** Exact paths or prefix patterns ending in `*`. Omit to match every application route. */
-  routes?: string[]
-  onRequest?: PluginRequestMiddleware
-  onResponse?: PluginResponseMiddleware
+export interface PluginHttpRequestRegistration {
+  /** Omit to match every application path. */
+  match?: readonly PluginRoutePattern[]
+  handler: PluginHttpRequestHandler
 }
 
-/** Middleware shorthand accepted by `plugin(name, middleware)`. */
-export interface PluginMiddlewareOptions extends PluginMiddleware {
-  /** Response headers to add or replace without writing an `onResponse` hook. */
-  headers?: HeadersInit
+export interface PluginHttpResponseRegistration {
+  /** Omit to match every application path. */
+  match?: readonly PluginRoutePattern[]
+  handler: PluginHttpResponseHandler
 }
 
-export type PluginResolveIdHook = (
-  id: string,
-  importer: string | undefined,
-  context: PluginTransformContext,
+export interface PluginHttpRouteContext extends PluginHttpContext {
+  readonly request: Request
+}
+
+export interface PluginHttpRouteRegistration {
+  /** Exact application path. */
+  path: string
+  /** One method, several methods, or every method when omitted. */
+  method?: string | readonly string[]
+  handler(context: PluginHttpRouteContext): Response | Promise<Response>
+}
+
+export interface PluginHttpSocket {
+  onRequest(registration: PluginHttpRequestRegistration | PluginHttpRequestHandler): void
+  onResponse(registration: PluginHttpResponseRegistration | PluginHttpResponseHandler): void
+  route(registration: PluginHttpRouteRegistration): void
+}
+
+export interface PluginBuildResolveContext extends PluginTransformContext {
+  readonly id: string
+  readonly importer?: string
+}
+
+export type PluginBuildResolveHandler = (
+  context: PluginBuildResolveContext,
 ) => string | null | void | Promise<string | null | void>
 
-export type PluginTransformHook = (
-  code: string,
-  id: string,
-  context: PluginTransformContext,
+export interface PluginBuildLoadContext extends PluginTransformContext {
+  readonly id: string
+}
+
+export type PluginBuildLoadHandler = (
+  context: PluginBuildLoadContext,
+) => string | TransformResult | null | void | Promise<string | TransformResult | null | void>
+
+export interface PluginBuildTransformContext extends PluginTransformContext {
+  readonly code: string
+  readonly id: string
+}
+
+export type PluginBuildTransformHandler = (
+  context: PluginBuildTransformContext,
 ) => string | TransformResult | null | void | Promise<string | TransformResult | null | void>
 
 export interface PluginBuildContext {
@@ -314,6 +356,21 @@ export interface PluginBuildContext {
 
 export type PluginBuildCompleteHook = (context: PluginBuildContext) => void | Promise<void>
 
+export interface PluginBuildStartContext {
+  readonly root: string
+  readonly outDir: string
+}
+
+export type PluginBuildStartHook = (context: PluginBuildStartContext) => void | Promise<void>
+
+export interface PluginBuildSocket {
+  onStart(hook: PluginBuildStartHook): void
+  onResolve(hook: PluginBuildResolveHandler): void
+  onLoad(hook: PluginBuildLoadHandler): void
+  onTransform(hook: PluginBuildTransformHandler): void
+  onComplete(hook: PluginBuildCompleteHook): void
+}
+
 /** Native self-hosted realtime transport requested by a first-party plugin. */
 export interface RealtimePluginOptions {
   /** WebSocket endpoint. Must be an absolute application path. @default "/__ruvyxa/realtime" */
@@ -324,24 +381,61 @@ export interface RealtimePluginOptions {
   capacity?: number
 }
 
-/** Registration surface available while a plugin is set up. */
-export interface PluginSetupContext {
-  /** Add request and/or response middleware to Ruvyxa's ordered middleware pipeline. */
-  addMiddleware(middleware: PluginMiddleware | PluginRequestMiddleware): void
-  /** Resolve an import before Ruvyxa's native resolver. */
-  resolveId(hook: PluginResolveIdHook): void
-  /** Transform application source before Ruvyxa compiles TypeScript and JSX. */
-  transform(hook: PluginTransformHook): void
-  /** Run after core output is committed and before adapters materialize deployment artifacts. */
-  onBuildComplete(hook: PluginBuildCompleteHook): void
-  /** Enable Ruvyxa's native self-hosted WebSocket transport for this plugin. */
-  enableRealtime(options?: RealtimePluginOptions): void
+export interface PluginDevFileChangeContext {
+  readonly root: string
+  readonly paths: readonly string[]
 }
 
-/** A Ruvyxa plugin configured in `ruvyxa.config.ts`. */
-export interface RuvyxaPlugin {
+export type PluginDevFileChangeHandler = (
+  context: PluginDevFileChangeContext,
+) => void | Promise<void>
+
+export interface PluginDevFileChangeRegistration {
+  /** Optional path patterns, relative to the application root. */
+  match?: readonly string[]
+  handler: PluginDevFileChangeHandler
+}
+
+export interface PluginDevSocket {
+  onFileChange(registration: PluginDevFileChangeRegistration | PluginDevFileChangeHandler): void
+}
+
+export type PluginDiagnosticLevel = 'info' | 'warning' | 'error'
+
+export interface PluginDiagnostic {
+  level: PluginDiagnosticLevel
+  code: string
+  message: string
+}
+
+export interface PluginDiagnosticsSocket {
+  report(diagnostic: PluginDiagnostic): void
+}
+
+export type PluginNativeCapability = 'realtime@1'
+
+export interface PluginNativeSocket {
+  claim(capability: 'realtime@1', options?: RealtimePluginOptions): void
+}
+
+/** Grouped extension sockets available while a plugin registers itself. */
+export interface PluginRegistrationApi {
+  readonly http: PluginHttpSocket
+  readonly build: PluginBuildSocket
+  readonly dev: PluginDevSocket
+  readonly diagnostics: PluginDiagnosticsSocket
+  readonly native: PluginNativeSocket
+}
+
+/** Input accepted by `definePlugin`. The API version is stamped by the helper. */
+export interface RuvyxaPluginDefinition {
   name: string
-  setup(context: PluginSetupContext): void | Promise<void>
+  register(api: PluginRegistrationApi): void | Promise<void>
+}
+
+/** The sole plugin object accepted by `config({ plugins })`. */
+export interface RuvyxaPlugin extends RuvyxaPluginDefinition {
+  readonly apiVersion: 2
 }
 
 export interface BuildContext {

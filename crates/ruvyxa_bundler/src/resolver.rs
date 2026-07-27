@@ -57,10 +57,20 @@ pub struct ResolvedModule {
     pub path: PathBuf,
     /// Raw UTF-8 source (TypeScript/TSX/JS/JSX).
     pub source: String,
+    /// Optional source map supplied by a build load hook.
+    pub load_source_map: Option<String>,
     /// Specifiers that this module imports (absolute paths after resolution).
     pub deps: Vec<PathBuf>,
+    /// Exact source specifier to resolved path bindings, including plugin aliases.
+    pub dependency_aliases: BTreeMap<String, PathBuf>,
     /// Whether this module is part of `node_modules` (external).
     pub is_external: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ResolvedDependencies {
+    paths: Vec<PathBuf>,
+    aliases: BTreeMap<String, PathBuf>,
 }
 
 /// Fingerprint for a cached source file: mtime + length.
@@ -944,13 +954,16 @@ pub(crate) fn resolve_graph_with_incremental(
         ResolvedModule {
             path: entry_key.clone(),
             source: entry_source.to_string(),
-            deps: entry_deps.clone(),
+            load_source_map: None,
+            deps: entry_deps.paths.clone(),
+            dependency_aliases: entry_deps.aliases,
             is_external: false,
         },
     );
 
     // Phase 2: Parallel BFS — resolve frontier layers concurrently.
     let mut frontier: Vec<PathBuf> = entry_deps
+        .paths
         .into_iter()
         .filter(|dep| visited_set.insert(dep.clone()))
         .collect();
@@ -965,7 +978,17 @@ pub(crate) fn resolve_graph_with_incremental(
                         .components()
                         .any(|c| c.as_os_str() == "node_modules");
 
-                let raw_source = cache.read_source(dep_path)?;
+                let hook_context = BuildHookContext {
+                    project_root: project_root.clone(),
+                    importer: None,
+                    target,
+                };
+                let loaded = build_hooks.load(dep_path, &hook_context)?;
+                let raw_source = match &loaded {
+                    Some(output) => output.code.clone(),
+                    None => cache.read_source(dep_path)?,
+                };
+                let load_source_map = loaded.and_then(|output| output.map);
                 let source = if target == BundleTarget::Client
                     && dep_path
                         .components()
@@ -976,8 +999,8 @@ pub(crate) fn resolve_graph_with_incremental(
                     raw_source.clone()
                 };
 
-                let deps = if is_external {
-                    Vec::new()
+                let dependencies = if is_external {
+                    ResolvedDependencies::default()
                 } else if target == BundleTarget::Client
                     && build_hooks.host_count() == 0
                     && incremental.is_some_and(|cache| {
@@ -991,7 +1014,10 @@ pub(crate) fn resolve_graph_with_incremental(
                     if let Some(incremental) = incremental {
                         incremental.record_edge_hit();
                     }
-                    cached
+                    ResolvedDependencies {
+                        paths: cached,
+                        aliases: BTreeMap::new(),
+                    }
                 } else {
                     let resolve_base = dep_path.parent().unwrap_or(&project_root).to_path_buf();
                     let dependency_source = if matches!(
@@ -1020,7 +1046,12 @@ pub(crate) fn resolve_graph_with_incremental(
                     && build_hooks.host_count() == 0
                     && let Some(incremental) = incremental
                 {
-                    incremental.record_module(dep_path.clone(), &raw_source, deps.clone(), None);
+                    incremental.record_module(
+                        dep_path.clone(),
+                        &raw_source,
+                        dependencies.paths.clone(),
+                        None,
+                    );
                 }
 
                 Ok((
@@ -1028,7 +1059,9 @@ pub(crate) fn resolve_graph_with_incremental(
                     ResolvedModule {
                         path: dep_path.clone(),
                         source,
-                        deps,
+                        load_source_map,
+                        deps: dependencies.paths,
+                        dependency_aliases: dependencies.aliases,
                         is_external,
                     },
                 ))
@@ -1072,7 +1105,7 @@ fn collect_deps_cached(
     cache: &ResolveGraphCache,
     build_hooks: &BuildHookPipeline,
     target: BundleTarget,
-) -> Result<Vec<PathBuf>> {
+) -> Result<ResolvedDependencies> {
     if build_hooks.host_count() == 0 {
         let key = DependencyCacheKey {
             base_dir: Arc::from(base_dir.to_string_lossy().as_ref()),
@@ -1084,7 +1117,10 @@ fn collect_deps_cached(
             },
         };
         if let Some(dependencies) = cache.dependencies.get(&key) {
-            return Ok(dependencies.to_vec());
+            return Ok(ResolvedDependencies {
+                paths: dependencies.to_vec(),
+                aliases: BTreeMap::new(),
+            });
         }
         let dependencies = collect_deps_uncached(
             source,
@@ -1097,7 +1133,7 @@ fn collect_deps_cached(
         )?;
         cache
             .dependencies
-            .insert(key, Arc::from(dependencies.as_slice()));
+            .insert(key, Arc::from(dependencies.paths.as_slice()));
         return Ok(dependencies);
     }
 
@@ -1121,9 +1157,12 @@ fn collect_deps_uncached(
     cache: &ResolveGraphCache,
     build_hooks: &BuildHookPipeline,
     target: BundleTarget,
-) -> Result<Vec<PathBuf>> {
+) -> Result<ResolvedDependencies> {
     let specifiers = extract_specifiers(source);
-    let mut deps = Vec::with_capacity(specifiers.len());
+    let mut dependencies = ResolvedDependencies {
+        paths: Vec::with_capacity(specifiers.len()),
+        aliases: BTreeMap::new(),
+    };
     let base_dir_str = base_dir.to_string_lossy();
 
     for specifier in specifiers {
@@ -1178,7 +1217,10 @@ fn collect_deps_uncached(
         match resolved {
             Some(abs_path) => {
                 if is_project_local(&abs_path, project_root) || target == BundleTarget::Client {
-                    deps.push(abs_path);
+                    dependencies
+                        .aliases
+                        .insert(specifier.clone(), abs_path.clone());
+                    dependencies.paths.push(abs_path);
                 }
             }
             None => {
@@ -1194,7 +1236,7 @@ fn collect_deps_uncached(
         }
     }
 
-    Ok(deps)
+    Ok(dependencies)
 }
 
 fn is_non_js_asset_specifier(specifier: &str) -> bool {
@@ -1419,9 +1461,9 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(deps.len(), 1);
+        assert_eq!(deps.paths.len(), 1);
         assert_eq!(
-            deps[0],
+            deps.paths[0],
             ruvyxa_diagnostics::normalized_canonical_path(&page)
         );
     }
@@ -1445,7 +1487,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(deps.is_empty());
+        assert!(deps.paths.is_empty());
     }
 
     #[test]

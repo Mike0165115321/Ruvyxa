@@ -145,8 +145,11 @@ pub(crate) fn dynamic_import_chunks(
     for module in compiled.iter().filter(|module| !module.is_external) {
         let ast = ast::parse_module(&module.js);
         for specifier in ast.dynamic_import_specifiers() {
-            if let Some(dep) = linker::find_dep_for_specifier(&specifier, &module.deps)
-                && let Some(file) = dynamic_import_files.get(dep)
+            if let Some(dep) = linker::find_dep_for_specifier_with_aliases(
+                &specifier,
+                &module.deps,
+                &module.dependency_aliases,
+            ) && let Some(file) = dynamic_import_files.get(dep)
             {
                 dynamic_imports.push(DynamicImportChunk {
                     importer: module.path.display().to_string().replace('\\', "/"),
@@ -175,8 +178,11 @@ fn dynamic_roots(
     for module in compiled.iter().filter(|module| !module.is_external) {
         let ast = ast::parse_module(&module.js);
         for specifier in ast.dynamic_import_specifiers() {
-            if let Some(dep) = linker::find_dep_for_specifier(&specifier, &module.deps)
-                && module_map.contains_key(dep)
+            if let Some(dep) = linker::find_dep_for_specifier_with_aliases(
+                &specifier,
+                &module.deps,
+                &module.dependency_aliases,
+            ) && module_map.contains_key(dep)
             {
                 roots.insert(dep.clone());
             }
@@ -204,8 +210,11 @@ fn collect_static_transitive_modules(
         .iter()
         .filter(|edge| edge.kind != ImportKind::Dynamic)
     {
-        if let Some(dep) = linker::find_dep_for_specifier(&edge.specifier, &module.deps)
-            && module_map.contains_key(dep)
+        if let Some(dep) = linker::find_dep_for_specifier_with_aliases(
+            &edge.specifier,
+            &module.deps,
+            &module.dependency_aliases,
+        ) && module_map.contains_key(dep)
         {
             collect_static_transitive_modules(dep, module_map, selected);
         }

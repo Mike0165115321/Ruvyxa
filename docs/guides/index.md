@@ -28,7 +28,7 @@ Levels: 🟢 beginner friendly · 🟡 intermediate · 🔴 advanced/reference
 | 11. Configuration Reference         | 🔴    | [EN](en/configuration.md)            | [TH](th/configuration.md)            |
 | 12. CLI Commands                    | 🟢    | [EN](en/cli-commands.md)             | [TH](th/cli-commands.md)             |
 | 13. Deployment                      | 🟢    | [EN](en/deployment.md)               | [TH](th/deployment.md)               |
-| 14. Plugins                         | 🔴    | [EN](en/plugins.md)                  | [TH](th/plugins.md)                  |
+| 14. Plugins                         | 🔴    | [คู่มือรวม](../plugin.md)            | [คู่มือรวม](../plugin.md)            |
 | 15. Official Packages (DB/Auth/RT)  | 🟡    | [EN](en/official-packages.md)        | [TH](th/official-packages.md)        |
 
 ## Pick Your Path
@@ -76,7 +76,7 @@ Then explore by topic:
   boundary safety
 - **Secure & tune**: [Configuration](en/configuration.md) — full `ruvyxa.config.ts` reference
 - **Ship**: [Deployment](en/deployment.md) — Vercel, adapters, CI, production checklist
-- **Extend safely**: [Plugins](en/plugins.md) — scaffold and register middleware/build hooks plugins
+- **Extend safely**: [Plugins](../plugin.md) — scaffold and register middleware/build hooks plugins
 - **Add state**: [Official Packages](en/official-packages.md) — `@ruvyxa/database`, `@ruvyxa/auth`,
   and `@ruvyxa/realtime` for data, login, and live updates
 

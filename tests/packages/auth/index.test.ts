@@ -7,6 +7,7 @@ import {
   memoryRateLimitStore,
   type AuthUser,
 } from '../../../packages/@ruvyxa/auth/dist/index.js'
+import { createAuthPlugin } from '../../../packages/@ruvyxa/auth/dist/plugin.js'
 
 const origin = 'https://app.example.com'
 const secret = 'test-secret-that-is-at-least-thirty-two-characters'
@@ -420,19 +421,38 @@ describe('@ruvyxa/auth', () => {
   it('refuses development stores in production plugin builds', async () => {
     const auth = runtime()
     let hook: ((context: unknown) => void | Promise<void>) | undefined
-    await auth.plugin.setup({
-      addMiddleware() {},
-      resolveId() {},
-      transform() {},
-      enableRealtime() {},
-      onBuildComplete(value) {
-        hook = value as typeof hook
+    await auth.plugin.register({
+      http: { onRequest() {}, onResponse() {}, route() {} },
+      build: {
+        onStart() {},
+        onResolve() {},
+        onLoad() {},
+        onTransform() {},
+        onComplete(value) {
+          hook = value as typeof hook
+        },
       },
+      dev: { onFileChange() {} },
+      diagnostics: { report() {} },
+      native: { claim() {} },
     })
     await assert.rejects(
       async () => hook?.({ manifest: { profile: 'production' } }),
       /RUV3105|production auth requires durable/,
     )
     assert.throws(() => memoryAuthStore({} as never), /development: true/)
+  })
+
+  it('exposes the explicit protocol-v2 plugin integration entry', () => {
+    const plugin = createAuthPlugin({
+      basePath: '/auth',
+      async handle() {
+        return undefined
+      },
+      validateBuild() {},
+    })
+
+    assert.equal(plugin.apiVersion, 2)
+    assert.equal(plugin.name, 'ruvyxa:auth')
   })
 })

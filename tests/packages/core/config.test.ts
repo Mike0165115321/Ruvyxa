@@ -1,33 +1,52 @@
-import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import { describe, it } from 'node:test'
 
+import { config, type RuvyxaConfig } from '../../../packages/@ruvyxa/core/src/config.ts'
 import {
-  config,
   definePlugin,
-  plugin,
   withResponseHeader,
-  type RuvyxaConfig,
-} from '../../../packages/@ruvyxa/core/src/config.ts'
+  type PluginHttpRequestHandler,
+  type PluginHttpRequestRegistration,
+  type PluginRegistrationApi,
+} from '../../../packages/@ruvyxa/core/src/plugin.ts'
 
-describe('config API', () => {
-  it('accepts builtin middleware and plugins', () => {
+function registrationApi(
+  onRequest: (value: PluginHttpRequestRegistration | PluginHttpRequestHandler) => void,
+): PluginRegistrationApi {
+  return {
+    http: { onRequest, onResponse() {}, route() {} },
+    build: {
+      onStart() {},
+      onResolve() {},
+      onLoad() {},
+      onTransform() {},
+      onComplete() {},
+    },
+    dev: { onFileChange() {} },
+    diagnostics: { report() {} },
+    native: { claim() {} },
+  }
+}
+
+describe('config and plugin APIs', () => {
+  it('accepts grouped plugin sockets in application config', async () => {
     const authPlugin = definePlugin({
       name: 'auth',
-      setup({ addMiddleware, transform, onBuildComplete }) {
-        addMiddleware({
-          routes: ['/api/*'],
-          onRequest(request) {
+      register({ http, build }) {
+        http.onRequest({
+          match: ['/api/*'],
+          handler({ request }) {
             return request.headers.has('authorization')
               ? undefined
               : new Response('Unauthorized', { status: 401 })
           },
         })
-        transform((code, id, context) =>
-          context.environment === 'client' && id.endsWith('.tsx')
+        build.onTransform(({ code, id, environment }) =>
+          environment === 'client' && id.endsWith('.tsx')
             ? { code: `${code}\n// transformed` }
             : undefined,
         )
-        onBuildComplete(({ root, outDir, manifest }) => {
+        build.onComplete(({ root, outDir, manifest }) => {
           assert.ok(root)
           assert.ok(outDir)
           assert.ok(manifest)
@@ -48,77 +67,29 @@ describe('config API', () => {
             credentials: true,
             maxAge: 86400,
           },
-          rate: {
-            max: 100,
-            window: 60,
-            key: 'ip',
-          },
-          headers: {
-            'X-Powered-By': 'Ruvyxa',
-          },
+          rate: { max: 100, window: 60, key: 'ip' },
+          headers: { 'X-Powered-By': 'Ruvyxa' },
         },
       },
       plugins: [authPlugin],
-      adapterOptions: {
-        region: 'iad1',
-      },
-      build: {
-        treeShake: false,
-        manifest: true,
-      },
+      adapterOptions: { region: 'iad1' },
+      build: { treeShake: false, manifest: true },
     }
 
     const defined = config(settings)
-
     assert.equal(defined.middleware?.builtin?.timing, true)
-    assert.equal(defined.middleware?.workers, 2)
-    assert.equal(defined.middleware?.timeoutMs, 15_000)
+    assert.equal(defined.plugins?.[0]?.apiVersion, 2)
     assert.equal(defined.plugins?.[0]?.name, 'auth')
-    assert.equal(defined.adapterOptions?.region, 'iad1')
-    assert.equal(defined.build?.treeShake, false)
-    assert.equal(defined.build?.manifest, true)
+
+    let registered: PluginHttpRequestRegistration | PluginHttpRequestHandler | undefined
+    await authPlugin.register(registrationApi((value) => (registered = value)))
+    assert.deepEqual((registered as PluginHttpRequestRegistration).match, ['/api/*'])
   })
 
-  it('rejects malformed plugin definitions at the application boundary', () => {
-    assert.throws(() => definePlugin({ name: ' ', setup() {} }), /must have a non-empty name/)
-    assert.throws(() => definePlugin({ name: 'broken' } as never), /must provide setup\(context\)/)
-  })
-
-  it('creates a middleware plugin without setup boilerplate', () => {
-    const auth = plugin('auth', {
-      routes: ['/api/*'],
-      onRequest: (request) =>
-        request.headers.has('authorization')
-          ? undefined
-          : new Response('Unauthorized', { status: 401 }),
-    })
-    let registered: unknown
-
-    auth.setup({
-      addMiddleware(value) {
-        registered = value
-      },
-      resolveId() {},
-      transform() {},
-      onBuildComplete() {},
-      enableRealtime() {},
-    })
-
-    assert.equal(auth.name, 'auth')
-    assert.deepEqual((registered as { routes?: string[] }).routes, ['/api/*'])
-    assert.equal(typeof (registered as { onRequest?: unknown }).onRequest, 'function')
-
-    const logger = plugin('logger', (request) => request)
-    logger.setup({
-      addMiddleware(value) {
-        registered = value
-      },
-      resolveId() {},
-      transform() {},
-      onBuildComplete() {},
-      enableRealtime() {},
-    })
-    assert.equal(typeof registered, 'function')
+  it('rejects malformed definitions and stamps the sole API version', () => {
+    assert.throws(() => definePlugin({ name: ' ', register() {} }), /must have a non-empty name/)
+    assert.throws(() => definePlugin({ name: 'broken' } as never), /must provide register\(api\)/)
+    assert.equal(definePlugin({ name: 'valid', register() {} }).apiVersion, 2)
   })
 
   it('copies a response when changing one header', async () => {
@@ -135,38 +106,5 @@ describe('config API', () => {
     assert.equal(updated.headers.get('x-existing'), 'kept')
     assert.equal(updated.headers.get('x-plugin'), 'active')
     assert.equal(await updated.text(), 'Hello')
-  })
-
-  it('turns declarative headers into response middleware', async () => {
-    const responseHeaders = plugin('response-headers', {
-      routes: ['/api/*'],
-      headers: { 'x-plugin': 'active' },
-    })
-    let registered: unknown
-
-    responseHeaders.setup({
-      addMiddleware(value) {
-        registered = value
-      },
-      resolveId() {},
-      transform() {},
-      onBuildComplete() {},
-      enableRealtime() {},
-    })
-
-    const middleware = registered as {
-      routes?: string[]
-      onResponse?: (request: Request, response: Response) => Promise<Response | void>
-    }
-    const response = await middleware.onResponse?.(
-      new Request('https://example.test/api/items'),
-      new Response('OK', { status: 202, headers: { 'x-existing': 'kept' } }),
-    )
-
-    assert.deepEqual(middleware.routes, ['/api/*'])
-    assert.equal(response?.status, 202)
-    assert.equal(response?.headers.get('x-existing'), 'kept')
-    assert.equal(response?.headers.get('x-plugin'), 'active')
-    assert.equal(await response?.text(), 'OK')
   })
 })

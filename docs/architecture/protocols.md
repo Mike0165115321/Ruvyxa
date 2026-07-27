@@ -335,18 +335,25 @@ Browser: receives message, dispatches to appropriate handler
 
 ---
 
-## ## 3. Plugin Protocol
+## 3. Plugin Protocol
 
 Plugins communicate with Rust through the persistent `runtime/plugin-runtime.mjs` process using
-newline-delimited JSON (NDJSON). The same registry serves build hooks and HTTP middleware.
+newline-delimited JSON (NDJSON). Every request and response carries `protocolVersion: 2`.
 
 ### Build hooks
 
 ```json
-{ "hook": "transform", "code": "...", "id": "/app/page.tsx", "environment": "client" }
+{
+  "protocolVersion": 2,
+  "hook": "build.transform",
+  "code": "...",
+  "id": "/app/page.tsx",
+  "environment": "client"
+}
 ```
 
-The runtime returns `{ "ok": true, "result": { "code": "...", "map": "..." } }`, or a structured
+The runtime returns
+`{ "protocolVersion": 2, "ok": true, "result": { "code": "...", "map": "..." } }`, or a structured
 error containing a Ruvyxa diagnostic code, message, and stack.
 
 ### HTTP middleware
@@ -355,7 +362,8 @@ Request calls use ordered header pairs and optional base64 bodies:
 
 ```json
 {
-  "hook": "middlewareRequest",
+  "protocolVersion": 2,
+  "hook": "http.request",
   "request": {
     "method": "POST",
     "path": "/api/items?draft=1",
@@ -372,7 +380,8 @@ paths, headers, status codes, and body limits before converting values to Axum t
 ### Lifecycle
 
 1. The CLI or dev server starts the runtime and sends `describe`.
-2. The runtime loads `ruvyxa.config.ts`, validates plugin names, and executes each `setup` once.
+2. The runtime loads `ruvyxa.config.ts`, validates API version/name, and executes each `register`
+   once.
 3. Rust sends serialized hook calls over the persistent process.
 4. The runtime returns one JSON response per input line; diagnostics go to stderr.
 5. The process is terminated with the owning build or server lifecycle.

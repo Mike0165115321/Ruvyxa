@@ -89,7 +89,7 @@ Add `databasePlugin()` to fail the production build early when configuration is 
 
 ```ts
 // ruvyxa.config.ts
-import { databasePlugin } from '@ruvyxa/database'
+import { databasePlugin } from '@ruvyxa/database/plugin'
 import { config } from 'ruvyxa/config'
 
 export default config({
@@ -235,7 +235,7 @@ never database rows. The browser then refetches through its normal loader path.
 
 ```ts
 // ruvyxa.config.ts
-import { realtime } from '@ruvyxa/realtime'
+import { realtime } from '@ruvyxa/realtime/plugin'
 import { config } from 'ruvyxa/config'
 
 export default config({ plugins: [realtime()] })
@@ -307,7 +307,7 @@ time.
 
 ## Next steps
 
-- [Plugins](plugins.md) — write your own middleware and build hooks
+- [Plugins](../../plugin.md) — write your own middleware and build hooks
 - [Server Actions](server-actions.md) — validation and forms that pair with these packages
 - [Deployment](deployment.md) — adapter compatibility details
 - [Official package architecture](../../architecture/official-plugins.md) — full internals, security
