@@ -8,7 +8,6 @@ on:
 
 permissions:
   contents: write
-  id-token: write
 
 concurrency:
   group: release-${{ github.ref_name }}
@@ -214,13 +213,15 @@ jobs:
               pnpm --filter "$PACKAGE" publish --access public --no-git-checks
             fi
             for ATTEMPT in 1 2 3 4 5 6; do
-              if npm view "$PACKAGE@$VERSION" version; then
+              if npm view "$PACKAGE@$VERSION" version >/dev/null 2>&1; then
+                echo "$PACKAGE@$VERSION is available on npm"
                 break
               fi
               if [ "$ATTEMPT" = 6 ]; then
                 echo "::error::${PACKAGE}@${VERSION} is not available on npm after publish"
                 exit 1
               fi
+              echo "Waiting for ${PACKAGE}@${VERSION} to propagate to npm..."
               sleep 10
             done
           done
