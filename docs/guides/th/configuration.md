@@ -122,7 +122,7 @@ alias และจะใช้ Node รัน JavaScript สำหรับง�
 
 ลงทะเบียนค่าที่สร้างด้วย `definePlugin({ name, register })` จาก `ruvyxa/plugin` Plugin หนึ่งตัวใช้
 กลุ่ม `http`, `build`, `dev`, `diagnostics`, `native` ร่วมกันได้ตามต้องการ ทุก hook ทำงานตามลำดับ
-ที่ประกาศและต้องเป็น API/protocol version 2 ดูรายละเอียดที่ [คู่มือ plugin](../../plugin.md)
+ที่ประกาศใน `plugins` ดูรายละเอียดที่ [คู่มือ plugin](plugin.md)
 
 ### css
 

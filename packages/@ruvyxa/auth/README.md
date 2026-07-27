@@ -37,8 +37,8 @@ export default config({ plugins: [auth.plugin] })
 ```
 
 The package exposes `@ruvyxa/auth/plugin` for integration authors who need `createAuthPlugin()` with
-an explicit request/build bridge. Normal applications should use the v2 `auth.plugin` value created
-by `createAuth()` so the handler, store validation, and plugin stay aligned.
+an explicit request/build bridge. Normal applications should use the `auth.plugin` value created by
+`createAuth()` so the handler, store validation, and plugin stay aligned.
 
 The session cookie is opaque, HttpOnly, SameSite, and Secure on HTTPS. Session and one-time token
 keys are HMAC-derived. `AuthStore.take()` and `AuthRateLimitStore.consume()` must be atomic; the

@@ -130,7 +130,7 @@ export default config({
 })
 ```
 
-Register application middleware with the same v2 plugin contract used by build and dev hooks:
+Register application middleware with the same plugin contract used by build and dev hooks:
 
 ```ts
 import { config } from 'ruvyxa/config'
@@ -197,11 +197,11 @@ including independent OpenAI search/training crawler policy.
 ## Runtime Architecture
 
 The `ruvyxa` package includes a persistent Node/Bun render worker pool (`runtime/worker-pool.mjs`)
-and a protocol-v2 plugin runtime (`runtime/plugin-runtime.mjs`). Each plugin host loads
-`ruvyxa.config.ts` once and serves validated NDJSON calls; dev HTTP hooks can use 1–8 processes,
-while build hooks run in build-owned hosts. Module state is shared only inside one process. Dev
-middleware calls default to a 30-second timeout, and repeated HTTP headers survive the native
-bridge. Plugin transform source maps are forwarded into generated client maps.
+and the plugin runtime (`runtime/plugin-runtime.mjs`). Each plugin host loads `ruvyxa.config.ts`
+once and serves validated NDJSON calls; dev HTTP hooks can use 1–8 processes, while build hooks run
+in build-owned hosts. Module state is shared only inside one process. Dev middleware calls default
+to a 30-second timeout, and repeated HTTP headers survive the native bridge. Plugin transform source
+maps are forwarded into generated client maps.
 
 The runtime files included in this package:
 

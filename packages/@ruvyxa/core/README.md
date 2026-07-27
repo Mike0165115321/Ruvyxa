@@ -169,7 +169,7 @@ export function customAdapter(): Adapter {
 
 ## Plugin Contract
 
-Plugins are ordinary TypeScript modules using the sole v2 contract:
+Plugins are ordinary TypeScript modules using one contract:
 
 ```ts
 import { definePlugin } from '@ruvyxa/core/plugin'
@@ -215,7 +215,7 @@ export function bannerPlugin(): RuvyxaPlugin {
 
 Request hooks return `undefined` to continue, a `Request` to replace the request, or a `Response` to
 short-circuit. Grouped `http`, `build`, `dev`, `diagnostics`, and `native` sockets run in
-declaration and registration order. `definePlugin()` stamps `apiVersion: 2`; other versions are
-rejected.
+declaration and registration order. The sole contract is a non-empty `name` and a `register(api)`
+function.
 
 This package is published as ESM with generated TypeScript declarations.

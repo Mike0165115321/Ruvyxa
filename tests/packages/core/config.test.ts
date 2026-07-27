@@ -78,7 +78,7 @@ describe('config and plugin APIs', () => {
 
     const defined = config(settings)
     assert.equal(defined.middleware?.builtin?.timing, true)
-    assert.equal(defined.plugins?.[0]?.apiVersion, 2)
+    assert.equal(defined.plugins?.[0]?.name, 'auth')
     assert.equal(defined.plugins?.[0]?.name, 'auth')
 
     let registered: PluginHttpRequestRegistration | PluginHttpRequestHandler | undefined
@@ -86,10 +86,10 @@ describe('config and plugin APIs', () => {
     assert.deepEqual((registered as PluginHttpRequestRegistration).match, ['/api/*'])
   })
 
-  it('rejects malformed definitions and stamps the sole API version', () => {
+  it('rejects malformed plugin definitions', () => {
     assert.throws(() => definePlugin({ name: ' ', register() {} }), /must have a non-empty name/)
     assert.throws(() => definePlugin({ name: 'broken' } as never), /must provide register\(api\)/)
-    assert.equal(definePlugin({ name: 'valid', register() {} }).apiVersion, 2)
+    assert.equal(definePlugin({ name: 'valid', register() {} }).name, 'valid')
   })
 
   it('copies a response when changing one header', async () => {

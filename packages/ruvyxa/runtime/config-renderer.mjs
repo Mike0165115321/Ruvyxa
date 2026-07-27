@@ -376,11 +376,6 @@ function pluginDescriptors(value) {
     if (typeof plugin.name !== 'string' || plugin.name.trim() === '') {
       throw new Error(`RUV1602 config.plugins[${index}].name must be a non-empty string.`)
     }
-    if (plugin.apiVersion !== 2) {
-      throw new Error(
-        `RUV1602 plugin "${plugin.name}" uses unsupported apiVersion ${String(plugin.apiVersion)}; expected 2.`,
-      )
-    }
     if (typeof plugin.register !== 'function') {
       throw new Error(`RUV1602 plugin "${plugin.name}" must provide register(api).`)
     }
@@ -389,7 +384,7 @@ function pluginDescriptors(value) {
       throw new Error(`RUV1602 duplicate plugin name: ${name}`)
     }
     names.add(name)
-    return { name, apiVersion: 2 }
+    return { name }
   })
 
   return plugins.length > 0 ? plugins : undefined

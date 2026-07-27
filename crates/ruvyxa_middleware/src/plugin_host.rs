@@ -14,9 +14,6 @@ use ruvyxa_diagnostics::{Result, RuvyxaError};
 
 use crate::config::DEFAULT_PLUGIN_HOOK_TIMEOUT_MS;
 
-/// Wire/API version shared by the Rust hosts and the Node/Bun registry.
-pub const PLUGIN_PROTOCOL_VERSION: u8 = 2;
-
 /// HTTP request representation transported losslessly over the plugin protocol.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -116,11 +113,10 @@ pub enum NativeCapabilityDescriptor {
     },
 }
 
-/// Descriptor for the sole versioned plugin registry contract.
+/// Descriptor for the plugin registry contract.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginRegistryDescriptor {
-    pub protocol_version: u8,
     pub plugins: Vec<String>,
     pub http: PluginHttpDescriptor,
     pub build: PluginBuildDescriptor,
@@ -160,8 +156,6 @@ impl PluginRegistryDescriptor {
 
 #[derive(Debug, Deserialize)]
 struct RuntimeOutput {
-    #[serde(rename = "protocolVersion")]
-    protocol_version: u8,
     ok: bool,
     result: Option<serde_json::Value>,
     code: Option<String>,
@@ -246,12 +240,6 @@ impl PluginHost {
                     "RUV1701 TypeScript plugin host returned an invalid registry descriptor: {error}"
                 ))
             })?;
-        if descriptor.protocol_version != PLUGIN_PROTOCOL_VERSION {
-            return Err(RuvyxaError::Message(format!(
-                "RUV1701 TypeScript plugin descriptor uses protocol version {}; expected {}",
-                descriptor.protocol_version, PLUGIN_PROTOCOL_VERSION
-            )));
-        }
         for diagnostic in &descriptor.diagnostics {
             warn!(
                 target: "ruvyxa::plugin",
@@ -501,7 +489,6 @@ async fn call_worker(
     mut payload: serde_json::Value,
 ) -> std::result::Result<serde_json::Value, CallFailure> {
     payload["hook"] = serde_json::Value::String(hook.to_string());
-    payload["protocolVersion"] = serde_json::Value::from(PLUGIN_PROTOCOL_VERSION);
     let mut encoded = serde_json::to_vec(&payload).map_err(|error| {
         CallFailure::Hook(RuvyxaError::Message(format!(
             "Failed to encode TypeScript plugin request: {error}"
@@ -538,12 +525,6 @@ async fn call_worker(
         ))));
     }
     let output = decode_runtime_output(line.trim())?;
-    if output.protocol_version != PLUGIN_PROTOCOL_VERSION {
-        return Err(CallFailure::WorkerPoisoned(RuvyxaError::Message(format!(
-            "RUV1701 TypeScript plugin host returned protocol version {}; expected {}",
-            output.protocol_version, PLUGIN_PROTOCOL_VERSION
-        ))));
-    }
     if output.ok {
         return Ok(output.result.unwrap_or(serde_json::Value::Null));
     }
@@ -587,9 +568,9 @@ mod tests {
     }
 
     #[test]
-    fn version_two_descriptor_decodes_grouped_sockets_and_capabilities() {
+    fn descriptor_decodes_grouped_sockets_and_capabilities() {
         let descriptor: PluginRegistryDescriptor = serde_json::from_value(serde_json::json!({
-            "protocolVersion": 2,
+
             "plugins": ["ruvyxa:realtime"],
             "http": { "request": 1, "response": 0, "routes": 1, "requestMatch": ["/events"] },
             "build": { "start": 0, "resolve": 0, "load": 0, "transform": 0, "complete": 1 },
@@ -604,7 +585,6 @@ mod tests {
             }]
         }))
         .unwrap();
-        assert_eq!(descriptor.protocol_version, PLUGIN_PROTOCOL_VERSION);
         assert_eq!(descriptor.http.routes, 1);
         assert_eq!(descriptor.dev.file_change, 1);
         assert_eq!(
@@ -673,7 +653,6 @@ mod tests {
             r#"
 export default {
   plugins: [{
-    apiVersion: 2,
     name: "recovery",
     register({ http }) {
       http.onRequest({
@@ -751,7 +730,6 @@ import { writeFileSync } from "node:fs"
 
 export default {
   plugins: [{
-    apiVersion: 2,
     name: "pool-selection",
     register({ http }) {
       http.onRequest({

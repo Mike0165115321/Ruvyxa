@@ -37,5 +37,5 @@ The package deliberately does not export a process-global `db`: config plugins, 
 render workers, and serverless instances have different lifecycles. Create the client in a
 server-only application module and let the selected driver own pooling for that process.
 
-`databasePlugin()` is a protocol-v2 plugin using the build-complete socket. The main package also
-re-exports it for convenience; `./plugin` is the explicit lifecycle-only entry.
+`databasePlugin()` uses the build-complete socket. The main package also re-exports it for
+convenience; `./plugin` is the explicit lifecycle-only entry.

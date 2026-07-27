@@ -269,7 +269,7 @@ process as the config renderer. Rust never evaluates plugin source directly.
 
 ### Communication boundary
 
-1. Config validation requires a named API-v2 plugin with `register(api)`.
+1. Config validation requires a named plugin with `register(api)`.
 2. Build sockets (start, resolve, load, transform, complete) and HTTP sockets go through versioned
    Node/Bun hosts via NDJSON (newline-delimited JSON) over stdin/stdout.
 3. Request and response bodies crossing the bridge are base64-encoded.

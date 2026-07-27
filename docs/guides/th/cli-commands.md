@@ -34,7 +34,7 @@ npm run start   # รัน production build ในเครื่อง
 | `npx ruvyxa test:parity`          | เปรียบเทียบ dev/prod routes + smoke-render        |
 | `npx ruvyxa parity`               | alias ของ `test:parity`                           |
 | `npx ruvyxa clean`                | ลบ `.ruvyxa/`                                     |
-| `npx ruvyxa plugin create <name>` | สร้างแพ็กเกจ plugin v2 มาตรฐาน                    |
+| `npx ruvyxa plugin create <name>` | สร้างแพ็กเกจ plugin มาตรฐาน                       |
 
 ## Common Options
 
@@ -249,7 +249,7 @@ npx ruvyxa plugin create request-logger
 ต้องการเลือกตำแหน่งอื่น (relative จาก `--root` และห้ามมี `..`) scaffold ใช้ได้ทั้ง Node.js และ Bun —
 build ด้วย `npm run build` (หรือ `bun run build`) แล้ว publish ด้วย package manager ที่ใช้ import
 package entry จาก `ruvyxa.config.ts` และลงทะเบียนใน `config({ plugins: [...] })` ดู workflow
-เต็มได้ที่ [Plugins](../../plugin.md)
+เต็มได้ที่ [Plugins](plugin.md)
 
 ## Environment Variables
 

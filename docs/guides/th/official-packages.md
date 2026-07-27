@@ -301,7 +301,7 @@ Mutation ทั่วไป: browser ที่ login แล้วเรียก
 
 ## บทถัดไป
 
-- [Plugins](../../plugin.md) — เขียน middleware และ build hook ของตัวเอง
+- [Plugins](plugin.md) — เขียน middleware และ build hook ของตัวเอง
 - [Server Actions](server-actions.md) — validation และ form ที่ใช้คู่กับแพ็กเกจพวกนี้
 - [Deployment](deployment.md) — รายละเอียดความเข้ากันได้ของ adapter
 - [สถาปัตยกรรมแพ็กเกจทางการ](../../architecture/official-plugins.md) — internals เต็ม, security

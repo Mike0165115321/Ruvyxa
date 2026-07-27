@@ -1,5 +1,45 @@
 # Changelog
 
+## v1.0.24 (2026-07-27)
+
+### Refactor Plugin System
+
+- Replaced the previous plugin implementation with one unified TypeScript/JavaScript plugin contract
+  based on `definePlugin({ name, register })` from `ruvyxa/plugin`.
+- Added grouped framework sockets for HTTP middleware/routes, build hooks, development file-change
+  events, diagnostics, and framework-owned native capabilities. A plugin can combine any supported
+  sockets without selecting a plugin category or template.
+- Built built-in plugins and the official `@ruvyxa/database`, `@ruvyxa/auth`, and `@ruvyxa/realtime`
+  packages on one `name` + `register(api)` contract. Invalid plugin objects are rejected during
+  configuration/startup.
+- Replaced plugin scaffolding with `ruvyxa plugin create <name>` and a single package template.
+- Added a complete npm plugin package template with TypeScript 7 source, tests, typed framework
+  dependencies, no plugin-specific package metadata, and a minimal response-hook example.
+
+### Runtime, Build, and Development Integration
+
+- Reworked the Node/Bun plugin runtime and Rust host bridge around one NDJSON protocol, including
+  deterministic registration order, hook failure handling, diagnostics, and response-size limits.
+- Added plugin-aware build resolution and loading for aliases, virtual modules, source transforms,
+  build lifecycle hooks, and dependency invalidation. Development file-change notifications now use
+  normalized project-relative paths.
+- Preserved the server/client boundary and existing middleware, route, render, and deployment
+  invariants while wiring plugin hooks through native, standalone, and development execution paths.
+- Removed plugin API and wire-protocol version fields; config rendering, package exports, type
+  declarations, examples, and official package integration now share one unversioned contract.
+
+### Documentation and Verification
+
+- Added beginner-friendly plugin guides with runnable examples in `docs/guides/th/plugin.md` and
+  `docs/guides/en/plugin.md`, then updated guide navigation and cross-references.
+- Updated release validation and package smoke coverage: version bumping now updates plugin-template
+  peer and development dependencies, metadata validation rejects plugin-specific package metadata,
+  and tarball smoke tests scaffold, compile, and test a generated plugin package.
+- Migrated the demo plugins and configuration to the new API and expanded plugin, compiler, package,
+  and official-package tests for HTTP, build, virtual-module, development, and diagnostics paths.
+- Verified the migration with workspace builds/checks/tests, Rust workspace tests and Clippy,
+  formatting, release metadata validation, npm package smoke tests, and demo build/parity checks.
+
 ## v1.0.23 (2026-07-26)
 
 ### Incremental Builds and Hydration Control
@@ -541,8 +581,7 @@ Both defects were found by building the Ruvyxa documentation site with the frame
 
 ### Plugin Scaffolding Enhancements
 
-- Added `--dir` flag to `plugin new` for custom plugin package directory placement with path
-  traversal protection.
+- Added a custom plugin package directory option with path traversal protection.
 - Changed default plugin output from `plugins/<name>` to root-level `<name>` directory.
 - Generated plugin packages now include npm, pnpm, and Bun setup instructions in README templates.
 - Added `scope` and `skipped` optional fields to adapter artifact reports for fine-grained build
@@ -601,9 +640,8 @@ Both defects were found by building the Ruvyxa documentation site with the frame
   validation, serialized hook errors, stderr forwarding, and graceful child cleanup.
 - Removed Wasmtime, the raw Wasm ABI, Wasm plugin configuration, custom middleware layers, legacy
   plugin metadata (`enforce`, `parallel`, and hook flags), and the old `plugin-runner.mjs` worker.
-- Removed the `plugin debug` CLI command and changed `plugin new` to scaffold a publishable npm
-  package at `plugins/<name>/` with `src/index.ts`, package metadata, TypeScript build settings, and
-  usage documentation.
+- Simplified plugin scaffolding into a publishable npm package workflow with `src/index.ts`, package
+  metadata, TypeScript build settings, and usage documentation.
 - Updated package exports, runtime file manifests, keyword metadata, templates, configuration
   validation, README files, architecture references, English guides, and Thai guides for the new
   plugin lifecycle.

@@ -2036,7 +2036,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "ruvyxa_bundler"
-version = "1.0.23"
+version = "1.0.24"
 dependencies = [
  "blake3",
  "dashmap",
@@ -2055,7 +2055,7 @@ dependencies = [
 
 [[package]]
 name = "ruvyxa_cli"
-version = "1.0.23"
+version = "1.0.24"
 dependencies = [
  "anyhow",
  "blake3",
@@ -2080,7 +2080,7 @@ dependencies = [
 
 [[package]]
 name = "ruvyxa_dev_server"
-version = "1.0.23"
+version = "1.0.24"
 dependencies = [
  "axum",
  "base64 0.23.0",
@@ -2103,7 +2103,7 @@ dependencies = [
 
 [[package]]
 name = "ruvyxa_diagnostics"
-version = "1.0.23"
+version = "1.0.24"
 dependencies = [
  "serde",
  "serde_json",
@@ -2112,7 +2112,7 @@ dependencies = [
 
 [[package]]
 name = "ruvyxa_graph"
-version = "1.0.23"
+version = "1.0.24"
 dependencies = [
  "ruvyxa_diagnostics",
  "serde",
@@ -2123,7 +2123,7 @@ dependencies = [
 
 [[package]]
 name = "ruvyxa_middleware"
-version = "1.0.23"
+version = "1.0.24"
 dependencies = [
  "axum",
  "futures-core",

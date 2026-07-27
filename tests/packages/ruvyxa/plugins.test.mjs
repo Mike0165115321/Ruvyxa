@@ -30,7 +30,7 @@ import {
   sitemap,
 } from '../../../packages/ruvyxa/dist/plugins.js'
 
-/** Runs a plugin's v2 registration with adapters for the focused hook tests below. */
+/** Runs a plugin registration with adapters for the focused hook tests below. */
 function register(plugin) {
   const registered = { middleware: [], resolveId: [], buildComplete: [] }
   plugin.register({

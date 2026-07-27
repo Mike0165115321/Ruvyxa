@@ -1,5 +1,5 @@
 export { config } from './config.js'
-export { definePlugin, PLUGIN_API_VERSION, withResponseHeader } from './plugin.js'
+export { definePlugin, withResponseHeader } from './plugin.js'
 export type {
   Adapter,
   AdapterArtifact,

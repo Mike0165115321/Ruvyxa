@@ -40,6 +40,6 @@ Firebase, and AWS Amplify builds fail with `RUV3201` instead of silently deployi
 socket. Horizontal multi-instance fan-out requires a future external broker adapter and is not
 claimed by this release.
 
-`realtime()` is a protocol-v2 plugin that exclusively claims the framework-owned `realtime@1` native
-socket and validates the deployment during build completion. The main package also re-exports the
-factory; `./plugin` makes the lifecycle entry explicit.
+`realtime()` exclusively claims the framework-owned `realtime@1` native socket and validates the
+deployment during build completion. The main package also re-exports the factory; `./plugin` makes
+the lifecycle entry explicit.

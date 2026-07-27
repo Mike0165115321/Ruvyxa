@@ -307,7 +307,7 @@ time.
 
 ## Next steps
 
-- [Plugins](../../plugin.md) — write your own middleware and build hooks
+- [Plugins](plugin.md) — write your own middleware and build hooks
 - [Server Actions](server-actions.md) — validation and forms that pair with these packages
 - [Deployment](deployment.md) — adapter compatibility details
 - [Official package architecture](../../architecture/official-plugins.md) — full internals, security

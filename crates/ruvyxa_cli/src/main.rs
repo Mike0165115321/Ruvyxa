@@ -453,7 +453,6 @@ struct CacheConfigOptions {
 #[serde(rename_all = "camelCase")]
 struct BuildPluginConfig {
     name: String,
-    api_version: u8,
 }
 
 struct RuvyxaBuildCache<'a> {
@@ -2951,7 +2950,6 @@ struct TypeScriptPluginWorker {
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PluginRuntimeOutput {
-    protocol_version: u8,
     ok: bool,
     result: Option<serde_json::Value>,
     code: Option<String>,
@@ -3055,8 +3053,6 @@ impl TypeScriptPluginBridge {
         mut payload: serde_json::Value,
     ) -> ruvyxa_bundler::Result<Option<serde_json::Value>> {
         payload["hook"] = serde_json::Value::String(hook.to_string());
-        payload["protocolVersion"] =
-            serde_json::Value::from(ruvyxa_middleware::PLUGIN_PROTOCOL_VERSION);
         let worker_index = self.next_worker.fetch_add(1, Ordering::Relaxed) % self.workers.len();
         let mut worker = self.workers[worker_index].lock().map_err(|_| {
             ruvyxa_bundler::BundleError::Compiler(
@@ -3064,14 +3060,6 @@ impl TypeScriptPluginBridge {
             )
         })?;
         let result = worker.call(&payload)?;
-
-        if result.protocol_version != ruvyxa_middleware::PLUGIN_PROTOCOL_VERSION {
-            return Err(ruvyxa_bundler::BundleError::Compiler(format!(
-                "RUV1701 TypeScript plugin worker returned protocol version {}; expected {}",
-                result.protocol_version,
-                ruvyxa_middleware::PLUGIN_PROTOCOL_VERSION
-            )));
-        }
 
         if result.ok {
             return Ok(result.result);
@@ -3243,7 +3231,6 @@ fn run_plugin_build_complete(
         .map_err(|error| anyhow::anyhow!("failed to start TypeScript plugin runtime: {error}"))?;
     let result = worker
         .call(&serde_json::json!({
-            "protocolVersion": ruvyxa_middleware::PLUGIN_PROTOCOL_VERSION,
             "hook": "build.complete",
             "outDir": out_dir,
             "manifest": manifest,
@@ -3251,13 +3238,6 @@ fn run_plugin_build_complete(
         .map_err(|error| {
             anyhow::anyhow!("TypeScript plugin build-complete hook failed: {error}")
         })?;
-    if result.protocol_version != ruvyxa_middleware::PLUGIN_PROTOCOL_VERSION {
-        anyhow::bail!(
-            "RUV1701 TypeScript plugin worker returned protocol version {}; expected {}",
-            result.protocol_version,
-            ruvyxa_middleware::PLUGIN_PROTOCOL_VERSION
-        );
-    }
     if !result.ok {
         anyhow::bail!(
             "{} {}",
@@ -3287,18 +3267,10 @@ fn run_plugin_build_start(
         .map_err(|error| anyhow::anyhow!("failed to start TypeScript plugin runtime: {error}"))?;
     let result = worker
         .call(&serde_json::json!({
-            "protocolVersion": ruvyxa_middleware::PLUGIN_PROTOCOL_VERSION,
             "hook": "build.start",
             "outDir": out_dir,
         }))
         .map_err(|error| anyhow::anyhow!("TypeScript plugin build-start hook failed: {error}"))?;
-    if result.protocol_version != ruvyxa_middleware::PLUGIN_PROTOCOL_VERSION {
-        anyhow::bail!(
-            "RUV1701 TypeScript plugin worker returned protocol version {}; expected {}",
-            result.protocol_version,
-            ruvyxa_middleware::PLUGIN_PROTOCOL_VERSION
-        );
-    }
     if !result.ok {
         anyhow::bail!(
             "{} {}",
@@ -3801,7 +3773,7 @@ fn build_plugin_manifest(plugins: &[BuildPluginConfig]) -> serde_json::Value {
     serde_json::Value::Array(
         plugins
             .iter()
-            .map(|plugin| serde_json::json!({ "name": plugin.name, "apiVersion": plugin.api_version }))
+            .map(|plugin| serde_json::json!({ "name": plugin.name }))
             .collect(),
     )
 }
@@ -6180,7 +6152,8 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(plugin_dir.join("package.json")).unwrap())
                 .unwrap();
         assert_eq!(package["name"], "ruvyxa-plugin-request-logger");
-        assert_eq!(package["ruvyxa"]["apiVersion"], 2);
+        assert!(package.get("ruvyxa").is_none());
+        assert_eq!(package["devDependencies"]["typescript"], "^7.0.2");
         assert_eq!(
             package["peerDependencies"]["ruvyxa"],
             format!("^{}", env!("CARGO_PKG_VERSION"))
@@ -6286,7 +6259,9 @@ mod tests {
         };
         assert!(matches!(plugin.command, PluginCommand::Create(_)));
 
-        assert!(Cli::try_parse_from(["ruvyxa", "plugin", "new", "request-logger"]).is_err());
+        assert!(
+            Cli::try_parse_from(["ruvyxa", "plugin", "unsupported", "request-logger"]).is_err()
+        );
         assert!(
             Cli::try_parse_from([
                 "ruvyxa",
@@ -6753,8 +6728,7 @@ export default {
         let config: ProjectConfig = serde_json::from_value(json!({
             "plugins": [
                 {
-                    "name": "banner",
-                    "apiVersion": 2
+                    "name": "banner"
                 }
             ]
         }))
@@ -6762,12 +6736,10 @@ export default {
 
         assert_eq!(config.plugins.len(), 1);
         assert_eq!(config.plugins[0].name, "banner");
-        assert_eq!(config.plugins[0].api_version, 2);
 
         let manifest = build_plugin_manifest(&config.plugins);
         assert_eq!(manifest[0]["name"], "banner");
-        assert_eq!(manifest[0]["apiVersion"], 2);
-        assert_eq!(manifest[0].as_object().unwrap().len(), 2);
+        assert_eq!(manifest[0].as_object().unwrap().len(), 1);
     }
 
     #[test]
@@ -7427,7 +7399,6 @@ export default {
         .unwrap();
         let plugins = vec![BuildPluginConfig {
             name: "complete".to_string(),
-            api_version: 2,
         }];
 
         run_plugin_build_complete(

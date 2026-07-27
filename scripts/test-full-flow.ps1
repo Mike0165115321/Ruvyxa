@@ -250,24 +250,24 @@ if (Test-Path $CreateDist) {
     Write-Warn "create-ruvyxa dist not built (run 'pnpm -r build' first)"
 }
 
-# `plugin new` scaffolds into --root, so keep it out of the demo app.
+# `plugin create` scaffolds into --root, so keep it out of the demo app.
 $PluginRoot = Join-Path $env:TEMP "ruvyxa-plugin-$(Get-Random)"
 try {
     New-Item -ItemType Directory -Path $PluginRoot -Force | Out-Null
-    Invoke-Native -Arguments @("plugin", "new", "ruvyxa-plugin-smoke", "--root", $PluginRoot) | Out-Host
+    Invoke-Native -Arguments @("plugin", "create", "ruvyxa-plugin-smoke", "--root", $PluginRoot) | Out-Host
     $pluginManifest = Join-Path $PluginRoot "ruvyxa-plugin-smoke\package.json"
     if ($script:LastNativeExitCode -eq 0 -and (Test-Path $pluginManifest)) {
-        Write-Ok "plugin new scaffolds a publishable package"
+        Write-Ok "plugin create scaffolds a publishable package"
     } else {
-        Write-Fail "plugin new (exit $($script:LastNativeExitCode))"
+        Write-Fail "plugin create (exit $($script:LastNativeExitCode))"
     }
 
     # --dir must place the package somewhere other than <name>.
-    Invoke-Native -Arguments @("plugin", "new", "ruvyxa-plugin-dir", "--root", $PluginRoot, "--dir", "custom-dir") | Out-Host
+    Invoke-Native -Arguments @("plugin", "create", "ruvyxa-plugin-dir", "--root", $PluginRoot, "--dir", "custom-dir") | Out-Host
     if ($script:LastNativeExitCode -eq 0 -and (Test-Path (Join-Path $PluginRoot "custom-dir\package.json"))) {
-        Write-Ok "plugin new --dir honors a custom directory"
+        Write-Ok "plugin create --dir honors a custom directory"
     } else {
-        Write-Fail "plugin new --dir (exit $($script:LastNativeExitCode))"
+        Write-Fail "plugin create --dir (exit $($script:LastNativeExitCode))"
     }
 } finally {
     Remove-Item $PluginRoot -Recurse -Force -ErrorAction SilentlyContinue

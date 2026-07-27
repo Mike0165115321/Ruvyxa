@@ -1073,7 +1073,6 @@ export class contentFormat {}
 
       const described = await runJson(pluginRuntime, [root, 'describe'], {})
       assert.deepEqual(described.result, {
-        protocolVersion: 2,
         plugins: ['native-hooks'],
         http: {
           request: 1,
@@ -1129,7 +1128,7 @@ export class contentFormat {}
     })
   })
 
-  it('connects route, build, dev, and diagnostic sockets through protocol v2', async () => {
+  it('connects route, build, dev, and diagnostic sockets through the plugin host', async () => {
     await withFixture(async ({ root }) => {
       await writeFile(
         path.join(root, 'ruvyxa.config.ts'),
@@ -1226,22 +1225,22 @@ export class contentFormat {}
     })
   })
 
-  it('rejects obsolete contracts, protocol mismatches, and duplicate plugin routes', async () => {
+  it('rejects invalid contracts and duplicate plugin routes', async () => {
     await withFixture(async ({ root }) => {
       await writeFile(
         path.join(root, 'ruvyxa.config.ts'),
-        `export default { plugins: [{ name: "obsolete", setup() {} }] }`,
+        `export default { plugins: [{ name: "invalid" }] }`,
       )
-      const obsolete = await runJsonResult(pluginRuntime, [root, 'describe'], {})
-      assert.equal(obsolete.exitCode, 1)
-      assert.match(obsolete.parsed.message, /unsupported apiVersion undefined; expected 2/)
+      const invalid = await runJsonResult(pluginRuntime, [root, 'describe'], {})
+      assert.equal(invalid.exitCode, 1)
+      assert.match(invalid.parsed.message, /must provide register\(api\)/)
 
       await writeFile(
         path.join(root, 'ruvyxa.config.ts'),
         `export default {
           plugins: [
-            { apiVersion: 2, name: "one", register({ http }) { http.route({ method: "GET", path: "/same", handler: () => new Response() }) } },
-            { apiVersion: 2, name: "two", register({ http }) { http.route({ method: "GET", path: "/same", handler: () => new Response() }) } },
+            { name: "one", register({ http }) { http.route({ method: "GET", path: "/same", handler: () => new Response() }) } },
+            { name: "two", register({ http }) { http.route({ method: "GET", path: "/same", handler: () => new Response() }) } },
           ],
         }`,
       )
@@ -1250,12 +1249,9 @@ export class contentFormat {}
       assert.match(duplicate.parsed.message, /route GET \/same conflicts with plugin "one"/)
 
       await writeFile(path.join(root, 'ruvyxa.config.ts'), `export default { plugins: [] }`)
-      const mismatch = await runJsonResult(pluginRuntime, [root, 'describe'], {
-        protocolVersion: 1,
-      })
-      assert.equal(mismatch.exitCode, 1)
-      assert.equal(mismatch.parsed.code, 'RUV1701')
-      assert.match(mismatch.parsed.message, /received 1, expected 2/)
+      const empty = await runJsonResult(pluginRuntime, [root, 'describe'], {})
+      assert.equal(empty.exitCode, 0)
+      assert.deepEqual(empty.parsed.result.plugins, [])
     })
   })
 
@@ -1285,7 +1281,6 @@ export class contentFormat {}
 
       const described = await runJson(pluginRuntime, [root, 'describe'], {})
       assert.deepEqual(described.result, {
-        protocolVersion: 2,
         plugins: ['ruvyxa:observability', 'ruvyxa:content-engine', 'ruvyxa:openapi'],
         http: {
           request: 3,
@@ -1341,7 +1336,6 @@ export class contentFormat {}
         path.join(root, 'ruvyxa.config.ts'),
         `export default {
           plugins: [{
-            apiVersion: 2,
             name: 'invalid-route',
             register({ http }) {
               http.onRequest({ match: ['api/*'], handler() {} })
@@ -1363,7 +1357,6 @@ export class contentFormat {}
         path.join(root, 'ruvyxa.config.ts'),
         `export default {
           plugins: [{
-            apiVersion: 2,
             name: 'realtime',
             register({ native }) {
               native.claim('realtime@1', { path: '/events', heartbeatMs: 10000, capacity: 64 })
@@ -1389,8 +1382,8 @@ export class contentFormat {}
         path.join(root, 'ruvyxa.config.ts'),
         `export default {
           plugins: [
-            { apiVersion: 2, name: 'one', register({ native }) { native.claim('realtime@1', { path: 'events' }) } },
-            { apiVersion: 2, name: 'two', register({ native }) { native.claim('realtime@1') } },
+            { name: 'one', register({ native }) { native.claim('realtime@1', { path: 'events' }) } },
+            { name: 'two', register({ native }) { native.claim('realtime@1') } },
           ],
         }`,
       )
@@ -1402,7 +1395,7 @@ export class contentFormat {}
         path.join(root, 'ruvyxa.config.ts'),
         `export default {
           plugins: [
-            { apiVersion: 2, name: 'one', register({ native }) { native.claim('realtime@1', { path: '/__ruvyxa/hmr' }) } },
+            { name: 'one', register({ native }) { native.claim('realtime@1', { path: '/__ruvyxa/hmr' }) } },
           ],
         }`,
       )
@@ -1414,8 +1407,8 @@ export class contentFormat {}
         path.join(root, 'ruvyxa.config.ts'),
         `export default {
           plugins: [
-            { apiVersion: 2, name: 'one', register({ native }) { native.claim('realtime@1') } },
-            { apiVersion: 2, name: 'two', register({ native }) { native.claim('realtime@1') } },
+            { name: 'one', register({ native }) { native.claim('realtime@1') } },
+            { name: 'two', register({ native }) { native.claim('realtime@1') } },
           ],
         }`,
       )
@@ -1437,13 +1430,13 @@ export class contentFormat {}
       )
       await writeFile(
         pluginFile,
-        `export const plugin = { apiVersion: 2, name: "label", register({ build }) { build.onTransform(({ code }) => code + "\\n// one") } }\n`,
+        `export const plugin = { name: "label", register({ build }) { build.onTransform(({ code }) => code + "\\n// one") } }\n`,
       )
 
       const first = await runJson(configRenderer, [root], {})
       await writeFile(
         pluginFile,
-        `export const plugin = { apiVersion: 2, name: "label", register({ build }) { build.onTransform(({ code }) => code + "\\n// two") } }\n`,
+        `export const plugin = { name: "label", register({ build }) { build.onTransform(({ code }) => code + "\\n// two") } }\n`,
       )
       const second = await runJson(configRenderer, [root], {})
 
@@ -1726,9 +1719,7 @@ function runJson(script, args, payload) {
         )
       }
     })
-    child.stdin.end(
-      JSON.stringify(script === pluginRuntime ? { protocolVersion: 2, ...payload } : payload),
-    )
+    child.stdin.end(JSON.stringify(script === pluginRuntime ? { ...payload } : payload))
   })
 }
 
@@ -1759,9 +1750,7 @@ function runJsonResult(script, args, payload) {
         )
       }
     })
-    child.stdin.end(
-      JSON.stringify(script === pluginRuntime ? { protocolVersion: 2, ...payload } : payload),
-    )
+    child.stdin.end(JSON.stringify(script === pluginRuntime ? { ...payload } : payload))
   })
 }
 

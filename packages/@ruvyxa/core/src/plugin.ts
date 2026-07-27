@@ -1,7 +1,5 @@
 import type { RuvyxaPlugin, RuvyxaPluginDefinition } from './types.js'
 
-export const PLUGIN_API_VERSION = 2 as const
-
 export type {
   PluginBuildCompleteHook,
   PluginBuildContext,
@@ -55,7 +53,6 @@ export function definePlugin(definition: RuvyxaPluginDefinition): RuvyxaPlugin {
     throw new TypeError(`Ruvyxa plugin "${definition.name}" must provide register(api).`)
   }
   return Object.freeze({
-    apiVersion: PLUGIN_API_VERSION,
     name: definition.name.trim(),
     register: definition.register,
   })

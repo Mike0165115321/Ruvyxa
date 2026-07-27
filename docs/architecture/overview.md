@@ -116,7 +116,7 @@ Two enforcement levels: graph-level (source scan in `ruvyxa_graph::validate_app`
 - [Dev Server](dev-server.md) — `ruvyxa_dev_server` Axum server, router, render cache, HMR, styles
 - [CLI & Build Pipeline](cli.md) — `ruvyxa_cli` commands, config, build orchestration
 - [Middleware](middleware.md) — built-in Tower stack and plugin bridge
-- [Plugins](../plugin.md) — current protocol-v2 socket registry, lifecycle, ordering, and host
+- [Plugins](../guides/en/plugin.md) — current socket registry, lifecycle, ordering, and host
   boundaries
 - [Official Data/Auth/Realtime Packages](official-plugins.md) — state ownership, security, flows,
   and deployment compatibility

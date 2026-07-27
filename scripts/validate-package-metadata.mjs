@@ -65,7 +65,7 @@ const templateDirs = readdirSync('templates')
 
 for (const dir of templateDirs) {
   const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
-  if (pkg.ruvyxa?.kind === 'plugin') {
+  if (dir === 'templates/plugin') {
     check(
       pkg.peerDependencies?.ruvyxa === `^${expectedVersion}`,
       `${dir} ruvyxa peer dependency must be ^${expectedVersion}`,
@@ -74,7 +74,8 @@ for (const dir of templateDirs) {
       pkg.devDependencies?.ruvyxa === `^${expectedVersion}`,
       `${dir} ruvyxa development dependency must be ^${expectedVersion}`,
     )
-    check(pkg.ruvyxa.apiVersion === 2, `${dir} plugin apiVersion must be 2`)
+    check(pkg.ruvyxa === undefined, `${dir} must not include package-level Ruvyxa metadata`)
+    check(pkg.devDependencies?.typescript === '^7.0.2', `${dir} must use TypeScript ^7.0.2`)
     check(
       pkg.dependencies?.['@ruvyxa/react'] === undefined,
       `${dir} plugin must not depend on @ruvyxa/react`,

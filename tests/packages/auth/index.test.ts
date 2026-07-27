@@ -443,7 +443,7 @@ describe('@ruvyxa/auth', () => {
     assert.throws(() => memoryAuthStore({} as never), /development: true/)
   })
 
-  it('exposes the explicit protocol-v2 plugin integration entry', () => {
+  it('exposes the explicit plugin integration entry', () => {
     const plugin = createAuthPlugin({
       basePath: '/auth',
       async handle() {
@@ -452,7 +452,7 @@ describe('@ruvyxa/auth', () => {
       validateBuild() {},
     })
 
-    assert.equal(plugin.apiVersion, 2)
+    assert.equal(plugin.name, 'auth')
     assert.equal(plugin.name, 'ruvyxa:auth')
   })
 })

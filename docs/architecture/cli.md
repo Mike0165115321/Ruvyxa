@@ -71,7 +71,7 @@ pub struct PluginCreateArgs { pub name: String, pub root: PathBuf, pub dir: Opti
 | `trace`         | Inspect one route by path (JSON)                          |
 | `bench`         | Benchmark (discovery, analysis, build)                    |
 | `test:parity`   | Dev/prod route comparison + smoke renders                 |
-| `plugin create` | Copy the canonical publishable v2 plugin package          |
+| `plugin create` | Copy the canonical publishable plugin package             |
 
 ---
 
@@ -652,8 +652,8 @@ pub struct BuildHookPipeline {
 - `transform_with_map`: chains transforms — each host receives previous output; last non-None source
   map is preserved.
 
-Each Node/Bun host owns a protocol-v2 `register()` registry, so closures and module-level state are
-shared only inside that host. `build.onComplete` runs after committed production output.
+Each Node/Bun host owns a `register()` registry, so closures and module-level state are shared only
+inside that host. `build.onComplete` runs after committed production output.
 
 ---
 

@@ -108,8 +108,7 @@ silently changing deployment behaviour.
 
 Register values created by `definePlugin({ name, register })` from `ruvyxa/plugin`. The same plugin
 may use any combination of grouped `http`, `build`, `dev`, `diagnostics`, and `native` sockets.
-Plugins execute in declaration/registration order and protocol/API version 2 is required. See the
-[plugin guide](../../plugin.md).
+Plugins execute in declaration/registration order. See the [plugin guide](plugin.md).
 
 ### `middleware`
 
@@ -140,9 +139,9 @@ middleware: {
 }
 ```
 
-The v2 `http` socket accepts `onRequest`, `onResponse`, and exact `route` registrations using Fetch
+The `http` socket accepts `onRequest`, `onResponse`, and exact `route` registrations using Fetch
 objects. The `build` socket provides start, resolve, load, transform, and complete handlers. All
-handlers run in declaration/registration order through the versioned plugin runtime.
+handlers run in declaration/registration order through the plugin runtime.
 
 `workers` defaults to one because module state is process-local. `timeoutMs` defaults to 30 seconds;
 a timed-out or protocol-corrupt worker is replaced without retrying that hook, while a worker that

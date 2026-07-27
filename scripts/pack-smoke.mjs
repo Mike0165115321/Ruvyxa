@@ -159,6 +159,31 @@ execFileSync('tar', ['-xzf', `${destination}/${ruvyxaTgz}`, '-C', extracted])
 execFileSync('node', [`${extracted}/package/bin/ruvyxa.js`, '--help'], {
   stdio: 'inherit',
 })
+const pluginSmokeDir = `${extracted}/scaffolded-plugin`
+execFileSync(
+  'node',
+  [
+    `${extracted}/package/bin/ruvyxa.js`,
+    'plugin',
+    'create',
+    'request-logger',
+    '--root',
+    extracted,
+    '--dir',
+    'scaffolded-plugin',
+  ],
+  { stdio: 'inherit' },
+)
+const pluginSmokePackagePath = `${pluginSmokeDir}/package.json`
+const pluginSmokePackage = JSON.parse(readFileSync(pluginSmokePackagePath, 'utf8'))
+assert(pluginSmokePackage.ruvyxa === undefined, 'generated plugin must not include Ruvyxa metadata')
+assert(
+  pluginSmokePackage.devDependencies?.typescript === '^7.0.2',
+  'generated plugin must use TypeScript 7',
+)
+pluginSmokePackage.peerDependencies.ruvyxa = `file:../../${destination}/${ruvyxaTgz}`
+pluginSmokePackage.devDependencies.ruvyxa = `file:../../${destination}/${ruvyxaTgz}`
+writeFileSync(pluginSmokePackagePath, JSON.stringify(pluginSmokePackage, null, 2) + '\n')
 mkdirSync(`${extracted}/create-ruvyxa`)
 execFileSync('tar', [
   '-xzf',
@@ -298,6 +323,11 @@ for (const starter of starters) {
     shell: process.platform === 'win32',
   })
 }
+execFileSync(pnpmBin, ['run', 'test'], {
+  cwd: pluginSmokeDir,
+  stdio: 'inherit',
+  shell: process.platform === 'win32',
+})
 execFileSync(pnpmBin, ['exec', 'ruvyxa', 'check', '--root', '.'], {
   cwd: `${extracted}/scaffolded-minimal`,
   stdio: 'inherit',

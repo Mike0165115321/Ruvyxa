@@ -427,16 +427,14 @@ export interface PluginRegistrationApi {
   readonly native: PluginNativeSocket
 }
 
-/** Input accepted by `definePlugin`. The API version is stamped by the helper. */
+/** Input accepted by `definePlugin`. */
 export interface RuvyxaPluginDefinition {
   name: string
   register(api: PluginRegistrationApi): void | Promise<void>
 }
 
 /** The sole plugin object accepted by `config({ plugins })`. */
-export interface RuvyxaPlugin extends RuvyxaPluginDefinition {
-  readonly apiVersion: 2
-}
+export interface RuvyxaPlugin extends RuvyxaPluginDefinition {}
 
 export interface BuildContext {
   root: string

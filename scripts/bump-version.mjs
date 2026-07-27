@@ -56,7 +56,8 @@ for (const dir of crateDirs) {
 }
 
 // Update framework dependencies in every source starter template. The
-// create-ruvyxa package copies these directories during prepack.
+// create-ruvyxa package copies application templates during prepack, while
+// the CLI embeds templates/plugin when it scaffolds a plugin package.
 const templateDirs = readdirSync('templates')
   .map((name) => `templates/${name}`)
   .filter((dir) => statSync(dir).isDirectory())
@@ -67,9 +68,14 @@ for (const dir of templateDirs) {
     const tmpl = JSON.parse(readFileSync(templatePkg, 'utf8'))
     let changed = false
     for (const dependency of ['ruvyxa', '@ruvyxa/react']) {
-      if (tmpl.dependencies?.[dependency] && tmpl.dependencies[dependency] !== `^${newVersion}`) {
-        tmpl.dependencies[dependency] = `^${newVersion}`
-        changed = true
+      for (const dependencyGroup of ['dependencies', 'peerDependencies', 'devDependencies']) {
+        if (
+          tmpl[dependencyGroup]?.[dependency] &&
+          tmpl[dependencyGroup][dependency] !== `^${newVersion}`
+        ) {
+          tmpl[dependencyGroup][dependency] = `^${newVersion}`
+          changed = true
+        }
       }
     }
     if (changed) {

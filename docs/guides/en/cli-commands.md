@@ -34,7 +34,7 @@ Everything else on this page is diagnostics and tooling you can reach for when y
 | `npx ruvyxa test:parity`          | Compare development and production routes, then smoke render pages |
 | `npx ruvyxa parity`               | Alias for `test:parity`                                            |
 | `npx ruvyxa clean`                | Remove generated `.ruvyxa/` output                                 |
-| `npx ruvyxa plugin create <name>` | Create a canonical v2 plugin package                               |
+| `npx ruvyxa plugin create <name>` | Create a canonical plugin package                                  |
 
 ## Common Options
 
@@ -254,10 +254,9 @@ npx ruvyxa plugin create request-logger
 after the plugin, no wrapping folder), with `src/index.ts`, `package.json`, `tsconfig.json`, and
 `README.md`. Pass `--dir <path>` only if you want a different location (relative to `--root`; `..`
 segments are rejected). The scaffold works with Node.js and Bun — build it with `npm run build` (or
-`bun run build`), then publish with your package manager. The package exports a protocol-v2
+`bun run build`), then publish with your package manager. The package exports the plugin
 `definePlugin({ name, register })` value. Import the package entry from `ruvyxa.config.ts` and
-register it in `config({ plugins: [...] })`. See [Plugins](../../plugin.md) for the complete
-workflow.
+register it in `config({ plugins: [...] })`. See [Plugins](plugin.md) for the complete workflow.
 
 ---
 

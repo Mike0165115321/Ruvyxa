@@ -26,9 +26,8 @@ pub mod stack;
 
 pub use config::MiddlewareConfig;
 pub use plugin_host::{
-    NativeCapabilityDescriptor, PLUGIN_PROTOCOL_VERSION, PluginBuildDescriptor,
-    PluginDevDescriptor, PluginDiagnosticDescriptor, PluginHost, PluginHttpDescriptor,
-    PluginHttpRequest, PluginHttpRequestResult, PluginHttpResponse, PluginRegistryDescriptor,
-    RealtimeDescriptor,
+    NativeCapabilityDescriptor, PluginBuildDescriptor, PluginDevDescriptor,
+    PluginDiagnosticDescriptor, PluginHost, PluginHttpDescriptor, PluginHttpRequest,
+    PluginHttpRequestResult, PluginHttpResponse, PluginRegistryDescriptor, RealtimeDescriptor,
 };
 pub use stack::MiddlewareStack;

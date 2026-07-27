@@ -11,7 +11,6 @@ import {
   toImportPath,
 } from './compiler.mjs'
 
-const PROTOCOL_VERSION = 2
 const [projectRootArg, mode] = process.argv.slice(2)
 
 if (!projectRootArg || !mode) {
@@ -19,7 +18,7 @@ if (!projectRootArg || !mode) {
   process.exit(1)
 }
 
-// Stdout is reserved for the versioned NDJSON protocol.
+// Stdout is reserved for the NDJSON protocol.
 console.log = console.info = console.debug = (...args) => console.error(...args)
 
 const projectRoot = path.resolve(projectRootArg)
@@ -31,7 +30,6 @@ try {
     await runPersistent(registry)
   } else {
     const payload = JSON.parse(readFileSync(0, 'utf8'))
-    assertProtocol(payload)
     const response = await handleHook(registry, mode, payload)
     writeResponse(response)
     if (!response.ok) process.exitCode = 1
@@ -51,7 +49,7 @@ async function loadRegistry(root) {
     '.ruvyxa',
     'cache',
     'config',
-    cacheFileName([moduleCode, configFile, 'plugin-runtime-v2'], 'mjs'),
+    cacheFileName([moduleCode, configFile, 'plugin-runtime'], 'mjs'),
   )
   await compileBundle({
     projectRoot: root,
@@ -106,11 +104,6 @@ async function createRegistry(root, pluginsValue) {
     const name = typeof plugin.name === 'string' ? plugin.name.trim() : ''
     if (!name) throw new TypeError(`config.plugins[${index}] must have a non-empty name`)
     if (names.has(name)) throw new TypeError(`duplicate plugin name: ${name}`)
-    if (plugin.apiVersion !== PROTOCOL_VERSION) {
-      throw new TypeError(
-        `plugin "${name}" uses unsupported apiVersion ${String(plugin.apiVersion)}; expected ${PROTOCOL_VERSION}`,
-      )
-    }
     if (typeof plugin.register !== 'function') {
       throw new TypeError(`plugin "${name}" must provide register(api)`)
     }
@@ -350,22 +343,11 @@ async function runPersistent(registry) {
     let response
     try {
       const payload = JSON.parse(line)
-      assertProtocol(payload)
       response = await handleHook(registry, payload.hook, payload)
     } catch (error) {
       response = failureFromError(error)
     }
     writeResponse(response, true)
-  }
-}
-
-function assertProtocol(payload) {
-  if (payload?.protocolVersion !== PROTOCOL_VERSION) {
-    const error = new TypeError(
-      `RUV1701 plugin protocol version mismatch: received ${String(payload?.protocolVersion)}, expected ${PROTOCOL_VERSION}`,
-    )
-    error.pluginCode = 'RUV1701'
-    throw error
   }
 }
 
@@ -399,7 +381,6 @@ async function handleHook(registry, hook, payload) {
 
 function describeRegistry(registry) {
   return {
-    protocolVersion: PROTOCOL_VERSION,
     plugins: registry.plugins,
     http: {
       request: registry.httpRequest.length,
@@ -665,11 +646,11 @@ async function encodeBody(message) {
 }
 
 function success(result) {
-  return { protocolVersion: PROTOCOL_VERSION, ok: true, result }
+  return { ok: true, result }
 }
 
 function failure(code, message, stack) {
-  return { protocolVersion: PROTOCOL_VERSION, ok: false, code, message, stack }
+  return { ok: false, code, message, stack }
 }
 
 function failureFromError(error) {
