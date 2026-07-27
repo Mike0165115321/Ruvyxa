@@ -7,6 +7,7 @@ import {
   withResponseHeader,
   type PluginHttpRequestHandler,
   type PluginHttpRequestRegistration,
+  type PluginHttpResponseRegistration,
   type PluginRegistrationApi,
 } from '../../../packages/@ruvyxa/core/src/plugin.ts'
 
@@ -79,7 +80,6 @@ describe('config and plugin APIs', () => {
     const defined = config(settings)
     assert.equal(defined.middleware?.builtin?.timing, true)
     assert.equal(defined.plugins?.[0]?.name, 'auth')
-    assert.equal(defined.plugins?.[0]?.name, 'auth')
 
     let registered: PluginHttpRequestRegistration | PluginHttpRequestHandler | undefined
     await authPlugin.register(registrationApi((value) => (registered = value)))
@@ -93,6 +93,24 @@ describe('config and plugin APIs', () => {
       /must declare behavior or provide register\(api\)/,
     )
     assert.equal(definePlugin({ name: 'valid', register() {} }).name, 'valid')
+  })
+
+  it('rejects concise definitions that cannot register behavior', () => {
+    for (const definition of [
+      { name: 'empty-headers', headers: {} },
+      { name: 'empty-routes', http: { routes: [] } },
+      { name: 'empty-diagnostics', diagnostics: [] },
+    ]) {
+      assert.throws(
+        () => definePlugin(definition as never),
+        /must declare behavior or provide register\(api\)/,
+      )
+    }
+
+    assert.throws(
+      () => definePlugin({ name: 'unknown-build-hook', build: { onTypo() {} } } as never),
+      /build\.onTypo is not supported/,
+    )
   })
 
   it('normalizes concise declarations into every existing socket before register()', async () => {
@@ -184,6 +202,28 @@ describe('config and plugin APIs', () => {
       'native.realtime@1.default',
       'diagnostic.DX002',
     ])
+  })
+
+  it('preserves an HTTP match used only to scope generated headers', async () => {
+    let registered: PluginHttpResponseRegistration | undefined
+    const plugin = definePlugin({
+      name: 'scoped-headers',
+      headers: { 'x-plugin': 'active' },
+      http: { match: ['/api/*'] },
+    })
+
+    await plugin.register({
+      ...registrationApi(() => {}),
+      http: {
+        onRequest() {},
+        onResponse(value) {
+          registered = typeof value === 'function' ? { handler: value } : value
+        },
+        route() {},
+      },
+    })
+
+    assert.deepEqual(registered?.match, ['/api/*'])
   })
 
   it('copies a response when changing one header', async () => {

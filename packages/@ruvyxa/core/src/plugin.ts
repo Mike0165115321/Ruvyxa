@@ -67,7 +67,7 @@ export function definePlugin(definition: RuvyxaPluginDefinition): RuvyxaPlugin {
   }
 
   const headers = normalizeHeaders(definition.headers)
-  const http = normalizeHttp(definition.http, definition.name)
+  const http = normalizeHttp(definition.http, definition.name, headers !== undefined)
   const build = normalizeBuild(definition.build, definition.name)
   const dev = normalizeDev(definition.dev, definition.name)
   const diagnostics = normalizeDiagnostics(definition.diagnostics)
@@ -126,12 +126,13 @@ function normalizeHeaders(
   if (headers === undefined) return undefined
   const entries: [string, string][] = []
   new Headers(headers).forEach((value, name) => entries.push([name, value]))
-  return entries
+  return entries.length > 0 ? entries : undefined
 }
 
 function normalizeHttp(
   http: PluginHttpDefinition | undefined,
   pluginName: string,
+  hasGeneratedHeaders: boolean,
 ): PluginHttpDefinition | undefined {
   if (http === undefined) return undefined
   if (!http || typeof http !== 'object' || Array.isArray(http)) {
@@ -146,11 +147,12 @@ function normalizeHttp(
   if (http.routes !== undefined && !Array.isArray(http.routes)) {
     throw new TypeError(`Ruvyxa plugin "${pluginName}" http.routes must be an array.`)
   }
-  if (!http.onRequest && !http.onResponse && !http.routes) {
-    throw new TypeError(`Ruvyxa plugin "${pluginName}" http must declare behavior.`)
-  }
-  return http
+  const hasBehavior = Boolean(http.onRequest || http.onResponse || (http.routes?.length ?? 0) > 0)
+  const scopesGeneratedHeaders = hasGeneratedHeaders && http.match !== undefined
+  return hasBehavior || scopesGeneratedHeaders ? http : undefined
 }
+
+const BUILD_HOOK_NAMES = new Set(['onStart', 'onResolve', 'onLoad', 'onTransform', 'onComplete'])
 
 function normalizeBuild(
   build: PluginBuildDefinition | undefined,
@@ -165,6 +167,9 @@ function normalizeBuild(
     throw new TypeError(`Ruvyxa plugin "${pluginName}" build must declare behavior.`)
   }
   for (const [name, hook] of entries) {
+    if (!BUILD_HOOK_NAMES.has(name)) {
+      throw new TypeError(`Ruvyxa plugin "${pluginName}" build.${name} is not supported.`)
+    }
     if (typeof hook !== 'function') {
       throw new TypeError(`Ruvyxa plugin "${pluginName}" build.${name} must be a function.`)
     }
@@ -190,9 +195,10 @@ function normalizeDiagnostics(
   diagnostics: RuvyxaPluginDefinition['diagnostics'],
 ): readonly PluginDiagnostic[] | undefined {
   if (diagnostics === undefined) return undefined
-  return Array.isArray(diagnostics)
-    ? (diagnostics as readonly PluginDiagnostic[])
-    : [diagnostics as PluginDiagnostic]
+  if (Array.isArray(diagnostics)) {
+    return diagnostics.length > 0 ? (diagnostics as readonly PluginDiagnostic[]) : undefined
+  }
+  return [diagnostics as PluginDiagnostic]
 }
 
 function normalizeNative(
