@@ -155,7 +155,7 @@ export default async function(req, res, context) {
   }
   const setCookies = response.headers.getSetCookie?.() ?? [];
   if (setCookies.length > 0) res.setHeader('set-cookie', setCookies);
-  const body = await response.text();
+  const body = Buffer.from(await response.arrayBuffer());
   res.end(body);
 }
 `

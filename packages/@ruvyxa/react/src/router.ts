@@ -135,7 +135,9 @@ function createRouter(): RouterInstance {
   let routes = loadManifestRoutes()
   let match = createRouteMatcher(routes)
   let manifestRequest: Promise<void> | null = null
-  let pending = false
+  // Pending state belongs to a navigation generation. A superseded bundle
+  // load must never clear the state now owned by a newer navigation.
+  let pendingNavigationId: number | null = null
   // Guards against a slow first navigation overwriting a faster later one.
   let navigationId = 0
 
@@ -229,6 +231,7 @@ function createRouter(): RouterInstance {
 
     const historyMode = options.history ?? (options.replace ? 'replace' : 'push')
     const id = ++navigationId
+    if (pendingNavigationId !== null) pendingNavigationId = id
 
     await ensureManifest()
     if (id !== navigationId) return
@@ -237,6 +240,7 @@ function createRouter(): RouterInstance {
     // No client route owns this URL — it may be an API route, a redirect, or a
     // rewrite the server resolves. Hand it to the browser rather than guess.
     if (!matched) {
+      pendingNavigationId = null
       hardNavigate(url, historyMode === 'replace')
       return
     }
@@ -248,19 +252,18 @@ function createRouter(): RouterInstance {
     }
 
     if (!globals.__RUVYXA_ROUTES__?.[context.route]) {
-      pending = true
+      pendingNavigationId = id
       emit()
       const loaded = await loadRoute(matched.route, context)
-      pending = false
-      if (id !== navigationId) {
-        emit()
-        return
-      }
+      if (id !== navigationId) return
+      pendingNavigationId = null
       if (!loaded) {
         emit()
         hardNavigate(url, historyMode === 'replace')
         return
       }
+    } else {
+      pendingNavigationId = null
     }
 
     if (historyMode === 'push') window.history.pushState({ ruvyxa: true }, '', url.href)
@@ -327,7 +330,7 @@ function createRouter(): RouterInstance {
     },
     getSnapshot: () => snapshot,
     getSearch: () => search,
-    getPending: () => pending,
+    getPending: () => pendingNavigationId !== null,
     navigate,
     prefetch,
     refresh,

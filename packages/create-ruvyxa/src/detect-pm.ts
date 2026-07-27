@@ -66,7 +66,7 @@ export function detectPackageManager(
   }
 
   for (const manager of TIE_BREAK_ORDER) {
-    if (hasCommand(manager)) return info(manager)
+    if (hasCommand(manager, environment)) return info(manager)
   }
   return info('npm')
 }
@@ -140,7 +140,14 @@ function info(name: PackageManager): PackageManagerInfo {
   return { name, ...PM_INFO[name] }
 }
 
-function hasCommand(command: string): boolean {
-  const result = spawnSync(command, ['--version'], { stdio: 'ignore', timeout: 2000 })
+function hasCommand(command: PackageManager, environment: NodeJS.ProcessEnv): boolean {
+  const result = spawnSync(command, ['--version'], {
+    stdio: 'ignore',
+    timeout: 2000,
+    env: environment,
+    // npm-family tools are installed as .cmd shims on Windows. Node cannot
+    // execute those shims directly, so use cmd.exe for this fixed whitelist.
+    shell: process.platform === 'win32',
+  })
   return !result.error && result.status === 0
 }

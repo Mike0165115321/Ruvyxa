@@ -86,6 +86,26 @@ describe('detectPackageManager', () => {
       await rm(root, { recursive: true, force: true })
     }
   })
+
+  it(
+    'detects package managers installed as Windows command shims',
+    { skip: process.platform !== 'win32' },
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'ruvyxa-windows-pm-project-'))
+      const bin = await mkdtemp(join(tmpdir(), 'ruvyxa-windows-pm-bin-'))
+      try {
+        await writeFile(join(bin, 'pnpm.cmd'), '@echo 10.0.0\r\n')
+        const pathKey =
+          Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ?? 'PATH'
+        const environment = { ...process.env, npm_config_user_agent: '', [pathKey]: bin }
+
+        assert.equal(detectPackageManager(root, environment).name, 'pnpm')
+      } finally {
+        await rm(root, { recursive: true, force: true })
+        await rm(bin, { recursive: true, force: true })
+      }
+    },
+  )
 })
 
 describe('createRuvyxaApp', () => {

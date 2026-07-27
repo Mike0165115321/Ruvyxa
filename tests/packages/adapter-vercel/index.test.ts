@@ -200,7 +200,7 @@ describe('vercelAdapter', () => {
     assert.throws(() => vercelAdapter({ regions: [''] }), /RUV2001/)
   })
 
-  it('forwards a streamed Node request body and repeated Set-Cookie headers', async () => {
+  it('forwards streamed requests, repeated Set-Cookie headers, and binary responses', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'ruvyxa-vercel-handler-'))
     try {
       const output = vercelAdapter({ projectOutput: false }).build({ root, outDir: '.ruvyxa' })
@@ -229,6 +229,11 @@ describe('vercelAdapter', () => {
       await writeFile(
         path.join(root, 'route-modules.mjs'),
         `const api = { async POST({ request }) {
+          if (request.headers.get('x-binary') === '1') {
+            return new Response(Uint8Array.from([0, 128, 255, 65]), {
+              headers: { 'content-type': 'application/octet-stream' },
+            })
+          }
           const headers = new Headers()
           headers.append('set-cookie', 'first=1; Path=/')
           headers.append('set-cookie', 'second=2; Path=/')
@@ -252,21 +257,21 @@ describe('vercelAdapter', () => {
         headers: { host: 'localhost', 'content-type': 'text/plain' },
       })
       const headers = new Map()
-      let body = ''
+      let body
       const response = {
         statusCode: 0,
         setHeader(name, value) {
           headers.set(name, value)
         },
         end(value) {
-          body = String(value)
+          body = value
         },
       }
 
       await handler(request, response)
 
       assert.equal(response.statusCode, 200)
-      assert.equal(body, 'streamed-payload')
+      assert.equal(Buffer.from(body).toString(), 'streamed-payload')
       assert.deepEqual(headers.get('set-cookie'), ['first=1; Path=/', 'second=2; Path=/'])
 
       const parsedRequest = Readable.from([])
@@ -276,9 +281,19 @@ describe('vercelAdapter', () => {
         headers: { host: 'localhost', 'content-type': 'application/json' },
         body: { parsed: true },
       })
-      body = ''
+      body = undefined
       await handler(parsedRequest, response)
-      assert.equal(body, '{"parsed":true}')
+      assert.equal(Buffer.from(body).toString(), '{"parsed":true}')
+
+      const binaryRequest = Readable.from([])
+      Object.assign(binaryRequest, {
+        url: '/api/echo',
+        method: 'POST',
+        headers: { host: 'localhost', 'x-binary': '1' },
+      })
+      body = undefined
+      await handler(binaryRequest, response)
+      assert.deepEqual(Buffer.from(body), Buffer.from([0, 128, 255, 65]))
     } finally {
       await rm(root, { recursive: true, force: true })
     }
