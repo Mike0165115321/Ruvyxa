@@ -1,13 +1,12 @@
 // Real benchmark harness: Ruvyxa vs Next.js vs Astro (minimal starters).
 // Metrics: cold production build time, dev server time-to-first-200,
 // prod server time-to-first-200, throughput (autocannon), client JS size.
+// This compares minimal starter output, not feature-equivalent applications.
 //
-// Setup (one time), from an empty working directory:
-//   npm create ruvyxa@latest ruvyxa-app            (or copy templates/minimal + npm install)
-//   npx create-next-app@latest next-app --ts --app --skip-install --disable-git \
-//     --no-eslint --no-tailwind --no-src-dir --no-import-alias && (cd next-app && npm install)
-//   npm create astro@latest astro-app -- --template minimal --no-git --yes
-//   node bench-frameworks.mjs                       (BENCH_ROOT=<dir> to point elsewhere)
+// Setup the three isolated starters described in README.md's Benchmarks section,
+// then run `BENCH_ROOT=<dir> RUNS=3 node scripts/bench-frameworks.mjs`.
+// Ruvyxa release candidates that are not yet on npm must use local packed
+// tarballs and overrides; do not silently substitute an older registry version.
 //
 // Results in the README were produced by this script; medians of RUNS (default 3) cold runs.
 import { spawn, execFileSync, execSync } from 'node:child_process'
