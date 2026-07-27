@@ -130,7 +130,8 @@ export default config({
 })
 ```
 
-Register application middleware with the same plugin contract used by build and dev hooks:
+Register application middleware with the concise `http` section. Use `register()` for build, dev,
+diagnostics, native, or advanced composition:
 
 ```ts
 import { config } from 'ruvyxa/config'
@@ -140,15 +141,13 @@ export default config({
   plugins: [
     definePlugin({
       name: 'auth-guard',
-      register({ http }) {
-        http.onRequest({
-          match: ['/api/*'],
-          handler({ request }) {
-            return request.headers.get('authorization')
-              ? undefined
-              : new Response('Unauthorized', { status: 401 })
-          },
-        })
+      http: {
+        match: ['/api/*'],
+        onRequest({ request }) {
+          return request.headers.get('authorization')
+            ? undefined
+            : new Response('Unauthorized', { status: 401 })
+        },
       },
     }),
   ],

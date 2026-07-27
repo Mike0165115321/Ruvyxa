@@ -9,7 +9,9 @@ npm install
 npm test
 ```
 
-Edit `src/index.ts`. The generated example adds `x-__PLUGIN_NAME__: active` to every response.
+Edit `src/index.ts`. The generated example adds `x-__PLUGIN_NAME__: active` to every response with
+the concise `headers` declaration. Add `http`, `build`, `dev`, `diagnostics`, or `native` sections
+only when the plugin needs them; use `register()` for advanced composition or repeated hooks.
 
 ## Use in an app
 
@@ -20,8 +22,7 @@ import __PLUGIN_IDENTIFIER__ from 'ruvyxa-plugin-__PLUGIN_NAME__'
 export default config({ plugins: [__PLUGIN_IDENTIFIER__] })
 ```
 
-The plugin can combine HTTP, build, development, diagnostics, and native capability sockets in one
-`register()` function. See the Ruvyxa plugin guide for every socket and complete examples.
+See the Ruvyxa plugin guide for concise sections, advanced sockets, and complete examples.
 
 ## Publish
 

@@ -798,9 +798,18 @@ fn scaffold_plugin(args: PluginCreateArgs) -> anyhow::Result<()> {
     println!(
         "  {} {}",
         dim("2."),
-        accent("npm install  (or: bun install)")
+        accent("npm install  (or: pnpm install, bun install)")
     );
-    println!("  {} {}", dim("3."), accent("npm test  (or: bun test)"));
+    println!(
+        "  {} {}",
+        dim("3."),
+        accent("npm test  (or: pnpm test, bun test)")
+    );
+    println!(
+        "  {} {}",
+        dim("4."),
+        dim("Start with headers; add direct sections only as the plugin grows.")
+    );
     println!();
     println!(
         "  {} Plugin {} is ready to develop\n",
@@ -6141,9 +6150,8 @@ mod tests {
         let source = fs::read_to_string(plugin_dir.join("src/index.ts")).unwrap();
         assert!(source.contains("import { definePlugin } from 'ruvyxa/plugin'"));
         assert!(source.contains("name: 'request-logger'"));
-        assert!(source.contains("register({ http })"));
-        assert!(source.contains("match: ['/*']"));
-        assert!(source.contains("headers.set('x-request-logger', 'active')"));
+        assert!(source.contains("headers: { 'x-request-logger': 'active' }"));
+        assert!(!source.contains("register({ http })"));
         let package: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(plugin_dir.join("package.json")).unwrap())
                 .unwrap();

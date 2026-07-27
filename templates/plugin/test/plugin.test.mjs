@@ -3,7 +3,7 @@ import test from 'node:test'
 
 import plugin from '../dist/index.js'
 
-test('exports a Ruvyxa plugin and registers its HTTP socket', async () => {
+test('exports a Ruvyxa plugin and declares response headers', async () => {
   let responseHook
   await plugin.register({
     http: {
@@ -27,7 +27,13 @@ test('exports a Ruvyxa plugin and registers its HTTP socket', async () => {
 
   assert.equal(plugin.name, 'request-logger')
   assert.equal(plugin.name, '__PLUGIN_NAME__')
-  assert.deepEqual(responseHook.match, ['/*'])
-  const response = await responseHook.handler({ response: new Response('ok') })
+  assert.equal(responseHook.match, undefined)
+  const response = await responseHook.handler({
+    plugin: '__PLUGIN_NAME__',
+    root: process.cwd(),
+    request: new Request('http://localhost/'),
+    response: new Response('ok'),
+    next() {},
+  })
   assert.equal(response.headers.get('x-__PLUGIN_NAME__'), 'active')
 })

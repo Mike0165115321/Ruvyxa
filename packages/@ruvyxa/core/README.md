@@ -169,22 +169,21 @@ export function customAdapter(): Adapter {
 
 ## Plugin Contract
 
-Plugins are ordinary TypeScript modules using one contract:
+Plugins are ordinary TypeScript modules. Start with direct declarations and use `register()` only
+for advanced composition:
 
 ```ts
 import { definePlugin } from '@ruvyxa/core/plugin'
 
 export default definePlugin({
   name: 'auth',
-  register({ http }) {
-    http.onRequest({
-      match: ['/api/*'],
-      handler({ request }) {
-        return request.headers.has('authorization')
-          ? undefined
-          : new Response('Unauthorized', { status: 401 })
-      },
-    })
+  http: {
+    match: ['/api/*'],
+    onRequest({ request }) {
+      return request.headers.has('authorization')
+        ? undefined
+        : new Response('Unauthorized', { status: 401 })
+    },
   },
 })
 ```
@@ -215,7 +214,7 @@ export function bannerPlugin(): RuvyxaPlugin {
 
 Request hooks return `undefined` to continue, a `Request` to replace the request, or a `Response` to
 short-circuit. Grouped `http`, `build`, `dev`, `diagnostics`, and `native` sockets run in
-declaration and registration order. The sole contract is a non-empty `name` and a `register(api)`
-function.
+declaration and registration order. The sole contract is a non-empty `name` plus direct behavior or
+a `register(api)` function.
 
 This package is published as ESM with generated TypeScript declarations.

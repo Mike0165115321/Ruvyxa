@@ -1,30 +1,29 @@
-คู่มือภาษาไทย
+# คู่มือเขียน Plugin สำหรับ Ruvyxa
 
-## Plugin คืออะไร
+Plugin คือโมดูล TypeScript/JavaScript ที่ export ค่า `definePlugin(...)` หนึ่งตัว
+เพื่อเพิ่มความสามารถ ให้แอปผ่าน hook ของ HTTP, build, development, diagnostics และ native capability
+ของ framework Plugin เป็น trusted server/build code ไม่ใช่ sandbox
 
-Plugin คือแพ็กเกจ TypeScript/JavaScript ที่นำ logic ของคุณมาเสียบเข้ากับ Framework ผ่าน
-`definePlugin({ name, register })` เพียง contract เดียว ระบบเดียวใช้แนวคิด “ปลั๊กเสียบกับเต้ารับ”:
-คุณเลือก socket ที่ต้องใช้ แล้วลงทะเบียน hook ใน `register()`
+## 1. เลือกรูปแบบการเขียน
 
-| Socket        | ใช้ทำอะไร                                                        |
-| ------------- | ---------------------------------------------------------------- |
-| `http`        | request, response และ endpoint ของ plugin                        |
-| `build`       | ตรวจค่า, resolve/load module, transform source และสร้าง artifact |
-| `dev`         | รับเหตุการณ์ file change ตอน development                         |
-| `diagnostics` | รายงาน info, warning และ error ตอนเริ่มระบบ                      |
-| `native`      | ขอใช้ capability ที่ Framework มีให้แบบ versioned                |
+เริ่มจาก declaration แบบสั้นก่อน แต่ละ declaration สร้าง hook ชนิดนั้นได้หนึ่งตัว ใช้
+`register(api)` เมื่อจำเป็นต้องใช้ hook ชนิดเดิมหลายตัว, ต้องคุมลำดับละเอียด หรือสร้าง hook ตาม
+เงื่อนไข/ลูป
 
-Plugin เป็น trusted server/build code ไม่ใช่ sandbox จึงเขียน logic JavaScript/TypeScript ได้อิสระ
-แต่ต้องรับผิดชอบ dependency, secret, side effect และความปลอดภัยของตัวเอง
+| ความต้องการ                                         | แบบสั้น            | แบบเต็ม                   |
+| --------------------------------------------------- | ------------------ | ------------------------- |
+| เพิ่ม response header                               | `headers`          | `http.onResponse(...)`    |
+| request/response hook หนึ่งตัว หรือ routes เล็กน้อย | `http`             | `http`                    |
+| build hook แต่ละชนิดหนึ่งตัว                        | `build`            | `build`                   |
+| file-change handler หนึ่งตัว                        | `dev.onFileChange` | `dev.onFileChange(...)`   |
+| diagnostic คงที่                                    | `diagnostics`      | `diagnostics.report(...)` |
+| realtime ที่กำหนดค่าตายตัว                          | `native.realtime`  | `native.claim(...)`       |
+| hook ชนิดเดียวกันหลายตัว                            | —                  | `register(api)`           |
 
-## ขั้นที่ 0: เตรียมเครื่องมือ
+ถ้าใช้ร่วมกัน ระบบลงทะเบียน declaration แบบสั้นตามลำดับ HTTP → build → dev → diagnostics → native
+แล้วจึงเรียก `register(api)` เป็นลำดับสุดท้าย
 
-ต้องมี Node.js, npm/pnpm และโปรเจกต์ Ruvyxa ที่รัน `ruvyxa dev` ได้ก่อน คำสั่งด้านล่างใช้ npm
-เป็นตัวอย่าง เปลี่ยนเป็น pnpm ได้ตาม package manager ของโปรเจกต์
-
-## ขั้นที่ 1: สร้าง plugin
-
-ใช้คำสั่งเดียวนี้ ไม่ต้องเลือกชนิด plugin
+## 2. สร้าง package และติดตั้งเข้าแอป
 
 ```bash
 npx ruvyxa plugin create request-logger
@@ -33,248 +32,253 @@ npm install
 npm test
 ```
 
-ถ้าต้องการสร้างไว้ในโฟลเดอร์ย่อยของ monorepo:
+ใน monorepo ระบุที่อยู่ด้วย `--dir`:
 
 ```bash
 npx ruvyxa plugin create request-logger --dir packages/request-logger
 ```
 
-โครงสร้างที่ได้:
+สร้างเสร็จจะมี `src/index.ts`, `test/plugin.test.mjs`, `package.json`, `tsconfig.json`, `README.md`
+และ `.gitignore` ติดตั้ง package ในแอปแล้วลงทะเบียน default export:
 
-```text
-request-logger/
-├─ src/index.ts          # โค้ด plugin หลัก
-├─ test/plugin.test.mjs  # test ของ register contract
-├─ package.json
-├─ tsconfig.json
-├─ README.md
-└─ .gitignore
+```bash
+cd ../my-app
+pnpm add ../packages/request-logger
 ```
 
-## ขั้นที่ 2: เขียน plugin ตัวแรก
+```ts
+// ruvyxa.config.ts
+import { config } from 'ruvyxa/config'
+import requestLogger from 'ruvyxa-plugin-request-logger'
 
-เปิด `src/index.ts` แล้วเขียนดังนี้:
+export default config({ plugins: [requestLogger] })
+```
+
+ชื่อ `name` ต้องไม่ว่างและห้ามซ้ำ ส่วนลำดับใน `plugins` คือลำดับการลงทะเบียน
+
+## 3. Plugin ตัวแรก: `headers`
 
 ```ts
 import { definePlugin } from 'ruvyxa/plugin'
 
 export default definePlugin({
   name: 'request-logger',
-  register({ http }) {
-    http.onResponse({
-      handler({ response }) {
-        const headers = new Headers(response.headers)
-        headers.set('x-request-logger', 'active')
-        return new Response(response.body, {
-          status: response.status,
-          statusText: response.statusText,
-          headers,
-        })
-      },
-    })
-  },
+  headers: { 'x-request-logger': 'active' },
 })
 ```
 
-สิ่งที่เกิดขึ้นคือ `definePlugin()` จะตรวจชื่อและคืน plugin object ที่พร้อมใช้งาน แล้ว
-`register({ http })` จะได้เฉพาะเต้ารับ HTTP ที่ plugin นี้ใช้
-
-## ขั้นที่ 3: ติดตั้งและลงทะเบียนในแอป
-
-ถ้า plugin อยู่ในเครื่องเดียวกับแอป:
-
-```bash
-cd my-app
-pnpm add ../packages/request-logger
-```
-
-ถ้า plugin publish แล้ว:
-
-```bash
-npm install ruvyxa-plugin-request-logger
-```
-
-เพิ่ม plugin ใน `ruvyxa.config.ts`:
-
-```ts
-import { config } from 'ruvyxa/config'
-import requestLogger from 'ruvyxa-plugin-request-logger'
-
-export default config({
-  plugins: [requestLogger],
-})
-```
-
-ลำดับใน `plugins` คือ registration order และชื่อ plugin ต้องไม่ซ้ำกัน
-
-## ขั้นที่ 4: เปิดแอปและตรวจผล
+`headers` รับค่า `HeadersInit` และเพิ่มหรือแทน header ที่ระบุใน response ให้เปิดแอปและตรวจผ่าน host
+จริง:
 
 ```bash
 npx ruvyxa dev
-```
-
-เปิดหน้าใดก็ได้ แล้วตรวจ response header `x-request-logger: active` ด้วย browser DevTools หรือ:
-
-```bash
 curl -I http://localhost:3000/
 ```
 
-ถ้าเห็น header แสดงว่า plugin ถูกโหลด, register และทำงานผ่าน host จริงแล้ว
+## 4. API แบบสั้นครบทุกส่วน
 
-## ตัวอย่าง HTTP ที่ใช้บ่อย
-
-### ป้องกัน route
+ตัวอย่างนี้ใช้ทุก section ที่รองรับ:
 
 ```ts
-register({ http }) {
-  http.onRequest({
+import { definePlugin } from 'ruvyxa/plugin'
+
+export default definePlugin({
+  name: 'site-tools',
+  headers: { 'x-site-tools': 'enabled' },
+  http: {
     match: ['/admin/*'],
-    handler({ request }) {
-      if (request.headers.get('authorization') !== `Bearer ${process.env.ADMIN_TOKEN}`) {
+    onRequest({ request }) {
+      if (!request.headers.has('authorization'))
         return new Response('Unauthorized', { status: 401 })
-      }
     },
-  })
-}
+    onResponse({ response }) {
+      return response
+    },
+    routes: [
+      { method: 'GET', path: '/plugin/status', handler: ({ plugin }) => Response.json({ plugin }) },
+    ],
+  },
+  build: {
+    onStart({ root, outDir }) {
+      console.log('building', root, outDir)
+    },
+    onComplete({ manifest }) {
+      console.log('finished', manifest)
+    },
+  },
+  dev: {
+    onFileChange({ paths }) {
+      console.log('changed', paths)
+    },
+  },
+  diagnostics: { level: 'info', code: 'SITE001', message: 'Site tools enabled' },
+  native: { realtime: true },
+})
 ```
 
-ไม่ return คือปล่อยให้ request ไปต่อ, return `Request` คือแทน request, return `Response` คือหยุด
-chain ทันที และสามารถใช้ `next()` หรือ `next(replacement)` เพื่อควบคุมลำดับเอง
+`http` และ `build` ห้ามเป็น object ว่าง; ต้องมี behavior อย่างน้อยหนึ่งตัว
 
-### สร้าง endpoint ของ plugin
+### HTTP request และ `match`
+
+`onRequest` รับ `{ plugin, root, request, next }` ไม่ return คือใช้ request เดิมต่อไป, return
+`Request` คือแทน request, return `Response` คือหยุด request flow และตอบทันที
 
 ```ts
-http.route({
-  method: 'GET',
-  path: '/plugin/status',
-  handler({ plugin }) {
-    return Response.json({ plugin, ready: true })
+http: {
+  match: ['/admin/*'],
+  onRequest({ request }) {
+    if (request.headers.get('authorization') !== `Bearer ${process.env.ADMIN_TOKEN}`) {
+      return new Response('Unauthorized', { status: 401 })
+    }
+  },
+},
+```
+
+ใช้ `next()` หรือ `next(replacementRequest)` เมื่อต้องการควบคุมการไปต่อแบบชัดเจน Pattern ใช้ exact
+path, `*`, หรือ prefix ที่ลงท้าย `*` เช่น `/api/*`; ระบบ match กับ decoded pathname โดยไม่รวม query
+string ไม่ระบุ `match` คือทุก path
+
+### HTTP response และ route
+
+`onResponse` รับ `{ plugin, root, request, response, next }` ไม่ return คือใช้ response เดิม; return
+`Response` คือแทน response
+
+```ts
+http: {
+  onResponse({ response }) {
+    const headers = new Headers(response.headers)
+    headers.set('x-request-checked', 'yes')
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    })
+  },
+  routes: [
+    {
+      method: ['GET', 'HEAD'],
+      path: '/plugin/health',
+      handler({ plugin, request }) {
+        return Response.json({ plugin, method: request.method })
+      },
+    },
+  ],
+},
+```
+
+Route มี `path` แบบ exact, `method` หนึ่งค่า/หลายค่า/ไม่ระบุ (ทุก method) และ handler ที่คืน
+`Response` หรือ `Promise<Response>` คู่ method/path ต้องไม่ซ้ำข้าม plugin
+
+### Build: lifecycle, virtual module และ transform
+
+```ts
+import path from 'node:path'
+
+export default definePlugin({
+  name: 'virtual-flags',
+  build: {
+    onStart({ root, outDir }) {
+      console.log({ root, outDir })
+    },
+    onResolve({ id, root }) {
+      return id === 'virtual:flags' ? path.join(root, '.virtual', 'flags.ts') : undefined
+    },
+    onLoad({ id }) {
+      return id.endsWith('flags.ts') ? { code: 'export const checkoutV2 = true' } : undefined
+    },
+    onTransform({ code, id, environment }) {
+      if (environment !== 'client' || !id.endsWith('.tsx')) return
+      return { code: code.replaceAll('__CHANNEL__', JSON.stringify('stable')) }
+    },
+    onComplete({ outDir, manifest }) {
+      console.log('output', outDir, manifest)
+    },
   },
 })
 ```
 
-`method + path` ห้ามชนกับ plugin อื่น ระบบจะ fail ตอนเริ่มแทนการเลือกเจ้าของแบบเงียบ ๆ
+`onResolve` รับ `id`, `importer?`, `root`, `environment` และคืน absolute path, `null` หรือไม่คืนค่า
+`onLoad`/`onTransform` คืน source string, `{ code, map }`, `null` หรือไม่คืนค่า Environment คือ
+`client`, `server`, `edge`, `worker`, หรือ `shared`
 
-### กำหนด `match`
-
-| Pattern          | ความหมาย                 |
-| ---------------- | ------------------------ |
-| ไม่ระบุ หรือ `*` | ทุก path                 |
-| `/api/users`     | path นี้เท่านั้น         |
-| `/api/*`         | `/api/` และ path ใต้ลงไป |
-
-Match จาก pathname ไม่รวม query string และ wildcard ใช้ได้ที่ท้าย pattern หนึ่งตัว
-
-## ขั้นที่ 5: ใช้ Build socket
-
-### Transform source
+### Dev, diagnostics และ native
 
 ```ts
-register({ build }) {
-  build.onTransform(({ code, id, environment }) => {
-    if (environment !== 'client' || !id.endsWith('.tsx')) return
-    return code.replaceAll('__BUILD_CHANNEL__', JSON.stringify(process.env.CHANNEL ?? 'local'))
-  })
-}
-```
-
-คืน string หรือ `{ code, map }`; ไม่คืนค่าคือไม่ transform ไฟล์นั้น Hook ทำงานตามลำดับที่ลงทะเบียน
-
-### Alias และ virtual module
-
-```ts
-import path from 'node:path'
-
-register({ build }) {
-  build.onResolve(({ id, root }) => {
-    if (id === 'virtual:feature-flags') {
-      return path.join(root, '.ruvyxa-virtual', 'feature-flags.ts')
-    }
-  })
-
-  build.onLoad(({ id }) => {
-    if (id.endsWith('feature-flags.ts')) {
-      return { code: `export const flags = ${JSON.stringify({ checkoutV2: true })}` }
-    }
-  })
-}
-```
-
-ในแอป import ได้ตามปกติ:
-
-```ts
-import { flags } from 'virtual:feature-flags'
-```
-
-`onResolve` ต้องคืน absolute path ส่วน `onLoad` สามารถคืน source โดยไม่ต้องมีไฟล์จริง
-
-### ตรวจ config และสร้าง artifact
-
-```ts
-import { writeFile } from 'node:fs/promises'
-import path from 'node:path'
-
-register({ build }) {
-  build.onStart(({ root }) => {
-    if (!process.env.SEARCH_API_KEY) throw new Error(`SEARCH_API_KEY is required for ${root}`)
-  })
-
-  build.onComplete(({ outDir, manifest }) =>
-    writeFile(path.join(outDir, 'plugin-manifest.json'), JSON.stringify(manifest, null, 2)),
-  )
-}
-```
-
-`onStart` ทำงานก่อน build output ส่วน `onComplete` ทำงานหลัง core output พร้อมแล้ว
-
-## ขั้นที่ 6: ใช้ Dev, Diagnostics และ Native
-
-รับ file change ตอน dev:
-
-```ts
-register({ dev }) {
-  dev.onFileChange({
-    match: ['content/*'],
-    handler({ root, paths }) {
-      console.log('changed', root, paths)
+export default definePlugin({
+  name: 'content-tools',
+  dev: {
+    onFileChange: {
+      match: ['content/*'],
+      handler({ root, paths }) {
+        console.log(root, paths)
+      },
     },
-  })
-}
+  },
+  diagnostics: [
+    { level: 'info', code: 'CONTENT001', message: 'Content tools enabled' },
+    { level: 'warning', code: 'CONTENT002', message: 'Remote sync is disabled' },
+  ],
+  native: { realtime: { path: '/events', heartbeatMs: 25_000, capacity: 256 } },
+})
 ```
 
-`paths` เป็น project-relative และใช้ `/` ทุกระบบปฏิบัติการ
+`dev.onFileChange` เขียนเป็น function ตรง ๆ ได้เช่นกัน; `match` เป็น project-relative pattern
+`diagnostics` เป็นค่าเดียวหรือ array และ level คือ `info`, `warning`, `error` ส่วน
+`native.realtime: true` ใช้ค่า default; options มี `path`, `heartbeatMs`, `capacity` และ realtime
+มีเจ้าของได้เพียง plugin เดียว
 
-รายงาน diagnostics:
+## 5. `register(api)`: escape hatch สำหรับขั้นสูง
+
+ใช้เมื่อ hook ชนิดเดียวกันต้องมีหลายตัว หรือต้องคุมลำดับ/สร้างตามเงื่อนไข:
 
 ```ts
-register({ diagnostics }) {
-  diagnostics.report({
-    level: process.env.ANALYTICS_KEY ? 'info' : 'warning',
-    code: 'ANL001',
-    message: 'Analytics configuration checked',
-  })
-}
+import { definePlugin } from 'ruvyxa/plugin'
+
+export default definePlugin({
+  name: 'security',
+  register({ http, build, diagnostics }) {
+    http.onRequest(requireAuthentication)
+    http.onRequest(rateLimit)
+    http.onResponse({ handler: addAuditHeader })
+    http.route({ method: 'GET', path: '/plugin/metrics', handler: metrics })
+
+    build.onTransform(instrumentClientCode)
+    build.onTransform(removeDebugCalls)
+    diagnostics.report({ level: 'info', code: 'SEC001', message: 'Security enabled' })
+  },
+})
 ```
 
-ระดับมี `info`, `warning`, `error`; `error` จะหยุด startup ห้ามใส่ secret ใน message
-
-ใช้ native capability ที่ Framework รองรับเท่านั้น:
+socket ที่ใช้ได้ทั้งหมด:
 
 ```ts
-register({ native }) {
-  native.claim('realtime@1', {
-    path: '/__ruvyxa/realtime',
-    heartbeatMs: 25_000,
-    capacity: 256,
-  })
+register({ http, build, dev, diagnostics, native }) {
+  http.onRequest(handlerOrRegistration)
+  http.onResponse(handlerOrRegistration)
+  http.route({ path, method, handler })
+  build.onStart(hook); build.onResolve(hook); build.onLoad(hook)
+  build.onTransform(hook); build.onComplete(hook)
+  dev.onFileChange(handlerOrRegistration)
+  diagnostics.report({ level, code, message })
+  native.claim('realtime@1', options)
 }
 ```
 
-Native capability มีเจ้าของได้ตัวเดียวและ plugin ไม่สามารถโหลด Rust code ใหม่จาก npm ได้
+ผสมแบบสั้นและเต็มได้ โดย header จะถูกลงทะเบียนก่อน audit hook:
 
-## ขั้นที่ 7: รับ options ให้ผู้ใช้ตั้งค่า
+```ts
+definePlugin({
+  name: 'hybrid',
+  headers: { 'x-powered-by': 'ruvyxa' },
+  register({ http }) {
+    http.onResponse({ handler: addAuditHeader })
+  },
+})
+```
 
-สร้าง factory ที่คืน `RuvyxaPlugin`:
+## 6. Plugin ที่รับ options
+
+export factory ที่คืน `RuvyxaPlugin` เพื่อให้ผู้ใช้กำหนดค่าได้:
 
 ```ts
 import { definePlugin, type RuvyxaPlugin } from 'ruvyxa/plugin'
@@ -287,63 +291,24 @@ export interface AuditOptions {
 export function audit(options: AuditOptions = {}): RuvyxaPlugin {
   const match = options.match ?? ['/api/*']
   const header = options.header ?? 'x-audit-id'
-
   return definePlugin({
     name: 'audit',
-    register({ http }) {
-      http.onRequest({
-        match,
-        handler({ request }) {
-          if (!request.headers.has(header)) {
-            return new Response(`Missing ${header}`, { status: 400 })
-          }
-        },
-      })
+    http: {
+      match,
+      onRequest({ request }) {
+        if (!request.headers.has(header)) return new Response(`Missing ${header}`, { status: 400 })
+      },
     },
   })
 }
 ```
 
-ผู้ใช้จะตั้งค่าใน config ได้แบบนี้:
+ผู้ใช้ใส่ใน config ได้เป็น `plugins: [audit({ header: 'x-trace-id' })]`
 
-```ts
-import { audit } from 'ruvyxa-plugin-audit'
+## 7. ทดสอบและ publish
 
-export default config({
-  plugins: [audit({ match: ['/api/*'], header: 'x-trace-id' })],
-})
-```
-
-## ขั้นที่ 8: ทดสอบ plugin
-
-เริ่มจาก test ที่ไม่ต้องเปิดแอป โดยเรียก `register()` กับ socket spy:
-
-```js
-import assert from 'node:assert/strict'
-import test from 'node:test'
-import plugin from '../dist/index.js'
-
-test('registers a response hook', async () => {
-  let registration
-  await plugin.register({
-    http: {
-      onRequest() {},
-      onResponse(value) {
-        registration = value
-      },
-      route() {},
-    },
-    build: { onStart() {}, onResolve() {}, onLoad() {}, onTransform() {}, onComplete() {} },
-    dev: { onFileChange() {} },
-    diagnostics: { report() {} },
-    native: { claim() {} },
-  })
-  assert.equal(plugin.name, 'request-logger')
-  assert.ok(registration)
-})
-```
-
-จากนั้นทดสอบกับแอปจริง:
+ทดสอบ registration contract โดยส่ง socket spy เข้า `plugin.register` แล้วทดสอบ fixture app สำหรับ
+request/response, route หรือ build behavior:
 
 ```bash
 npm test
@@ -352,39 +317,21 @@ npx ruvyxa check --root ../my-app
 npx ruvyxa test:parity --root ../my-app
 ```
 
-## ขั้นที่ 9: เตรียม publish
+ก่อน publish ให้มี `ruvyxa` หรือ `@ruvyxa/core` ใน peer dependency ตาม API ที่ใช้, publish ESM
+output และ declaration, ตรวจ tarball และอย่าให้มี test, `node_modules`, `.ruvyxa` หรือ `workspace:`
+dependency
 
-ก่อน publish ให้ตรวจรายการนี้:
+## 8. Validation และแก้ปัญหา
 
-1. `peerDependencies` มี `ruvyxa` หรือ `@ruvyxa/core` ตาม API ที่ใช้
-2. `dist` และ declaration ถูกสร้างครบ
-3. tarball ไม่รวม test, `node_modules`, `.ruvyxa` หรือ dependency แบบ `workspace:`
-4. package เป็น ESM และไม่ต้องมี metadata เฉพาะของ Ruvyxa ใน `package.json`
-5. README อธิบาย install, registration, options, security และ deployment limits
-6. รัน `npm test` และ `npm pack --dry-run` ก่อน `npm publish`
+| อาการ                     | ตรวจตรงจุด                                                                       |
+| ------------------------- | -------------------------------------------------------------------------------- |
+| Plugin validation ไม่ผ่าน | ต้องมี `name` ที่ไม่ว่าง และมี declaration อย่างน้อยหนึ่งตัวหรือ `register(api)` |
+| Plugin ไม่ถูกโหลด         | ตรวจ `plugins` และ default import/export ใน config                               |
+| ชื่อซ้ำ                   | เปลี่ยน `name` ให้ไม่ซ้ำ                                                         |
+| Route ชนกัน               | ให้ทุกคู่ method/path ไม่ซ้ำ                                                     |
+| Hook ไม่ทำงาน             | ตรวจ `match`, environment และลำดับ plugin                                        |
+| Virtual import หาไม่พบ    | `onResolve` ต้องคืน absolute path แล้ว `onLoad` คืน source หรือมีไฟล์จริง        |
+| Dev handler ไม่ทำงาน      | ใช้ project-relative match เช่น `content/*`                                      |
+| Native claim ไม่ผ่าน      | ใช้ capability ที่รองรับและต้องมีเจ้าของคนเดียว                                  |
 
-## ความปลอดภัยและข้อจำกัด
-
-- Plugin มีสิทธิ์ระดับ server/build และไม่ใช่ sandbox
-- Secret ต้องอยู่ server-side ห้ามฝังลง client bundle
-- อย่าใช้ memory ของ plugin เป็น session, database, lock หรือ durable state
-- Response hook มี buffer limit จึงไม่เหมาะกับ download ไฟล์ใหญ่มาก
-- Hook ที่ timeout จะไม่ถูก retry อัตโนมัติ เพราะ side effect อาจเกิดไปแล้ว
-- ใช้ `console` ได้ แต่ protocol ใช้ stdout จึงไม่ควรเขียนข้อมูล protocol เองลง stdout
-
-## แก้ปัญหาเบื้องต้น
-
-| อาการ                     | วิธีตรวจ                                                                     |
-| ------------------------- | ---------------------------------------------------------------------------- |
-| Plugin ไม่ผ่าน validation | ตรวจว่ามี `name` ที่ไม่ว่างและ `register(api)` เป็น function                 |
-| Plugin ไม่ถูกโหลด         | ตรวจ `plugins` ใน `ruvyxa.config.ts` และ default export                      |
-| ชื่อ plugin ซ้ำ           | ตั้ง `name` ให้ไม่ซ้ำทุกตัว                                                  |
-| Route conflict            | ตรวจคู่ `method + path`                                                      |
-| Alias หาไม่พบ             | `onResolve` ต้องคืน absolute path และ `onLoad` ต้องคืน source หรือมีไฟล์จริง |
-| Hook ไม่ทำงาน             | ตรวจ `match`, `environment` และลำดับใน `config.plugins`                      |
-| Dev change ไม่ match      | ใช้ project-relative path เช่น `content/*`                                   |
-| Response ใหญ่เกิน         | ลดการใช้ response hook หรือปรับ `security.pluginLimit` ภายในเพดาน            |
-
----
-
-#
+ห้ามส่ง private environment value ลง source ฝั่ง client หรือใส่ secret ใน diagnostic message

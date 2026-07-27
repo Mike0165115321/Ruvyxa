@@ -319,6 +319,15 @@ export interface PluginHttpSocket {
   route(registration: PluginHttpRouteRegistration): void
 }
 
+/** Concise HTTP declarations accepted by `definePlugin`. */
+export interface PluginHttpDefinition {
+  /** Optional scope shared by `onRequest`, `onResponse`, and generated response headers. */
+  match?: readonly PluginRoutePattern[]
+  onRequest?: PluginHttpRequestHandler
+  onResponse?: PluginHttpResponseHandler
+  routes?: readonly PluginHttpRouteRegistration[]
+}
+
 export interface PluginBuildResolveContext extends PluginTransformContext {
   readonly id: string
   readonly importer?: string
@@ -371,6 +380,15 @@ export interface PluginBuildSocket {
   onComplete(hook: PluginBuildCompleteHook): void
 }
 
+/** Concise build declarations accepted by `definePlugin`. Use `register` for repeated hooks. */
+export interface PluginBuildDefinition {
+  onStart?: PluginBuildStartHook
+  onResolve?: PluginBuildResolveHandler
+  onLoad?: PluginBuildLoadHandler
+  onTransform?: PluginBuildTransformHandler
+  onComplete?: PluginBuildCompleteHook
+}
+
 /** Native self-hosted realtime transport requested by a first-party plugin. */
 export interface RealtimePluginOptions {
   /** WebSocket endpoint. Must be an absolute application path. @default "/__ruvyxa/realtime" */
@@ -400,6 +418,11 @@ export interface PluginDevSocket {
   onFileChange(registration: PluginDevFileChangeRegistration | PluginDevFileChangeHandler): void
 }
 
+/** Concise development declarations accepted by `definePlugin`. */
+export interface PluginDevDefinition {
+  onFileChange?: PluginDevFileChangeRegistration | PluginDevFileChangeHandler
+}
+
 export type PluginDiagnosticLevel = 'info' | 'warning' | 'error'
 
 export interface PluginDiagnostic {
@@ -418,6 +441,12 @@ export interface PluginNativeSocket {
   claim(capability: 'realtime@1', options?: RealtimePluginOptions): void
 }
 
+/** Framework-owned native capabilities requested declaratively by a plugin. */
+export interface PluginNativeDefinition {
+  /** Enable the self-hosted realtime capability; `true` uses its defaults. */
+  realtime?: RealtimePluginOptions | true
+}
+
 /** Grouped extension sockets available while a plugin registers itself. */
 export interface PluginRegistrationApi {
   readonly http: PluginHttpSocket
@@ -427,14 +456,28 @@ export interface PluginRegistrationApi {
   readonly native: PluginNativeSocket
 }
 
-/** Input accepted by `definePlugin`. */
+/**
+ * Input accepted by `definePlugin`.
+ *
+ * Prefer concise declarations for common behavior. `register(api)` remains the escape hatch for
+ * multiple hooks of the same kind or advanced composition.
+ */
 export interface RuvyxaPluginDefinition {
   name: string
-  register(api: PluginRegistrationApi): void | Promise<void>
+  headers?: HeadersInit
+  http?: PluginHttpDefinition
+  build?: PluginBuildDefinition
+  dev?: PluginDevDefinition
+  diagnostics?: PluginDiagnostic | readonly PluginDiagnostic[]
+  native?: PluginNativeDefinition
+  register?(api: PluginRegistrationApi): void | Promise<void>
 }
 
 /** The sole plugin object accepted by `config({ plugins })`. */
-export interface RuvyxaPlugin extends RuvyxaPluginDefinition {}
+export interface RuvyxaPlugin {
+  readonly name: string
+  register(api: PluginRegistrationApi): void | Promise<void>
+}
 
 export interface BuildContext {
   root: string

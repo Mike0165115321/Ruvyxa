@@ -88,8 +88,102 @@ describe('config and plugin APIs', () => {
 
   it('rejects malformed plugin definitions', () => {
     assert.throws(() => definePlugin({ name: ' ', register() {} }), /must have a non-empty name/)
-    assert.throws(() => definePlugin({ name: 'broken' } as never), /must provide register\(api\)/)
+    assert.throws(
+      () => definePlugin({ name: 'broken' } as never),
+      /must declare behavior or provide register\(api\)/,
+    )
     assert.equal(definePlugin({ name: 'valid', register() {} }).name, 'valid')
+  })
+
+  it('normalizes concise declarations into every existing socket before register()', async () => {
+    const registrations: string[] = []
+    const plugin = definePlugin({
+      name: 'concise',
+      headers: { 'x-plugin': 'active' },
+      http: {
+        match: ['/api/*'],
+        onRequest() {},
+        onResponse() {},
+        routes: [
+          { method: 'GET', path: '/plugin/status', handler: () => Response.json({ ok: true }) },
+        ],
+      },
+      build: {
+        onStart() {},
+        onResolve() {},
+        onLoad() {},
+        onTransform() {},
+        onComplete() {},
+      },
+      dev: { onFileChange() {} },
+      diagnostics: [{ level: 'info', code: 'DX001', message: 'concise declarations enabled' }],
+      native: { realtime: true },
+      register({ diagnostics }) {
+        diagnostics.report({ level: 'info', code: 'DX002', message: 'advanced hook ran last' })
+      },
+    })
+
+    await plugin.register({
+      http: {
+        onRequest() {
+          registrations.push('http.request')
+        },
+        onResponse() {
+          registrations.push('http.response')
+        },
+        route() {
+          registrations.push('http.route')
+        },
+      },
+      build: {
+        onStart() {
+          registrations.push('build.start')
+        },
+        onResolve() {
+          registrations.push('build.resolve')
+        },
+        onLoad() {
+          registrations.push('build.load')
+        },
+        onTransform() {
+          registrations.push('build.transform')
+        },
+        onComplete() {
+          registrations.push('build.complete')
+        },
+      },
+      dev: {
+        onFileChange() {
+          registrations.push('dev.fileChange')
+        },
+      },
+      diagnostics: {
+        report(value) {
+          registrations.push(`diagnostic.${value.code}`)
+        },
+      },
+      native: {
+        claim(capability, options) {
+          registrations.push(`native.${capability}.${options?.path ?? 'default'}`)
+        },
+      },
+    })
+
+    assert.deepEqual(registrations, [
+      'http.request',
+      'http.response',
+      'http.route',
+      'http.response',
+      'build.start',
+      'build.resolve',
+      'build.load',
+      'build.transform',
+      'build.complete',
+      'dev.fileChange',
+      'diagnostic.DX001',
+      'native.realtime@1.default',
+      'diagnostic.DX002',
+    ])
   })
 
   it('copies a response when changing one header', async () => {
