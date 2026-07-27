@@ -30,6 +30,7 @@ Levels: 🟢 beginner friendly · 🟡 intermediate · 🔴 advanced/reference
 | 13. Deployment                      | 🟢    | [EN](en/deployment.md)               | [TH](th/deployment.md)               |
 | 14. Plugins                         | 🔴    | [EN](en/plugin.md)                   | [TH](th/plugin.md)                   |
 | 15. Official Packages (DB/Auth/RT)  | 🟡    | [EN](en/official-packages.md)        | [TH](th/official-packages.md)        |
+| 16. Error Handling                  | 🔴    | [EN](en/error-handling.md)           | [TH](th/error-handling.md)           |
 
 ## Pick Your Path
 
@@ -79,6 +80,8 @@ Then explore by topic:
 - **Extend safely**: [Plugins](en/plugin.md) — scaffold and register middleware/build hooks plugins
 - **Add state**: [Official Packages](en/official-packages.md) — `@ruvyxa/database`, `@ruvyxa/auth`,
   and `@ruvyxa/realtime` for data, login, and live updates
+- **Recover safely**: [Error Handling](en/error-handling.md) — route fallbacks, HTTP contracts,
+  server actions, diagnostics, and the complete RUV code catalogue
 
 ### For Framework Contributors
 

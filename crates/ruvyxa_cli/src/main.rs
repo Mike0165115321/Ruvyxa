@@ -1514,12 +1514,12 @@ async fn build_with_output(args: BuildArgs, show_summary: bool) -> anyhow::Resul
     if show_summary {
         print_build_phase("validated", "ok".to_string(), validation_duration);
     }
-    run_plugin_build_start(
+    let plugin_session = TypeScriptPluginBuildSession::new(
         &args.root,
-        &out_dir,
         &config.plugins,
         config.javascript_runtime(),
     )?;
+    plugin_session.run_start(&out_dir)?;
     let staging_dir = create_build_staging_dir(&out_dir).with_context(|| {
         format!(
             "failed to create build staging dir in {}",
@@ -1552,7 +1552,7 @@ async fn build_with_output(args: BuildArgs, show_summary: bool) -> anyhow::Resul
                 )
             });
             let bundle_started = Instant::now();
-            let client_manifest = emit_client_bundles_with_runtime(
+            let client_manifest = emit_client_bundles_with_session(
                 &args.root,
                 &app_dir,
                 &manifest,
@@ -1563,7 +1563,7 @@ async fn build_with_output(args: BuildArgs, show_summary: bool) -> anyhow::Resul
                     dependency_hash: &config.config_dependency_hash,
                     directory: &build_cache_dir(&args.root, &config.cache),
                 },
-                config.javascript_runtime(),
+                &plugin_session,
             );
             let client_bundle_duration = bundle_started.elapsed();
             let prepared_assets = preparation
@@ -1736,13 +1736,7 @@ async fn build_with_output(args: BuildArgs, show_summary: bool) -> anyhow::Resul
         .await
         .context("build output commit task panicked")?
         .with_context(|| format!("failed to commit build output into {}", out_dir.display()))?;
-    run_plugin_build_complete(
-        &args.root,
-        &out_dir,
-        &build_info,
-        &config.plugins,
-        config.javascript_runtime(),
-    )?;
+    plugin_session.run_complete(&out_dir, &build_info)?;
     // Adapters must snapshot the committed output after build-complete hooks:
     // first-party and application plugins can add public artifacts such as a
     // sitemap or service worker that must be present in static deploy output.
@@ -2947,6 +2941,14 @@ struct TypeScriptPluginWorker {
     stdout: BufReader<ChildStdout>,
 }
 
+/// Owns the single persistent plugin registry used by one production build.
+///
+/// Lifecycle and bundler hooks intentionally share this host so config
+/// compilation, plugin registration, and process startup happen only once.
+struct TypeScriptPluginBuildSession {
+    bridge: Option<TypeScriptPluginBridge>,
+}
+
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PluginRuntimeOutput {
@@ -3047,19 +3049,26 @@ impl ruvyxa_bundler::hooks::BuildHooks for TypeScriptPluginBridge {
 }
 
 impl TypeScriptPluginBridge {
-    fn call_runner(
+    fn call_worker(
         &self,
-        hook: &str,
-        mut payload: serde_json::Value,
-    ) -> ruvyxa_bundler::Result<Option<serde_json::Value>> {
-        payload["hook"] = serde_json::Value::String(hook.to_string());
+        payload: &serde_json::Value,
+    ) -> ruvyxa_bundler::Result<PluginRuntimeOutput> {
         let worker_index = self.next_worker.fetch_add(1, Ordering::Relaxed) % self.workers.len();
         let mut worker = self.workers[worker_index].lock().map_err(|_| {
             ruvyxa_bundler::BundleError::Compiler(
                 "TypeScript plugin worker lock was poisoned".into(),
             )
         })?;
-        let result = worker.call(&payload)?;
+        worker.call(payload)
+    }
+
+    fn call_runner(
+        &self,
+        hook: &str,
+        mut payload: serde_json::Value,
+    ) -> ruvyxa_bundler::Result<Option<serde_json::Value>> {
+        payload["hook"] = serde_json::Value::String(hook.to_string());
+        let result = self.call_worker(&payload)?;
 
         if result.ok {
             return Ok(result.result);
@@ -3073,6 +3082,82 @@ impl TypeScriptPluginBridge {
                 .or(result.stack)
                 .unwrap_or_else(|| "TypeScript plugin hook failed".to_string())
         )))
+    }
+}
+
+impl TypeScriptPluginBuildSession {
+    fn new(
+        root: &Path,
+        plugins: &[BuildPluginConfig],
+        runtime: JavaScriptRuntime,
+    ) -> anyhow::Result<Self> {
+        if plugins.is_empty() {
+            return Ok(Self { bridge: None });
+        }
+
+        let runner = find_runtime_script(root, "plugin-runtime.mjs")
+            .ok_or_else(|| anyhow::anyhow!("RUV1701 TypeScript plugin runtime not found"))?;
+        let project_root = ruvyxa_diagnostics::normalized_canonical_path(root);
+        let worker =
+            TypeScriptPluginWorker::spawn(&runner, &project_root, runtime).map_err(|error| {
+                anyhow::anyhow!("failed to start TypeScript plugin runtime: {error}")
+            })?;
+        Ok(Self {
+            bridge: Some(TypeScriptPluginBridge {
+                project_root,
+                workers: Arc::new(vec![Mutex::new(worker)]),
+                next_worker: Arc::new(AtomicUsize::new(0)),
+            }),
+        })
+    }
+
+    fn bridge(&self) -> Option<&TypeScriptPluginBridge> {
+        self.bridge.as_ref()
+    }
+
+    fn run_start(&self, out_dir: &Path) -> anyhow::Result<()> {
+        self.call_lifecycle(
+            "build.start",
+            serde_json::json!({ "outDir": out_dir }),
+            "build-start",
+        )
+    }
+
+    fn run_complete(&self, out_dir: &Path, manifest: &serde_json::Value) -> anyhow::Result<()> {
+        self.call_lifecycle(
+            "build.complete",
+            serde_json::json!({
+                "outDir": out_dir,
+                "manifest": manifest,
+            }),
+            "build-complete",
+        )
+    }
+
+    fn call_lifecycle(
+        &self,
+        hook: &str,
+        mut payload: serde_json::Value,
+        label: &str,
+    ) -> anyhow::Result<()> {
+        let Some(bridge) = &self.bridge else {
+            return Ok(());
+        };
+        payload["hook"] = serde_json::Value::String(hook.to_string());
+        let result = bridge
+            .call_worker(&payload)
+            .map_err(|error| anyhow::anyhow!("TypeScript plugin {label} hook failed: {error}"))?;
+        if !result.ok {
+            anyhow::bail!(
+                "{} {}",
+                result.code.unwrap_or_else(|| "RUV1700".to_string()),
+                result
+                    .message
+                    .or(result.stack)
+                    .unwrap_or_else(|| format!("TypeScript plugin {label} hook failed"))
+            );
+        }
+        Ok(())
     }
 }
 
@@ -3173,115 +3258,30 @@ fn plugin_environment(target: ruvyxa_bundler::BundleTarget) -> &'static str {
 }
 
 fn bundle_context_for_build(
-    root: &Path,
-    plugins: &[BuildPluginConfig],
     config_dependency_hash: &str,
     cache_dir: &Path,
-    runtime: JavaScriptRuntime,
+    plugin_session: &TypeScriptPluginBuildSession,
 ) -> anyhow::Result<ruvyxa_bundler::BundleContext> {
     let compile_cache = ruvyxa_bundler::cache::CompileCache::at_dir_with_namespace(
         cache_dir,
         true,
         config_dependency_hash,
     );
-    if plugins.is_empty() {
+    let Some(bridge) = plugin_session.bridge() else {
         return Ok(ruvyxa_bundler::BundleContext::for_build(
             compile_cache,
             ruvyxa_bundler::resolver::ResolveGraphCache::for_build(),
             cache_dir,
             config_dependency_hash,
         ));
-    }
-
-    let runner = find_runtime_script(root, "plugin-runtime.mjs")
-        .ok_or_else(|| anyhow::anyhow!("RUV1701 TypeScript plugin runtime not found"))?;
-    let project_root = ruvyxa_diagnostics::normalized_canonical_path(root);
-    let workers = std::iter::once(
-        TypeScriptPluginWorker::spawn(&runner, &project_root, runtime).map(Mutex::new),
-    )
-    .collect::<ruvyxa_bundler::Result<Vec<_>>>()?;
-    let bridge = TypeScriptPluginBridge {
-        project_root,
-        workers: Arc::new(workers),
-        next_worker: Arc::new(AtomicUsize::new(0)),
     };
 
     Ok(ruvyxa_bundler::BundleContext::with_build_hooks(
         compile_cache,
         ruvyxa_bundler::resolver::ResolveGraphCache::for_build(),
         ruvyxa_bundler::incremental::IncrementalGraphCache::disabled(),
-        ruvyxa_bundler::hooks::BuildHookPipeline::new(vec![Arc::new(bridge)]),
+        ruvyxa_bundler::hooks::BuildHookPipeline::new(vec![Arc::new(bridge.clone())]),
     ))
-}
-
-fn run_plugin_build_complete(
-    root: &Path,
-    out_dir: &Path,
-    manifest: &serde_json::Value,
-    plugins: &[BuildPluginConfig],
-    runtime: JavaScriptRuntime,
-) -> anyhow::Result<()> {
-    if plugins.is_empty() {
-        return Ok(());
-    }
-    let runner = find_runtime_script(root, "plugin-runtime.mjs")
-        .ok_or_else(|| anyhow::anyhow!("RUV1701 TypeScript plugin runtime not found"))?;
-    let project_root = ruvyxa_diagnostics::normalized_canonical_path(root);
-    let mut worker = TypeScriptPluginWorker::spawn(&runner, &project_root, runtime)
-        .map_err(|error| anyhow::anyhow!("failed to start TypeScript plugin runtime: {error}"))?;
-    let result = worker
-        .call(&serde_json::json!({
-            "hook": "build.complete",
-            "outDir": out_dir,
-            "manifest": manifest,
-        }))
-        .map_err(|error| {
-            anyhow::anyhow!("TypeScript plugin build-complete hook failed: {error}")
-        })?;
-    if !result.ok {
-        anyhow::bail!(
-            "{} {}",
-            result.code.unwrap_or_else(|| "RUV1700".to_string()),
-            result
-                .message
-                .or(result.stack)
-                .unwrap_or_else(|| "TypeScript plugin build-complete hook failed".to_string())
-        );
-    }
-    Ok(())
-}
-
-fn run_plugin_build_start(
-    root: &Path,
-    out_dir: &Path,
-    plugins: &[BuildPluginConfig],
-    runtime: JavaScriptRuntime,
-) -> anyhow::Result<()> {
-    if plugins.is_empty() {
-        return Ok(());
-    }
-    let runner = find_runtime_script(root, "plugin-runtime.mjs")
-        .ok_or_else(|| anyhow::anyhow!("RUV1701 TypeScript plugin runtime not found"))?;
-    let project_root = ruvyxa_diagnostics::normalized_canonical_path(root);
-    let mut worker = TypeScriptPluginWorker::spawn(&runner, &project_root, runtime)
-        .map_err(|error| anyhow::anyhow!("failed to start TypeScript plugin runtime: {error}"))?;
-    let result = worker
-        .call(&serde_json::json!({
-            "hook": "build.start",
-            "outDir": out_dir,
-        }))
-        .map_err(|error| anyhow::anyhow!("TypeScript plugin build-start hook failed: {error}"))?;
-    if !result.ok {
-        anyhow::bail!(
-            "{} {}",
-            result.code.unwrap_or_else(|| "RUV1700".to_string()),
-            result
-                .message
-                .or(result.stack)
-                .unwrap_or_else(|| "TypeScript plugin build-start hook failed".to_string())
-        );
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -3294,7 +3294,8 @@ fn emit_client_bundles(
     plugins: &[BuildPluginConfig],
     cache: RuvyxaBuildCache<'_>,
 ) -> anyhow::Result<serde_json::Value> {
-    emit_client_bundles_with_runtime(
+    let plugin_session = TypeScriptPluginBuildSession::new(root, plugins, JavaScriptRuntime::Node)?;
+    emit_client_bundles_with_session(
         root,
         app_dir,
         manifest,
@@ -3302,12 +3303,12 @@ fn emit_client_bundles(
         build,
         plugins,
         cache,
-        JavaScriptRuntime::Node,
+        &plugin_session,
     )
 }
 
 #[allow(clippy::too_many_arguments)]
-fn emit_client_bundles_with_runtime(
+fn emit_client_bundles_with_session(
     root: &Path,
     app_dir: &Path,
     manifest: &RouteManifest,
@@ -3315,7 +3316,7 @@ fn emit_client_bundles_with_runtime(
     build: &BuildConfigOptions,
     plugins: &[BuildPluginConfig],
     cache: RuvyxaBuildCache<'_>,
-    runtime: JavaScriptRuntime,
+    plugin_session: &TypeScriptPluginBuildSession,
 ) -> anyhow::Result<serde_json::Value> {
     let page_routes = manifest
         .routes
@@ -3327,13 +3328,8 @@ fn emit_client_bundles_with_runtime(
         .cloned()
         .collect::<Vec<_>>();
     let parallelism = build_parallelism(build.parallelism, page_routes.len());
-    let bundle_context = bundle_context_for_build(
-        root,
-        plugins,
-        cache.dependency_hash,
-        cache.directory,
-        runtime,
-    )?;
+    let bundle_context =
+        bundle_context_for_build(cache.dependency_hash, cache.directory, plugin_session)?;
     let artifact_cache_dir = cache.directory.to_path_buf();
     let artifact_dependency_hash = cache.dependency_hash.to_string();
     let artifact_fingerprints = ArtifactFingerprintCache::default();
@@ -7401,17 +7397,80 @@ export default {
             name: "complete".to_string(),
         }];
 
-        run_plugin_build_complete(
-            root,
-            &out_dir,
-            &serde_json::json!({ "routes": 1 }),
-            &plugins,
-            JavaScriptRuntime::Node,
-        )
-        .unwrap();
+        let session =
+            TypeScriptPluginBuildSession::new(root, &plugins, JavaScriptRuntime::Node).unwrap();
+        session
+            .run_complete(&out_dir, &serde_json::json!({ "routes": 1 }))
+            .unwrap();
 
         let marker = std::fs::read_to_string(out_dir.join("plugin-complete.json")).unwrap();
         assert!(marker.contains("\"routes\":1"));
+    }
+
+    #[test]
+    fn typescript_plugin_build_session_reuses_worker_across_lifecycle_hooks() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let out_dir = root.join(".ruvyxa");
+        std::fs::create_dir_all(&out_dir).unwrap();
+        std::fs::write(
+            root.join("ruvyxa.config.mjs"),
+            r#"
+import { definePlugin } from "ruvyxa/plugin"
+let phase = "registered"
+export default {
+  plugins: [definePlugin({
+    name: "lifecycle-state",
+    register({ build }) {
+      build.onStart(() => { phase = "started" })
+      build.onTransform(({ code }) => {
+        const observed = phase
+        phase = "transformed"
+        return `${code}\nexport const lifecyclePhase = ${JSON.stringify(observed)}`
+      })
+      build.onComplete(async ({ outDir }) => {
+        const { writeFile } = await import("node:fs/promises")
+        await writeFile(`${outDir}/plugin-phase.txt`, phase)
+      })
+    },
+  })],
+}
+"#,
+        )
+        .unwrap();
+        let plugins = vec![BuildPluginConfig {
+            name: "lifecycle-state".to_string(),
+        }];
+        let session =
+            TypeScriptPluginBuildSession::new(root, &plugins, JavaScriptRuntime::Node).unwrap();
+
+        session.run_start(&out_dir).unwrap();
+        let context = ruvyxa_bundler::hooks::BuildHookContext {
+            project_root: root.to_path_buf(),
+            importer: None,
+            target: ruvyxa_bundler::BundleTarget::Client,
+        };
+        let transformed = ruvyxa_bundler::hooks::BuildHooks::transform(
+            session.bridge().unwrap(),
+            "export const value = 1",
+            &root.join("page.ts"),
+            &context,
+        )
+        .unwrap()
+        .unwrap();
+        session
+            .run_complete(&out_dir, &serde_json::json!({ "routes": 1 }))
+            .unwrap();
+
+        assert!(
+            transformed.code.contains("lifecyclePhase = \"started\""),
+            "{}",
+            transformed.code
+        );
+        assert_eq!(
+            std::fs::read_to_string(out_dir.join("plugin-phase.txt")).unwrap(),
+            "transformed"
+        );
     }
 
     #[test]

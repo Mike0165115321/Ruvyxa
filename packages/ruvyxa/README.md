@@ -198,10 +198,11 @@ including independent OpenAI search/training crawler policy.
 
 The `ruvyxa` package includes a persistent Node/Bun render worker pool (`runtime/worker-pool.mjs`)
 and the plugin runtime (`runtime/plugin-runtime.mjs`). Each plugin host loads `ruvyxa.config.ts`
-once and serves validated NDJSON calls; dev HTTP hooks can use 1–8 processes, while build hooks run
-in build-owned hosts. Module state is shared only inside one process. Dev middleware calls default
-to a 30-second timeout, and repeated HTTP headers survive the native bridge. Plugin transform source
-maps are forwarded into generated client maps.
+once and serves validated NDJSON calls; dev HTTP hooks can use 1–8 processes, while one build-owned
+host serves the complete start, resolve/load/transform, and complete lifecycle of each production
+build. Module state is shared only inside one process. Dev middleware calls default to a 30-second
+timeout, and repeated HTTP headers survive the native bridge. Plugin transform source maps are
+forwarded into generated client maps.
 
 The runtime files included in this package:
 

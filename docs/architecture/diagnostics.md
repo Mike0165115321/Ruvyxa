@@ -3,6 +3,11 @@
 Every framework error has a structured `RUV####` code with title, explanation, source location, and
 suggested fix. Defined in `ruvyxa_diagnostics` and raised by every crate.
 
+> **Current recovery reference:** [Error Handling](../guides/en/error-handling.md) is the
+> authoritative, complete application-facing RUV catalogue. It also covers error.tsx, notFound(),
+> API responses, actions, client loaders, hydration reporting, and explicit treatment of
+> forwarded/reserved and test-only codes. Keep this page as the diagnostic architecture overview.
+
 ---
 
 ## Diagnostic struct
