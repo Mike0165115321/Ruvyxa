@@ -452,7 +452,6 @@ describe('@ruvyxa/auth', () => {
       validateBuild() {},
     })
 
-    assert.equal(plugin.name, 'auth')
     assert.equal(plugin.name, 'ruvyxa:auth')
   })
 })
