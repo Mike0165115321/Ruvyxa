@@ -6,7 +6,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use axum::body::{Body, BodyDataStream, Bytes, HttpBody};
-use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use axum::response::Response;
 use futures_core::Stream;
 use ruvyxa_diagnostics::{Result, RuvyxaError};
@@ -219,12 +219,103 @@ pub(crate) fn split_plugin_target(method: &str, target: &str) -> Result<(String,
     let method = method.parse::<Method>().map_err(|error| {
         RuvyxaError::Message(format!("RUV1701 plugin returned invalid method: {error}"))
     })?;
-    if !target.starts_with('/') {
+    let uri = target.parse::<Uri>().map_err(|error| {
+        RuvyxaError::Message(format!(
+            "RUV1701 plugin returned an invalid request target: {error}"
+        ))
+    })?;
+    let Some(path_and_query) = uri.path_and_query() else {
         return Err(RuvyxaError::Message(
-            "RUV1701 plugin returned a path that does not start with '/'.".to_string(),
+            "RUV1701 plugin returned a request target without a path.".to_string(),
+        ));
+    };
+    if path_and_query.as_str() != target {
+        return Err(RuvyxaError::Message(
+            "RUV1701 plugin returned a request target that is not an absolute application path."
+                .to_string(),
         ));
     }
-    Ok((method.to_string(), target.to_string()))
+    let path = canonical_request_path(uri.path()).map_err(|error| {
+        RuvyxaError::Message(format!(
+            "RUV1701 plugin returned an unsafe request path: {error}"
+        ))
+    })?;
+    let target = match uri.query() {
+        Some(query) => format!("{path}?{query}"),
+        None => path,
+    };
+    Ok((method.to_string(), target))
+}
+
+/// Decode each URI path segment without allowing encoded bytes to introduce a
+/// new path boundary or filesystem traversal component.
+pub(crate) fn canonical_request_path(raw_path: &str) -> Result<String> {
+    if !raw_path.starts_with('/') {
+        return Err(RuvyxaError::Message(
+            "request path must start with '/'.".to_string(),
+        ));
+    }
+
+    let mut segments = Vec::new();
+    for segment in raw_path.split('/').filter(|segment| !segment.is_empty()) {
+        let decoded = decode_path_segment(segment)?;
+        if decoded.is_empty()
+            || matches!(decoded.as_str(), "." | "..")
+            || decoded.contains(['/', '\\'])
+            || decoded.chars().any(char::is_control)
+        {
+            return Err(RuvyxaError::Message(
+                "request path contains an unsafe segment.".to_string(),
+            ));
+        }
+        segments.push(decoded);
+    }
+
+    Ok(if segments.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{}", segments.join("/"))
+    })
+}
+
+fn decode_path_segment(segment: &str) -> Result<String> {
+    let bytes = segment.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+
+    while index < bytes.len() {
+        if bytes[index] != b'%' {
+            decoded.push(bytes[index]);
+            index += 1;
+            continue;
+        }
+
+        let Some(high) = bytes.get(index + 1).and_then(|byte| hex_value(*byte)) else {
+            return Err(RuvyxaError::Message(
+                "request path contains malformed percent encoding.".to_string(),
+            ));
+        };
+        let Some(low) = bytes.get(index + 2).and_then(|byte| hex_value(*byte)) else {
+            return Err(RuvyxaError::Message(
+                "request path contains malformed percent encoding.".to_string(),
+            ));
+        };
+        decoded.push((high << 4) | low);
+        index += 3;
+    }
+
+    String::from_utf8(decoded).map_err(|_| {
+        RuvyxaError::Message("request path contains invalid UTF-8 encoding.".to_string())
+    })
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 pub(crate) fn plugin_headers(headers: &[(String, String)]) -> HeaderMap {
@@ -242,4 +333,30 @@ pub(crate) fn plugin_headers(headers: &[(String, String)]) -> HeaderMap {
 
 pub(crate) fn request_method_allows_body(method: &str) -> bool {
     !method.eq_ignore_ascii_case("GET") && !method.eq_ignore_ascii_case("HEAD")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_plugin_target;
+
+    #[test]
+    fn plugin_request_rewrites_use_the_same_canonical_path_contract_as_routing() {
+        assert_eq!(
+            split_plugin_target("PATCH", "/caf%C3%A9?from=plugin").unwrap(),
+            ("PATCH".to_string(), "/café?from=plugin".to_string())
+        );
+
+        for target in [
+            "https://example.test/admin",
+            "/admin/%2Fprivate",
+            "/admin/%5Cprivate",
+            "/admin/%2E%2E",
+            "/admin/%",
+        ] {
+            assert!(
+                split_plugin_target("GET", target).is_err(),
+                "{target} must be rejected"
+            );
+        }
+    }
 }

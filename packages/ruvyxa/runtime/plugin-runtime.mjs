@@ -241,8 +241,16 @@ function normalizeHttpRoute(plugin, value) {
   }
   const input =
     value.method === undefined ? ['*'] : Array.isArray(value.method) ? value.method : [value.method]
-  if (input.length === 0 || input.some((method) => typeof method !== 'string' || !method.trim())) {
-    throw new TypeError(`plugin "${plugin}" http.route().method must contain HTTP method names`)
+  if (
+    input.length === 0 ||
+    input.some(
+      (method) =>
+        typeof method !== 'string' || !/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(method.trim()),
+    )
+  ) {
+    throw new TypeError(
+      `plugin "${plugin}" http.route().method must contain valid HTTP method tokens`,
+    )
   }
   return {
     path: value.path,
@@ -267,7 +275,10 @@ function normalizeDevFileChange(plugin, value) {
 
 function normalizePatterns(plugin, field, value, requireSlash = true) {
   if (value === undefined) return undefined
-  if (!Array.isArray(value) || value.some((pattern) => typeof pattern !== 'string')) {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new TypeError(`plugin "${plugin}" ${field} must contain at least one pattern`)
+  }
+  if (value.some((pattern) => typeof pattern !== 'string')) {
     throw new TypeError(`plugin "${plugin}" ${field} must be an array of strings`)
   }
   for (const [index, pattern] of value.entries()) {
@@ -484,7 +495,7 @@ async function runBuildComplete(registry, payload) {
 async function runHttpRequest(registry, payload) {
   let request = requestFromPayload(payload.request)
   for (const entry of registry.httpRequest) {
-    const pathname = new URL(request.url).pathname
+    const pathname = decodedRequestPathname(request)
     if (entry.kind === 'route') {
       if (
         entry.path !== pathname ||
@@ -523,7 +534,7 @@ async function runHttpResponse(registry, payload) {
   const request = requestFromPayload(payload.request)
   let response = responseFromPayload(payload.response)
   for (const entry of registry.httpResponse) {
-    if (!matchesPatterns(entry.match, new URL(request.url).pathname)) continue
+    if (!matchesPatterns(entry.match, decodedRequestPathname(request))) continue
     let continued = response
     const context = Object.freeze({
       plugin: entry.plugin,
@@ -581,6 +592,18 @@ function matchesPatterns(patterns, value) {
     if (pattern.endsWith('*')) return value.startsWith(pattern.slice(0, -1))
     return value === pattern
   })
+}
+
+/** Match paths using the decoded representation the Rust development router exposes to plugins. */
+function decodedRequestPathname(request) {
+  const pathname = new URL(request.url).pathname
+  try {
+    return decodeURIComponent(pathname)
+  } catch {
+    // A production host rejects malformed path encodings before this runtime
+    // receives them. Preserve the encoded value defensively for direct calls.
+    return pathname
+  }
 }
 
 function requestFromPayload(value = {}) {

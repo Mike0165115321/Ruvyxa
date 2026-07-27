@@ -80,8 +80,9 @@ use plugin_bridge::{
     plugin_response_into_response,
 };
 use plugin_bridge::{
-    apply_request_plugins, apply_response_plugins, decode_plugin_body, encode_plugin_body,
-    headers_to_plugin_pairs, plugin_headers, request_method_allows_body, split_plugin_target,
+    apply_request_plugins, apply_response_plugins, canonical_request_path, decode_plugin_body,
+    encode_plugin_body, headers_to_plugin_pairs, plugin_headers, request_method_allows_body,
+    split_plugin_target,
 };
 
 mod static_assets;
@@ -1591,77 +1592,6 @@ fn should_log_dev_request(request_path: &str) -> bool {
         return true;
     }
     Path::new(request_path).extension().is_none()
-}
-
-/// Decode each URI path segment without allowing encoded bytes to introduce a
-/// new path boundary or filesystem traversal component.
-fn canonical_request_path(raw_path: &str) -> Result<String> {
-    if !raw_path.starts_with('/') {
-        return Err(RuvyxaError::Message(
-            "request path must start with '/'.".to_string(),
-        ));
-    }
-
-    let mut segments = Vec::new();
-    for segment in raw_path.split('/').filter(|segment| !segment.is_empty()) {
-        let decoded = decode_path_segment(segment)?;
-        if decoded.is_empty()
-            || matches!(decoded.as_str(), "." | "..")
-            || decoded.contains(['/', '\\'])
-            || decoded.chars().any(char::is_control)
-        {
-            return Err(RuvyxaError::Message(
-                "request path contains an unsafe segment.".to_string(),
-            ));
-        }
-        segments.push(decoded);
-    }
-
-    Ok(if segments.is_empty() {
-        "/".to_string()
-    } else {
-        format!("/{}", segments.join("/"))
-    })
-}
-
-fn decode_path_segment(segment: &str) -> Result<String> {
-    let bytes = segment.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-
-    while index < bytes.len() {
-        if bytes[index] != b'%' {
-            decoded.push(bytes[index]);
-            index += 1;
-            continue;
-        }
-
-        let Some(high) = bytes.get(index + 1).and_then(|byte| hex_value(*byte)) else {
-            return Err(RuvyxaError::Message(
-                "request path contains malformed percent encoding.".to_string(),
-            ));
-        };
-        let Some(low) = bytes.get(index + 2).and_then(|byte| hex_value(*byte)) else {
-            return Err(RuvyxaError::Message(
-                "request path contains malformed percent encoding.".to_string(),
-            ));
-        };
-        decoded.push((high << 4) | low);
-        index += 3;
-    }
-
-    String::from_utf8(decoded).map_err(|_| {
-        RuvyxaError::Message("request path contains invalid UTF-8 encoding.".to_string())
-    })
-}
-
-fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
 }
 
 fn dev_page_request_log(

@@ -1248,10 +1248,86 @@ export class contentFormat {}
       assert.equal(duplicate.exitCode, 1)
       assert.match(duplicate.parsed.message, /route GET \/same conflicts with plugin "one"/)
 
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `export default {
+          plugins: [{
+            name: "empty-match",
+            register({ http }) {
+              http.onRequest({ match: [], handler: () => undefined })
+            },
+          }],
+        }`,
+      )
+      const emptyMatch = await runJsonResult(pluginRuntime, [root, 'describe'], {})
+      assert.equal(emptyMatch.exitCode, 1)
+      assert.match(emptyMatch.parsed.message, /match must contain at least one pattern/)
+
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `export default {
+          plugins: [{
+            name: "invalid-method",
+            register({ http }) {
+              http.route({ method: "GET /wrong", path: "/wrong", handler: () => new Response() })
+            },
+          }],
+        }`,
+      )
+      const invalidMethod = await runJsonResult(pluginRuntime, [root, 'describe'], {})
+      assert.equal(invalidMethod.exitCode, 1)
+      assert.match(invalidMethod.parsed.message, /method must contain valid HTTP method tokens/)
+
       await writeFile(path.join(root, 'ruvyxa.config.ts'), `export default { plugins: [] }`)
       const empty = await runJsonResult(pluginRuntime, [root, 'describe'], {})
       assert.equal(empty.exitCode, 0)
       assert.deepEqual(empty.parsed.result.plugins, [])
+    })
+  })
+
+  it('matches plugin HTTP paths after percent-decoding, like the development router', async () => {
+    await withFixture(async ({ root }) => {
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `export default {
+          plugins: [{
+            name: "unicode-path",
+            register({ http }) {
+              http.route({
+                method: "GET",
+                path: "/café",
+                handler: () => new Response("route matched"),
+              })
+              http.onResponse({
+                match: ["/café"],
+                handler: ({ response }) => {
+                  const headers = new Headers(response.headers)
+                  headers.set("x-plugin-path", "decoded")
+                  return new Response(response.body, { status: response.status, headers })
+                },
+              })
+            },
+          }],
+        }`,
+      )
+
+      const route = await runJson(pluginRuntime, [root, 'http.request'], {
+        request: { method: 'GET', path: '/caf%C3%A9', headers: [] },
+      })
+      assert.equal(route.result.kind, 'response')
+      assert.equal(
+        Buffer.from(route.result.response.bodyBase64, 'base64').toString('utf8'),
+        'route matched',
+      )
+
+      const response = await runJson(pluginRuntime, [root, 'http.response'], {
+        request: { method: 'GET', path: '/caf%C3%A9', headers: [] },
+        response: { status: 200, headers: [], bodyBase64: Buffer.from('ok').toString('base64') },
+      })
+      assert.equal(
+        response.result.response.headers.find(([name]) => name === 'x-plugin-path')[1],
+        'decoded',
+      )
     })
   })
 
