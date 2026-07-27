@@ -2,43 +2,76 @@
 
 ## v1.0.24 (2026-07-27)
 
-### Refactor Plugin System
+### Breaking: Unified Plugin API
 
-- Replaced the previous plugin implementation with one unified TypeScript/JavaScript plugin contract
-  based on `definePlugin({ name, register })` from `ruvyxa/plugin`.
-- Added grouped framework sockets for HTTP middleware/routes, build hooks, development file-change
-  events, diagnostics, and framework-owned native capabilities. A plugin can combine any supported
-  sockets without selecting a plugin category or template.
-- Built built-in plugins and the official `@ruvyxa/database`, `@ruvyxa/auth`, and `@ruvyxa/realtime`
-  packages on one `name` + `register(api)` contract. Invalid plugin objects are rejected during
-  configuration/startup.
-- Replaced plugin scaffolding with `ruvyxa plugin create <name>` and a single package template.
-- Added a complete npm plugin package template with TypeScript 7 source, tests, typed framework
-  dependencies, no plugin-specific package metadata, and a minimal response-hook example.
+- Replaced the previous `definePlugin({ name, setup })` API with `definePlugin({ name, register })`
+  from the new `ruvyxa/plugin` export. Existing plugins must migrate their configuration and
+  imports.
+- Replaced the flat setup callbacks with grouped sockets: `http` (`onRequest`, `onResponse`, and
+  `route`), `build` (`onStart`, `onResolve`, `onLoad`, `onTransform`, and `onComplete`), `dev`
+  (`onFileChange`), `diagnostics`, and `native`. One plugin can register across any of these
+  sockets.
+- Replaced middleware `routes` with `match` and request/response callback arguments with typed
+  context objects. Request hooks can continue with `next(request?)`; response hooks can continue
+  with `next(response?)`.
+- Migrated the built-in plugins plus `@ruvyxa/auth`, `@ruvyxa/database`, and `@ruvyxa/realtime` to
+  the same contract. Each official package now exposes its plugin integration through `./plugin`.
+- Replaced the old scaffolding command with `ruvyxa plugin create <name>`. The generated package is
+  a TypeScript npm package with source, tests, typed framework dependencies, and a minimal headers
+  example; it does not require plugin-specific package metadata.
 
-### Runtime, Build, and Development Integration
+### Plugin Runtime, Build, and Development
 
-- Reworked the Node/Bun plugin runtime and Rust host bridge around one NDJSON protocol, including
-  deterministic registration order, hook failure handling, diagnostics, and response-size limits.
-- Added plugin-aware build resolution and loading for aliases, virtual modules, source transforms,
-  build lifecycle hooks, and dependency invalidation. Development file-change notifications now use
-  normalized project-relative paths.
-- Preserved the server/client boundary and existing middleware, route, render, and deployment
-  invariants while wiring plugin hooks through native, standalone, and development execution paths.
-- Removed plugin API and wire-protocol version fields; config rendering, package exports, type
-  declarations, examples, and official package integration now share one unversioned contract.
+- Reworked the Node/Bun plugin runtime and Rust host bridge around one NDJSON protocol with
+  deterministic registration, hook-failure reporting, diagnostics, and response-size limits.
+- Added validation at plugin definition and configuration boundaries: a plugin requires a non-empty
+  name and `register(api)` function, and invalid configured plugin objects fail during startup.
+- Added plugin-aware source resolution for aliases, virtual modules, loading, transforms, lifecycle
+  hooks, and dependency invalidation. Exact dependency aliases now carry
+  source-specifier-to-resolved path bindings through compilation and dynamic-import chunking.
+- Kept one TypeScript plugin worker/registry alive for the complete production build, so lifecycle
+  and bundler hooks share initialization instead of restarting the runtime for each phase.
+- Normalized development file-change notifications to project-relative paths and wired plugin hooks
+  through native, standalone, and development execution paths without relaxing server/client
+  boundary checks.
 
-### Documentation and Verification
+### Correctness and Security
 
-- Added beginner-friendly plugin guides with runnable examples in `docs/guides/th/plugin.md` and
-  `docs/guides/en/plugin.md`, then updated guide navigation and cross-references.
-- Updated release validation and package smoke coverage: version bumping now updates plugin-template
-  peer and development dependencies, metadata validation rejects plugin-specific package metadata,
-  and tarball smoke tests scaffold, compile, and test a generated plugin package.
-- Migrated the demo plugins and configuration to the new API and expanded plugin, compiler, package,
-  and official-package tests for HTTP, build, virtual-module, development, and diagnostics paths.
-- Verified the migration with workspace builds/checks/tests, Rust workspace tests and Clippy,
-  formatting, release metadata validation, npm package smoke tests, and demo build/parity checks.
+- **Fixed stale client navigation pending state.** Concurrent route loads now use navigation IDs, so
+  a completed older navigation cannot clear the pending state of a newer one.
+- **Fixed binary Vercel responses.** The adapter now preserves response bytes by creating its body
+  from `arrayBuffer()` data rather than decoding it as text.
+- **Fixed package-manager detection on Windows.** `create-ruvyxa` supplies the process environment
+  and uses shell execution for `.cmd` shims, allowing npm/pnpm commands to be detected correctly.
+- Hardened plugin-controlled request rewrites: targets must be absolute application paths, percent
+  decoded segments cannot introduce `/`, `\\`, `.`, `..`, controls, malformed encoding, or invalid
+  UTF-8, and external URI targets are rejected.
+- Hardened plugin scaffolding input validation by rejecting absolute and drive-prefixed `--dir`
+  values and plugin names containing consecutive hyphens.
+
+### Tooling, Documentation, and Release Reliability
+
+- Added English and Thai plugin-authoring guides with the new API, lifecycle flow, socket selection,
+  route matching, local package workflow, and HTTP/build examples. Added English and Thai error
+  handling guides and updated CLI, configuration, architecture, official-package, demo, and guide
+  navigation references.
+- Migrated the demo plugins and configuration to the new API and expanded compiler, plugin, core,
+  official-package, Vercel-adapter, router, and scaffolding test coverage for the new behavior.
+- Updated release validation and package smoke coverage: version bumping synchronizes
+  plugin-template peer and development dependencies, metadata validation rejects obsolete
+  plugin-specific metadata, and tarball smoke tests scaffold, compile, and test a generated plugin
+  package.
+- Bumped Rust crates, npm packages, platform CLI packages, and starter templates to 1.0.24 while
+  keeping workspace dependency ranges aligned.
+
+### Benchmarks
+
+- Refreshed the documented minimal-starter benchmark on Windows 11 Home, Ryzen 7 8845HS, Node.js
+  22.23.1, npm 10.9.8, and pnpm 11.17.0. Across three cold-cache runs, Ruvyxa 1.0.24 recorded a
+  1.848 s median production build, 1.020 s dev readiness, 0.828 s production readiness, and 44,316
+  requests/second; exact Next.js and Astro conditions and limits are recorded in the README.
+- Clarified that the benchmark compares minimal starter output, uses local packed artifacts for the
+  unpublished Ruvyxa candidate, and is not a universal framework ranking.
 
 ## v1.0.23 (2026-07-26)
 
