@@ -1,5 +1,83 @@
 # Changelog
 
+## v1.0.25 (2026-07-28)
+
+### Route Metadata
+
+- **Added `export const meta`.** A page or layout can declare document metadata; the framework
+  merges every `meta` on the route root-layout-first and renders the result into `<head>`. Fields:
+  `title`, `titleTemplate`, `description`, `canonical`, `robots`/`noindex`, `lang`, `alternates`,
+  `image`, `imageAlt`, `siteName`, `type`, `locale`, and `card`. `meta` may be an object or a
+  synchronous function of `{ path, params }`.
+- A level's own `title` is never formatted by its own `titleTemplate`, so a layout template formats
+  its pages without reformatting the layout's own title.
+- `lang` is applied to the `<html>` element of the document each server render produces, covering
+  SSR, SSG, PPR, prerender, and serverless. Client-side navigation does not change it.
+- Metadata is composed as a sibling of the route's layouts, so a suspended layout cannot hold the
+  document title back past the flushed shell, and no wrapper element is created per render.
+- Added `RouteMeta`, `RouteMetaFactory`, `RouteMetaExport`, `RouteMetaContext`, and
+  `RouteMetaAlternate` types to `@ruvyxa/react`.
+
+### Crawler Discovery Files
+
+- **`ruvyxa build` now generates `robots.txt` and `sitemap.xml`** from the route manifest and the
+  URLs the build prerendered, instead of leaving both to opt-in plugins. A file of the same name in
+  `public/` always wins.
+- Added the `site` configuration block: `url`, `sitemap`, and `robots`. When `url` is absent the
+  build reads the `RUVYXA_SITE_URL` environment variable. A sitemap needs absolute URLs, so without
+  either the build warns and writes only `robots.txt`.
+- **Fixed `/robots.txt` and `/sitemap.xml` being answered with an HTML page.** Those exact paths now
+  return 404 when no file backs them, rather than letting a bare dynamic route such as `/[lang]`
+  capture them. `dev`, `start`, and the serverless handler apply the same rule.
+
+### Plugins
+
+- **Added the `head` declaration.** A plugin contributes `link`, `meta`, `noscript`, `script`, and
+  `style` elements to every rendered document's `<head>`, declared once at config load and injected
+  by the server with no per-request round trip into the plugin host. Attribute values are escaped
+  and the element list is closed, so a declaration cannot end the head early.
+- **Added `createPluginHarness()`**, exported from `ruvyxa/plugin-harness`. It runs `register(api)`
+  against recording sockets and exposes the request, response, route, build, dev, diagnostics, and
+  head entry points the server uses, so a plugin can be tested without booting an application.
+- **Added the `fonts()` built-in plugin.** It downloads Google Fonts stylesheets and their `.woff2`
+  files at build time, rewrites the URLs to local paths, and declares the self-hosted stylesheet in
+  `<head>`, removing a render-blocking third-party origin from the critical path. A network failure
+  reports a diagnostic instead of failing the build.
+- `definePlugin` validation errors now carry the `RUV2102` diagnostic code instead of raising bare
+  `TypeError` messages.
+
+### Correctness
+
+- **Fixed the Node compiler mis-linking any module containing a regular expression with a quote.**
+  The source scanner had no regex-literal handling, so a pattern such as `/("[^"]*")/` opened a
+  phantom string that ran to the next quote anywhere later in the file; every `import` and `export`
+  in between was read as string content and survived into the bundle, producing
+  `SyntaxError: Unexpected token 'export'` at runtime.
+
+### Performance
+
+- **Added a build diagnostic for images that bypass the image pipeline.** A raw `<img>` pointing at
+  a public PNG/JPEG the optimizer already converted is reported with its file, line, and the bytes
+  the page ships versus the generated WebP. The optimization was previously performed and silently
+  unused.
+- Route bundles for the browser no longer carry the `<html lang>` rewrite helper, which only a
+  server entry can use.
+
+### API Naming
+
+- `card` replaces `twitterCard` on `<Seo>` and in route metadata. `twitterCard` still works and is
+  marked deprecated; the emitted `<meta name="twitter:card">` attribute is unchanged, since that is
+  the name the crawler still reads.
+- Site URL resolution reads one framework-owned `RUVYXA_SITE_URL` variable rather than a list of
+  host-specific environment variable names.
+
+### Documentation
+
+- Added page-metadata sections to the English and Thai routing guides, the `site` block to both
+  configuration guides, and `head` plus `createPluginHarness` coverage to both plugin guides,
+  including a first-party plugin list that calls out `fonts()`.
+- Documented the `RUV2102` plugin-definition diagnostic.
+
 ## v1.0.24 (2026-07-27)
 
 ### Breaking: Unified Plugin API
