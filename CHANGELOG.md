@@ -78,6 +78,16 @@
   including a first-party plugin list that calls out `fonts()`.
 - Documented the `RUV2102` plugin-definition diagnostic.
 
+### Benchmarks
+
+- Refreshed the minimal-starter benchmark on Windows with Node.js 22.23.1, npm 10.9.8, and pnpm
+  11.17.0. Across three cold-cache runs, Ruvyxa 1.0.25 recorded a 1.698 s median production build,
+  1.103 s dev readiness, 0.917 s production readiness, and 37,381 requests/second. The comparison
+  used Next.js 16.2.12 and Astro 7.1.4 under the same harness; exact conditions and limitations are
+  recorded in the README.
+- The benchmark uses local packed 1.0.25 artifacts for Ruvyxa and compares minimal starter output;
+  it is not a universal framework performance ranking.
+
 ## v1.0.24 (2026-07-27)
 
 ### Breaking: Unified Plugin API
