@@ -96,6 +96,46 @@ describe('serverless handler route matching', () => {
     assert.deepEqual(rendered.at(-1).params.path, ['a b', 'c'])
   })
 
+  it('canonicalizes the full path once like the development router', async () => {
+    const rendered = []
+    const handler = handlerFor(
+      [pageRoute('unicode', '/ทดสอบ'), pageRoute('blog-slug', '/blog/[slug]')],
+      rendered,
+    )
+
+    const unicode = await handler(
+      new Request('http://localhost/%E0%B8%97%E0%B8%94%E0%B8%AA%E0%B8%AD%E0%B8%9A'),
+    )
+    assert.equal(unicode.status, 200)
+    assert.equal(rendered.at(-1).routeId, 'unicode')
+    assert.equal(rendered.at(-1).pathname, '/ทดสอบ')
+
+    const literalPercent = await handler(new Request('http://localhost/blog/%2520'))
+    assert.equal(literalPercent.status, 200)
+    assert.equal(rendered.at(-1).params.slug, '%20')
+    assert.equal(rendered.at(-1).pathname, '/blog/%20')
+  })
+
+  it('uses the canonical path for prerender cache lookup', async () => {
+    const cachePaths = []
+    const route = pageRoute('blog-slug', '/blog/[slug]', 'ssg')
+    const handler = createHandler({
+      routes: [route],
+      importPage: async () => ({ render: async () => '<html>fallback</html>' }),
+      importApi: async () => ({}),
+      readPrerendered(pathname) {
+        cachePaths.push(pathname)
+        return '<html>cached</html>'
+      },
+    })
+
+    const response = await handler(new Request('http://localhost/blog/a%20b'))
+
+    assert.equal(response.status, 200)
+    assert.equal(await response.text(), '<html>cached</html>')
+    assert.deepEqual(cachePaths, ['/blog/a b'])
+  })
+
   it('matches trailing and duplicate slashes like the dev router', async () => {
     const rendered = []
     const handler = handlerFor(
@@ -112,12 +152,13 @@ describe('serverless handler route matching', () => {
     const trailing = await handler(new Request('http://localhost/docs/a/'))
     assert.equal(trailing.status, 200)
     assert.deepEqual(rendered.at(-1).params.path, ['a'])
-    // The un-normalized request path still reaches render, like the dev server.
-    assert.equal(rendered.at(-1).pathname, '/docs/a/')
+    // The canonical path reaches render, matching the dev server boundary.
+    assert.equal(rendered.at(-1).pathname, '/docs/a')
 
     const duplicate = await handler(new Request('http://localhost/docs//a'))
     assert.equal(duplicate.status, 200)
     assert.deepEqual(rendered.at(-1).params.path, ['a'])
+    assert.equal(rendered.at(-1).pathname, '/docs/a')
 
     // An optional catch-all keeps its "absent at the parent route" contract
     // even when the parent is requested with a trailing slash.
@@ -217,6 +258,19 @@ describe('serverless handler request validation', () => {
     const response = await handler(new Request('http://localhost/blog/%ZZ'))
 
     assert.equal(response.status, 400)
+    assert.equal(rendered.length, 0)
+  })
+
+  it('answers encoded path boundaries and control characters with 400', async () => {
+    const rendered = []
+    const handler = handlerFor([pageRoute('blog-slug', '/blog/[slug]')], rendered)
+
+    // WHATWG URL parsing removes encoded dot-segments before Request exposes
+    // `url`; the remaining boundary-changing values reach this guard intact.
+    for (const pathname of ['/blog/%2F', '/blog/%5C', '/blog/%00']) {
+      const response = await handler(new Request(`http://localhost${pathname}`))
+      assert.equal(response.status, 400, pathname)
+    }
     assert.equal(rendered.length, 0)
   })
 })

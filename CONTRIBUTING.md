@@ -68,7 +68,7 @@ ruvyxa/
 │   ├── ruvyxa_cli/            # CLI binary (dev, build, check, start, routes, analyze, etc.)
 │   ├── ruvyxa_dev_server/     # Dev + production HTTP server, HMR, render cache, worker pool
 │   ├── ruvyxa_graph/          # Route discovery, validation, rendering strategy detection
-│   ├── ruvyxa_middleware/     # Tower middleware (CORS, timing, logging, rate limit) + Wasm plugins
+│   ├── ruvyxa_middleware/     # Tower middleware plus the TypeScript plugin host bridge
 │   └── ruvyxa_diagnostics/    # Structured error types (RUV#### codes)
 ├── packages/                  # TypeScript packages (npm)
 │   ├── ruvyxa/                # Main package (CLI wrapper + runtime Node scripts)

@@ -102,7 +102,19 @@ export function createHandler(options) {
 
   async function dispatch(request, runtimeContext = {}) {
     const url = new URL(request.url)
-    const pathname = stripBasePath(url.pathname, basePath)
+    const rawPathname = url.pathname
+    let canonicalPathname
+    try {
+      canonicalPathname = canonicalRequestPath(rawPathname)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(`[ruvyxa] Malformed request path ${rawPathname}:`, message)
+      return new Response('Bad Request', {
+        status: 400,
+        headers: { 'content-type': 'text/plain; charset=utf-8' },
+      })
+    }
+    const pathname = stripBasePath(canonicalPathname, basePath)
     // A request outside the configured base path is not ours to serve.
     // Slicing unconditionally would turn `/other/thing` into `r/thing` and let
     // it match an unrelated route.
@@ -110,28 +122,9 @@ export function createHandler(options) {
       return new Response('Not Found', { status: 404 })
     }
 
-    let match
-    try {
-      // Route matching percent-decodes parameters, which throws on malformed
-      // input such as `/blog/%ZZ`. This ran outside the handler's try block, so
-      // the URIError escaped as an unhandled rejection instead of a response.
-      //
-      // Matching uses the dev router's segment semantics (split_path in
-      // crates/ruvyxa_dev_server/src/router.rs drops empty segments), so
-      // `/docs/a/`, `/docs//a`, and `/docs/a` resolve to the same route with
-      // the same params. Without this, the greedy catch-all regex captured the
-      // trailing slash and produced params like ["a", ""] in deploys only.
-      // The un-normalized pathname is still what render and the prerender
-      // cache receive, matching what the dev server passes.
-      match = matchRoute(compiledRoutes, normalizeMatchPath(pathname))
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      console.error(`[ruvyxa] Malformed request path ${pathname}:`, message)
-      return new Response('Bad Request', {
-        status: 400,
-        headers: { 'content-type': 'text/plain; charset=utf-8' },
-      })
-    }
+    // The request boundary above already decoded and normalized the path using
+    // the same segment rules as the Rust development server.
+    const match = matchRoute(compiledRoutes, pathname)
     if (!match) {
       return new Response('Not Found', { status: 404 })
     }
@@ -327,7 +320,8 @@ function normalizeCacheEntry(value) {
  * Map a request path to the relative location of its pre-rendered HTML.
  *
  * Mirrors the build writer, which stores `<prerenderDir>/<path>/index.html`
- * using the raw (still percent-encoded) route path, so this must not decode.
+ * from its canonical route path. Request handlers canonicalize before calling
+ * this mapper; direct callers must provide the path representation they store.
  *
  * Returns `null` when the path cannot be mapped to a contained location.
  * Adapters join the result onto their cache directory and touch the file
@@ -451,6 +445,37 @@ function normalizeMatchPath(pathname) {
   return segments.length === 0 ? '/' : `/${segments.join('/')}`
 }
 
+/** Decode a request path exactly once while preserving segment boundaries. */
+function canonicalRequestPath(rawPathname) {
+  if (typeof rawPathname !== 'string' || !rawPathname.startsWith('/')) {
+    throw new URIError('Request path must start with "/"')
+  }
+  const segments = []
+  for (const segment of rawPathname.split('/').filter(Boolean)) {
+    const decoded = decodeURIComponent(segment)
+    if (
+      decoded === '' ||
+      decoded === '.' ||
+      decoded === '..' ||
+      decoded.includes('/') ||
+      decoded.includes('\\') ||
+      hasControlCharacter(decoded)
+    ) {
+      throw new URIError('Request path contains an unsafe encoded segment')
+    }
+    segments.push(decoded)
+  }
+  return normalizeMatchPath(`/${segments.join('/')}`)
+}
+
+function hasControlCharacter(value) {
+  for (const character of value) {
+    const code = character.codePointAt(0)
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return true
+  }
+  return false
+}
+
 /**
  * Compile a route path pattern into a regex and parameter names.
  * Supports:
@@ -542,19 +567,15 @@ function matchRoute(compiledRoutes, pathname) {
       const value = match[i + 1]
 
       if (route.pattern.catchAll && name === route.pattern.catchAll.name) {
-        // Decode each captured segment like the dev server does; leaving
-        // them encoded makes /docs/a%20b produce different params in
-        // serverless deploys than in development.
-        //
         // An optional catch-all that captured nothing stays absent rather than
         // becoming `[]`. The documented contract is "undefined at the parent
         // route", and the dev server's router omits the key there, so emitting
         // an empty array would make `/shop` behave differently in a deploy.
         if (value) {
-          params[name] = value.split('/').map((segment) => decodeURIComponent(segment))
+          params[name] = value.split('/')
         }
       } else {
-        params[name] = value ? decodeURIComponent(value) : undefined
+        params[name] = value || undefined
       }
     }
 
@@ -585,8 +606,15 @@ export function resolveRouteForTesting(routes, pathname) {
       specificity: routeSpecificity(route.path),
     }))
     .sort((left, right) => compareSpecificity(left.specificity, right.specificity))
-  const matched = matchRoute(compiled, normalizeMatchPath(pathname))
-  return matched ? { path: matched.route.path, params: matched.params } : null
+  try {
+    const canonicalPathname = canonicalRequestPath(pathname)
+    const matched = matchRoute(compiled, canonicalPathname)
+    return matched
+      ? { path: matched.route.path, params: matched.params, pathname: canonicalPathname }
+      : null
+  } catch {
+    return null
+  }
 }
 
 // ─── Response Normalization ─────────────────────────────────────────────────

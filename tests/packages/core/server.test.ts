@@ -148,6 +148,36 @@ describe('cache', () => {
     assert.equal(calls, 2)
   })
 
+  it('treats an empty cache key as a key instead of a clear-all sentinel', async () => {
+    await cache('')
+      .ttl('10s')
+      .get(() => 'empty')
+    await cache('retained')
+      .ttl('10s')
+      .get(() => 'retained')
+
+    invalidateCache('')
+
+    let emptyCalls = 0
+    const empty = await cache('')
+      .ttl('10s')
+      .get(() => {
+        emptyCalls++
+        return 'repopulated'
+      })
+    let retainedCalls = 0
+    const retained = await cache('retained')
+      .ttl('10s')
+      .get(() => {
+        retainedCalls++
+        return 'unexpected'
+      })
+    assert.equal(empty, 'repopulated')
+    assert.equal(emptyCalls, 1)
+    assert.equal(retained, 'retained')
+    assert.equal(retainedCalls, 0)
+  })
+
   it('invalidates by prefix', async () => {
     await cache('users:list')
       .ttl('10s')
@@ -213,6 +243,32 @@ describe('cache', () => {
       })
     assert.equal(retained, 1)
     assert.equal(producerCalls, 0)
+    assert.equal(cacheStats().size, 1024)
+  })
+
+  it('evicts an empty-string key when it is the least recently used entry', async () => {
+    await cache('')
+      .ttl('10s')
+      .get(() => 'oldest')
+    for (let index = 1; index < 1024; index++) {
+      await cache(`empty-key-capacity:${index}`)
+        .ttl('10s')
+        .get(() => index)
+    }
+
+    await cache('empty-key-capacity:new')
+      .ttl('10s')
+      .get(() => 'new')
+
+    let producerCalls = 0
+    const value = await cache('')
+      .ttl('10s')
+      .get(() => {
+        producerCalls++
+        return 'repopulated'
+      })
+    assert.equal(value, 'repopulated')
+    assert.equal(producerCalls, 1)
     assert.equal(cacheStats().size, 1024)
   })
 

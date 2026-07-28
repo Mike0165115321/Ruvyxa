@@ -188,7 +188,7 @@ class CacheStore {
   }
 
   invalidate(keyOrPrefix?: string): void {
-    if (!keyOrPrefix) {
+    if (keyOrPrefix === undefined) {
       this.clear()
       return
     }
@@ -253,7 +253,7 @@ class CacheStore {
 
   #evictOldest(): void {
     const oldest = this.#accessOrder.shift()
-    if (oldest) {
+    if (oldest !== undefined) {
       this.delete(oldest)
     }
   }

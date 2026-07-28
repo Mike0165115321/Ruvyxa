@@ -101,9 +101,12 @@ project/
 
 `canonical_request_path(path)`:
 
-- Splits by `/`, percent-decodes each segment (`percent_encoding::percent_decode_str`)
-- Rejects: empty segments, `.`, `..`, decoded `/` or `\`, control characters (0x00–0x1F)
-- Rejects: malformed percent encoding (invalid hex, truncation)
+- Requires an absolute path, discards empty segments, and percent-decodes each segment exactly once
+  with the internal strict hex/UTF-8 decoder
+- Rejects: `.`, `..`, empty decoded values, decoded `/` or `\`, and Unicode control characters
+- Rejects: malformed percent encoding (invalid hex, truncation, or invalid UTF-8)
+- Browser matching treats invalid segments as a non-match and falls back to a document request;
+  serverless matching returns `400`, matching the Rust request boundary
 
 Prevents: path traversal (`/../../../etc/passwd`), null byte injection, CRLF injection.
 

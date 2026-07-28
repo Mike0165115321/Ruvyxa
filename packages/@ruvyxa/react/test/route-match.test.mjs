@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import { createRouteMatcher } from '../dist/route-match.js'
+import { canonicalRoutePath, createRouteMatcher } from '../dist/route-match.js'
 // The server matcher lives in the ruvyxa runtime. Both must resolve any URL to
 // the same route and params, or a soft navigation would render a different
 // page than a reload of the same address.
@@ -20,6 +20,7 @@ const ROUTES = [
   { path: '/docs/[...slug]' },
   { path: '/shop/[[...category]]' },
   { path: '/users/[id]/posts/[postId]' },
+  { path: '/ทดสอบ' },
 ]
 
 const CASES = [
@@ -34,6 +35,8 @@ const CASES = [
   '/shop', // optional catch-all matches the bare parent
   '/shop/electronics/phones',
   '/users/7/posts/42',
+  '/%E0%B8%97%E0%B8%94%E0%B8%AA%E0%B8%AD%E0%B8%9A', // encoded Unicode static route
+  '/blog/%2520', // decode once: the parameter value is the literal string "%20"
   '/nope/nope', // no route
 ]
 
@@ -53,12 +56,17 @@ describe('createRouteMatcher parity with the server matcher', () => {
       assert.ok(client, `client failed to match ${pathname}`)
       assert.equal(client.route.path, server.path)
       assert.deepEqual(client.params, server.params)
+      assert.equal(canonicalRoutePath(pathname), server.pathname)
     })
   }
 })
 
 describe('createRouteMatcher route selection', () => {
   const match = createRouteMatcher(ROUTES)
+
+  it('preserves the public match result shape', () => {
+    assert.deepEqual(match('/about'), { route: ROUTES[1], params: {} })
+  })
 
   it('prefers a static segment over a dynamic one at the same position', () => {
     assert.equal(match('/blog/new')?.route.path, '/blog/new')
@@ -69,6 +77,12 @@ describe('createRouteMatcher route selection', () => {
     assert.deepEqual(match('/docs/a/b')?.params, { slug: ['a', 'b'] })
   })
 
+  it('matches encoded Unicode static routes and decodes parameters exactly once', () => {
+    assert.equal(match('/%E0%B8%97%E0%B8%94%E0%B8%AA%E0%B8%AD%E0%B8%9A')?.route.path, '/ทดสอบ')
+    assert.equal(match('/blog/%2520')?.params.slug, '%20')
+    assert.equal(canonicalRoutePath('/blog/%2520'), '/blog/%20')
+  })
+
   it('omits an optional catch-all key when it captured nothing', () => {
     const result = match('/shop')
     assert.equal(result?.route.path, '/shop/[[...category]]')
@@ -77,5 +91,12 @@ describe('createRouteMatcher route selection', () => {
 
   it('returns null for an unmatched path', () => {
     assert.equal(match('/does/not/exist/here'), null)
+  })
+
+  it('rejects malformed and boundary-changing encoded segments as non-matches', () => {
+    for (const pathname of ['/blog/%ZZ', '/blog/%2F', '/blog/%5C', '/blog/%2e%2e']) {
+      assert.equal(match(pathname), null, pathname)
+      assert.equal(resolveRouteForTesting(ROUTES, pathname), null, pathname)
+    }
   })
 })

@@ -25,7 +25,12 @@
  * navigating away and back would otherwise render nothing.
  */
 
-import { createRouteMatcher, type RouteManifestEntry, type RouteParams } from './route-match.js'
+import {
+  canonicalRoutePath,
+  createRouteMatcher,
+  type RouteManifestEntry,
+  type RouteParams,
+} from './route-match.js'
 
 /**
  * The active route, as seen by the routing hooks.
@@ -246,7 +251,7 @@ function createRouter(): RouterInstance {
     }
 
     const context: RouteContextValue = {
-      pathname: url.pathname,
+      pathname: canonicalRoutePath(url.pathname) ?? url.pathname,
       params: matched.params,
       route: matched.route.path,
     }

@@ -208,13 +208,16 @@ worker_pool.shutdown().await;  // 5s grace period
 ### 1. Parse canonical path
 
 ```rust
-fn canonical_request_path(path: &str) -> Result<String, StatusCode>
+fn canonical_request_path(raw_path: &str) -> Result<String>
 ```
 
-- Split by `/`.
-- Percent-decode each segment (`percent_encoding::percent_decode_str`).
-- Reject: empty segments, `.`, `..`, decoded `/` or `\`, control characters (0x00-0x1F).
-- Reject: malformed percent encoding (invalid hex, truncated).
+- Require an absolute path, split by `/`, and discard empty segments to normalize duplicate and
+  trailing slashes.
+- Percent-decode each segment exactly once with the internal strict hex/UTF-8 decoder.
+- Reject `.`, `..`, decoded `/` or `\`, empty decoded values, and Unicode control characters.
+- Reject malformed percent encoding (invalid hex, truncated, or invalid UTF-8).
+- The browser and serverless matchers mirror these segment rules so Unicode/static routing,
+  parameters, and prerender cache paths agree with development.
 
 ### 2. Read body
 

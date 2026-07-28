@@ -711,10 +711,25 @@ function validateUser(user: AuthUser): void {
 
 function parseSession(value: string): AuthSession | null {
   try {
-    const session = JSON.parse(value) as AuthSession
-    validateUser(session.user)
-    if (typeof session.id !== 'string' || typeof session.expiresAt !== 'string') return null
-    return session
+    const parsed = JSON.parse(value) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const session = parsed as Partial<AuthSession>
+    validateUser(session.user as AuthUser)
+    if (
+      typeof session.id !== 'string' ||
+      session.id.trim() === '' ||
+      typeof session.createdAt !== 'string' ||
+      typeof session.expiresAt !== 'string' ||
+      typeof session.remember !== 'boolean'
+    ) {
+      return null
+    }
+    const createdAt = Date.parse(session.createdAt)
+    const expiresAt = Date.parse(session.expiresAt)
+    if (!Number.isFinite(createdAt) || !Number.isFinite(expiresAt) || expiresAt < createdAt) {
+      return null
+    }
+    return session as AuthSession
   } catch {
     return null
   }

@@ -140,6 +140,43 @@ export function normalizeMatchPath(pathname: string): string {
 }
 
 /**
+ * Decode each path segment exactly once without allowing an encoded value to
+ * create a route boundary or traversal component. This mirrors
+ * `canonical_request_path` at the development-server request boundary.
+ */
+export function canonicalRoutePath(pathname: string): string | null {
+  if (!pathname.startsWith('/')) return null
+  const decoded: string[] = []
+  try {
+    for (const segment of pathname.split('/').filter(Boolean)) {
+      const value = decodeURIComponent(segment)
+      if (
+        value === '' ||
+        value === '.' ||
+        value === '..' ||
+        value.includes('/') ||
+        value.includes('\\') ||
+        hasControlCharacter(value)
+      ) {
+        return null
+      }
+      decoded.push(value)
+    }
+  } catch {
+    return null
+  }
+  return normalizeMatchPath(`/${decoded.join('/')}`)
+}
+
+function hasControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.codePointAt(0)!
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return true
+  }
+  return false
+}
+
+/**
  * Compile a route table once and return a matcher over it.
  *
  * Manifest order is alphabetical, where `[` sorts before letters — matching in
@@ -158,7 +195,8 @@ export function createRouteMatcher<Route extends RouteManifestEntry>(
     .sort((left, right) => compareSpecificity(left.specificity, right.specificity))
 
   return function match(pathname: string): RouteMatch<Route> | null {
-    const normalized = normalizeMatchPath(pathname)
+    const normalized = canonicalRoutePath(pathname)
+    if (normalized === null) return null
 
     for (const entry of compiled) {
       const matched = entry.pattern.regex.exec(normalized)
@@ -174,10 +212,10 @@ export function createRouteMatcher<Route extends RouteManifestEntry>(
           // than becoming `[]`: the documented contract is "undefined at the
           // parent route", and both server routers omit the key there.
           if (value) {
-            params[name] = value.split('/').map((segment) => decodeURIComponent(segment))
+            params[name] = value.split('/')
           }
         } else {
-          params[name] = value ? decodeURIComponent(value) : undefined
+          params[name] = value || undefined
         }
       }
 

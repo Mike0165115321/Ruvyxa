@@ -55,6 +55,44 @@ describe('@ruvyxa/auth', () => {
     assert.equal(session?.remember, true)
   })
 
+  it('rejects and deletes stored sessions with an invalid expiration date', async () => {
+    const values = new Map<string, string>()
+    let sessionKey = ''
+    const store = {
+      name: 'test-session-store',
+      durable: true,
+      async get(key: string) {
+        return values.get(key) ?? null
+      },
+      async set(key: string, value: string) {
+        sessionKey = key
+        values.set(key, value)
+      },
+      async delete(key: string) {
+        values.delete(key)
+      },
+      async take(key: string) {
+        const value = values.get(key) ?? null
+        values.delete(key)
+        return value
+      },
+    }
+    const auth = runtime({ store })
+    const result = await auth.login('email', {
+      email: 'ada@example.com',
+      password: 'correct',
+    })
+    const cookie = result.headers.get('set-cookie')!.split(';')[0]!
+    const persisted = JSON.parse(values.get(sessionKey)!) as Record<string, unknown>
+    persisted.expiresAt = 'not-a-date'
+    values.set(sessionKey, JSON.stringify(persisted))
+
+    const session = await auth.getSession(new Request(origin, { headers: { cookie } }))
+
+    assert.equal(session, null)
+    assert.equal(values.has(sessionKey), false)
+  })
+
   it('treats malformed percent-encoding in the provider path as no match', async () => {
     const auth = runtime()
     const response = await auth.handle(
