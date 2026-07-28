@@ -26,6 +26,155 @@ export const ROUTE_CONTEXT_LOCAL = '__ruvyxaRouteContext'
 /** Local name the emitted prelude binds the error/not-found boundary class to. */
 export const ROUTE_BOUNDARY_LOCAL = '__ruvyxaBoundary'
 
+/** Local name bound to the route-metadata merge helper. */
+export const META_RESOLVE_LOCAL = '__ruvyxaResolveMeta'
+
+/** Local name bound to the helper that turns merged metadata into elements. */
+export const META_ELEMENT_LOCAL = '__ruvyxaMetaElement'
+
+/** Local name bound to the helper that rewrites `<html lang>` on a rendered document. */
+export const META_LANG_LOCAL = '__ruvyxaApplyLang'
+
+/** Identifier prefix for the namespace imports metadata is read from. */
+export const META_SOURCE_PREFIX = '__ruvyxaMeta'
+
+/**
+ * Build the namespace imports a route's metadata is merged from.
+ *
+ * A page and its layouts are already imported for their default export, but a
+ * default import cannot see a sibling `export const meta`. Re-importing the same
+ * specifier as a namespace is the smallest change that exposes it: ESM gives
+ * both statements the same module instance, and every bundler in the pipeline
+ * collapses them to one record.
+ *
+ * `importPaths` must be ordered root layout → leaf layout → page, which is the
+ * order {@link routeMetaPrelude}'s resolver treats as least → most specific.
+ *
+ * Mirrored by `meta_source_imports()` in `crates/ruvyxa_bundler/src/output.rs`.
+ *
+ * @param {string[]} importPaths Module specifiers, already normalized.
+ * @param {string} [namePrefix] Identifier prefix, unique per route in a file
+ *   that defines several routes (`adapter-runner.mjs`).
+ */
+export function metaSourceImports(importPaths, namePrefix = META_SOURCE_PREFIX) {
+  const imports = []
+  const metaNames = []
+  importPaths.forEach((importPath, index) => {
+    const name = `${namePrefix}${index}`
+    imports.push(`import * as ${name} from ${JSON.stringify(importPath)}`)
+    metaNames.push(name)
+  })
+  return { imports, metaNames }
+}
+
+/**
+ * Emit the route-metadata helpers: merge, element construction, and the
+ * `<html lang>` rewrite.
+ *
+ * Metadata is merged least-specific first (root layout → page), so a page
+ * overrides its layouts field by field. `titleTemplate` applies only to a title
+ * declared *below* the level that set the template, matching Next.js: a layout's
+ * template formats its pages' titles but not its own.
+ *
+ * The elements are ordinary `<title>`/`<meta>`/`<link>` nodes. React 19 hoists
+ * those into `<head>` from anywhere in the tree, so this needs no cooperation
+ * from the Rust document composer and works identically for SSR, SSG, PPR, and
+ * hydration.
+ *
+ * Resolution is synchronous by design: a `meta` function runs during render, and
+ * an async one would resolve after the shell has already been flushed with no
+ * title. `meta` must therefore be an object or a synchronous function.
+ *
+ * Emit this exactly once per generated module, next to
+ * {@link routeContextPrelude}.
+ *
+ * @param {object} [options]
+ * @param {boolean} [options.lang] Include the `<html lang>` rewrite. Only a
+ *   server entry has a document string to rewrite; shipping it to the browser
+ *   would be dead bytes on every route bundle.
+ */
+export function routeMetaPrelude({ lang = true } = {}) {
+  const langHelper = lang
+    ? `
+
+function ${META_LANG_LOCAL}(html, lang) {
+  if (typeof html !== "string" || typeof lang !== "string" || lang === "") return html
+  const match = /<html\\b[^>]*>/i.exec(html)
+  if (!match) return html
+  const value = lang.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;")
+  const attribute = /\\slang\\s*=\\s*("[^"]*"|'[^']*'|[^\\s>]+)/i
+  const tag = attribute.test(match[0])
+    ? match[0].replace(attribute, ' lang="' + value + '"')
+    : match[0].replace(/^<html/i, '<html lang="' + value + '"')
+  return html.slice(0, match.index) + tag + html.slice(match.index + match[0].length)
+}`
+    : ''
+
+  return `function ${META_RESOLVE_LOCAL}(sources, ctx) {
+  const merged = {}
+  let template = null
+  let templateDepth = -1
+  let titleDepth = -1
+  for (let depth = 0; depth < sources.length; depth += 1) {
+    const source = sources[depth]
+    const declared = source && source.meta
+    const resolved = typeof declared === "function" ? declared(ctx) : declared
+    if (!resolved || typeof resolved !== "object") continue
+    if (typeof resolved.titleTemplate === "string") {
+      template = resolved.titleTemplate
+      templateDepth = depth
+    }
+    for (const key of Object.keys(resolved)) {
+      if (resolved[key] !== undefined) merged[key] = resolved[key]
+    }
+    if (typeof resolved.title === "string") titleDepth = depth
+  }
+  if (template && titleDepth > templateDepth && typeof merged.title === "string") {
+    merged.title = template.replace("%s", merged.title)
+  }
+  delete merged.titleTemplate
+  return merged
+}
+
+function ${META_ELEMENT_LOCAL}(meta) {
+  if (!meta || typeof meta !== "object") return null
+  const children = []
+  const add = (type, props) => {
+    children.push(React.createElement(type, Object.assign({ key: type + children.length }, props)))
+  }
+  const title = typeof meta.title === "string" && meta.title !== "" ? meta.title : null
+  const description = typeof meta.description === "string" ? meta.description : null
+  const canonical = typeof meta.canonical === "string" ? meta.canonical : null
+  const image = typeof meta.image === "string" ? meta.image : null
+  if (title) add("title", { children: title })
+  if (description) add("meta", { name: "description", content: description })
+  if (canonical) add("link", { rel: "canonical", href: canonical })
+  const robots = typeof meta.robots === "string" ? meta.robots : meta.noindex ? "noindex, nofollow" : null
+  if (robots) add("meta", { name: "robots", content: robots })
+  for (const alternate of Array.isArray(meta.alternates) ? meta.alternates : []) {
+    if (alternate && alternate.href && alternate.hreflang) {
+      add("link", { rel: "alternate", hrefLang: alternate.hreflang, href: alternate.href })
+    }
+  }
+  if (title || description || image) {
+    if (title) add("meta", { property: "og:title", content: title })
+    if (description) add("meta", { property: "og:description", content: description })
+    add("meta", { property: "og:type", content: meta.type || "website" })
+    if (canonical) add("meta", { property: "og:url", content: canonical })
+    if (meta.siteName) add("meta", { property: "og:site_name", content: meta.siteName })
+    if (meta.locale) add("meta", { property: "og:locale", content: meta.locale })
+    if (image) add("meta", { property: "og:image", content: image })
+    if (image && meta.imageAlt) add("meta", { property: "og:image:alt", content: meta.imageAlt })
+    add("meta", { name: "twitter:card", content: meta.card || (image ? "summary_large_image" : "summary") })
+    if (title) add("meta", { name: "twitter:title", content: title })
+    if (description) add("meta", { name: "twitter:description", content: description })
+    if (image) add("meta", { name: "twitter:image", content: image })
+  }
+  if (children.length === 0) return null
+  return children
+}${langHelper}`
+}
+
 /**
  * Emit the inline error / not-found boundary class.
  *
@@ -112,12 +261,17 @@ export function routeContextPrelude() {
  * @param {string|null} [options.errorName] `error.tsx` component identifier.
  * @param {string|null} [options.loadingName] `loading.tsx` component identifier.
  * @param {string|null} [options.notFoundName] `not-found.tsx` component identifier.
+ * @param {string[]} [options.metaNames] Namespace identifiers from
+ *   {@link metaSourceImports}, least specific first. Omitting them emits a tree
+ *   with no metadata code at all, which is what a caller that has not adopted
+ *   route metadata gets.
  */
 export function routeTreeFunction({
   name,
   pageName,
   layoutNames,
   routePath,
+  metaNames = [],
   errorName = null,
   loadingName = null,
   notFoundName = null,
@@ -140,9 +294,17 @@ export function routeTreeFunction({
   lines.push(`  for (const Layout of [${layoutNames.join(', ')}].reverse()) {
     tree = React.createElement(Layout, null, tree)
   }`)
+  // Metadata is a sibling of the layouts, not a wrapper around them: a layout
+  // that suspends must not be able to hold the document title back past the
+  // flushed shell. It is passed as an extra child of the provider — an element
+  // array with its own keys — so no extra wrapper element is created per render.
+  const metaChild =
+    metaNames.length > 0
+      ? `${META_ELEMENT_LOCAL}(${META_RESOLVE_LOCAL}([${metaNames.join(', ')}], ctx)), `
+      : ''
   lines.push(`  return React.createElement(${ROUTE_CONTEXT_LOCAL}.Provider, {
     value: { pathname: ctx.path, params: ctx.params ?? {}, route: ${JSON.stringify(routePath)} },
-  }, tree)`)
+  }, ${metaChild}tree)`)
   return `function ${name}(ctx) {\n${lines.join('\n')}\n}`
 }
 
@@ -209,6 +371,7 @@ export function routeRegistration({ name, routePath }) {
  * @param {string|null} [options.errorName] `error.tsx` component identifier.
  * @param {string|null} [options.loadingName] `loading.tsx` component identifier.
  * @param {string|null} [options.notFoundName] `not-found.tsx` component identifier.
+ * @param {string[]} [options.metaNames] Namespace identifiers from {@link metaSourceImports}.
  */
 export function clientEntrySource({
   imports,
@@ -220,17 +383,19 @@ export function clientEntrySource({
   errorName = null,
   loadingName = null,
   notFoundName = null,
+  metaNames = [],
 }) {
   const boundary = needsRouteBoundary({ errorName, notFoundName })
     ? `\n${routeBoundaryPrelude()}\n`
     : ''
+  const meta = metaNames.length > 0 ? `\n${routeMetaPrelude({ lang: false })}\n` : ''
   return `import React from "react"
 import { hydrateRoot } from "react-dom/client"
 ${imports.join('\n')}
 
 ${routeContextPrelude()}
-${boundary}
-${routeTreeFunction({ name: '__ruvyxaTree', pageName, layoutNames, routePath, errorName, loadingName, notFoundName })}
+${boundary}${meta}
+${routeTreeFunction({ name: '__ruvyxaTree', pageName, layoutNames, routePath, errorName, loadingName, notFoundName, metaNames })}
 ${routeRegistration({ name: '__ruvyxaTree', routePath })}
 
 const __ruvyxaCtx = {
@@ -275,10 +440,20 @@ export function nodeSsrEntrySource({
   errorName = null,
   loadingName = null,
   notFoundName = null,
+  metaNames = [],
 }) {
   const boundary = needsRouteBoundary({ errorName, notFoundName })
     ? `\n${routeBoundaryPrelude()}\n`
     : ''
+  const metaPrelude = metaNames.length > 0 ? `\n${routeMetaPrelude()}\n` : ''
+  // `lang` is the one metadata field React cannot place: it belongs to the
+  // `<html>` element the app itself renders, which no hoisted child can reach.
+  // The finished document string is rewritten here instead, so every server
+  // path — SSR, SSG, PPR, prerender, serverless — agrees.
+  const applyLang =
+    metaNames.length > 0
+      ? `${META_LANG_LOCAL}(html, ${META_RESOLVE_LOCAL}([${metaNames.join(', ')}], ctx).lang)`
+      : 'html'
 
   // Only `not-found.tsx` recovers on the server (see routeRecoveryFunction).
   const serverRecovers = Boolean(notFoundName)
@@ -292,10 +467,15 @@ import { Writable } from "node:stream"
 ${imports.join('\n')}
 
 ${routeContextPrelude()}
-${boundary}
-${routeTreeFunction({ name: '__ruvyxaTree', pageName, layoutNames, routePath, errorName, loadingName, notFoundName })}
+${boundary}${metaPrelude}
+${routeTreeFunction({ name: '__ruvyxaTree', pageName, layoutNames, routePath, errorName, loadingName, notFoundName, metaNames })}
 ${recovery}
 export async function render(ctx) {
+  const html = await __ruvyxaRenderDocument(ctx)
+  return ${applyLang}
+}
+
+async function __ruvyxaRenderDocument(ctx) {
   const tree = __ruvyxaTree(ctx)
 
   if (typeof ReactDomServer.renderToPipeableStream !== "function") {

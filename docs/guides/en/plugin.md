@@ -13,6 +13,7 @@ conditional/loop-based registration.
 | Need                                               | Concise declaration | Advanced socket           |
 | -------------------------------------------------- | ------------------- | ------------------------- |
 | Add response headers                               | `headers`           | `http.onResponse(...)`    |
+| Add elements to every document's `<head>`          | `head`              | `head`                    |
 | One request/response hook or a small route list    | `http`              | `http`                    |
 | One lifecycle/resolve/load/transform/complete hook | `build`             | `build`                   |
 | One file-change handler                            | `dev.onFileChange`  | `dev.onFileChange(...)`   |
@@ -22,6 +23,30 @@ conditional/loop-based registration.
 
 When both styles are present, Ruvyxa registers concise declarations first in this order: HTTP,
 build, dev, diagnostics, native; it calls `register(api)` last.
+
+Before writing one, check `ruvyxa/plugins` — it ships `redirects`, `headers`, `securityHeaders`,
+`cacheRules`, `sitemap`, `robots`, `feed`, `searchIndex`, `contentEngine`, `openApi`, `pwa`,
+`observability`, `alias`, `bundleBudget`, `requireEnv`, and `fonts`.
+
+`fonts` is the one to reach for on a Lighthouse performance score: a `<link>` to
+`fonts.googleapis.com` blocks first paint on a third-party origin, and the plugin downloads the
+stylesheet and its `.woff2` files at build time, rewrites the URLs to local paths, and declares the
+self-hosted stylesheet in `<head>`.
+
+```ts
+import { fonts } from 'ruvyxa/plugins'
+
+export default config({
+  plugins: [
+    fonts({
+      google: ['https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap'],
+    }),
+  ],
+})
+```
+
+Remove the original `<link rel="stylesheet" href="https://fonts.googleapis.com/...">` from your
+layout when you adopt it; leaving it in keeps the blocking request the plugin exists to remove.
 
 ## 2. Create the package
 
@@ -120,10 +145,35 @@ export default definePlugin({
       console.log('changed', paths)
     },
   },
+  head: [
+    { tag: 'link', attrs: { rel: 'preconnect', href: 'https://cdn.example' } },
+    { tag: 'script', attrs: { defer: true }, children: 'window.siteTools = 1' },
+  ],
   diagnostics: [{ level: 'info', code: 'SITE001', message: 'Site tools enabled' }],
   native: { realtime: true },
 })
 ```
+
+### `head`
+
+`head` declares elements the server writes into every rendered document's `<head>`. Declaring them
+once — rather than rewriting response bodies per request — is what makes analytics, preconnect, and
+verification-tag plugins cheap:
+
+```ts
+export default definePlugin({
+  name: 'analytics',
+  head: { tag: 'script', attrs: { src: 'https://cdn.example/a.js', defer: true } },
+})
+```
+
+Only `link`, `meta`, `noscript`, `script`, and `style` are accepted — anything else in `<head>` ends
+the head early and the browser moves the rest of the document into `<body>`. Attribute values are
+HTML-escaped; `children` is written verbatim (a script or stylesheet cannot be escaped) and is
+allowed only on the raw-text elements. Entries appear in plugin configuration order.
+
+`head` cannot vary per route: a plugin does not know which route is rendering. Export
+[`meta`](routing.md#page-metadata) from the route for that.
 
 ### `headers`
 
@@ -338,9 +388,39 @@ Consumers install `plugins: [audit({ header: 'x-trace-id' })]`.
 
 ## 7. Test and publish
 
-Test the registration contract without starting an application. Give `plugin.register` a socket spy
-that records the expected registrations, then test a fixture application for request/response,
-route, or build behavior.
+Test a plugin as a unit with `createPluginHarness`. It runs `register(api)` against recording
+sockets and exposes the same entry points the server uses, so no application has to boot:
+
+```ts
+import assert from 'node:assert/strict'
+import { createPluginHarness } from 'ruvyxa/plugin-harness'
+
+import siteTools from './index.js'
+
+const harness = await createPluginHarness(siteTools)
+
+// Response hooks, scoped by the plugin's own `match` patterns.
+const response = await harness.respond(new Response('ok'), '/admin/users')
+assert.equal(response.headers.get('x-site-tools'), 'enabled')
+
+// A request hook that short-circuits reports the response it returned.
+const blocked = await harness.request('/admin/users')
+assert.equal(blocked.response?.status, 401)
+
+// Registered routes, build hooks, dev hooks, diagnostics, and head entries.
+assert.deepEqual(await (await harness.route('/plugin/status')).json(), {
+  plugin: 'site-tools',
+  ready: true,
+})
+await harness.build.start()
+assert.equal(await harness.build.transform('const a = 1', '/a.ts'), null)
+await harness.fileChange(['content/post.md'])
+assert.equal(harness.diagnostics[0].code, 'SITE001')
+assert.equal(harness.head.length, 2)
+```
+
+Pass an array to register several plugins in configuration order, which is how conflicts between
+them surface. Then test a fixture application for anything that depends on real routing.
 
 ```bash
 npm test

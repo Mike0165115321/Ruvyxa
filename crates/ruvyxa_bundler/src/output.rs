@@ -82,6 +82,27 @@ pub fn build_entry_source(input: &BundleInput) -> (String, String) {
 
     let request_path = js_string(&input.request_path);
 
+    // Route metadata is read from namespace re-imports of the same modules: a
+    // default import cannot see a sibling `export const meta`. Ordered root
+    // layout → leaf layout → page, which the resolver treats as least → most
+    // specific. Mirrors `metaSourceImports()` in
+    // `packages/ruvyxa/runtime/entry-templates.mjs`.
+    let meta_paths: Vec<String> = input
+        .layouts
+        .iter()
+        .chain(std::iter::once(&input.entry))
+        .map(|file| js_string(&file.display().to_string().replace('\\', "/")))
+        .collect();
+    let meta_imports: String = meta_paths
+        .iter()
+        .enumerate()
+        .map(|(i, literal)| format!("import * as __ruvyxaMeta{i} from {literal};\n"))
+        .collect();
+    let meta_names: String = (0..meta_paths.len())
+        .map(|i| format!("__ruvyxaMeta{i}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
     // Client bundles are keyed by route pattern, which is what `request_path`
     // carries on this path — one bundle serves every concrete URL of a dynamic
     // route.
@@ -91,6 +112,7 @@ pub fn build_entry_source(input: &BundleInput) -> (String, String) {
         error_name.as_deref(),
         loading_name.as_deref(),
         not_found_name.as_deref(),
+        &meta_names,
     );
 
     let source = match input.target {
@@ -99,8 +121,9 @@ pub fn build_entry_source(input: &BundleInput) -> (String, String) {
                 r#"import React from "react";
 import {{ hydrateRoot }} from "react-dom/client";
 import Page from {page_path};
-{layout_imports}{special_imports}
+{layout_imports}{special_imports}{meta_imports}
 {ROUTE_CONTEXT_PRELUDE}{boundary_prelude}
+{META_PRELUDE}
 
 {route_tree}
 ;(globalThis.__RUVYXA_ROUTES__ ||= {{}})[{request_path}] = __ruvyxaTree;
@@ -125,13 +148,15 @@ window.__RUVYXA_HYDRATED = true;
                 r#"import React from "react";
 import {{ renderToString }} from "react-dom/server";
 import Page from {page_path};
-{layout_imports}{special_imports}
+{layout_imports}{special_imports}{meta_imports}
 {ROUTE_CONTEXT_PRELUDE}{boundary_prelude}
+{META_PRELUDE}{META_LANG_PRELUDE}
 
 {route_tree}
 
 export async function render(ctx) {{
-  return "<!doctype html>" + renderToString(__ruvyxaTree(ctx));
+  const html = "<!doctype html>" + renderToString(__ruvyxaTree(ctx));
+  return __ruvyxaApplyLang(html, __ruvyxaResolveMeta([{meta_names}], ctx).lang);
 }}
 "#
             )
@@ -201,6 +226,104 @@ const ROUTE_BOUNDARY_PRELUDE: &str = r#"class __ruvyxaBoundary extends React.Com
   }
 }"#;
 
+/// Route-metadata helpers: merge, element construction, and the `<html lang>`
+/// rewrite.
+///
+/// Mirrors `routeMetaPrelude()` in `packages/ruvyxa/runtime/entry-templates.mjs`
+/// — the two must stay in step or a route's `<head>` would differ depending on
+/// which bundler produced it. Inlined rather than imported for the same reason
+/// as the routing context: a generated entry cannot depend on `@ruvyxa/react`.
+///
+/// Metadata merges least-specific first (root layout → page). `titleTemplate`
+/// applies only to a title declared below the level that set it, so a layout's
+/// template formats its pages' titles and not its own. Resolution is
+/// synchronous: an async `meta` would resolve after the shell was flushed
+/// without a title.
+const META_PRELUDE: &str = r#"function __ruvyxaResolveMeta(sources, ctx) {
+  const merged = {};
+  let template = null;
+  let templateDepth = -1;
+  let titleDepth = -1;
+  for (let depth = 0; depth < sources.length; depth += 1) {
+    const source = sources[depth];
+    const declared = source && source.meta;
+    const resolved = typeof declared === "function" ? declared(ctx) : declared;
+    if (!resolved || typeof resolved !== "object") continue;
+    if (typeof resolved.titleTemplate === "string") {
+      template = resolved.titleTemplate;
+      templateDepth = depth;
+    }
+    for (const key of Object.keys(resolved)) {
+      if (resolved[key] !== undefined) merged[key] = resolved[key];
+    }
+    if (typeof resolved.title === "string") titleDepth = depth;
+  }
+  if (template && titleDepth > templateDepth && typeof merged.title === "string") {
+    merged.title = template.replace("%s", merged.title);
+  }
+  delete merged.titleTemplate;
+  return merged;
+}
+
+function __ruvyxaMetaElement(meta) {
+  if (!meta || typeof meta !== "object") return null;
+  const children = [];
+  const add = (type, props) => {
+    children.push(React.createElement(type, Object.assign({ key: type + children.length }, props)));
+  };
+  const title = typeof meta.title === "string" && meta.title !== "" ? meta.title : null;
+  const description = typeof meta.description === "string" ? meta.description : null;
+  const canonical = typeof meta.canonical === "string" ? meta.canonical : null;
+  const image = typeof meta.image === "string" ? meta.image : null;
+  if (title) add("title", { children: title });
+  if (description) add("meta", { name: "description", content: description });
+  if (canonical) add("link", { rel: "canonical", href: canonical });
+  const robots = typeof meta.robots === "string" ? meta.robots : meta.noindex ? "noindex, nofollow" : null;
+  if (robots) add("meta", { name: "robots", content: robots });
+  for (const alternate of Array.isArray(meta.alternates) ? meta.alternates : []) {
+    if (alternate && alternate.href && alternate.hreflang) {
+      add("link", { rel: "alternate", hrefLang: alternate.hreflang, href: alternate.href });
+    }
+  }
+  if (title || description || image) {
+    if (title) add("meta", { property: "og:title", content: title });
+    if (description) add("meta", { property: "og:description", content: description });
+    add("meta", { property: "og:type", content: meta.type || "website" });
+    if (canonical) add("meta", { property: "og:url", content: canonical });
+    if (meta.siteName) add("meta", { property: "og:site_name", content: meta.siteName });
+    if (meta.locale) add("meta", { property: "og:locale", content: meta.locale });
+    if (image) add("meta", { property: "og:image", content: image });
+    if (image && meta.imageAlt) add("meta", { property: "og:image:alt", content: meta.imageAlt });
+    add("meta", { name: "twitter:card", content: meta.card || (image ? "summary_large_image" : "summary") });
+    if (title) add("meta", { name: "twitter:title", content: title });
+    if (description) add("meta", { name: "twitter:description", content: description });
+    if (image) add("meta", { name: "twitter:image", content: image });
+  }
+  if (children.length === 0) return null;
+  return children;
+}"#;
+
+/// The `<html lang>` rewrite, appended to [`META_PRELUDE`] on server entries.
+///
+/// Only a server entry has a finished document string to rewrite; the browser
+/// hydrates into a document whose `lang` the server already set, so shipping
+/// this to the client would be dead bytes on every route bundle. Mirrors the
+/// `lang` option of `routeMetaPrelude()` in
+/// `packages/ruvyxa/runtime/entry-templates.mjs`.
+const META_LANG_PRELUDE: &str = r#"
+
+function __ruvyxaApplyLang(html, lang) {
+  if (typeof html !== "string" || typeof lang !== "string" || lang === "") return html;
+  const match = /<html\b[^>]*>/i.exec(html);
+  if (!match) return html;
+  const value = lang.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  const attribute = /\slang\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/i;
+  const tag = attribute.test(match[0])
+    ? match[0].replace(attribute, ' lang="' + value + '"')
+    : match[0].replace(/^<html/i, '<html lang="' + value + '"');
+  return html.slice(0, match.index) + tag + html.slice(match.index + match[0].length);
+}"#;
+
 /// Build the function that composes a route's element tree.
 ///
 /// The page is wrapped, innermost to outermost: the error/not-found boundary
@@ -215,6 +338,7 @@ fn route_tree_function(
     error_name: Option<&str>,
     loading_name: Option<&str>,
     not_found_name: Option<&str>,
+    meta_names: &str,
 ) -> String {
     let mut lines = vec![
         "  let tree = React.createElement(Page, { params: ctx.params ?? {}, requestPath: ctx.path });"
@@ -235,8 +359,17 @@ fn route_tree_function(
     lines.push(format!(
         "  for (const Layout of [{layout_wrappers}].reverse()) {{\n    tree = React.createElement(Layout, null, tree);\n  }}"
     ));
+    // Metadata is a sibling of the layouts, not a wrapper around them: a layout
+    // that suspends must not be able to hold the document title back past the
+    // flushed shell. It is passed as an extra child of the provider — an element
+    // array carrying its own keys — so no wrapper element is created per render.
+    let meta_child = if meta_names.is_empty() {
+        String::new()
+    } else {
+        format!("__ruvyxaMetaElement(__ruvyxaResolveMeta([{meta_names}], ctx)), ")
+    };
     lines.push(format!(
-        "  return React.createElement(__ruvyxaRouteContext.Provider, {{\n    value: {{ pathname: ctx.path, params: ctx.params ?? {{}}, route: {route_path_literal} }},\n  }}, tree);"
+        "  return React.createElement(__ruvyxaRouteContext.Provider, {{\n    value: {{ pathname: ctx.path, params: ctx.params ?? {{}}, route: {route_path_literal} }},\n  }}, {meta_child}tree);"
     ));
     format!("function __ruvyxaTree(ctx) {{\n{}\n}}", lines.join("\n"))
 }
@@ -414,6 +547,83 @@ mod tests {
         assert!(!source.contains("__ruvyxaBoundary"), "{source}");
         assert!(!source.contains("React.Suspense"), "{source}");
         assert!(!source.contains("RouteError"), "{source}");
+    }
+
+    #[test]
+    fn entry_reimports_page_and_layouts_as_metadata_namespaces() {
+        // A default import cannot see a sibling `export const meta`; the
+        // namespace re-import is what makes route metadata readable. Order is
+        // root layout -> leaf layout -> page, least specific first.
+        let (source, _) = build_entry_source(&input(
+            "/project/app/blog/page.tsx",
+            vec!["/project/app/layout.tsx", "/project/app/blog/layout.tsx"],
+            "/blog",
+        ));
+
+        assert!(
+            source.contains(r#"import * as __ruvyxaMeta0 from "/project/app/layout.tsx";"#),
+            "{source}"
+        );
+        assert!(
+            source.contains(r#"import * as __ruvyxaMeta1 from "/project/app/blog/layout.tsx";"#),
+            "{source}"
+        );
+        assert!(
+            source.contains(r#"import * as __ruvyxaMeta2 from "/project/app/blog/page.tsx";"#),
+            "{source}"
+        );
+        assert!(
+            source.contains(
+                "__ruvyxaMetaElement(__ruvyxaResolveMeta([__ruvyxaMeta0, __ruvyxaMeta1, __ruvyxaMeta2], ctx))"
+            ),
+            "{source}"
+        );
+    }
+
+    #[test]
+    fn metadata_is_composed_outside_the_layouts() {
+        // A layout that suspends must not be able to hold the document title
+        // back past the flushed shell.
+        let (source, _) = build_entry_source(&input(
+            "/project/app/page.tsx",
+            vec!["/project/app/layout.tsx"],
+            "/",
+        ));
+
+        let layouts = source.find("[Layout0].reverse()").expect("layout wrap");
+        let meta = source
+            .find("__ruvyxaMetaElement(__ruvyxaResolveMeta")
+            .expect("metadata composition");
+        assert!(meta > layouts, "{source}");
+        // A sibling child of the provider, not a wrapper element per render.
+        assert!(
+            source.contains("}, __ruvyxaMetaElement(__ruvyxaResolveMeta([__ruvyxaMeta0, __ruvyxaMeta1], ctx)), tree);"),
+            "{source}"
+        );
+        assert!(!source.contains("React.Fragment"), "{source}");
+    }
+
+    #[test]
+    fn server_entries_rewrite_the_document_lang_from_metadata() {
+        // `lang` belongs to the `<html>` element the app renders, which no
+        // hoisted child element can reach — the finished document is rewritten.
+        for target in [BundleTarget::Ssr, BundleTarget::Edge] {
+            let mut bundle = input("/project/app/page.tsx", Vec::new(), "/");
+            bundle.target = target;
+            let (source, _) = build_entry_source(&bundle);
+
+            assert!(
+                source.contains(
+                    "return __ruvyxaApplyLang(html, __ruvyxaResolveMeta([__ruvyxaMeta0], ctx).lang);"
+                ),
+                "{source}"
+            );
+        }
+
+        // The client bundle hydrates into a document whose lang the server
+        // already set, so it carries no rewrite call.
+        let (client, _) = build_entry_source(&input("/project/app/page.tsx", Vec::new(), "/"));
+        assert!(!client.contains("__ruvyxaApplyLang(html"), "{client}");
     }
 
     #[test]

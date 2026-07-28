@@ -12,7 +12,7 @@ import {
   serverPlatform,
   toImportPath,
 } from './compiler.mjs'
-import { nodeSsrEntrySource } from './entry-templates.mjs'
+import { metaSourceImports, nodeSsrEntrySource } from './entry-templates.mjs'
 
 const [projectRootArg, appDirArg, pageFileArg, requestPath = '/', paramsJson = '{}', routePathArg] =
   process.argv.slice(2)
@@ -69,6 +69,11 @@ async function bundleSsrModule(projectRoot, pageFile, layouts, routePath, specia
     }
   }
 
+  const { imports: metaImports, metaNames } = metaSourceImports(
+    [...layouts, pageFile].map(toImportPath),
+  )
+  imports.push(...metaImports)
+
   const moduleCode = nodeSsrEntrySource({
     imports,
     pageName: 'Page',
@@ -76,6 +81,7 @@ async function bundleSsrModule(projectRoot, pageFile, layouts, routePath, specia
     routePath,
     readyEvent: 'onAllReady',
     tolerateStreamErrors: true,
+    metaNames,
     ...names,
   })
 

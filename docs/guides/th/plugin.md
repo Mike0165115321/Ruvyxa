@@ -23,6 +23,29 @@ Plugin คือโมดูล TypeScript/JavaScript ที่ export ค่า
 ถ้าใช้ร่วมกัน ระบบลงทะเบียน declaration แบบสั้นตามลำดับ HTTP → build → dev → diagnostics → native
 แล้วจึงเรียก `register(api)` เป็นลำดับสุดท้าย
 
+ก่อนเขียนเอง ลองดู `ruvyxa/plugins` ก่อน — มี `redirects`, `headers`, `securityHeaders`,
+`cacheRules`, `sitemap`, `robots`, `feed`, `searchIndex`, `contentEngine`, `openApi`, `pwa`,
+`observability`, `alias`, `bundleBudget`, `requireEnv` และ `fonts`
+
+`fonts` คือตัวที่มีผลกับคะแนน performance ที่สุด: `<link>` ไป `fonts.googleapis.com` บล็อกการวาด
+ครั้งแรกบน origin ของบุคคลที่สาม plugin นี้ดาวน์โหลด stylesheet กับไฟล์ `.woff2` ตอน build เขียน URL
+ใหม่เป็น path ในเครื่อง แล้วประกาศ stylesheet ที่ self-host ไว้ใน `<head>`
+
+```ts
+import { fonts } from 'ruvyxa/plugins'
+
+export default config({
+  plugins: [
+    fonts({
+      google: ['https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap'],
+    }),
+  ],
+})
+```
+
+เมื่อใช้แล้วให้ลบ `<link rel="stylesheet" href="https://fonts.googleapis.com/...">` เดิมออกจาก
+layout ไม่งั้นคำขอที่บล็อกอยู่ก็ยังอยู่
+
 ## 2. สร้าง package และติดตั้งเข้าแอป
 
 ```bash
@@ -111,12 +134,36 @@ export default definePlugin({
       console.log('changed', paths)
     },
   },
+  head: [
+    { tag: 'link', attrs: { rel: 'preconnect', href: 'https://cdn.example' } },
+    { tag: 'script', attrs: { defer: true }, children: 'window.siteTools = 1' },
+  ],
   diagnostics: { level: 'info', code: 'SITE001', message: 'Site tools enabled' },
   native: { realtime: true },
 })
 ```
 
 `http` และ `build` ห้ามเป็น object ว่าง; ต้องมี behavior อย่างน้อยหนึ่งตัว
+
+### `head`: element ใน `<head>`
+
+`head` ประกาศ element ที่ server เขียนลง `<head>` ของทุกเอกสาร ประกาศครั้งเดียว ไม่ต้องเขียนทับ
+response body รายคำขอ — analytics, preconnect, verification tag จึงเขียนเป็น plugin ได้ถูก
+
+```ts
+export default definePlugin({
+  name: 'analytics',
+  head: { tag: 'script', attrs: { src: 'https://cdn.example/a.js', defer: true } },
+})
+```
+
+รับเฉพาะ `link`, `meta`, `noscript`, `script`, `style` — tag อื่นใน `<head>` ทำให้ head จบก่อนเวลา
+แล้ว browser ย้ายส่วนที่เหลือของเอกสารไป `<body>` ค่า attribute ถูก escape ส่วน `children` เขียนตรง
+ๆ (script หรือ stylesheet escape ไม่ได้) และใช้ได้เฉพาะ element แบบ raw text ลำดับตามลำดับ plugin ใน
+config
+
+`head` เปลี่ยนตาม route ไม่ได้ เพราะ plugin ไม่รู้ว่ากำลัง render route ไหน ถ้าต้องการแบบนั้นให้
+export [`meta`](routing.md#metadata-ของหน้า) จาก route
 
 ### HTTP request และ `match`
 
@@ -307,8 +354,38 @@ export function audit(options: AuditOptions = {}): RuvyxaPlugin {
 
 ## 7. ทดสอบและ publish
 
-ทดสอบ registration contract โดยส่ง socket spy เข้า `plugin.register` แล้วทดสอบ fixture app สำหรับ
-request/response, route หรือ build behavior:
+ทดสอบ plugin เป็น unit ด้วย `createPluginHarness` — มันรัน `register(api)` กับ socket ที่บันทึกผล
+และเปิดทางเข้าชุดเดียวกับที่ server ใช้ จึงไม่ต้องบูตแอป:
+
+```ts
+import assert from 'node:assert/strict'
+import { createPluginHarness } from 'ruvyxa/plugin-harness'
+
+import siteTools from './index.js'
+
+const harness = await createPluginHarness(siteTools)
+
+// response hook ถูก scope ด้วย `match` ของ plugin เอง
+const response = await harness.respond(new Response('ok'), '/admin/users')
+assert.equal(response.headers.get('x-site-tools'), 'enabled')
+
+// request hook ที่ตอบกลับทันที รายงาน response ที่ return ออกมา
+const blocked = await harness.request('/admin/users')
+assert.equal(blocked.response?.status, 401)
+
+// route, build hook, dev hook, diagnostics และ head ที่ประกาศไว้
+assert.deepEqual(await (await harness.route('/plugin/status')).json(), {
+  plugin: 'site-tools',
+  ready: true,
+})
+await harness.build.start()
+await harness.fileChange(['content/post.md'])
+assert.equal(harness.diagnostics[0].code, 'SITE001')
+assert.equal(harness.head.length, 2)
+```
+
+ส่ง array เพื่อลงทะเบียนหลาย plugin ตามลำดับใน config ซึ่งเป็นวิธีให้เห็นการชนกันระหว่างตัว
+จากนั้นค่อยทดสอบ fixture app สำหรับสิ่งที่ต้องพึ่ง routing จริง:
 
 ```bash
 npm test

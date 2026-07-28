@@ -145,6 +145,32 @@ alias และจะใช้ Node รัน JavaScript สำหรับง�
 | `css`    | `true`                    | เปิด/ปิด CSS cache                           |
 | `dir`    | `".ruvyxa/cache/bundler"` | ไดเรกทอรี build cache ที่แชร์ข้ามการ restart |
 
+### site
+
+ข้อมูลตัวตนของเว็บ ใช้สร้างไฟล์ที่ crawler ขอก่อนอย่างอื่น
+
+| Field     | Default | คำอธิบาย                                           |
+| --------- | ------- | -------------------------------------------------- |
+| `url`     | —       | origin เต็ม เช่น `https://ruvyxa.dev`              |
+| `sitemap` | `true`  | สร้าง `sitemap.xml` (ต้องมี `url` ที่ resolve ได้) |
+| `robots`  | `true`  | สร้าง `robots.txt`                                 |
+
+`ruvyxa build` เขียน `robots.txt` และ `sitemap.xml` จาก route manifest ลงรายการเฉพาะ page route แบบ
+static — pattern อย่าง `/blog/[slug]` ไม่ใช่ URL และ API route ไม่ใช่หน้า
+
+ไฟล์ชื่อเดียวกันใน `public/` ชนะเสมอ ถ้าต้องการเนื้อหาที่ generator เขียนให้ไม่ได้ก็วางไฟล์เอง
+
+ถ้าไม่ตั้ง `url` Ruvyxa อ่าน environment variable `RUVYXA_SITE_URL` — ตัวเดียวที่ framework
+เป็นเจ้าของ deploy pipeline export ครั้งเดียวจบ framework ไม่ต้องตามว่าแต่ละ host เรียก URL
+ตัวเองว่าอะไร ใส่แค่ hostname ได้ ระบบเติม scheme `https` ให้ sitemap ต้องใช้ URL เต็ม
+ถ้าหาไม่เจอทั้งสองทาง build จะเตือนแล้วเขียนแค่ `robots.txt`
+
+```ts
+export default config({
+  site: { url: 'https://ruvyxa.dev' },
+})
+```
+
 ### debug
 
 | Field     | Default | คำอธิบาย                    |

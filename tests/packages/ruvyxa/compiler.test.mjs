@@ -196,6 +196,44 @@ export class contentFormat {}
     })
   })
 
+  it('links a module whose regex literal contains a quote', async () => {
+    // The scanner masks strings before classifying lines. Without regex-literal
+    // handling, the `"` inside `/("[^"]*")/` opened a phantom string that ran to
+    // the next quote later in the file, so every `export` in between was read as
+    // string content and survived into the bundle — a syntax error at runtime,
+    // because linked modules are wrapped in an IIFE where `export` is illegal.
+    await withFixture(async ({ root, outDir }) => {
+      const moduleFile = path.join(root, 'quote-in-regex.ts')
+      const outfile = path.join(outDir, 'quote-in-regex.mjs')
+      await writeFile(
+        moduleFile,
+        `const ATTRIBUTE = /\\slang\\s*=\\s*("[^"]*"|'[^']*'|[^\\s>]+)/i
+
+export function replaceLang(tag: string, value: string): string {
+  return ATTRIBUTE.test(tag) ? tag.replace(ATTRIBUTE, ' lang="' + value + '"') : tag
+}
+
+export const marker = 'reached'
+`,
+      )
+
+      await compileBundle({
+        projectRoot: root,
+        entrySource: `export { replaceLang, marker } from ${JSON.stringify(toImportPath(moduleFile))}`,
+        sourcefile: 'ruvyxa:quote-in-regex-entry.ts',
+        outfile,
+        platform: 'node',
+      })
+
+      const bundled = await readFile(outfile, 'utf8')
+      assert.doesNotMatch(bundled, /^\s+export /m, bundled)
+
+      const mod = await import(pathToFileURL(outfile).href + `?t=${Date.now()}`)
+      assert.equal(mod.marker, 'reached')
+      assert.equal(mod.replaceLang('<html lang="en">', 'th'), '<html lang="th">')
+    })
+  })
+
   it('rejects invalid and non-mapping YAML frontmatter in the Node compiler', async () => {
     await withFixture(async ({ root, outDir }) => {
       const pageFile = path.join(root, 'invalid.md')
@@ -1609,6 +1647,38 @@ export class contentFormat {}
         variantWidths: [640, 1280],
         workers: 2,
       })
+    })
+  })
+
+  it('forwards the site block that drives robots.txt and sitemap.xml', async () => {
+    await withFixture(async ({ root }) => {
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `export default {
+          site: { url: 'https://ruvyxa.dev', sitemap: true, robots: false },
+        }`,
+      )
+
+      const config = await runJson(configRenderer, [root], {})
+      assert.deepEqual(config.config.site, {
+        url: 'https://ruvyxa.dev',
+        sitemap: true,
+        robots: false,
+      })
+    })
+  })
+
+  it('rejects an unknown key inside the site block', async () => {
+    await withFixture(async ({ root }) => {
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `export default { site: { siteUrl: 'https://ruvyxa.dev' } }`,
+      )
+
+      const failed = await runJsonResult(configRenderer, [root], {})
+      assert.equal(failed.exitCode, 1)
+      assert.equal(failed.parsed.ok, false)
+      assert.match(failed.parsed.message, /unknown config\.site field: siteUrl/)
     })
   })
 

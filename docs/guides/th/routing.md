@@ -118,6 +118,59 @@ export default function BlogLayout({ children }: { children: React.ReactNode }) 
 }
 ```
 
+## Metadata ของหน้า
+
+page หรือ layout export `meta` ได้ Ruvyxa จะ merge `meta` ทุกชั้นของ route — root layout ก่อน page
+ท้ายสุด — แล้ว render ลง `<head>`:
+
+```tsx
+// app/layout.tsx
+import type { RouteMeta } from '@ruvyxa/react'
+
+export const meta: RouteMeta = {
+  titleTemplate: '%s · Acme',
+  title: 'Acme',
+  description: 'ทุกอย่างที่ Acme สร้าง',
+  siteName: 'Acme',
+  lang: 'th',
+}
+```
+
+```tsx
+// app/blog/[slug]/page.tsx
+export const meta = ({ params }: { params: { slug: string } }) => ({
+  title: params.slug,
+  canonical: `https://acme.dev/blog/${params.slug}`,
+})
+```
+
+`/blog/hello` จะได้ `<title>hello · Acme</title>`, description กับ `og:site_name` จาก layout และ
+canonical ของตัวเอง `title` ของชั้นไหนจะไม่ถูกจัดรูปด้วย `titleTemplate` ของชั้นตัวเอง ดังนั้น
+layout ข้างบนยังเป็น `Acme` ที่ `/`
+
+| ฟิลด์                                | render เป็น                                                          |
+| ------------------------------------ | -------------------------------------------------------------------- |
+| `title`, `titleTemplate`             | `<title>`, `og:title`, `twitter:title`                               |
+| `description`                        | `<meta name="description">`, `og:description`, `twitter:description` |
+| `canonical`                          | `<link rel="canonical">`, `og:url`                                   |
+| `robots`, `noindex`                  | `<meta name="robots">`                                               |
+| `lang`                               | attribute `lang` ของ `<html>` ที่ server render                      |
+| `alternates`                         | `<link rel="alternate" hreflang>` ต่อหนึ่งรายการ                     |
+| `image`, `imageAlt`                  | `og:image`, `twitter:image` และ alt                                  |
+| `siteName`, `type`, `locale`, `card` | tag Open Graph และการ์ดพรีวิวของ X ที่ตรงกัน                         |
+
+`meta` เป็น object หรือฟังก์ชัน **แบบ synchronous** ของ `{ path, params }` ก็ได้ ค่าถูก resolve ตอน
+render ฟังก์ชัน async จะได้ค่ามาหลัง shell ถูกส่งออกไปแล้วโดยไม่มี title
+
+ข้อจำกัดที่ควรรู้สองข้อ:
+
+- `lang` ถูกใส่ในเอกสารที่ server render แต่ละครั้ง การนำทางฝั่ง client ไม่เปลี่ยนค่านี้ route tree
+  ที่แยกภาษา (`app/[lang]/…`) จึงได้ค่าถูกต้องบนทุกเอกสารที่ crawler เห็น แต่ไม่เปลี่ยนตอน soft
+  navigation ข้ามภาษา
+- อย่าตั้งฟิลด์เดียวกันทั้งใน `meta` และ [`<Seo>`](official-packages.md) React จะ hoist `<title>`
+  ทั้งสองอันและอันหลังชนะ ซึ่งมักไม่ใช่สิ่งที่ตั้งใจ ใช้ `meta` กับสิ่งที่ route เป็นเสมอ และใช้
+  `<Seo>` เมื่อค่ามีอยู่เฉพาะตอน component render
+
 ## Route Groups
 
 ใช้ `(name)` จัดระเบียบไฟล์ **โดยไม่เพิ่ม** URL segment:

@@ -79,6 +79,7 @@ async function sanitizeConfig(config) {
     'image',
     'security',
     'cache',
+    'site',
     'middleware',
     'adapter',
     'adapterOptions',
@@ -122,6 +123,7 @@ async function sanitizeConfig(config) {
     'window',
   ])
   assertKnownKeys(config.cache, 'config.cache', ['routes', 'css', 'dir'])
+  assertKnownKeys(config.site, 'config.site', ['url', 'sitemap', 'robots'])
   assertKnownKeys(config.render, 'config.render', ['strategy', 'revalidate'])
   assertKnownKeys(config.middleware, 'config.middleware', ['builtin', 'workers', 'timeoutMs'])
   assertKnownKeys(config.middleware?.builtin, 'config.middleware.builtin', [
@@ -203,6 +205,11 @@ async function sanitizeConfig(config) {
       css: booleanValue(config.cache?.css),
       dir: stringValue(config.cache?.dir),
     }),
+    site: objectValue(config.site, {
+      url: stringValue(config.site?.url),
+      sitemap: booleanValue(config.site?.sitemap),
+      robots: booleanValue(config.site?.robots),
+    }),
     middleware: safeJsonValue(config.middleware),
     adapter: await adapterOutput(config.adapter, projectRoot, config.outDir),
     adapterOptions: safeJsonValue(config.adapterOptions),
@@ -232,6 +239,7 @@ function assertConfigValueShape(config) {
       prerenderCache: 'boolean',
     },
     render: { strategy: 'string', revalidate: 'number' },
+    site: { url: 'string', sitemap: 'boolean', robots: 'boolean' },
     debug: { overlay: 'boolean', traces: 'boolean' },
     image: {
       optimize: 'boolean',
@@ -384,7 +392,11 @@ function pluginDescriptors(value) {
       throw new Error(`RUV1602 duplicate plugin name: ${name}`)
     }
     names.add(name)
-    return { name }
+    // Head entries are declared once and injected by the server on every
+    // render, so they travel with the descriptor instead of through a
+    // per-request hook. `definePlugin` has already validated their shape.
+    const head = Array.isArray(plugin.head) ? plugin.head.filter(isObject) : []
+    return head.length > 0 ? { name, head } : { name }
   })
 
   return plugins.length > 0 ? plugins : undefined

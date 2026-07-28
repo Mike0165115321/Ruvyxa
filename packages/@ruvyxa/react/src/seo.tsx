@@ -32,6 +32,15 @@ export interface SeoProps {
   type?: 'website' | 'article' | 'profile'
   locale?: string
   noindex?: boolean
+  /**
+   * Shape of the link preview card on X.
+   *
+   * Emitted as `<meta name="twitter:card">`: that is the attribute name X's
+   * crawler still reads, so the tag keeps the platform's former name even
+   * though the prop does not.
+   */
+  card?: 'summary' | 'summary_large_image'
+  /** @deprecated Renamed to `card`. Still honored when `card` is absent. */
   twitterCard?: 'summary' | 'summary_large_image'
   /** Explicit article facts used to generate Article JSON-LD. */
   article?: SeoArticle
@@ -54,7 +63,8 @@ export function Seo({
   type = 'website',
   locale,
   noindex = false,
-  twitterCard = 'summary_large_image',
+  card,
+  twitterCard,
   article,
   breadcrumbs,
   jsonLd,
@@ -83,7 +93,7 @@ export function Seo({
       {locale ? <meta property="og:locale" content={locale} /> : null}
       {image ? <meta property="og:image" content={image} /> : null}
       {image && imageAlt ? <meta property="og:image:alt" content={imageAlt} /> : null}
-      <meta name="twitter:card" content={twitterCard} />
+      <meta name="twitter:card" content={card ?? twitterCard ?? 'summary_large_image'} />
       <meta name="twitter:title" content={title} />
       {description ? <meta name="twitter:description" content={description} /> : null}
       {image ? <meta name="twitter:image" content={image} /> : null}

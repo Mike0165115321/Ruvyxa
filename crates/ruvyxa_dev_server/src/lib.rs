@@ -85,6 +85,8 @@ use plugin_bridge::{
     split_plugin_target,
 };
 
+mod plugin_head;
+pub use plugin_head::{PluginHeadEntry, render_plugin_head};
 mod static_assets;
 #[cfg(test)]
 use static_assets::{is_safe_relative_path, resolve_public_asset};
@@ -263,6 +265,8 @@ pub struct ServerConfig {
     pub middleware: MiddlewareConfig,
     /// Start the TypeScript plugin host for this server.
     pub plugins_enabled: bool,
+    /// Head elements plugins declared in `ruvyxa.config.ts`.
+    pub plugin_head: Vec<PluginHeadEntry>,
     pub default_render_strategy: Option<RenderStrategy>,
     pub default_revalidate: Option<u64>,
 }
@@ -335,6 +339,7 @@ impl ServerConfig {
             security_headers: true,
             middleware: MiddlewareConfig::default(),
             plugins_enabled: false,
+            plugin_head: Vec::new(),
             default_render_strategy: None,
             default_revalidate: None,
         }
@@ -370,6 +375,7 @@ impl ServerConfig {
             security_headers: true,
             middleware: MiddlewareConfig::default(),
             plugins_enabled: false,
+            plugin_head: Vec::new(),
             default_render_strategy: None,
             default_revalidate: None,
         }
@@ -2556,8 +2562,19 @@ mod tests {
             "/favicon.ico",
             "/nested/app.CSS",
             "/fonts/inter.woff2",
+            // Well-known crawler files: `.txt`/`.xml` are not asset extensions,
+            // but these exact paths must 404 rather than let `/[lang]` answer
+            // them with an HTML page.
+            "/robots.txt",
+            "/sitemap.xml",
+            "/sitemap.xml/",
         ] {
             assert!(static_assets::is_static_asset_request(asset), "{asset}");
+        }
+
+        // A page that merely ends in the same extension keeps matching.
+        for page in ["/docs/robots.txt.md", "/feed.xml", "/blog/sitemap.xml"] {
+            assert!(!static_assets::is_static_asset_request(page), "{page}");
         }
 
         for page in ["/", "/en/docs", "/readme.md", "/blog/post.", "/.env"] {

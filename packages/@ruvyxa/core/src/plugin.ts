@@ -1,5 +1,6 @@
 import type {
   PluginBuildDefinition,
+  PluginHeadEntry,
   PluginDevDefinition,
   PluginDiagnostic,
   PluginHttpDefinition,
@@ -11,6 +12,7 @@ import type {
 
 export type {
   PluginBuildCompleteHook,
+  PluginHeadEntry,
   PluginBuildContext,
   PluginBuildDefinition,
   PluginBuildLoadContext,
@@ -57,13 +59,13 @@ export type {
 /** Define a plugin through concise declarations or the advanced socket API. */
 export function definePlugin(definition: RuvyxaPluginDefinition): RuvyxaPlugin {
   if (!definition || typeof definition !== 'object') {
-    throw new TypeError('Ruvyxa plugin must be an object.')
+    throw new TypeError('RUV2102 Ruvyxa plugin must be an object.')
   }
   if (typeof definition.name !== 'string' || definition.name.trim() === '') {
-    throw new TypeError('Ruvyxa plugin must have a non-empty name.')
+    throw new TypeError('RUV2102 Ruvyxa plugin must have a non-empty name.')
   }
   if (definition.register !== undefined && typeof definition.register !== 'function') {
-    throw new TypeError(`Ruvyxa plugin "${definition.name}" register must be a function.`)
+    throw new TypeError(`RUV2102 Ruvyxa plugin "${definition.name}" register must be a function.`)
   }
 
   const headers = normalizeHeaders(definition.headers)
@@ -72,14 +74,25 @@ export function definePlugin(definition: RuvyxaPluginDefinition): RuvyxaPlugin {
   const dev = normalizeDev(definition.dev, definition.name)
   const diagnostics = normalizeDiagnostics(definition.diagnostics)
   const native = normalizeNative(definition.native, definition.name)
-  if (!definition.register && !headers && !http && !build && !dev && !diagnostics && !native) {
+  const head = normalizeHead(definition.head, definition.name)
+  if (
+    !definition.register &&
+    !headers &&
+    !http &&
+    !build &&
+    !dev &&
+    !diagnostics &&
+    !native &&
+    !head
+  ) {
     throw new TypeError(
-      `Ruvyxa plugin "${definition.name}" must declare behavior or provide register(api).`,
+      `RUV2102 Ruvyxa plugin "${definition.name}" must declare behavior or provide register(api).`,
     )
   }
 
   return Object.freeze({
     name: definition.name.trim(),
+    ...(head ? { head } : {}),
     register(api: PluginRegistrationApi) {
       registerHttp(api, http, headers)
       registerBuild(api, build)
@@ -136,16 +149,16 @@ function normalizeHttp(
 ): PluginHttpDefinition | undefined {
   if (http === undefined) return undefined
   if (!http || typeof http !== 'object' || Array.isArray(http)) {
-    throw new TypeError(`Ruvyxa plugin "${pluginName}" http must be an object.`)
+    throw new TypeError(`RUV2102 Ruvyxa plugin "${pluginName}" http must be an object.`)
   }
   if (http.onRequest !== undefined && typeof http.onRequest !== 'function') {
-    throw new TypeError(`Ruvyxa plugin "${pluginName}" http.onRequest must be a function.`)
+    throw new TypeError(`RUV2102 Ruvyxa plugin "${pluginName}" http.onRequest must be a function.`)
   }
   if (http.onResponse !== undefined && typeof http.onResponse !== 'function') {
-    throw new TypeError(`Ruvyxa plugin "${pluginName}" http.onResponse must be a function.`)
+    throw new TypeError(`RUV2102 Ruvyxa plugin "${pluginName}" http.onResponse must be a function.`)
   }
   if (http.routes !== undefined && !Array.isArray(http.routes)) {
-    throw new TypeError(`Ruvyxa plugin "${pluginName}" http.routes must be an array.`)
+    throw new TypeError(`RUV2102 Ruvyxa plugin "${pluginName}" http.routes must be an array.`)
   }
   const hasBehavior = Boolean(http.onRequest || http.onResponse || (http.routes?.length ?? 0) > 0)
   const scopesGeneratedHeaders = hasGeneratedHeaders && http.match !== undefined
@@ -160,18 +173,18 @@ function normalizeBuild(
 ): PluginBuildDefinition | undefined {
   if (build === undefined) return undefined
   if (!build || typeof build !== 'object' || Array.isArray(build)) {
-    throw new TypeError(`Ruvyxa plugin "${pluginName}" build must be an object.`)
+    throw new TypeError(`RUV2102 Ruvyxa plugin "${pluginName}" build must be an object.`)
   }
   const entries = Object.entries(build)
   if (entries.length === 0) {
-    throw new TypeError(`Ruvyxa plugin "${pluginName}" build must declare behavior.`)
+    throw new TypeError(`RUV2102 Ruvyxa plugin "${pluginName}" build must declare behavior.`)
   }
   for (const [name, hook] of entries) {
     if (!BUILD_HOOK_NAMES.has(name)) {
-      throw new TypeError(`Ruvyxa plugin "${pluginName}" build.${name} is not supported.`)
+      throw new TypeError(`RUV2102 Ruvyxa plugin "${pluginName}" build.${name} is not supported.`)
     }
     if (typeof hook !== 'function') {
-      throw new TypeError(`Ruvyxa plugin "${pluginName}" build.${name} must be a function.`)
+      throw new TypeError(`RUV2102 Ruvyxa plugin "${pluginName}" build.${name} must be a function.`)
     }
   }
   return build
@@ -183,10 +196,10 @@ function normalizeDev(
 ): PluginDevDefinition | undefined {
   if (dev === undefined) return undefined
   if (!dev || typeof dev !== 'object' || Array.isArray(dev)) {
-    throw new TypeError(`Ruvyxa plugin "${pluginName}" dev must be an object.`)
+    throw new TypeError(`RUV2102 Ruvyxa plugin "${pluginName}" dev must be an object.`)
   }
   if (!dev.onFileChange) {
-    throw new TypeError(`Ruvyxa plugin "${pluginName}" dev must declare onFileChange.`)
+    throw new TypeError(`RUV2102 Ruvyxa plugin "${pluginName}" dev must declare onFileChange.`)
   }
   return dev
 }
@@ -201,16 +214,90 @@ function normalizeDiagnostics(
   return [diagnostics as PluginDiagnostic]
 }
 
+/** Elements a plugin may contribute to `<head>`, and what may hold text. */
+const HEAD_TAGS = new Set(['link', 'meta', 'noscript', 'script', 'style'])
+const HEAD_TEXT_TAGS = new Set(['noscript', 'script', 'style'])
+
+/**
+ * Validate declared head entries.
+ *
+ * The tag list is closed on purpose: `<head>` accepts only a handful of
+ * elements, and anything else the browser sees there ends the head early and
+ * silently moves the rest of the document into `<body>`. Text content is
+ * likewise restricted to the raw-text elements, since `<meta>` and `<link>`
+ * are void and would drop it.
+ */
+function normalizeHead(
+  head: RuvyxaPluginDefinition['head'],
+  pluginName: string,
+): readonly PluginHeadEntry[] | undefined {
+  if (head === undefined) return undefined
+  const entries = Array.isArray(head) ? head : [head as PluginHeadEntry]
+  if (entries.length === 0) return undefined
+
+  for (const [index, entry] of entries.entries()) {
+    const at = `head[${index}]`
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new TypeError(`RUV2102 Ruvyxa plugin "${pluginName}" ${at} must be an object.`)
+    }
+    if (!HEAD_TAGS.has(entry.tag)) {
+      throw new TypeError(
+        `RUV2102 Ruvyxa plugin "${pluginName}" ${at}.tag must be one of ${[...HEAD_TAGS].join(', ')}.`,
+      )
+    }
+    if (entry.attrs !== undefined) {
+      if (!entry.attrs || typeof entry.attrs !== 'object' || Array.isArray(entry.attrs)) {
+        throw new TypeError(`RUV2102 Ruvyxa plugin "${pluginName}" ${at}.attrs must be an object.`)
+      }
+      for (const [name, value] of Object.entries(entry.attrs)) {
+        // An attribute name is written unescaped, so it must not be able to
+        // introduce another attribute or close the tag.
+        if (!/^[A-Za-z][A-Za-z0-9:_.-]*$/.test(name)) {
+          throw new TypeError(
+            `RUV2102 Ruvyxa plugin "${pluginName}" ${at}.attrs has an invalid attribute name: ${name}.`,
+          )
+        }
+        if (!['string', 'number', 'boolean'].includes(typeof value)) {
+          throw new TypeError(
+            `RUV2102 Ruvyxa plugin "${pluginName}" ${at}.attrs.${name} must be a string, number, or boolean.`,
+          )
+        }
+      }
+    }
+    if (entry.children !== undefined) {
+      if (typeof entry.children !== 'string') {
+        throw new TypeError(
+          `RUV2102 Ruvyxa plugin "${pluginName}" ${at}.children must be a string.`,
+        )
+      }
+      if (!HEAD_TEXT_TAGS.has(entry.tag)) {
+        throw new TypeError(
+          `RUV2102 Ruvyxa plugin "${pluginName}" ${at}.children is only supported on ${[...HEAD_TEXT_TAGS].join(', ')}.`,
+        )
+      }
+      // Raw-text content ends at the matching close tag; a nested one would
+      // terminate the element early and inject markup into the document.
+      if (new RegExp(`</${entry.tag}`, 'i').test(entry.children)) {
+        throw new TypeError(
+          `RUV2102 Ruvyxa plugin "${pluginName}" ${at}.children must not contain a closing </${entry.tag}> tag.`,
+        )
+      }
+    }
+  }
+
+  return Object.freeze(entries.map((entry) => Object.freeze({ ...entry })))
+}
+
 function normalizeNative(
   native: PluginNativeDefinition | undefined,
   pluginName: string,
 ): PluginNativeDefinition | undefined {
   if (native === undefined) return undefined
   if (!native || typeof native !== 'object' || Array.isArray(native)) {
-    throw new TypeError(`Ruvyxa plugin "${pluginName}" native must be an object.`)
+    throw new TypeError(`RUV2102 Ruvyxa plugin "${pluginName}" native must be an object.`)
   }
   if (!native.realtime) {
-    throw new TypeError(`Ruvyxa plugin "${pluginName}" native must declare realtime.`)
+    throw new TypeError(`RUV2102 Ruvyxa plugin "${pluginName}" native must declare realtime.`)
   }
   return native
 }

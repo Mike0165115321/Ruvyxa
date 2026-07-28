@@ -4,7 +4,10 @@ import '../styles/config-entry.css'
 
 export const meta = {
   title: 'Ruvyxa Kitchen Sink',
+  titleTemplate: '%s · Ruvyxa Kitchen Sink',
   description: 'Comprehensive Ruvyxa framework example',
+  siteName: 'Ruvyxa Kitchen Sink',
+  lang: 'en',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

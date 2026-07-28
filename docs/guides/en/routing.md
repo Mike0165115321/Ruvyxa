@@ -120,6 +120,60 @@ export default function BlogLayout({ children }: { children: React.ReactNode }) 
 }
 ```
 
+## Page metadata
+
+A page or layout can export `meta`. Ruvyxa merges every `meta` on the route — root layout first,
+page last — and renders the result into `<head>`:
+
+```tsx
+// app/layout.tsx
+import type { RouteMeta } from '@ruvyxa/react'
+
+export const meta: RouteMeta = {
+  titleTemplate: '%s · Acme',
+  title: 'Acme',
+  description: 'Everything Acme builds.',
+  siteName: 'Acme',
+  lang: 'en',
+}
+```
+
+```tsx
+// app/blog/[slug]/page.tsx
+export const meta = ({ params }: { params: { slug: string } }) => ({
+  title: params.slug,
+  canonical: `https://acme.dev/blog/${params.slug}`,
+})
+```
+
+`/blog/hello` gets `<title>hello · Acme</title>`, the layout's description and `og:site_name`, and
+its own canonical URL. A level's own `title` is never formatted by its own `titleTemplate`, so the
+layout above stays `Acme` at `/`.
+
+| Field                                | Renders                                                              |
+| ------------------------------------ | -------------------------------------------------------------------- |
+| `title`, `titleTemplate`             | `<title>`, `og:title`, `twitter:title`                               |
+| `description`                        | `<meta name="description">`, `og:description`, `twitter:description` |
+| `canonical`                          | `<link rel="canonical">`, `og:url`                                   |
+| `robots`, `noindex`                  | `<meta name="robots">`                                               |
+| `lang`                               | the `lang` attribute of the server-rendered `<html>` element         |
+| `alternates`                         | `<link rel="alternate" hreflang>` per entry                          |
+| `image`, `imageAlt`                  | `og:image`, `twitter:image` and their alt tags                       |
+| `siteName`, `type`, `locale`, `card` | the matching Open Graph and X preview tags                           |
+
+`meta` may be an object or a **synchronous** function of `{ path, params }`. It is resolved during
+render, so an async function would land after the streamed shell had already been sent without a
+title.
+
+Two limits worth knowing:
+
+- `lang` is applied to the document each server render produces. Client-side navigation does not
+  change it, so a locale-segmented tree (`app/[lang]/…`) gets the right value on every crawlable
+  document but not on a soft navigation between locales.
+- Do not set the same field in both `meta` and [`<Seo>`](official-packages.md). React hoists both
+  `<title>` elements and the last one wins, which is rarely what you meant. Use `meta` for what a
+  route always is, and `<Seo>` when the value only exists inside a component's render.
+
 ## Route Groups
 
 Use `(name)` to organize files **without** adding a URL segment:

@@ -142,7 +142,7 @@ export default function HomePage() {
       canonical="https://example.com/page"
       image="https://example.com/og-image.png"
       type="article"
-      twitterCard="summary_large_image"
+      card="summary_large_image"
       article={{
         type: 'BlogPosting',
         publishedAt: '2026-07-22',

@@ -399,9 +399,22 @@ const STATIC_ASSET_EXTENSIONS = new Set([
   'woff2',
 ])
 
+/**
+ * Well-known crawler files that are never a page.
+ *
+ * `.txt` and `.xml` are deliberately absent from `STATIC_ASSET_EXTENSIONS` — a
+ * route may legitimately end in either — but these exact paths are fixed by
+ * convention. Letting `/[lang]` answer `/robots.txt` returns 200 with an HTML
+ * body, which is what Lighthouse's `robots-txt` audit fails on. Mirrors
+ * `is_crawler_discovery_path()` in
+ * `crates/ruvyxa_dev_server/src/static_assets.rs`.
+ */
+const CRAWLER_DISCOVERY_PATHS = new Set(['/robots.txt', '/sitemap.xml', '/sitemap_index.xml'])
+
 /** True when the last path segment names a static asset file. */
 export function isStaticAssetPath(pathname) {
   if (typeof pathname !== 'string') return false
+  if (CRAWLER_DISCOVERY_PATHS.has(pathname.replace(/\/+$/, ''))) return true
   const lastSlash = pathname.lastIndexOf('/')
   const segment = lastSlash === -1 ? pathname : pathname.slice(lastSlash + 1)
   const dot = segment.lastIndexOf('.')

@@ -13,7 +13,13 @@ import {
   serverPlatform,
   toImportPath,
 } from './compiler.mjs'
-import { routeBoundaryPrelude, routeContextPrelude, routeTreeFunction } from './entry-templates.mjs'
+import {
+  metaSourceImports,
+  routeBoundaryPrelude,
+  routeContextPrelude,
+  routeMetaPrelude,
+  routeTreeFunction,
+} from './entry-templates.mjs'
 import { prerenderRelativePath } from './serverless-handler.mjs'
 
 const [projectRootArg, outputDirArg, adapterNameArg] = process.argv.slice(2)
@@ -428,6 +434,7 @@ async function materializeRouteModules(manifest, destination, target) {
     // this keeps a single definition site instead of a per-route guard).
     definitions.push(routeContextPrelude())
     definitions.push(routeBoundaryPrelude())
+    definitions.push(routeMetaPrelude())
   }
 
   for (const [index, route] of routes.entries()) {
@@ -525,11 +532,18 @@ function pageRouteDefinition(pageFile, routeIndex, routePath = '/') {
     }
   }
 
+  const { imports: metaImports, metaNames } = metaSourceImports(
+    [...layouts, pageFile].map(toImportPath),
+    `__ruvyxaMeta${routeIndex}_`,
+  )
+  imports.push(...metaImports)
+
   const definition = `${routeTreeFunction({
     name: treeName,
     pageName,
     layoutNames: wrappers,
     routePath,
+    metaNames,
     ...specialNames,
   })}
 
@@ -545,7 +559,8 @@ async function ${renderName}(ctx) {
   } else {
     throw new Error("React server renderer is unavailable")
   }
-  return html.trimStart().toLowerCase().startsWith("<!doctype") ? html : "<!doctype html>" + html
+  const document = html.trimStart().toLowerCase().startsWith("<!doctype") ? html : "<!doctype html>" + html
+  return __ruvyxaApplyLang(document, __ruvyxaResolveMeta([${metaNames.join(', ')}], ctx).lang)
 }`
   return { imports, definition, renderName }
 }

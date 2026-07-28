@@ -122,6 +122,7 @@ Raised by `ruvyxa_middleware`.
 | **RUV2001** | Middleware execution failed | Tower middleware layer panicked or returned error                                                   | Check custom middleware implementation, verify dependencies                         |
 | **RUV2100** | Plugin runtime error        | Plugin runtime could not start or returned invalid protocol data                                    | Check the Node/Bun runtime and plugin setup                                         |
 | **RUV2101** | Plugin hook error           | Plugin callback threw or returned an unsupported value                                              | Check the named hook and return `undefined`, `Request`, or `Response` as documented |
+| **RUV2102** | Plugin definition invalid   | `definePlugin` received an unsupported shape (bad hook, head entry, or no declared behavior)        | Fix the declaration named in the message                                            |
 
 ## Official Package Diagnostics (RUV3xxx)
 

@@ -68,10 +68,33 @@ export interface RuvyxaConfig {
     /** Shared compile-cache directory. Relative paths are resolved from the project root. */
     dir?: string
   }
+  site?: SiteConfig
   middleware?: MiddlewareConfig
   adapter?: Adapter
   adapterOptions?: Record<string, unknown>
   plugins?: RuvyxaPlugin[]
+}
+
+/**
+ * Site identity used by the crawler discovery files the build emits.
+ *
+ * `robots.txt` and `sitemap.xml` are generated from the route manifest during
+ * `ruvyxa build`. A file of the same name in `public/` always wins, so shipping
+ * your own is still the way to say something the generator cannot.
+ */
+export interface SiteConfig {
+  /**
+   * Absolute origin of the deployed site, e.g. `https://ruvyxa.dev`.
+   *
+   * Falls back to `RUVYXA_SITE_URL`, then to the URL the host exports
+   * (`VERCEL_PROJECT_PRODUCTION_URL`, `VERCEL_URL`, Netlify's `URL`). A sitemap
+   * needs absolute URLs, so it is skipped when none of these resolves.
+   */
+  url?: string
+  /** Emit `sitemap.xml`. Requires a resolvable `url`. @default true */
+  sitemap?: boolean
+  /** Emit `robots.txt`. @default true */
+  robots?: boolean
 }
 
 export interface ImageConfig {
@@ -457,6 +480,31 @@ export interface PluginRegistrationApi {
 }
 
 /**
+ * One element a plugin contributes to every rendered document's `<head>`.
+ *
+ * Declared once at config load and injected by the server, so a plugin adds an
+ * analytics snippet, a preconnect, or a verification tag without paying for a
+ * per-request round trip into the plugin host.
+ *
+ * Only elements that are legal in `<head>` are accepted, and attribute values
+ * are HTML-escaped. To contribute per-route metadata instead, export `meta`
+ * from the route — a plugin cannot know which route is rendering.
+ */
+export interface PluginHeadEntry {
+  tag: 'link' | 'meta' | 'noscript' | 'script' | 'style'
+  /** Attribute names and values. Values are escaped before they are written. */
+  attrs?: Record<string, string | number | boolean>
+  /**
+   * Text content for `script`, `style`, and `noscript`.
+   *
+   * Written verbatim: these elements have raw-text content models, so escaping
+   * would corrupt them. A plugin is trusted project code — do not build this
+   * string from untrusted input.
+   */
+  children?: string
+}
+
+/**
  * Input accepted by `definePlugin`.
  *
  * Prefer concise declarations for common behavior. `register(api)` remains the escape hatch for
@@ -465,6 +513,7 @@ export interface PluginRegistrationApi {
 export interface RuvyxaPluginDefinition {
   name: string
   headers?: HeadersInit
+  head?: PluginHeadEntry | readonly PluginHeadEntry[]
   http?: PluginHttpDefinition
   build?: PluginBuildDefinition
   dev?: PluginDevDefinition
@@ -476,6 +525,8 @@ export interface RuvyxaPluginDefinition {
 /** The sole plugin object accepted by `config({ plugins })`. */
 export interface RuvyxaPlugin {
   readonly name: string
+  /** Head elements this plugin contributes to every rendered document. */
+  readonly head?: readonly PluginHeadEntry[]
   register(api: PluginRegistrationApi): void | Promise<void>
 }
 

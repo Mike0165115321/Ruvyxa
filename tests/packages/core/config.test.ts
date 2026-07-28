@@ -241,4 +241,45 @@ describe('config and plugin APIs', () => {
     assert.equal(updated.headers.get('x-plugin'), 'active')
     assert.equal(await updated.text(), 'Hello')
   })
+  it('accepts head declarations and freezes them onto the plugin', () => {
+    const plugin = definePlugin({
+      name: 'analytics',
+      head: [
+        { tag: 'link', attrs: { rel: 'preconnect', href: 'https://cdn.example' } },
+        { tag: 'script', attrs: { defer: true }, children: 'window.analytics = 1' },
+      ],
+    })
+
+    assert.equal(plugin.head?.length, 2)
+    assert.equal(plugin.head?.[0].tag, 'link')
+    assert.throws(() => {
+      // @ts-expect-error frozen at definition time
+      plugin.head[0].tag = 'meta'
+    })
+  })
+
+  it('rejects head declarations that could escape the head', () => {
+    const cases: Array<[string, unknown]> = [
+      ['tag must be one of', { tag: 'div' }],
+      ['invalid attribute name', { tag: 'meta', attrs: { 'x y': '1' } }],
+      ['must be a string, number, or boolean', { tag: 'meta', attrs: { content: { a: 1 } } }],
+      ['children is only supported on', { tag: 'meta', children: 'text' }],
+      ['must not contain a closing', { tag: 'script', children: 'a</script><img>' }],
+    ]
+
+    for (const [message, head] of cases) {
+      assert.throws(
+        () => definePlugin({ name: 'bad', head: head as never }),
+        (error: Error) => error.message.includes('RUV2102') && error.message.includes(message),
+        message,
+      )
+    }
+  })
+
+  it('reports plugin authoring mistakes with a diagnostic code', () => {
+    assert.throws(
+      () => definePlugin({ name: 'empty' }),
+      /RUV2102 .*must declare behavior or provide register\(api\)/,
+    )
+  })
 })

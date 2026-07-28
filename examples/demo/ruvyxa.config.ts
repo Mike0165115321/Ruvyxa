@@ -11,6 +11,11 @@ const settings: RuvyxaConfig = {
     port: 3000,
   },
 
+  // robots.txt and sitemap.xml are generated from the route manifest at build.
+  site: {
+    url: 'https://demo.ruvyxa.dev',
+  },
+
   build: {
     minify: true,
     map: false,

@@ -33,7 +33,7 @@ import path from 'node:path'
 import { isMap, isScalar, isSeq, parseDocument } from 'yaml'
 
 import { definePlugin } from '@ruvyxa/core/plugin'
-import type { PluginBuildContext, RuvyxaPlugin } from '@ruvyxa/core/plugin'
+import type { PluginBuildContext, PluginHeadEntry, RuvyxaPlugin } from '@ruvyxa/core/plugin'
 
 // ─── redirects ────────────────────────────────────────────────────────────────
 
@@ -1965,6 +1965,154 @@ export function requireEnv(names: string[]): RuvyxaPlugin {
   })
 }
 
+// ─── fonts ────────────────────────────────────────────────────────────────────
+
+export interface FontsOptions {
+  /**
+   * Google Fonts CSS URLs, exactly as they appear in a `<link rel="stylesheet">`.
+   *
+   * ```ts
+   * fonts({ google: ['https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap'] })
+   * ```
+   */
+  google: string[]
+  /** Public directory the font files and stylesheet are written to. @default "/fonts" */
+  publicPath?: string
+  /**
+   * Emit `<link rel="preload">` for every downloaded font file.
+   *
+   * Correct for the one or two families a page actually renders in; with many
+   * families it costs more than it saves. @default true
+   */
+  preload?: boolean
+}
+
+/**
+ * Self-hosts Google Fonts at build time.
+ *
+ * A `<link>` to `fonts.googleapis.com` is a render-blocking request to a third
+ * party: the browser cannot paint text until it has resolved a new origin,
+ * fetched the stylesheet, and then fetched the font files it names. This plugin
+ * downloads the stylesheet and the `.woff2` files it references during the
+ * build, rewrites the `src` URLs to local paths, and declares the resulting
+ * stylesheet in `<head>` — the same fonts with no third-party origin on the
+ * critical path.
+ *
+ * Remove the original `<link rel="stylesheet" href="https://fonts.googleapis.com/...">`
+ * from your layout when you adopt this; leaving it in keeps the blocking
+ * request the plugin exists to remove.
+ *
+ * The build needs network access. A failure is reported and the build
+ * continues: shipping a page without the plugin's stylesheet is better than a
+ * broken deploy, and the missing `<link>` is visible immediately.
+ */
+export function fonts(options: FontsOptions): RuvyxaPlugin {
+  const urls = options?.google
+  if (!Array.isArray(urls) || urls.length === 0 || urls.some((url) => typeof url !== 'string')) {
+    throw new TypeError('fonts: google must be a non-empty array of stylesheet URLs')
+  }
+  for (const url of urls) {
+    if (!url.startsWith('https://fonts.googleapis.com/')) {
+      throw new TypeError(`fonts: ${url} is not a fonts.googleapis.com stylesheet URL`)
+    }
+  }
+  const publicPath = normalizeFontPublicPath(options.publicPath ?? '/fonts')
+  const preload = options.preload !== false
+  const stylesheetPath = `${publicPath}/fonts.css`
+
+  // Preload hints must be declared before the build runs, so they are derived
+  // from the requested families rather than from the downloaded file list. A
+  // stylesheet `<link>` is enough on its own; `preload` only moves the font
+  // fetch earlier by one round trip.
+  const head: PluginHeadEntry[] = [
+    { tag: 'link', attrs: { rel: 'stylesheet', href: stylesheetPath } },
+  ]
+  if (preload) {
+    head.unshift({
+      tag: 'link',
+      attrs: { rel: 'preload', as: 'style', href: stylesheetPath },
+    })
+  }
+
+  return definePlugin({
+    name: 'ruvyxa:fonts',
+    head,
+    register({ build, diagnostics }) {
+      build.onComplete(async (context) => {
+        try {
+          const sheets: string[] = []
+          for (const url of urls) {
+            // The browser user-agent decides which format Google serves; asking
+            // as a modern browser gets woff2, which every supported target reads.
+            const response = await fetch(url, {
+              headers: {
+                'user-agent':
+                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+              },
+            })
+            if (!response.ok) {
+              throw new Error(`${url} responded ${response.status}`)
+            }
+            sheets.push(await downloadFontFiles(await response.text(), context, publicPath))
+          }
+          writePublicAsset(context, stylesheetPath.slice(1), sheets.join('\n'))
+        } catch (error) {
+          diagnostics.report({
+            level: 'warning',
+            code: 'RUV2103',
+            message: `fonts: could not self-host Google Fonts (${
+              error instanceof Error ? error.message : String(error)
+            }). The generated stylesheet is missing from this build.`,
+          })
+        }
+      })
+    },
+  })
+}
+
+/** Download every font file a stylesheet references and rewrite its URLs. */
+async function downloadFontFiles(
+  css: string,
+  context: PluginBuildContext,
+  publicPath: string,
+): Promise<string> {
+  const remote = [...css.matchAll(/url\((https:\/\/fonts\.gstatic\.com\/[^)]+)\)/g)]
+  let rewritten = css
+  for (const [, url] of remote) {
+    const fileName = fontFileName(url)
+    const response = await fetch(url)
+    if (!response.ok) throw new Error(`${url} responded ${response.status}`)
+    const bytes = Buffer.from(await response.arrayBuffer())
+    const destination = `${publicPath}/${fileName}`
+    writePublicBinaryAsset(context, destination.slice(1), bytes)
+    rewritten = rewritten.replaceAll(url, destination)
+  }
+  return rewritten
+}
+
+/**
+ * Stable file name for a gstatic font URL.
+ *
+ * The last path segment is unique per family/weight/subset, so it needs no
+ * hashing; the hash of the full URL is appended only to keep two families that
+ * happen to share a segment name apart.
+ */
+function fontFileName(url: string): string {
+  const segment = url.split('?')[0].split('/').pop() ?? 'font.woff2'
+  const safe = segment.replace(/[^A-Za-z0-9._-]/g, '-')
+  const digest = createHash('sha256').update(url).digest('hex').slice(0, 8)
+  const dot = safe.lastIndexOf('.')
+  return dot <= 0 ? `${safe}-${digest}` : `${safe.slice(0, dot)}-${digest}${safe.slice(dot)}`
+}
+
+function normalizeFontPublicPath(value: string): string {
+  const trimmed = `/${String(value).replace(/^\/+|\/+$/g, '')}`
+  if (trimmed === '/' || /[?#]/.test(trimmed)) {
+    throw new TypeError('fonts: publicPath must be a directory path such as "/fonts"')
+  }
+  return trimmed
+}
+
 // ─── shared helpers ───────────────────────────────────────────────────────────
 
 function normalizeSiteUrl(value: unknown, plugin: string): string {
@@ -2169,6 +2317,27 @@ function writePublicAsset(context: PluginBuildContext, fileName: string, content
   const destination = path.join(assetsDir, ...normalized.split('/'))
   mkdirSync(path.dirname(destination), { recursive: true })
   writeTextFileAtomic(destination, contents)
+}
+
+/** Same placement rules as `writePublicAsset`, for bytes rather than text. */
+function writePublicBinaryAsset(
+  context: PluginBuildContext,
+  fileName: string,
+  contents: Buffer,
+): void {
+  const normalized = normalizePublicFilePath(
+    fileName.startsWith('/') ? fileName : `/${fileName}`,
+    'built-in plugin',
+  ).slice(1)
+  const destination = path.join(context.outDir, 'assets', ...normalized.split('/'))
+  mkdirSync(path.dirname(destination), { recursive: true })
+  const temporary = `${destination}.tmp-${process.pid}-${randomUUID()}`
+  try {
+    writeFileSync(temporary, contents)
+    renameSync(temporary, destination)
+  } finally {
+    rmSync(temporary, { force: true })
+  }
 }
 
 function writeTextFileAtomic(destination: string, contents: string): void {

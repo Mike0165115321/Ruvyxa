@@ -14,6 +14,7 @@ export type {
   RouteParamValue,
   RouteParams,
   RuvyxaConfig,
+  SiteConfig,
   StaticParamsContext,
   StaticParamSegment,
   StaticParamsCacheDuration,

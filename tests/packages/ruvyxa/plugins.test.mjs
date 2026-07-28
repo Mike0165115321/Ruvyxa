@@ -18,6 +18,7 @@ import {
   cacheRules,
   contentEngine,
   feed,
+  fonts,
   headers,
   observability,
   openApi,
@@ -996,5 +997,104 @@ describe('alias()', () => {
 
   it('rejects empty targets', () => {
     assert.throws(() => alias({ '~x': '' }), TypeError)
+  })
+})
+
+describe('fonts()', () => {
+  /** Replace global fetch with a fixture map for the duration of one call. */
+  async function withFetch(responses, run) {
+    const original = globalThis.fetch
+    const requested = []
+    globalThis.fetch = async (url) => {
+      requested.push(String(url))
+      const body = responses[String(url)]
+      if (body === undefined) return new Response('missing', { status: 404 })
+      return typeof body === 'string'
+        ? new Response(body, { status: 200 })
+        : new Response(body, { status: 200 })
+    }
+    try {
+      return await run(requested)
+    } finally {
+      globalThis.fetch = original
+    }
+  }
+
+  const sheetUrl = 'https://fonts.googleapis.com/css2?family=Inter:wght@400&display=swap'
+  const fontUrl = 'https://fonts.gstatic.com/s/inter/v1/abc.woff2'
+  const css = `@font-face{font-family:'Inter';src:url(${fontUrl}) format('woff2');}`
+
+  it('declares a stylesheet link and preload in head', () => {
+    const plugin = fonts({ google: [sheetUrl] })
+    assert.deepEqual(
+      plugin.head.map((entry) => [entry.tag, entry.attrs.rel, entry.attrs.href]),
+      [
+        ['link', 'preload', '/fonts/fonts.css'],
+        ['link', 'stylesheet', '/fonts/fonts.css'],
+      ],
+    )
+
+    const withoutPreload = fonts({ google: [sheetUrl], preload: false })
+    assert.equal(withoutPreload.head.length, 1)
+  })
+
+  it('downloads the font files and rewrites the stylesheet to local paths', async () => {
+    const { buildComplete } = register(fonts({ google: [sheetUrl] }))
+    const context = tempBuildContext({ routes: [] })
+
+    await withFetch({ [sheetUrl]: css, [fontUrl]: Buffer.from('woff2-bytes') }, async () => {
+      await buildComplete[0](context)
+    })
+
+    const generated = readFileSync(path.join(context.outDir, 'assets/fonts/fonts.css'), 'utf8')
+    assert.match(generated, /url\(\/fonts\/abc-[a-f0-9]{8}\.woff2\)/)
+    // No gstatic origin survives: that request is what blocks first paint.
+    assert.doesNotMatch(generated, /fonts\.gstatic\.com/)
+
+    const [fontFile] = readdirSync(path.join(context.outDir, 'assets/fonts')).filter((name) =>
+      name.endsWith('.woff2'),
+    )
+    assert.ok(fontFile, 'font file was written')
+    assert.equal(
+      readFileSync(path.join(context.outDir, 'assets/fonts', fontFile), 'utf8'),
+      'woff2-bytes',
+    )
+  })
+
+  it('reports a diagnostic instead of failing the build when the network is unavailable', async () => {
+    const reported = []
+    const plugin = fonts({ google: [sheetUrl] })
+    const buildComplete = []
+    plugin.register({
+      http: { onRequest() {}, onResponse() {}, route() {} },
+      build: {
+        onStart() {},
+        onResolve() {},
+        onLoad() {},
+        onTransform() {},
+        onComplete(hook) {
+          buildComplete.push(hook)
+        },
+      },
+      dev: { onFileChange() {} },
+      diagnostics: { report: (diagnostic) => reported.push(diagnostic) },
+      native: { claim() {} },
+    })
+
+    const context = tempBuildContext({ routes: [] })
+    await withFetch({}, async () => {
+      await buildComplete[0](context)
+    })
+
+    assert.equal(reported.length, 1)
+    assert.equal(reported[0].level, 'warning')
+    assert.match(reported[0].message, /could not self-host Google Fonts/)
+    assert.equal(existsSync(path.join(context.outDir, 'assets/fonts/fonts.css')), false)
+  })
+
+  it('rejects URLs that are not Google Fonts stylesheets', () => {
+    assert.throws(() => fonts({ google: [] }), TypeError)
+    assert.throws(() => fonts({ google: ['https://cdn.example/font.css'] }), TypeError)
+    assert.throws(() => fonts({ google: [sheetUrl], publicPath: '/' }), TypeError)
   })
 })

@@ -37,7 +37,7 @@ import {
   serverPlatform,
   toImportPath,
 } from './compiler.mjs'
-import { clientEntrySource, nodeSsrEntrySource } from './entry-templates.mjs'
+import { clientEntrySource, metaSourceImports, nodeSsrEntrySource } from './entry-templates.mjs'
 
 // --- Configuration ---
 const MAX_BUNDLE_CACHE_ENTRIES = positiveIntegerEnv('RUVYXA_CACHE_MAX_ENTRIES', 256)
@@ -1032,6 +1032,11 @@ async function bundleSsrModule(projectRoot, pageFile, layouts, routePath = '/', 
   const { imports: specialImports, names } = specialEntryParts(specials)
   imports.push(...specialImports)
 
+  const { imports: metaImports, metaNames } = metaSourceImports(
+    [...layouts, pageFile].map(toImportPath),
+  )
+  imports.push(...metaImports)
+
   const moduleCode = nodeSsrEntrySource({
     imports,
     pageName: 'Page',
@@ -1039,6 +1044,7 @@ async function bundleSsrModule(projectRoot, pageFile, layouts, routePath = '/', 
     routePath,
     readyEvent: 'onAllReady',
     tolerateStreamErrors: true,
+    metaNames,
     ...names,
   })
 
@@ -1151,6 +1157,11 @@ async function bundleClientModule(
   const { imports: specialImports, names } = specialEntryParts(specials)
   imports.push(...specialImports)
 
+  const { imports: metaImports, metaNames } = metaSourceImports(
+    [...layouts, pageFile].map(toImportPath),
+  )
+  imports.push(...metaImports)
+
   const moduleCode = clientEntrySource({
     imports,
     pageName: 'Page',
@@ -1158,6 +1169,7 @@ async function bundleClientModule(
     routePath,
     requestPathLiteral: JSON.stringify(requestPath),
     paramsLiteral: paramsJson,
+    metaNames,
     ...names,
   })
 
@@ -1211,6 +1223,11 @@ async function bundleSsgModule(
   const { imports: specialImports, names } = specialEntryParts(specials)
   imports.push(...specialImports)
 
+  const { imports: metaImports, metaNames } = metaSourceImports(
+    [...layouts, pageFile].map(toImportPath),
+  )
+  imports.push(...metaImports)
+
   const moduleCode = nodeSsrEntrySource({
     imports,
     pageName: 'Page',
@@ -1220,6 +1237,7 @@ async function bundleSsgModule(
     // lets the dynamic slots stream in behind their Suspense boundaries.
     readyEvent: mode === 'ppr' ? 'onShellReady' : 'onAllReady',
     tolerateStreamErrors: mode === 'ppr',
+    metaNames,
     ...names,
   })
 

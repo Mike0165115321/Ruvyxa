@@ -24,6 +24,7 @@ use serde::Deserialize;
 use crate::html_document::{
     client_hydration_script, compose_document, error_page, hmr_client_script,
 };
+use crate::plugin_head::render_plugin_head;
 use crate::render_cache::RenderCache;
 use crate::router::RadixRouter;
 use crate::static_assets::{
@@ -333,7 +334,9 @@ async fn render_page_ssg(
         ""
     };
     let client_script = client_hydration_script(&state.config, route, request_path, params);
-    let head_content = format!(r#"{asset_links}<style data-ruvyxa-css>{styles}</style>"#);
+    let plugin_head = render_plugin_head(&state.config.plugin_head);
+    let head_content =
+        format!(r#"{asset_links}{plugin_head}<style data-ruvyxa-css>{styles}</style>"#);
     let html = compose_document(&rendered, &head_content, &format!("{client_script}{hmr}"));
 
     state.render_cache.put(cache_key, html.clone()).await;
@@ -423,7 +426,9 @@ async fn render_isr_background(
         ""
     };
     let client_script = client_hydration_script(&state.config, route, request_path, params);
-    let head_content = format!(r#"{asset_links}<style data-ruvyxa-css>{styles}</style>"#);
+    let plugin_head = render_plugin_head(&state.config.plugin_head);
+    let head_content =
+        format!(r#"{asset_links}{plugin_head}<style data-ruvyxa-css>{styles}</style>"#);
     Ok(compose_document(
         &rendered,
         &head_content,
@@ -706,7 +711,9 @@ async fn render_page_ppr(
         ""
     };
     let client_script = client_hydration_script(&state.config, route, request_path, params);
-    let head_content = format!(r#"{asset_links}<style data-ruvyxa-css>{styles}</style>"#);
+    let plugin_head = render_plugin_head(&state.config.plugin_head);
+    let head_content =
+        format!(r#"{asset_links}{plugin_head}<style data-ruvyxa-css>{styles}</style>"#);
     let html = compose_document(&rendered, &head_content, &format!("{client_script}{hmr}"));
 
     state.render_cache.put(cache_key, html.clone()).await;
@@ -790,7 +797,9 @@ pub(crate) async fn render_page_pooled(
         ""
     };
     let client_script = client_hydration_script(&state.config, route, request_path, params);
-    let head_content = format!(r#"{asset_links}<style data-ruvyxa-css>{styles}</style>"#);
+    let plugin_head = render_plugin_head(&state.config.plugin_head);
+    let head_content =
+        format!(r#"{asset_links}{plugin_head}<style data-ruvyxa-css>{styles}</style>"#);
 
     let html = compose_document(&rendered, &head_content, &format!("{client_script}{hmr}"));
 
@@ -1145,7 +1154,9 @@ fn render_page(
         ""
     };
     let client_script = client_hydration_script(config, route, request_path, params);
-    let head_content = format!(r#"{asset_links}<style data-ruvyxa-css>{styles}</style>"#);
+    let plugin_head = render_plugin_head(&config.plugin_head);
+    let head_content =
+        format!(r#"{asset_links}{plugin_head}<style data-ruvyxa-css>{styles}</style>"#);
 
     Ok(compose_document(
         &rendered,

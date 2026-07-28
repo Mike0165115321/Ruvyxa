@@ -252,6 +252,9 @@ const STATIC_ASSET_EXTENSIONS: [&str; 25] = [
 /// client bundle directory and the public directory, so the file genuinely
 /// does not exist and a dynamic route must not render a page for it.
 pub(crate) fn is_static_asset_request(request_path: &str) -> bool {
+    if is_crawler_discovery_path(request_path) {
+        return true;
+    }
     let segment = request_path.rsplit('/').next().unwrap_or_default();
     let Some((name, extension)) = segment.rsplit_once('.') else {
         return false;
@@ -261,6 +264,22 @@ pub(crate) fn is_static_asset_request(request_path: &str) -> bool {
     }
     let extension = extension.to_ascii_lowercase();
     STATIC_ASSET_EXTENSIONS.contains(&extension.as_str())
+}
+
+/// Well-known crawler files that are never a page.
+///
+/// `.txt` and `.xml` are deliberately absent from `STATIC_ASSET_EXTENSIONS` —
+/// a route may legitimately end in either — but these exact paths are fixed by
+/// convention. Letting `/[lang]` answer `/robots.txt` returns 200 with an HTML
+/// body, which is exactly what Lighthouse's `robots-txt` audit fails on. The
+/// build emits both files by default, so this only decides what a project that
+/// turned generation off serves. Mirrors `isCrawlerDiscoveryPath()` in
+/// `packages/ruvyxa/runtime/serverless-handler.mjs`.
+fn is_crawler_discovery_path(request_path: &str) -> bool {
+    matches!(
+        request_path.trim_end_matches('/'),
+        "/robots.txt" | "/sitemap.xml" | "/sitemap_index.xml"
+    )
 }
 
 pub(crate) fn is_convertible_image_url(path: &Path) -> bool {

@@ -1,3 +1,9 @@
+export const meta = {
+  title: 'About',
+  description: 'A static nested route rendered from app/about/page.tsx.',
+  canonical: 'https://demo.ruvyxa.dev/about',
+}
+
 export default function About() {
   return (
     <main className="page">

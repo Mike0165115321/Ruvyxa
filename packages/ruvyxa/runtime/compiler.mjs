@@ -1721,10 +1721,15 @@ function maskNonCode(source, options = {}) {
   const preserveRequireCallSpecifiers = options.preserveRequireCallSpecifiers === true
   let output = ''
   let index = 0
+  // Index of the last byte that can end a token, tracked for the same reason as
+  // in `scanPrivateEnvReads`: a `/` only opens a regular expression where no
+  // value precedes it.
+  let previousSignificant = -1
 
   while (index < source.length) {
     const char = source[index]
     const next = source[index + 1]
+    const tokenStart = index
 
     if (char === '/' && next === '/') {
       const end = source.indexOf('\n', index + 2)
@@ -1752,6 +1757,7 @@ function maskNonCode(source, options = {}) {
         (preserveRequireCallSpecifiers && /\brequire\s*\(\s*$/.test(previous))
       output += preserve ? literal : maskRange(literal)
       index = end
+      previousSignificant = tokenStart
       continue
     }
 
@@ -1759,11 +1765,25 @@ function maskNonCode(source, options = {}) {
       const end = readTemplateEnd(source, index)
       output += maskRange(source.slice(index, end))
       index = end
+      previousSignificant = tokenStart
+      continue
+    }
+
+    // A regular expression is masked like any other literal. Without this, a
+    // regex that contains a quote — `/("[^"]*"|'[^']*')/` — opens a phantom
+    // string that runs to the next quote anywhere later in the file, and every
+    // `import`/`export` in between is misread as string content.
+    if (char === '/' && regexCanStart(source, previousSignificant)) {
+      const end = readRegexEnd(source, index)
+      output += maskRange(source.slice(index, end))
+      index = end
+      previousSignificant = tokenStart
       continue
     }
 
     output += char
     index++
+    if (!/\s/.test(char)) previousSignificant = tokenStart
   }
 
   return output

@@ -1,4 +1,4 @@
-import { bundleBudget, sitemap } from 'ruvyxa/plugins'
+import { bundleBudget } from 'ruvyxa/plugins'
 
 import buildPipeline from './build-pipeline'
 import pageObservability from './page-observability'
@@ -8,6 +8,5 @@ export const demoPlugins = [
   pageObservability,
   renderModeBadges,
   buildPipeline,
-  sitemap({ siteUrl: 'https://demo.ruvyxa.dev', robots: true }),
   bundleBudget({ maxChunkKb: 1024, maxTotalKb: 4096 }),
 ]

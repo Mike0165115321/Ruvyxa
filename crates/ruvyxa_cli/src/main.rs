@@ -30,6 +30,10 @@ use walkdir::WalkDir;
 
 mod image_optimizer;
 use image_optimizer::{ImageOptimizationOptions, ImageOptimizationReport, optimize_public_images};
+mod image_usage;
+use image_usage::scan_raw_image_usage;
+mod site_discovery;
+use site_discovery::{SiteConfigOptions, resolve_site_url, write_discovery_files};
 
 const ASSET_HASH_ALGORITHM: &str = "blake3-256";
 
@@ -345,6 +349,8 @@ struct ProjectConfig {
     #[serde(default)]
     cache: CacheConfigOptions,
     #[serde(default)]
+    site: SiteConfigOptions,
+    #[serde(default)]
     middleware: ruvyxa_middleware::MiddlewareConfig,
     #[serde(default)]
     plugins: Vec<BuildPluginConfig>,
@@ -454,6 +460,9 @@ struct CacheConfigOptions {
 #[serde(rename_all = "camelCase")]
 struct BuildPluginConfig {
     name: String,
+    /// Elements this plugin contributes to every rendered document's `<head>`.
+    #[serde(default)]
+    head: Vec<ruvyxa_dev_server::PluginHeadEntry>,
 }
 
 struct RuvyxaBuildCache<'a> {
@@ -1012,6 +1021,7 @@ fn dev_server_config(args: &ServerArgs, config: &ProjectConfig) -> anyhow::Resul
         .unwrap_or(server.security_headers);
     server.middleware = config.middleware.clone();
     server.plugins_enabled = !config.plugins.is_empty();
+    server.plugin_head = collect_plugin_head(&config.plugins);
     server.default_render_strategy = config.rendering.default_strategy;
     server.default_revalidate = config.rendering.default_revalidate;
     Ok(server)
@@ -1079,6 +1089,7 @@ fn production_server_config(
         .unwrap_or(server.security_headers);
     server.middleware = config.middleware.clone();
     server.plugins_enabled = !config.plugins.is_empty();
+    server.plugin_head = collect_plugin_head(&config.plugins);
     server.default_render_strategy = config.rendering.default_strategy;
     server.default_revalidate = config.rendering.default_revalidate;
     Ok(server)
@@ -1587,6 +1598,27 @@ async fn build_with_output(args: BuildArgs, show_summary: bool) -> anyhow::Resul
         asset_files,
         duration: preparation_duration,
     } = prepared_assets;
+
+    // The optimizer converted these images; a raw `<img>` still ships the
+    // original bytes, so the build's work is silently unused.
+    let bypassed_images = scan_raw_image_usage(&app_dir, &image_report.entries);
+    for usage in bypassed_images.iter().take(5) {
+        warn!(
+            "{}:{} <img src=\"{}\"> ships {} instead of the generated WebP ({}). Use <Image> from @ruvyxa/react to serve the optimized file.",
+            usage.file.display(),
+            usage.line,
+            usage.url,
+            format_bytes(usage.source_bytes as usize),
+            format_bytes(usage.webp_bytes as usize),
+        );
+    }
+    if bypassed_images.len() > 5 {
+        warn!(
+            "{} more raw <img> references bypass the image pipeline.",
+            bypassed_images.len() - 5
+        );
+    }
+
     if show_summary {
         let mut detail = format!("{asset_files} files");
         if image_report.optimized_images > 0 {
@@ -1652,6 +1684,31 @@ async fn build_with_output(args: BuildArgs, show_summary: bool) -> anyhow::Resul
                 if prerendered.len() == 1 { "" } else { "s" }
             ),
             prerender_duration,
+        );
+    }
+
+    // Discovery files are written after prerendering: a dynamic route has no
+    // URL until the build produces one, and `public/` has already been staged,
+    // so a file the project ships still wins.
+    let prerendered_paths: Vec<String> =
+        prerendered.iter().map(|route| route.path.clone()).collect();
+    let site_url = resolve_site_url(config.site.url.as_deref(), |name| std::env::var(name).ok());
+    let discovery = write_discovery_files(
+        &manifest,
+        &prerendered_paths,
+        &assets_dir,
+        site_url.as_deref(),
+        &config.site,
+    )
+    .with_context(|| {
+        format!(
+            "failed to write discovery files into {}",
+            assets_dir.display()
+        )
+    })?;
+    if discovery.sitemap_needs_site_url {
+        warn!(
+            "no site URL is configured, so sitemap.xml was not generated. Set `site.url` in ruvyxa.config.ts or the RUVYXA_SITE_URL environment variable."
         );
     }
 
@@ -3773,6 +3830,17 @@ fn prerender_parallelism(configured: Option<usize>, work_items: usize) -> usize 
         .map(|value| value.min(MAX_CONFIGURED_PRERENDER_PARALLELISM))
         .unwrap_or(default)
         .clamp(1, work_items.max(1))
+}
+
+/// Flatten every plugin's declared head elements in configuration order.
+///
+/// Order is the order plugins are listed, so a project controls which entry
+/// wins when two plugins contribute the same tag.
+fn collect_plugin_head(plugins: &[BuildPluginConfig]) -> Vec<ruvyxa_dev_server::PluginHeadEntry> {
+    plugins
+        .iter()
+        .flat_map(|plugin| plugin.head.iter().cloned())
+        .collect()
 }
 
 fn build_plugin_manifest(plugins: &[BuildPluginConfig]) -> serde_json::Value {
@@ -7420,6 +7488,7 @@ export default {
         .unwrap();
         let plugins = vec![BuildPluginConfig {
             name: "complete".to_string(),
+            head: Vec::new(),
         }];
 
         let session =
@@ -7465,6 +7534,7 @@ export default {
         .unwrap();
         let plugins = vec![BuildPluginConfig {
             name: "lifecycle-state".to_string(),
+            head: Vec::new(),
         }];
         let session =
             TypeScriptPluginBuildSession::new(root, &plugins, JavaScriptRuntime::Node).unwrap();

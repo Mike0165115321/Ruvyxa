@@ -162,6 +162,33 @@ exits before responding is restarted and retried once.
 | `css`    | `boolean` | `true`                    | Cache collected CSS   |
 | `dir`    | `string`  | `".ruvyxa/cache/bundler"` | Build cache directory |
 
+### `site`
+
+Identity for the crawler discovery files the build emits into the output assets.
+
+| Field     | Type      | Default | Description                                   |
+| --------- | --------- | ------- | --------------------------------------------- |
+| `url`     | `string`  | —       | Absolute origin, e.g. `https://ruvyxa.dev`    |
+| `sitemap` | `boolean` | `true`  | Emit `sitemap.xml` (needs a resolvable `url`) |
+| `robots`  | `boolean` | `true`  | Emit `robots.txt`                             |
+
+`ruvyxa build` writes `robots.txt` and `sitemap.xml` from the route manifest. Only static page
+routes are listed: a pattern such as `/blog/[slug]` is not a URL, and API routes are not pages.
+
+A file of the same name in `public/` always wins, so shipping your own is still how you say
+something the generator cannot.
+
+When `url` is absent, Ruvyxa reads the `RUVYXA_SITE_URL` environment variable — one variable the
+framework owns, so a deploy pipeline exports it once and the framework does not have to track what
+each host calls its own URL. A bare hostname is accepted and given an `https` scheme. A sitemap
+needs absolute URLs, so without either the build warns and writes only `robots.txt`.
+
+```ts
+export default config({
+  site: { url: 'https://ruvyxa.dev' },
+})
+```
+
 ### `debug`
 
 | Field     | Type      | Default | Description          |
