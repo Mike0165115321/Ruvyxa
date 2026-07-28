@@ -20,7 +20,7 @@
 //! consumption.  Disk entries are not evicted automatically — run
 //! `ruvyxa clean` or call [`CompileCache::clear`] to purge them.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -46,12 +46,85 @@ static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 #[derive(Debug)]
 struct MemEntry {
     value: String,
-    /// Monotonically increasing generation counter for LRU tracking.
+    /// Monotonically increasing generation counter for LRU tracking. Doubles as
+    /// this entry's slot in [`MemoryCache::recency`].
     last_used: u64,
 }
 
 /// Atomic generation counter for LRU tracking.
+///
+/// Global rather than per-cache, so generations are unique across every
+/// [`CompileCache`] instance in the process and can be used directly as
+/// recency-index keys without collision.
 static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+fn next_generation() -> u64 {
+    GENERATION.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Bounded in-process LRU over compiled module output.
+///
+/// The recency index exists so eviction does not have to scan. Finding the
+/// least-recently-used entry used to be a `min_by_key` pass over every entry,
+/// which runs once per insert for the whole remainder of a build once the cache
+/// is full — and it diverged from the O(1) recency list `RenderCache` already
+/// uses in this workspace for the same job. A `BTreeMap` keyed by generation
+/// gives the same eviction order in O(log n) with far less code than a
+/// hand-rolled linked list.
+#[derive(Debug, Default)]
+struct MemoryCache {
+    entries: HashMap<String, MemEntry>,
+    /// `last_used` generation -> cache key. Exactly one slot per entry.
+    recency: BTreeMap<u64, String>,
+}
+
+impl MemoryCache {
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Read an entry and mark it most-recently-used.
+    fn touch(&mut self, key: &str) -> Option<&str> {
+        let entry = self.entries.get_mut(key)?;
+        self.recency.remove(&entry.last_used);
+        entry.last_used = next_generation();
+        self.recency.insert(entry.last_used, key.to_string());
+        Some(&entry.value)
+    }
+
+    /// Insert `value`, evicting the least-recently-used entry first when the
+    /// cache is at its limit and this is a new key.
+    fn insert(&mut self, key: String, value: String, limit: usize) {
+        if self.entries.len() >= limit && !self.entries.contains_key(&key) {
+            self.evict_lru();
+        }
+        let last_used = next_generation();
+        if let Some(previous) = self
+            .entries
+            .insert(key.clone(), MemEntry { value, last_used })
+        {
+            self.recency.remove(&previous.last_used);
+        }
+        self.recency.insert(last_used, key);
+    }
+
+    fn evict_lru(&mut self) {
+        if let Some((_, lru_key)) = self.recency.pop_first() {
+            self.entries.remove(&lru_key);
+        }
+    }
+
+    fn remove(&mut self, key: &str) {
+        if let Some(entry) = self.entries.remove(key) {
+            self.recency.remove(&entry.last_used);
+        }
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.recency.clear();
+    }
+}
 
 /// On-disk compilation cache with an in-process LRU memory layer.
 #[derive(Debug, Clone)]
@@ -64,7 +137,7 @@ pub struct CompileCache {
     /// dependencies change without changing a source module.
     namespace: String,
     /// Process-local hot cache shared by cloned cache handles.
-    memory: Arc<Mutex<HashMap<String, MemEntry>>>,
+    memory: Arc<Mutex<MemoryCache>>,
 }
 
 /// Cache lookup result.
@@ -100,7 +173,7 @@ impl CompileCache {
             cache_dir: cache_dir.into(),
             enabled,
             namespace: namespace.into(),
-            memory: Arc::new(Mutex::new(HashMap::new())),
+            memory: Arc::new(Mutex::new(MemoryCache::default())),
         }
     }
 
@@ -110,7 +183,7 @@ impl CompileCache {
             cache_dir: PathBuf::new(),
             enabled: false,
             namespace: String::new(),
-            memory: Arc::new(Mutex::new(HashMap::new())),
+            memory: Arc::new(Mutex::new(MemoryCache::default())),
         }
     }
 
@@ -142,10 +215,9 @@ impl CompileCache {
 
         // Fast path: memory cache (LRU-updated on hit).
         if let Ok(mut memory) = self.memory.lock()
-            && let Some(entry) = memory.get_mut(&key)
+            && let Some(value) = memory.touch(&key)
         {
-            entry.last_used = GENERATION.fetch_add(1, Ordering::Relaxed);
-            return CacheLookup::Hit(entry.value.clone());
+            return CacheLookup::Hit(value.to_string());
         }
 
         // Disk cache.
@@ -192,23 +264,7 @@ impl CompileCache {
     /// when the cache has grown past [`MEMORY_CACHE_LIMIT`].
     fn insert_to_memory(&self, key: String, value: String) {
         if let Ok(mut memory) = self.memory.lock() {
-            if memory.len() >= MEMORY_CACHE_LIMIT && !memory.contains_key(&key) {
-                // Evict the least-recently-used entry.
-                if let Some(lru_key) = memory
-                    .iter()
-                    .min_by_key(|(_, v)| v.last_used)
-                    .map(|(k, _)| k.clone())
-                {
-                    memory.remove(&lru_key);
-                }
-            }
-            memory.insert(
-                key,
-                MemEntry {
-                    value,
-                    last_used: GENERATION.fetch_add(1, Ordering::Relaxed),
-                },
-            );
+            memory.insert(key, value, MEMORY_CACHE_LIMIT);
         }
     }
 
@@ -318,6 +374,19 @@ impl CompileCache {
                     .sum()
             })
             .unwrap_or(0)
+    }
+
+    /// Whether `key` is currently resident in the memory layer.
+    ///
+    /// Test-only: [`Self::lookup`] cannot answer this because a memory miss
+    /// falls through to disk and repopulates the entry, which is exactly the
+    /// eviction the caller wants to observe.
+    #[cfg(test)]
+    fn memory_contains(&self, key: &str) -> bool {
+        self.memory
+            .lock()
+            .map(|m| m.entries.contains_key(key))
+            .unwrap_or(false)
     }
 
     /// Return the current number of entries in the memory cache.
@@ -489,6 +558,68 @@ mod tests {
             cache.memory_entry_count(),
             MEMORY_CACHE_LIMIT,
             "memory cache should not grow past the limit"
+        );
+    }
+
+    /// Eviction must follow read recency, not insertion order. The bound test
+    /// above passes for any eviction policy, including one that drops the
+    /// most-recently-used entry, so the ordering needs its own guard.
+    #[test]
+    fn lru_eviction_drops_the_least_recently_used_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = CompileCache::new(tmp.path(), true);
+
+        let sources: Vec<String> = (0..MEMORY_CACHE_LIMIT)
+            .map(|i| format!("const x{i} = {i};"))
+            .collect();
+        let keys: Vec<String> = sources
+            .iter()
+            .map(|src| CompileCache::cache_key(src, false))
+            .collect();
+        for (i, key) in keys.iter().enumerate() {
+            cache.store(key, &format!("var x{i} = {i};"));
+        }
+
+        // Read the oldest entry so it becomes the most recently used, leaving
+        // entry 1 as the least recently used.
+        assert!(matches!(
+            cache.lookup(&sources[0], false),
+            CacheLookup::Hit(_)
+        ));
+
+        let extra = "const extra = 999;";
+        cache.store(&CompileCache::cache_key(extra, false), "var extra = 999;");
+
+        assert_eq!(cache.memory_entry_count(), MEMORY_CACHE_LIMIT);
+        assert!(
+            cache.memory_contains(&keys[0]),
+            "the entry read most recently must survive eviction"
+        );
+        assert!(
+            !cache.memory_contains(&keys[1]),
+            "the least recently used entry must be the one evicted"
+        );
+    }
+
+    /// Re-storing an existing key must replace its recency slot rather than
+    /// leaving a stale one behind, or the index and the entry map drift apart
+    /// and eviction starts removing keys that are no longer resident.
+    #[test]
+    fn restoring_an_existing_key_keeps_the_recency_index_consistent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = CompileCache::new(tmp.path(), true);
+
+        let source = "const a = 1;";
+        let key = CompileCache::cache_key(source, false);
+        for _ in 0..5 {
+            cache.store(&key, "var a = 1;");
+        }
+
+        assert_eq!(cache.memory_entry_count(), 1);
+        let recency_len = cache.memory.lock().map(|m| m.recency.len()).unwrap();
+        assert_eq!(
+            recency_len, 1,
+            "one resident entry must hold exactly one recency slot"
         );
     }
 

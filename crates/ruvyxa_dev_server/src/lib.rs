@@ -93,9 +93,11 @@ mod worker_pool;
 pub use worker_pool::{NodeWorkerPool, StaticParamSegment, StaticParamsRoute};
 
 mod render_pipeline;
+pub use render_pipeline::{
+    RenderContext, find_runtime_script, render_request, render_request_with_context,
+};
 #[cfg(test)]
 use render_pipeline::{decode_realtime_event, page_has_default_export, serve_prerendered_html};
-pub use render_pipeline::{find_runtime_script, render_request};
 use render_pipeline::{
     render_client_bundle_pooled, render_request_pooled, render_server_action_pooled, runtime_env,
     runtime_trace_cached,
@@ -382,7 +384,7 @@ struct AppState {
     action_limiter: Arc<Mutex<ActionRateLimiter>>,
     worker_pool: Arc<NodeWorkerPool>,
     render_cache: Arc<RenderCache>,
-    isr_revalidating: Arc<tokio::sync::Mutex<HashSet<String>>>,
+    isr_revalidating: render_pipeline::IsrRevalidationSet,
     hmr_tracker: Arc<HmrTracker>,
     plugin_runtime: Option<Arc<PluginHost>>,
     realtime: Option<RealtimeRuntime>,
@@ -671,7 +673,7 @@ pub async fn serve(config: ServerConfig) -> Result<()> {
         ))),
         worker_pool: worker_pool.clone(),
         render_cache,
-        isr_revalidating: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
+        isr_revalidating: Arc::new(std::sync::Mutex::new(HashSet::new())),
         hmr_tracker,
         plugin_runtime,
         realtime,

@@ -144,12 +144,10 @@ pub(crate) fn dynamic_import_chunks(
     let mut dynamic_imports = Vec::new();
     for module in compiled.iter().filter(|module| !module.is_external) {
         let ast = ast::parse_module(&module.js);
+        let deps = linker::DepIndex::new(&module.deps, &module.dependency_aliases);
         for specifier in ast.dynamic_import_specifiers() {
-            if let Some(dep) = linker::find_dep_for_specifier_with_aliases(
-                &specifier,
-                &module.deps,
-                &module.dependency_aliases,
-            ) && let Some(file) = dynamic_import_files.get(dep)
+            if let Some(dep) = deps.resolve(&specifier)
+                && let Some(file) = dynamic_import_files.get(dep)
             {
                 dynamic_imports.push(DynamicImportChunk {
                     importer: module.path.display().to_string().replace('\\', "/"),
@@ -177,12 +175,10 @@ fn dynamic_roots(
     let mut roots = BTreeSet::new();
     for module in compiled.iter().filter(|module| !module.is_external) {
         let ast = ast::parse_module(&module.js);
+        let deps = linker::DepIndex::new(&module.deps, &module.dependency_aliases);
         for specifier in ast.dynamic_import_specifiers() {
-            if let Some(dep) = linker::find_dep_for_specifier_with_aliases(
-                &specifier,
-                &module.deps,
-                &module.dependency_aliases,
-            ) && module_map.contains_key(dep)
+            if let Some(dep) = deps.resolve(&specifier)
+                && module_map.contains_key(dep)
             {
                 roots.insert(dep.clone());
             }
@@ -205,16 +201,14 @@ fn collect_static_transitive_modules(
     };
 
     let ast = ast::parse_module(&module.js);
+    let deps = linker::DepIndex::new(&module.deps, &module.dependency_aliases);
     for edge in ast
         .imports
         .iter()
         .filter(|edge| edge.kind != ImportKind::Dynamic)
     {
-        if let Some(dep) = linker::find_dep_for_specifier_with_aliases(
-            &edge.specifier,
-            &module.deps,
-            &module.dependency_aliases,
-        ) && module_map.contains_key(dep)
+        if let Some(dep) = deps.resolve(&edge.specifier)
+            && module_map.contains_key(dep)
         {
             collect_static_transitive_modules(dep, module_map, selected);
         }

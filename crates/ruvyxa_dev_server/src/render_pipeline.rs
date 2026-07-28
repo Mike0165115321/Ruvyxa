@@ -2,10 +2,11 @@
 //! (SSR/SSG/ISR/CSR/PPR), worker-pool render paths, ISR revalidation, and the
 //! Node/Bun render-process fallback used by `render_request`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use axum::body::Body;
@@ -24,7 +25,7 @@ use crate::html_document::{
     client_hydration_script, compose_document, error_page, hmr_client_script,
 };
 use crate::render_cache::RenderCache;
-use crate::router::{self, RadixRouter};
+use crate::router::RadixRouter;
 use crate::static_assets::{
     contained_public_asset, is_safe_relative_path, is_static_asset_request, public_asset_links,
     serve_client_file, serve_client_file_sync, serve_public_file, serve_public_file_sync,
@@ -48,8 +49,61 @@ fn worker_request_headers(headers: &HeaderMap) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Project-wide state for the synchronous render path, built once and reused.
+///
+/// [`render_request`] takes only a [`ServerConfig`], so every call had to
+/// rediscover the route graph, recompile the radix router, and re-collect every
+/// stylesheet from disk. That is invisible for a single render, but the one
+/// caller that renders more than one path — the dev/prod parity sweep in
+/// `ruvyxa check` — repeated the whole project scan twice per route.
+///
+/// Holding that state in a context makes the work per project instead of per
+/// request without changing what a lone `render_request` call does: it still
+/// builds a context of its own.
+pub struct RenderContext {
+    manifest: RouteManifest,
+    router: RadixRouter,
+    /// Collected on the first page render and reused after. API-only sweeps
+    /// never pay for it.
+    styles: std::sync::OnceLock<String>,
+}
+
+impl RenderContext {
+    /// Discover the route graph and compile the router for `config`.
+    pub fn new(config: &ServerConfig) -> Result<Self> {
+        let manifest = discover_routes(DiscoverOptions::new(&config.app_dir))?;
+        let router = RadixRouter::compile(&manifest);
+        Ok(Self {
+            manifest,
+            router,
+            styles: std::sync::OnceLock::new(),
+        })
+    }
+
+    fn styles(&self, config: &ServerConfig) -> Result<&str> {
+        if let Some(styles) = self.styles.get() {
+            return Ok(styles);
+        }
+        let css = collect_styles(&config.root, &config.app_dir, &config.style_entries)?.css;
+        // A concurrent caller may have won the race; either value is the same
+        // collection of the same sources, so whichever lands first stands.
+        Ok(self.styles.get_or_init(|| css))
+    }
+}
+
 pub fn render_request(config: &ServerConfig, request_path: &str, method: &str) -> Result<Response> {
-    render_request_cached(config, request_path, method)
+    let context = RenderContext::new(config)?;
+    render_request_with_context(config, &context, request_path, method)
+}
+
+/// Render one request against an already-built [`RenderContext`].
+pub fn render_request_with_context(
+    config: &ServerConfig,
+    context: &RenderContext,
+    request_path: &str,
+    method: &str,
+) -> Result<Response> {
+    render_request_cached(config, context, request_path, method)
 }
 
 /// True when an asset-shaped request survived static serving only because a
@@ -68,6 +122,7 @@ fn is_missing_static_asset(request_path: &str, route_path: &str) -> bool {
 
 pub(crate) fn render_request_cached(
     config: &ServerConfig,
+    context: &RenderContext,
     request_path: &str,
     method: &str,
 ) -> Result<Response> {
@@ -79,8 +134,7 @@ pub(crate) fn render_request_cached(
         return Ok(public_response);
     }
 
-    let manifest = discover_routes(DiscoverOptions::new(&config.app_dir))?;
-    let Some(route_match) = find_route(&manifest, request_path) else {
+    let Some(route_match) = context.router.find(&context.manifest, request_path) else {
         return Ok(html_response(
             StatusCode::NOT_FOUND,
             error_page("Route not found", config.watch && config.error_overlay),
@@ -95,13 +149,13 @@ pub(crate) fn render_request_cached(
 
     match route_match.route.kind {
         RouteKind::Page => {
-            let styles = collect_styles(&config.root, &config.app_dir, &config.style_entries)?.css;
+            let styles = context.styles(config)?;
             let html = render_page(
                 config,
                 route_match.route,
                 request_path,
                 &route_match.params,
-                &styles,
+                styles,
             )?;
             Ok(html_response(StatusCode::OK, html))
         }
@@ -377,6 +431,57 @@ async fn render_isr_background(
     ))
 }
 
+/// Set of ISR cache keys that currently have a background revalidation running.
+///
+/// A plain [`std::sync::Mutex`] rather than the async one: the critical section
+/// is a single `HashSet` insert or remove, so it never needs to hold the lock
+/// across an await, and a synchronous lock is what lets the slot be released
+/// from [`Drop`].
+pub(crate) type IsrRevalidationSet = Arc<Mutex<HashSet<String>>>;
+
+/// Exclusive claim on one ISR cache key's revalidation slot, released on drop.
+///
+/// The slot used to be freed by a `remove` call at the tail of the spawned
+/// task's happy path. Anything that stopped the task before that line — a panic
+/// inside the render, a cancelled runtime, or an early `return` added later —
+/// left the key in the set permanently, and the route then never revalidated
+/// again for the life of the process while still reporting cache hits. Tying
+/// the release to `Drop` makes the claim last exactly as long as the task that
+/// owns it, whatever way that task ends.
+pub(crate) struct IsrRevalidationSlot {
+    keys: IsrRevalidationSet,
+    key: String,
+}
+
+impl IsrRevalidationSlot {
+    /// Claim the slot for `key`, or `None` when a revalidation is already in
+    /// flight for it.
+    ///
+    /// A poisoned lock is recovered rather than propagated: the guarded value is
+    /// a key set with no invariant a panicking holder could have broken, and
+    /// treating poison as fatal would disable ISR revalidation process-wide.
+    pub(crate) fn claim(keys: &IsrRevalidationSet, key: &str) -> Option<Self> {
+        let mut in_flight = keys.lock().unwrap_or_else(PoisonError::into_inner);
+        if !in_flight.insert(key.to_string()) {
+            return None;
+        }
+        drop(in_flight);
+        Some(Self {
+            keys: Arc::clone(keys),
+            key: key.to_string(),
+        })
+    }
+}
+
+impl Drop for IsrRevalidationSlot {
+    fn drop(&mut self) {
+        self.keys
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.key);
+    }
+}
+
 /// Spawn a background task to revalidate an ISR page.
 fn spawn_isr_revalidation(
     state: &AppState,
@@ -386,13 +491,9 @@ fn spawn_isr_revalidation(
     styles: &str,
     cache_key: &str,
 ) {
-    let Ok(mut in_flight) = state.isr_revalidating.try_lock() else {
+    let Some(slot) = IsrRevalidationSlot::claim(&state.isr_revalidating, cache_key) else {
         return;
     };
-    if !in_flight.insert(cache_key.to_string()) {
-        return;
-    }
-    drop(in_flight);
 
     let revalidate_state = state.clone();
     let revalidate_route = route.clone();
@@ -400,9 +501,11 @@ fn spawn_isr_revalidation(
     let revalidate_params = params.clone();
     let revalidate_styles = styles.to_string();
     let revalidate_key = cache_key.to_string();
-    let revalidating = state.isr_revalidating.clone();
 
     tokio::spawn(async move {
+        // Held for the whole task so the slot is released however the task
+        // ends. Never dropped early.
+        let _slot = slot;
         if let Ok(html) = render_isr_background(
             &revalidate_state,
             &revalidate_route,
@@ -414,10 +517,9 @@ fn spawn_isr_revalidation(
         {
             revalidate_state
                 .render_cache
-                .put(revalidate_key.clone(), html)
+                .put(revalidate_key, html)
                 .await;
         }
-        revalidating.lock().await.remove(&revalidate_key);
     });
 }
 
@@ -1320,16 +1422,110 @@ pub(crate) fn action_file_for(route: &RouteEntry) -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
-fn find_route<'a>(
-    manifest: &'a RouteManifest,
-    request_path: &str,
-) -> Option<router::RouteMatch<'a>> {
-    RadixRouter::compile(manifest).find(manifest, request_path)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The context must own the route graph and the compiled router, not
+    /// re-derive them per request: deleting the app directory after the context
+    /// is built leaves routing intact, which cannot be true of a lookup that
+    /// rescans the project.
+    #[test]
+    fn render_context_resolves_routes_without_rescanning_the_project() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = temp.path().join("app");
+        std::fs::create_dir_all(app.join("blog/[slug]")).unwrap();
+        std::fs::write(
+            app.join("page.tsx"),
+            "export default function Home() { return <main /> }",
+        )
+        .unwrap();
+        std::fs::write(
+            app.join("blog/[slug]/page.tsx"),
+            "export default function Post() { return <article /> }",
+        )
+        .unwrap();
+
+        let config = ServerConfig::dev(temp.path(), "localhost", 3000);
+        let context = RenderContext::new(&config).unwrap();
+
+        std::fs::remove_dir_all(&app).unwrap();
+        assert!(RenderContext::new(&config).is_err() || !app.exists());
+
+        let matched = context
+            .router
+            .find(&context.manifest, "/blog/hello")
+            .expect("the context keeps the graph it discovered");
+        assert_eq!(matched.route.path, "/blog/[slug]");
+        assert_eq!(
+            matched.params.get("slug").and_then(|value| value.as_str()),
+            Some("hello")
+        );
+    }
+
+    /// Only one revalidation may be in flight per ISR cache key.
+    #[test]
+    fn isr_slot_is_exclusive_per_key() {
+        let keys: IsrRevalidationSet = Arc::new(Mutex::new(HashSet::new()));
+        let held = IsrRevalidationSlot::claim(&keys, "isr:/blog").unwrap();
+
+        assert!(
+            IsrRevalidationSlot::claim(&keys, "isr:/blog").is_none(),
+            "a second claim on a held key must be refused"
+        );
+        assert!(
+            IsrRevalidationSlot::claim(&keys, "isr:/docs").is_some(),
+            "a different key must still be claimable"
+        );
+
+        drop(held);
+        assert!(IsrRevalidationSlot::claim(&keys, "isr:/blog").is_some());
+    }
+
+    /// A revalidation that panics must still release its slot. Before the slot
+    /// was tied to `Drop`, the release ran only on the happy path, so one
+    /// panicking render left the key claimed forever and that route never
+    /// revalidated again for the life of the process.
+    #[test]
+    fn isr_slot_is_released_when_the_revalidation_panics() {
+        let keys: IsrRevalidationSet = Arc::new(Mutex::new(HashSet::new()));
+
+        let panicked = std::panic::catch_unwind({
+            let keys = Arc::clone(&keys);
+            move || {
+                let _slot = IsrRevalidationSlot::claim(&keys, "isr:/blog").unwrap();
+                panic!("render failed");
+            }
+        });
+        assert!(panicked.is_err());
+
+        assert!(
+            IsrRevalidationSlot::claim(&keys, "isr:/blog").is_some(),
+            "the slot must be reclaimable after a panicking revalidation"
+        );
+    }
+
+    /// A panic inside the guarded section poisons the lock. ISR revalidation
+    /// must keep working: the guarded value is a key set with no invariant to
+    /// break, so poison is recovered rather than propagated.
+    #[test]
+    fn isr_slot_survives_a_poisoned_lock() {
+        let keys: IsrRevalidationSet = Arc::new(Mutex::new(HashSet::new()));
+        let poisoned = std::panic::catch_unwind({
+            let keys = Arc::clone(&keys);
+            move || {
+                let _guard = keys.lock().unwrap();
+                panic!("poison the lock");
+            }
+        });
+        assert!(poisoned.is_err());
+        assert!(keys.is_poisoned());
+
+        let slot = IsrRevalidationSlot::claim(&keys, "isr:/blog");
+        assert!(slot.is_some(), "a poisoned lock must not disable ISR");
+        drop(slot);
+        assert!(IsrRevalidationSlot::claim(&keys, "isr:/blog").is_some());
+    }
 
     /// Every prerendered strategy owns a distinct cache namespace. A collision
     /// would let one strategy serve another strategy's document for the same

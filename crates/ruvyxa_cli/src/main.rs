@@ -17,7 +17,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 use ruvyxa_dev_server::{
     JavaScriptRuntime, MAX_ACTION_BODY_LIMIT_BYTES, MAX_ACTION_RATE_LIMIT_REQUESTS,
     MAX_ACTION_RATE_LIMIT_WINDOW_SECS, MAX_API_BODY_LIMIT_BYTES,
-    MAX_PLUGIN_RESPONSE_BODY_LIMIT_BYTES, ServerConfig, find_runtime_script, render_request, serve,
+    MAX_PLUGIN_RESPONSE_BODY_LIMIT_BYTES, RenderContext, ServerConfig, find_runtime_script,
+    render_request_with_context, serve,
 };
 use ruvyxa_diagnostics::{Diagnostic, diagnostics_to_sarif};
 use ruvyxa_graph::{
@@ -5407,6 +5408,22 @@ fn smoke_render_parity(
 ) -> Vec<String> {
     let mut failures = Vec::new();
 
+    // One context per config. Each must discover its own route graph: the dev
+    // config points at the source app directory and the production config at
+    // the built one, and the two disagree on every route's module paths.
+    // Rendering through `render_request` instead would redo that discovery,
+    // recompile the router, and re-collect every stylesheet twice per route.
+    let (dev_context, prod_context) = match (
+        RenderContext::new(dev_config),
+        RenderContext::new(prod_config),
+    ) {
+        (Ok(dev), Ok(prod)) => (dev, prod),
+        (Err(error), _) | (_, Err(error)) => {
+            failures.push(format!("route discovery failed for smoke render: {error}"));
+            return failures;
+        }
+    };
+
     for route in manifest
         .routes
         .iter()
@@ -5414,7 +5431,7 @@ fn smoke_render_parity(
     {
         let request_path = parity_smoke_path(&route.path);
 
-        match render_request(dev_config, &request_path, "GET") {
+        match render_request_with_context(dev_config, &dev_context, &request_path, "GET") {
             Ok(response) if !response.status().is_server_error() => {
                 println!("{} Page {} dev render ok", success(), route.path);
             }
@@ -5430,7 +5447,7 @@ fn smoke_render_parity(
             )),
         }
 
-        match render_request(prod_config, &request_path, "GET") {
+        match render_request_with_context(prod_config, &prod_context, &request_path, "GET") {
             Ok(response) if !response.status().is_server_error() => {
                 println!("{} Page {} prod render ok", success(), route.path);
             }
