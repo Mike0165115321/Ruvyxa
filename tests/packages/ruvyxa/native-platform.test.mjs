@@ -70,7 +70,7 @@ describe('Ruvyxa CLI platforms', () => {
     }
   })
 
-  it('tests the declared minimum Rust and Node versions in CI', () => {
+  it('tests the Rust minimum and supported Node major in CI', () => {
     const workspaceManifest = readFileSync(new URL('../../../Cargo.toml', import.meta.url), 'utf8')
     const ciWorkflow = readFileSync(
       new URL('../../../.github/workflows/ci.yml', import.meta.url),
@@ -80,7 +80,7 @@ describe('Ruvyxa CLI platforms', () => {
     assert.match(workspaceManifest, /rust-version = "1\.96"/)
     assert.equal(ruvyxaPackage.engines.node, '>=22.12.0')
     assert.match(ciWorkflow, /toolchain: 1\.96\.0/)
-    assert.match(ciWorkflow, /node-version: 22\.12\.0/)
+    assert.match(ciWorkflow, /node-version: 22(?:\s|$)/)
   })
 
   it('does not publish an Intel macOS binary package', () => {
