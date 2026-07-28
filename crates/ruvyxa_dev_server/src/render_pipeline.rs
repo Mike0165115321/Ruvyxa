@@ -23,6 +23,7 @@ use serde::Deserialize;
 use crate::html_document::{
     client_hydration_script, compose_document, error_page, hmr_client_script,
 };
+use crate::render_cache::RenderCache;
 use crate::router::{self, RadixRouter};
 use crate::static_assets::{
     contained_public_asset, is_safe_relative_path, is_static_asset_request, public_asset_links,
@@ -231,12 +232,14 @@ async fn render_page_ssg(
     // and serve subsequent requests from the in-memory render cache — a
     // synchronous file open per request otherwise dominates the hot path.
     if !state.config.watch
-        && let Some(html) = serve_prerendered_html(&state.config.prerender_dir, request_path)
+        && let Some(html) = store_prerendered_html(
+            &state.render_cache,
+            &state.config.prerender_dir,
+            request_path,
+            &cache_key,
+        )
+        .await
     {
-        state
-            .render_cache
-            .put(cache_key.clone(), html.clone())
-            .await;
         return Ok(html);
     }
 
@@ -306,16 +309,18 @@ async fn render_page_isr(
         return Ok(cached);
     }
 
-    // In production, try the pre-rendered HTML file
+    // In production, try the pre-rendered HTML file. Storing it means the first
+    // background revalidation waits until the route's declared interval instead
+    // of firing once per request.
     if !state.config.watch
-        && let Some(html) = serve_prerendered_html(&state.config.prerender_dir, request_path)
+        && let Some(html) = store_prerendered_html(
+            &state.render_cache,
+            &state.config.prerender_dir,
+            request_path,
+            &cache_key,
+        )
+        .await
     {
-        // Store in cache. The first background revalidation waits until the
-        // route's declared interval instead of firing once per request.
-        state
-            .render_cache
-            .put(cache_key.clone(), html.clone())
-            .await;
         return Ok(html);
     }
 
@@ -433,6 +438,40 @@ pub(crate) fn serve_prerendered_html(prerender_dir: &Path, request_path: &str) -
     fs::read_to_string(html_path).ok()
 }
 
+/// Async wrapper around [`serve_prerendered_html`].
+///
+/// The lookup canonicalizes paths and reads the whole document, so running it
+/// inline on an async request handler blocks a Tokio worker thread for the
+/// duration of the file I/O. `render_page_pooled` already reads page modules
+/// through `spawn_blocking`; prerendered documents follow the same rule.
+async fn read_prerendered_html(prerender_dir: &Path, request_path: &str) -> Option<String> {
+    let prerender_dir = prerender_dir.to_path_buf();
+    let request_path = request_path.to_string();
+    tokio::task::spawn_blocking(move || serve_prerendered_html(&prerender_dir, &request_path))
+        .await
+        .ok()
+        .flatten()
+}
+
+/// Read a prerendered document once and store it under `cache_key`.
+///
+/// Every prerendered strategy funnels its disk read through here so the rule
+/// stays in one place: a prerender directory does not change while a
+/// production server runs, and re-opening the same document per request is the
+/// dominant cost on an otherwise trivial response. Callers consult the render
+/// cache with their own getter first — SSG/CSR/PPR use the TTL getter, ISR
+/// deliberately uses the stale-tolerant one.
+async fn store_prerendered_html(
+    render_cache: &RenderCache,
+    prerender_dir: &Path,
+    request_path: &str,
+    cache_key: &str,
+) -> Option<String> {
+    let html = read_prerendered_html(prerender_dir, request_path).await?;
+    render_cache.put(cache_key.to_string(), html.clone()).await;
+    Some(html)
+}
+
 /// CSR: emit a minimal HTML shell with no server-rendered content.
 /// The page loads entirely in the browser via the client bundle.
 /// In production: serve the pre-built CSR shell HTML.
@@ -443,11 +482,24 @@ async fn render_page_csr(
     params: &RouteParams,
     styles: &str,
 ) -> Result<String> {
-    // In production, serve the pre-rendered CSR shell
-    if !state.config.watch
-        && let Some(html) = serve_prerendered_html(&state.config.prerender_dir, request_path)
-    {
-        return Ok(html);
+    // In production, serve the pre-rendered CSR shell. The disk read is cached
+    // like every other prerendered strategy: without it each request re-opens
+    // and re-reads the same shell file for the life of the process.
+    if !state.config.watch {
+        let cache_key = format!("csr:{}", render_cache::ssr_cache_key(request_path, params));
+        if let Some(cached) = state.render_cache.get(&cache_key).await {
+            return Ok(cached);
+        }
+        if let Some(html) = store_prerendered_html(
+            &state.render_cache,
+            &state.config.prerender_dir,
+            request_path,
+            &cache_key,
+        )
+        .await
+        {
+            return Ok(html);
+        }
     }
 
     let asset_links = public_asset_links(&state.config.public_dir);
@@ -496,16 +548,24 @@ async fn render_page_ppr(
     params: &RouteParams,
     styles: &str,
 ) -> Result<String> {
-    // In production, serve the pre-rendered PPR shell
-    if !state.config.watch
-        && let Some(html) = serve_prerendered_html(&state.config.prerender_dir, request_path)
-    {
-        return Ok(html);
-    }
-
     let cache_key = format!("ppr:{}", render_cache::ssr_cache_key(request_path, params));
     if let Some(cached) = state.render_cache.get(&cache_key).await {
         return Ok(cached);
+    }
+
+    // In production, serve the pre-rendered PPR shell. The cache lookup above
+    // must come first: reading the shell from disk before consulting the cache
+    // made the cache unreachable and re-read the same file on every request.
+    if !state.config.watch
+        && let Some(html) = store_prerendered_html(
+            &state.render_cache,
+            &state.config.prerender_dir,
+            request_path,
+            &cache_key,
+        )
+        .await
+    {
+        return Ok(html);
     }
 
     // PPR mode: render with onShellReady (Suspense boundaries show fallback)
@@ -930,8 +990,11 @@ pub(crate) async fn runtime_trace_cached(
     runtime_cache: &RuntimeCache,
     request_path: &str,
 ) -> Result<RuntimeTrace> {
-    let manifest = runtime_cache.manifest(config).await?;
-    let route_match = find_route(&manifest, request_path);
+    // Use the cached compiled router. Calling `find_route` here rebuilt the
+    // whole radix trie on every trace request even though `runtime_cache`
+    // already holds a compiled one for the same manifest.
+    let (manifest, router) = runtime_cache.router(config).await?;
+    let route_match = router.find(&manifest, request_path);
     let (route, params) = match route_match {
         Some(route_match) => (Some(route_match.route.clone()), route_match.params),
         None => (None, BTreeMap::new()),
@@ -1262,4 +1325,86 @@ fn find_route<'a>(
     request_path: &str,
 ) -> Option<router::RouteMatch<'a>> {
     RadixRouter::compile(manifest).find(manifest, request_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every prerendered strategy owns a distinct cache namespace. A collision
+    /// would let one strategy serve another strategy's document for the same
+    /// request path.
+    #[test]
+    fn prerender_cache_namespaces_do_not_collide() {
+        let params = RouteParams::new();
+        let base = render_cache::ssr_cache_key("/pricing", &params);
+        let keys = [
+            format!("ssg:{base}"),
+            format!("isr:{base}"),
+            format!("csr:{base}"),
+            format!("ppr:{base}"),
+        ];
+
+        let unique = keys.iter().collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(unique.len(), keys.len(), "prerender cache keys must differ");
+    }
+
+    /// The prerendered document must be readable from the render cache after
+    /// one disk read. Deleting the file proves no second read is required:
+    /// before this was shared, CSR read the shell from disk on every request
+    /// and PPR consulted its cache only after the read had already returned.
+    #[tokio::test]
+    async fn prerendered_html_is_read_from_disk_once_then_served_from_cache() {
+        let temp = tempfile::tempdir().unwrap();
+        let prerender_dir = temp.path();
+        let page_dir = prerender_dir.join("pricing");
+        std::fs::create_dir_all(&page_dir).unwrap();
+        std::fs::write(page_dir.join("index.html"), "<h1>pricing</h1>").unwrap();
+
+        let cache = RenderCache::new(8, 60);
+        let cache_key = "csr:ssr:/pricing";
+
+        let first = store_prerendered_html(&cache, prerender_dir, "/pricing", cache_key).await;
+        assert_eq!(first.as_deref(), Some("<h1>pricing</h1>"));
+
+        std::fs::remove_dir_all(&page_dir).unwrap();
+
+        assert_eq!(
+            cache.get(cache_key).await.as_deref(),
+            Some("<h1>pricing</h1>"),
+            "a served prerendered document must survive in the render cache"
+        );
+        assert_eq!(
+            read_prerendered_html(prerender_dir, "/pricing").await,
+            None,
+            "the test removed the file, so a second disk read would have failed"
+        );
+    }
+
+    /// A missing prerendered document must not poison the cache with an entry.
+    #[tokio::test]
+    async fn missing_prerendered_html_is_not_cached() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = RenderCache::new(8, 60);
+
+        assert_eq!(
+            store_prerendered_html(&cache, temp.path(), "/absent", "ppr:ssr:/absent").await,
+            None
+        );
+        assert_eq!(cache.get("ppr:ssr:/absent").await, None);
+    }
+
+    /// The prerender read must run off the async worker thread. `spawn_blocking`
+    /// requires a multi-thread runtime handle; this asserts the wrapper works
+    /// under the same runtime flavor the server uses.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn prerendered_read_runs_off_the_async_worker_thread() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("index.html"), "<p>root</p>").unwrap();
+
+        assert_eq!(
+            read_prerendered_html(temp.path(), "/").await.as_deref(),
+            Some("<p>root</p>")
+        );
+    }
 }

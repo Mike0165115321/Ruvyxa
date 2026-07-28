@@ -933,6 +933,46 @@ export class contentFormat {}
     })
   })
 
+  it('derives a bundle content hash that only moves when the emitted code changes', async () => {
+    // `contentHash` is the ESM import token used by the persistent worker.
+    // Node never releases a loaded module URL, so an unchanged rebuild must
+    // produce an unchanged hash or the worker retains one module graph per
+    // rebuild for the life of the process.
+    await withFixture(async ({ root, outDir }) => {
+      const pageFile = path.join(root, 'content-hash.ts')
+      const outfile = path.join(outDir, 'content-hash.mjs')
+      const build = () =>
+        compileBundleWithMetadata({
+          projectRoot: root,
+          entrySource: `export { value } from ${JSON.stringify(toImportPath(pageFile))}`,
+          sourcefile: 'ruvyxa:content-hash-entry.ts',
+          outfile,
+          platform: 'node',
+        })
+
+      await writeFile(pageFile, "export const value = 'first'\n")
+      const first = await build()
+      assert.match(first.contentHash, /^[a-f0-9]{16}$/)
+
+      clearCompilerCache()
+      const rebuilt = await build()
+      assert.equal(
+        rebuilt.contentHash,
+        first.contentHash,
+        'recompiling unchanged sources must reuse the import token',
+      )
+
+      await writeFile(pageFile, "export const value = 'second'\n")
+      clearCompilerCache()
+      const changed = await build()
+      assert.notEqual(
+        changed.contentHash,
+        first.contentHash,
+        'changed output must produce a new import token',
+      )
+    })
+  })
+
   it('reports stable Sass diagnostics for invalid modules', async () => {
     await withFixture(async ({ root, outDir }) => {
       const pageFile = path.join(root, 'invalid-style.ts')

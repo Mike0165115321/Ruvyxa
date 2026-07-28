@@ -647,3 +647,61 @@ test('streams large binary API responses as bounded frames', async (t) => {
     assert.equal(body[index], index % 251)
   }
 })
+
+test('an unchanged rebuild reuses its module URL instead of retaining a new graph', async (t) => {
+  // Node's ESM loader never releases a module URL. A rebuild that emits
+  // byte-identical output must therefore reuse its previous URL: busting the
+  // cache with a monotonic token retained one whole module graph per rebuild,
+  // and the file watcher rebuilds on every save.
+  const projectRoot = await mkdtemp(path.join(fixtureWorkspace, 'module-url-test-'))
+  const appDir = path.join(projectRoot, 'app/api/value')
+  const routeFile = path.join(appDir, 'route.ts')
+  const utilityFile = path.join(projectRoot, 'lib/value.ts')
+  await mkdir(appDir, { recursive: true })
+  await mkdir(path.dirname(utilityFile), { recursive: true })
+  await writeFile(utilityFile, `export const value = 'first'\n`)
+  await writeFile(
+    routeFile,
+    `import { value } from '../../../lib/value.js'\nexport function GET() { return Response.json({ value }) }\n`,
+  )
+
+  const { request } = startWorker(t, [projectRoot])
+
+  const apiRequest = {
+    type: 'api',
+    projectRoot,
+    routeFile,
+    method: 'GET',
+    requestPath: '/api/value',
+    headers: {},
+    params: {},
+  }
+
+  const first = await request(apiRequest)
+  assert.equal(first.ok, true)
+  const afterFirst = await request({ type: 'ping' })
+  assert.equal(afterFirst.retainedModuleUrls, 1)
+
+  // Rebuild without changing anything the bundle depends on. The bundle cache
+  // is dropped, the compiler re-runs, and the emitted code is identical.
+  const untouched = await request({ type: 'invalidate', paths: [utilityFile] })
+  assert.equal(untouched.ok, true)
+  const repeat = await request(apiRequest)
+  assert.equal(repeat.ok, true)
+  assert.deepEqual(JSON.parse(repeat.body), { value: 'first' })
+  const afterRepeat = await request({ type: 'ping' })
+  assert.equal(
+    afterRepeat.retainedModuleUrls,
+    1,
+    'an identical rebuild must not register a second module URL',
+  )
+
+  // A real source change must still reload: correctness comes before the leak.
+  await writeFile(utilityFile, `export const value = 'second'\n`)
+  await request({ type: 'invalidate', paths: [utilityFile] })
+  const changed = await request(apiRequest)
+  assert.equal(changed.ok, true)
+  assert.deepEqual(JSON.parse(changed.body), { value: 'second' })
+  const afterChange = await request({ type: 'ping' })
+  assert.equal(afterChange.retainedModuleUrls, 2, 'changed output must load under a new module URL')
+})

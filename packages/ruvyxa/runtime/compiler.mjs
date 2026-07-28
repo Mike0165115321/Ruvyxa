@@ -169,6 +169,12 @@ export async function compileBundleWithMetadata({
   }
   return {
     outfile,
+    // Hash of the emitted bundle, used as the ESM import version token. Two
+    // builds that emit identical code must resolve to the same import URL:
+    // Node never releases a module URL once it is loaded, so a token that
+    // changes on every rebuild retains one module graph per rebuild for the
+    // life of the process.
+    contentHash: createHash('sha256').update(linked.code).digest('hex').slice(0, 16),
     dependencyHash: await fingerprintProjectInputs(root, modules),
     inputs: projectInputPaths(root, modules),
   }

@@ -109,11 +109,14 @@ const bundleCache = new LRUCache(MAX_BUNDLE_CACHE_ENTRIES)
 // Cache key -> normalized absolute project files used to build that bundle.
 const bundleInputs = new Map()
 const bundleFingerprints = new Map()
+// Cache key -> content hash of the emitted bundle. This is the ESM import
+// version token; see `importModule`.
+const bundleVersions = new Map()
 const buildLocks = new Map()
 
 // Performance: Module import cache — avoids re-parsing JS on every request.
-// Key: absolute outfile path, Value: imported module object.
-// Invalidated only when the bundle is re-built.
+// Key: `<outfile>?<version>`, Value: imported module object.
+// A rebuild that changes the emitted code changes the version and misses here.
 const moduleCache = new LRUCache(MAX_BUNDLE_CACHE_ENTRIES)
 
 // Performance: Track directories already created to skip mkdir syscalls.
@@ -127,6 +130,12 @@ const reactResolvedRoots = new Set()
 // If two SSR requests for the same page arrive concurrently, only one
 // actually renders; the second awaits the same Promise.
 const renderCoalesceMap = new Map()
+
+// Every module URL this process has imported. Node's ESM loader never releases
+// a loaded URL, so this set's size is the number of module graphs the process
+// is retaining and can never free. Reported by `ping` so the cost is
+// measurable rather than inferred from heap growth.
+const registeredModuleUrls = new Set()
 
 let activeRequests = 0
 let isShuttingDown = false
@@ -227,6 +236,8 @@ async function dispatchRequest(request) {
         pong: true,
         cacheSize: bundleCache.size,
         moduleCacheSize: moduleCache.size,
+        // Module graphs retained by Node's ESM registry for this process.
+        retainedModuleUrls: registeredModuleUrls.size,
         activeRequests,
         coalesceMapSize: renderCoalesceMap.size,
         workerRequestTimeoutMs: WORKER_REQUEST_TIMEOUT_MS,
@@ -338,16 +349,35 @@ async function ensureDir(dir) {
 
 // --- Fast module import (cached) ---
 // Avoids V8 re-parsing the same JS file on every request.
-// Only cache-busts when the bundle is freshly built.
-async function importModule(outfile, forceReload = false) {
-  if (!forceReload) {
-    const cached = moduleCache.get(outfile)
-    if (cached) return cached
-  }
-  // Use timestamp only when we need to bust Node's ESM cache
-  const mod = await import(pathToFileURL(outfile).href + `?t=${++moduleImportVersion}`)
-  moduleCache.set(outfile, mod)
+//
+// `version` is the content hash of the emitted bundle, not a counter. Node's
+// ESM loader keeps every distinct module URL in its registry for the life of
+// the process and offers no way to evict one, so a monotonic token leaks one
+// whole module graph per rebuild — including the common dev case where a save
+// invalidates the bundle cache but the recompiled output is byte-identical.
+// Keying on content means only a genuinely changed bundle adds a registry
+// entry, which is the floor Node's loader allows.
+async function importModule(outfile, version) {
+  const cacheKey = `${outfile}?${version}`
+  const cached = moduleCache.get(cacheKey)
+  if (cached) return cached
+  const url = `${pathToFileURL(outfile).href}?v=${version}`
+  // Every distinct URL costs one permanently retained module graph. Counting
+  // them makes that cost observable through `ping` instead of only visible as
+  // unexplained heap growth.
+  registeredModuleUrls.add(url)
+  const mod = await import(url)
+  moduleCache.set(cacheKey, mod)
   return mod
+}
+
+/// Version token for a build-isolated import.
+///
+/// Production prerendering asks for a fresh module per path so page-module
+/// state cannot leak between paths. That isolation requires a distinct URL, so
+/// it keeps the monotonic counter and pays the registry cost deliberately.
+function isolatedVersion(version) {
+  return `${version}.${++moduleImportVersion}`
 }
 
 // --- Fast React resolution (cached per project root) ---
@@ -400,14 +430,14 @@ async function handleWarmup(request) {
             : null
           // Warmup must produce the same bundle a real request will ask for,
           // or the cache key differs and the warm module is never reused.
-          const { outfile } = await bundleSsrModule(
+          const { outfile, version } = await bundleSsrModule(
             resolvedRoot,
             route.pageFile,
             layouts,
             route.routePath || '/',
             specials,
           )
-          await importModule(outfile, false)
+          await importModule(outfile, version)
           warmed++
         }
       } catch {
@@ -437,14 +467,14 @@ async function handleSsr(request) {
   const specials = collectSpecials(appDir, path.dirname(pageFile))
   // The route pattern, not the concrete URL: it keys the client-side route
   // registry, and a per-URL key would make every dynamic request a cache miss.
-  const { outfile, freshBuild } = await bundleSsrModule(
+  const { outfile, version } = await bundleSsrModule(
     resolvedRoot,
     pageFile,
     layouts,
     routePath || requestPath,
     specials,
   )
-  const mod = await importModule(outfile, freshBuild)
+  const mod = await importModule(outfile, version)
   const html = await mod.render({ path: requestPath, params: params || {} })
 
   return { ok: true, html }
@@ -477,7 +507,7 @@ async function handleSsg(request) {
 
   const layouts = collectLayouts(appDir, path.dirname(pageFile))
   const specials = collectSpecials(appDir, path.dirname(pageFile))
-  const { outfile, freshBuild, dependencyHash, inputs } = await bundleSsgModule(
+  const { outfile, version, dependencyHash, inputs } = await bundleSsgModule(
     resolvedRoot,
     pageFile,
     layouts,
@@ -485,7 +515,7 @@ async function handleSsg(request) {
     routePath || requestPath,
     specials,
   )
-  const mod = await importModule(outfile, freshBuild || fresh)
+  const mod = await importModule(outfile, fresh ? isolatedVersion(version) : version)
   const html = await mod.render({ path: requestPath, params: params || {} })
 
   return { ok: true, html, dependencyHash, inputs }
@@ -515,12 +545,12 @@ async function handleStaticParams(request) {
     .update(JSON.stringify({ routePath, segments, routes }))
     .digest('hex')
 
-  const { freshBuild, dependencyHash } = await withBuildLock(cacheKey, async () => {
+  const { version, dependencyHash } = await withBuildLock(cacheKey, async () => {
     const cached = bundleCache.get(cacheKey)
     if (cached) {
       return {
         outfile: cached,
-        freshBuild: false,
+        version: bundleVersions.get(cacheKey),
         dependencyHash: bundleFingerprints.get(cacheKey),
       }
     }
@@ -534,14 +564,21 @@ async function handleStaticParams(request) {
       external: ['react', 'react/jsx-runtime', 'react-dom/server', 'node:stream'],
       aliases: runtimeAliases(runtimeDir),
     })
-    cacheBundle(cacheKey, outfile, resolvedRoot, bundle.inputs, bundle.dependencyHash)
-    return { outfile, freshBuild: true, dependencyHash: bundle.dependencyHash }
+    cacheBundle(
+      cacheKey,
+      outfile,
+      resolvedRoot,
+      bundle.inputs,
+      bundle.dependencyHash,
+      bundle.contentHash,
+    )
+    return { outfile, version: bundle.contentHash, dependencyHash: bundle.dependencyHash }
   })
 
   const cachedParams = await readStaticParamsCache(paramsCacheFile, dependencyHash, contextHash)
   if (cachedParams) return { ok: true, params: cachedParams, cached: true }
 
-  const mod = await importModule(outfile, freshBuild)
+  const mod = await importModule(outfile, version)
   const context = {
     routes,
     route: { path: routePath, segments },
@@ -665,8 +702,8 @@ async function handleApi(request) {
   } = request
 
   const resolvedRoot = path.resolve(projectRoot || process.cwd())
-  const { outfile, freshBuild } = await bundleApiModule(resolvedRoot, routeFile)
-  const mod = await importModule(outfile, freshBuild)
+  const { outfile, version } = await bundleApiModule(resolvedRoot, routeFile)
+  const mod = await importModule(outfile, version)
   const handler = mod[method.toUpperCase()]
 
   if (typeof handler !== 'function') {
@@ -738,8 +775,8 @@ async function handleAction(request) {
   } = request
 
   const resolvedRoot = path.resolve(projectRoot || process.cwd())
-  const { outfile, freshBuild } = await bundleActionModule(resolvedRoot, actionFile)
-  const mod = await importModule(outfile, freshBuild)
+  const { outfile, version } = await bundleActionModule(resolvedRoot, actionFile)
+  const mod = await importModule(outfile, version)
   const action = mod[actionName]
 
   if (typeof action !== 'function' || action.ruvyxa?.kind !== 'action') {
@@ -863,6 +900,7 @@ function invalidateBundleCache(paths) {
     bundleCache.clear()
     bundleInputs.clear()
     bundleFingerprints.clear()
+    bundleVersions.clear()
     moduleCache.clear()
     buildLocks.clear()
     return { invalidated }
@@ -894,13 +932,15 @@ function normalizeAbsolutePath(file) {
   return path.resolve(file).replaceAll('\\', '/')
 }
 
-function cacheBundle(cacheKey, outfile, projectRoot, inputs, dependencyHash) {
+function cacheBundle(cacheKey, outfile, projectRoot, inputs, dependencyHash, contentHash) {
   const evicted = bundleCache.set(cacheKey, outfile)
   if (evicted) {
     bundleInputs.delete(evicted.key)
     bundleFingerprints.delete(evicted.key)
-    if (evicted.value) moduleCache.delete(evicted.value)
+    dropModuleCacheEntries(evicted.key, evicted.value)
+    bundleVersions.delete(evicted.key)
   }
+  if (contentHash) bundleVersions.set(cacheKey, contentHash)
   bundleInputs.set(
     cacheKey,
     new Set((inputs ?? []).map((input) => normalizeAbsolutePath(path.join(projectRoot, input)))),
@@ -913,7 +953,16 @@ function deleteBundleCacheEntry(cacheKey) {
   bundleInputs.delete(cacheKey)
   bundleFingerprints.delete(cacheKey)
   buildLocks.delete(cacheKey)
-  if (outfile) moduleCache.delete(outfile)
+  dropModuleCacheEntries(cacheKey, outfile)
+  bundleVersions.delete(cacheKey)
+}
+
+// The module cache is keyed by `<outfile>?<version>`, so a bundle eviction has
+// to drop the entry for the version that bundle was last built at.
+function dropModuleCacheEntries(cacheKey, outfile) {
+  if (!outfile) return
+  const version = bundleVersions.get(cacheKey)
+  if (version) moduleCache.delete(`${outfile}?${version}`)
 }
 
 // --- Shared Utilities ---
@@ -963,8 +1012,10 @@ function specialEntryParts(specials) {
   return { imports, names }
 }
 
-// --- Bundle functions now return { outfile, freshBuild } ---
-// freshBuild=true means V8 module cache needs busting
+// --- Bundle functions return { outfile, version } ---
+// `version` is the content hash of the emitted bundle and is the ESM import
+// token. Identical output keeps the same token, so no new module URL is
+// registered; changed output produces a new token and a genuine reload.
 
 async function bundleSsrModule(projectRoot, pageFile, layouts, routePath = '/', specials = null) {
   const cacheDir = path.join(projectRoot, '.ruvyxa', 'cache', 'ssr')
@@ -996,11 +1047,11 @@ async function bundleSsrModule(projectRoot, pageFile, layouts, routePath = '/', 
 
   const cacheKey = `ssr:${pageFile}:${hash}`
   const cached = bundleCache.get(cacheKey)
-  if (cached) return { outfile: cached, freshBuild: false }
+  if (cached) return { outfile: cached, version: bundleVersions.get(cacheKey) }
 
   return withBuildLock(cacheKey, async () => {
     const rechecked = bundleCache.get(cacheKey)
-    if (rechecked) return { outfile: rechecked, freshBuild: false }
+    if (rechecked) return { outfile: rechecked, version: bundleVersions.get(cacheKey) }
 
     const bundle = await compileBundleWithMetadata({
       projectRoot,
@@ -1012,8 +1063,8 @@ async function bundleSsrModule(projectRoot, pageFile, layouts, routePath = '/', 
       aliases: runtimeAliases(runtimeDir),
     })
 
-    cacheBundle(cacheKey, outfile, projectRoot, bundle.inputs)
-    return { outfile, freshBuild: true }
+    cacheBundle(cacheKey, outfile, projectRoot, bundle.inputs, null, bundle.contentHash)
+    return { outfile, version: bundle.contentHash }
   })
 }
 
@@ -1027,11 +1078,11 @@ async function bundleApiModule(projectRoot, routeFile) {
 
   const cacheKey = `api:${routeFile}:${hash}`
   const cached = bundleCache.get(cacheKey)
-  if (cached) return { outfile: cached, freshBuild: false }
+  if (cached) return { outfile: cached, version: bundleVersions.get(cacheKey) }
 
   return withBuildLock(cacheKey, async () => {
     const rechecked = bundleCache.get(cacheKey)
-    if (rechecked) return { outfile: rechecked, freshBuild: false }
+    if (rechecked) return { outfile: rechecked, version: bundleVersions.get(cacheKey) }
 
     const bundle = await compileBundleWithMetadata({
       projectRoot,
@@ -1042,8 +1093,8 @@ async function bundleApiModule(projectRoot, routeFile) {
       aliases: runtimeAliases(runtimeDir),
     })
 
-    cacheBundle(cacheKey, outfile, projectRoot, bundle.inputs)
-    return { outfile, freshBuild: true }
+    cacheBundle(cacheKey, outfile, projectRoot, bundle.inputs, null, bundle.contentHash)
+    return { outfile, version: bundle.contentHash }
   })
 }
 
@@ -1057,11 +1108,11 @@ async function bundleActionModule(projectRoot, actionFile) {
 
   const cacheKey = `action:${actionFile}:${hash}`
   const cached = bundleCache.get(cacheKey)
-  if (cached) return { outfile: cached, freshBuild: false }
+  if (cached) return { outfile: cached, version: bundleVersions.get(cacheKey) }
 
   return withBuildLock(cacheKey, async () => {
     const rechecked = bundleCache.get(cacheKey)
-    if (rechecked) return { outfile: rechecked, freshBuild: false }
+    if (rechecked) return { outfile: rechecked, version: bundleVersions.get(cacheKey) }
 
     const bundle = await compileBundleWithMetadata({
       projectRoot,
@@ -1072,8 +1123,8 @@ async function bundleActionModule(projectRoot, actionFile) {
       aliases: runtimeAliases(runtimeDir),
     })
 
-    cacheBundle(cacheKey, outfile, projectRoot, bundle.inputs)
-    return { outfile, freshBuild: true }
+    cacheBundle(cacheKey, outfile, projectRoot, bundle.inputs, null, bundle.contentHash)
+    return { outfile, version: bundle.contentHash }
   })
 }
 
@@ -1115,11 +1166,11 @@ async function bundleClientModule(
 
   const cacheKey = `client:${pageFile}:${hash}`
   const cached = bundleCache.get(cacheKey)
-  if (cached) return { outfile: cached, freshBuild: false }
+  if (cached) return { outfile: cached, version: bundleVersions.get(cacheKey) }
 
   return withBuildLock(cacheKey, async () => {
     const rechecked = bundleCache.get(cacheKey)
-    if (rechecked) return { outfile: rechecked, freshBuild: false }
+    if (rechecked) return { outfile: rechecked, version: bundleVersions.get(cacheKey) }
 
     const bundle = await compileBundleWithMetadata({
       projectRoot,
@@ -1131,8 +1182,8 @@ async function bundleClientModule(
       aliases: runtimeAliases(runtimeDir),
     })
 
-    cacheBundle(cacheKey, outfile, projectRoot, bundle.inputs)
-    return { outfile, freshBuild: true }
+    cacheBundle(cacheKey, outfile, projectRoot, bundle.inputs, null, bundle.contentHash)
+    return { outfile, version: bundle.contentHash }
   })
 }
 
@@ -1185,7 +1236,7 @@ async function bundleSsgModule(
   if (cached) {
     return {
       outfile: cached,
-      freshBuild: false,
+      version: bundleVersions.get(cacheKey),
       dependencyHash: bundleFingerprints.get(cacheKey),
       inputs: [...(bundleInputs.get(cacheKey) ?? [])],
     }
@@ -1196,7 +1247,7 @@ async function bundleSsgModule(
     if (rechecked) {
       return {
         outfile: rechecked,
-        freshBuild: false,
+        version: bundleVersions.get(cacheKey),
         dependencyHash: bundleFingerprints.get(cacheKey),
         inputs: [...(bundleInputs.get(cacheKey) ?? [])],
       }
@@ -1212,10 +1263,17 @@ async function bundleSsgModule(
       aliases: runtimeAliases(runtimeDir),
     })
 
-    cacheBundle(cacheKey, outfile, projectRoot, bundle.inputs, bundle.dependencyHash)
+    cacheBundle(
+      cacheKey,
+      outfile,
+      projectRoot,
+      bundle.inputs,
+      bundle.dependencyHash,
+      bundle.contentHash,
+    )
     return {
       outfile,
-      freshBuild: true,
+      version: bundle.contentHash,
       dependencyHash: bundle.dependencyHash,
       inputs: [...(bundleInputs.get(cacheKey) ?? [])],
     }
