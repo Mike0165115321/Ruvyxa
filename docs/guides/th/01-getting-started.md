@@ -1,8 +1,8 @@
 # เริ่มต้นใช้งาน Ruvyxa
 
-Ruvyxa คือ React full-stack framework สำหรับ production พัฒนาให้ dev experience ดีที่สุด รองรับ
-marketing site, SaaS dashboard, blog, API backend — ใช้เครื่องมือชุดเดียว ควบคุมทุกอย่างได้
-ไม่ต้องต่อ framework หลายตัว
+Ruvyxa คือ full-stack framework สำหรับ production พัฒนาให้ dev experience ดีที่สุด รองรับ marketing
+site, SaaS dashboard, blog, API backend — ใช้เครื่องมือชุดเดียว ควบคุมทุกอย่างได้ ไม่ต้องต่อ
+framework หลายตัว
 
 คู่มือนี้ให้คุณตั้งแต่ศูนย์ถึงแอปที่รันได้จริง พร้อมรายละเอียดทุก API และทุกการตั้งค่า
 

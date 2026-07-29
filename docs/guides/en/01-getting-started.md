@@ -1,8 +1,8 @@
 # Getting Started with Ruvyxa
 
-Welcome to Ruvyxa — a React full-stack framework that puts developer experience first. Whether you
-are building a marketing site, a SaaS dashboard, a blog, or an API backend, Ruvyxa gives you the
-tools to ship fast without sacrificing control.
+Welcome to Ruvyxa — a full-stack framework that puts developer experience first. Whether you are
+building a marketing site, a SaaS dashboard, a blog, or an API backend, Ruvyxa gives you the tools
+to ship fast without sacrificing control.
 
 This guide walks you from zero to your first running app in about 10 minutes.
 

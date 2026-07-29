@@ -1,9 +1,9 @@
 # การจัดการ Error ใน Ruvyxa
 
 Ruvyxa ใช้ระบบ error codes แบบ `RUV####` เพื่อให้นักพัฒนาแก้ไขปัญหาได้รวดเร็ว error ทุกตัวมี code,
-ชื่อ, คำอธิบาย, error text ที่แสดง, และวิธีแก้ไขที่ชัดเจน
+ชื่อ, คำอธิบาย, และวิธีแก้ไขที่ชัดเจน
 
-ระบบ error codes ครอบคลุมตั้งแต่ build-time (config, compilation, boundary) ไปจนถึง runtime (server,
+ระบบ error codes ครอบคลุมตั้งแต่ build-time (boundary, config, compilation) ไปจนถึง runtime (server,
 worker, plugin, deploy)
 
 ---
@@ -11,64 +11,124 @@ worker, plugin, deploy)
 ## Error Code ช่วง
 
 ```
-RUV1000-1099  →  Boundary errors     — server/client boundary, env, hooks
-RUV1100-1199  →  Route errors        — ambiguous routes, parameters, conflicts
-RUV1200-1299  →  Config errors       — validation, unknown fields, type mismatch
-RUV1300-1399  →  Build errors        — compilation, resolution, bundle, timeout
-RUV1400-1499  →  Server errors       — runtime, worker pool, cache, actions, API
-RUV1500-1599  →  Worker errors       — crash, timeout, protocol, init, socket
-RUV1600-1699  →  Plugin errors       — config invalid, out of range, not found, hook
-RUV1700-1799  →  Deploy errors       — adapter, bundle budget, artifacts, incompatibility
+RUV1000-1099  →  Boundary / Graph      — server/client boundary, env leak, route discovery
+RUV1100-1199  →  SSR / Render           — React SSR, renderer discovery
+RUV1200-1299  →  API / Server Runtime   — API route, port binding, renderer
+RUV1300-1399  →  Bundle / Compilation   — hydration bundling, client route, MDX
+RUV1400-1499  →  Style                  — Tailwind, Sass, CSS entries
+RUV1500-1599  →  Worker / Static Params — render worker, actions, static params, PPR
+RUV1600-1699  →  Config / Adapter       — config loading, validation, range, build()
+RUV1700-1799  →  Plugin Bridge          — plugin hook timeout, protocol, worker pool
+RUV1800-1899  →  JS Runtime             — module resolution, Oxc transform, circular deps
+RUV2000-2200  →  Adapter / Plugin Def   — BuildContext, options, definePlugin, build hook
+RUV3000-3201  →  Official Packages      — database, auth, realtime
 ```
 
 ---
 
-## RUV1000-1099: Boundary Errors
+## RUV1000-1099: Boundary Violations
 
 ข้อผิดพลาดเกี่ยวกับ server/client boundary violation — ป้องกันไม่ให้ server code รั่วไหลไปยัง client
 
-### RUV1000: Missing Use Client Directive
+### RUV1001: ไม่พบไดเรกทอรี app
+
+**Title**: App directory not found
+
+**คำอธิบาย**: Ruvyxa ไม่พบไดเรกทอรี `app/` ใน project root — ไม่สามารถค้นหา route ได้
+
+**Error text**: `RUV1001: App directory not found at <path>`
+
+**วิธีแก้**: สร้างไดเรกทอรี `app/` ใน project root หรือกำหนด `appDir` ใน config
+
+### RUV1002: Segment route dynamic ไม่ถูกต้อง
+
+**Title**: Invalid dynamic route segment
+
+**คำอธิบาย**: ชื่อ segment dynamic ใน route ไม่ถูกต้อง — เช่น ใช้อักขระพิเศษหรือรูปแบบผิด
+
+```
+RUV1002: Invalid dynamic route segment
+
+  Segment: [slug#bad]
+  Route: /blog/[slug#bad]
+  File: app/blog/[slug#bad]/page.tsx
+
+  Fix: ใช้รูปแบบ [param], [...param], หรือ [[...param]] เท่านั้น
+```
+
+**วิธีแก้**: เปลี่ยนชื่อ segment ให้ใช้รูปแบบที่รองรับ: `[param]`, `[...param]`, `[[...param]]`
+
+### RUV1003: เส้นทาง route ขัดแย้งกัน
+
+**Title**: Ambiguous route path
+
+**คำอธิบาย**: สองไฟล์ match URL เดียวกัน — Ruvyxa ไม่รู้ว่าจะใช้ไฟล์ไหน
+
+```
+RUV1003: Ambiguous route
+
+  Route: /products/[id]
+  Files:
+    app/products/[id]/page.tsx
+    app/products/[slug]/page.tsx
+
+  Both files match the same URL pattern like /products/123.
+
+  Fix: Rename one of the conflicting dynamic segments so
+       they have different parameter names.
+```
+
+**Edge cases**:
+
+- `page.tsx` + `index.tsx` ในโฟลเดอร์เดียวกัน
+- Group route ที่ซ้อนทับ
+- Static route + dynamic route ที่ path เดียวกัน
+
+**วิธีแก้**: ลบ หรือเปลี่ยนชื่อไฟล์ที่ซ้ำ — เหลือเพียงไฟล์เดียว
+
+### RUV1004: Page ไม่มี default export
+
+**Title**: Page missing default export
+
+**คำอธิบาย**: ไฟล์ page ไม่มี `export default` component — Ruvyxa ไม่สามารถ render หน้านี้ได้
+
+```
+RUV1004: Page is missing a default export
+
+  File: app/about/page.tsx
+
+  Fix: Add `export default function Page() { ... }`
+```
+
+**วิธีแก้**: เพิ่ม default export component ในไฟล์ page
 
 ```tsx
-// app/page.tsx
-import { useState } from 'react' // RUV1000
-
-export default function Page() {
-  const [count, setCount] = useState(0) // ต้องใช้ 'use client'
-  return <div>{count}</div>
+// app/about/page.tsx
+export default function AboutPage() {
+  return <div>About</div>
 }
 ```
 
-**Title**: Missing `'use client'` directive
+### RUV1007: โมดูล server-only ถูก import ใน client graph
 
-**คำอธิบาย**: Server component ใช้ React hooks (`useState`, `useEffect`, `useContext` ฯลฯ) โดยไม่มี
-`'use client'` directive ที่ด้านบนของไฟล์
+**Title**: Server-only module imported in client bundle
 
-**Error text**: `RUV1000: Component uses React hooks but is missing 'use client' directive`
+**คำอธิบาย**: Client component import โมดูลที่ใช้ server-only code (database, env, server modules)
 
-**วิธีแก้**: เพิ่ม `'use client'` เป็นบรรทัดแรกของไฟล์
-
-```tsx
-'use client' // ← เพิ่มตรงนี้
-
-import { useState } from 'react'
-// ...
 ```
+RUV1007: Private import
 
-### RUV1001: Private Import in Client Component
+  Package: @ruvyxa/database
+  File: app/components/UserList.tsx:1
+  Import chain:
+    app/components/UserList.tsx (client)
+    app/lib/db.ts
 
-```tsx
-'use client'
+  Server-only packages cannot be imported in client bundles.
 
-// app/page.tsx
-import { serverOnlyFunction } from './server-only' // RUV1001
+  Fix: Move the database access to a server action or
+       use @ruvyxa/auth/client instead of @ruvyxa/auth.
 ```
-
-**Title**: Private server import in client component
-
-**คำอธิบาย**: Client component import ไฟล์ที่ใช้ server-only code (database, env, server modules)
-
-**Error text**: `RUV1001: Client component imports server-only module: <path>`
 
 **Edge cases**:
 
@@ -80,162 +140,30 @@ import { serverOnlyFunction } from './server-only' // RUV1001
 
 - ย้าย import ที่ผิดออกไป
 - ใช้ server action (`'use server'`) แทน direct import
-- ถ้าต้องการ import จริงๆ — แยก server logic ไว้ใน `server/` directory
+- ใช้ `/client` subpath สำหรับ packages ที่มี
 
-### RUV1002: Client Hook in Server Component
+### RUV1008: ตัวแปร env ส่วนบุคคลรั่วไหลไปยัง client bundle
 
-```tsx
-// app/page.tsx (server component — ไม่มี 'use client')
-import { useState } from 'react' // RUV1002
-```
-
-**Title**: Client hook used in server component
-
-**คำอธิบาย**: Server component ใช้ React hooks ที่ต้องทำงานใน client
-
-**Error text**: `RUV1002: Client hook {hookName} cannot be used in a server component`
-
-**วิธีแก้**:
-
-- เพิ่ม `'use client'` directive ที่ด้านบนของไฟล์
-- หรือแยกส่วนที่ใช้ hooks ออกเป็น client component ย่อย
-
-### RUV1003: Ambiguous Route
-
-```
-app/
-  blog/
-    page.tsx    → /blog
-    index.tsx   → /blog  (ซ้ำกับ page.tsx)
-```
-
-**Title**: Ambiguous route path
-
-**คำอธิบาย**: สองไฟล์ match URL เดียวกัน — Ruvyxa ไม่รู้ว่าจะใช้ไฟล์ไหน
-
-**Error text**: `RUV1003: Ambiguous route: <path> matched by both <file1> and <file2>`
-
-**Edge cases**:
-
-- `page.tsx` + `index.tsx` ในโฟลเดอร์เดียวกัน
-- `route.ts` + `page.tsx` ใน path เดียวกัน
-- Group route ที่ซ้อนทับ
-
-**วิธีแก้**: ลบ หรือเปลี่ยนชื่อไฟล์ที่ซ้ำ — เหลือเพียงไฟล์เดียว
-
-### RUV1004: Duplicate Route Parameter
-
-```
-app/
-  blog/
-    [slug]/
-      [slug]/
-        page.tsx  → /blog/:slug/:slug (ซ้ำ)
-```
-
-**Title**: Duplicate route parameter name
-
-**คำอธิบาย**: พารามิเตอร์ซ้ำใน path เดียวกัน (ชื่อเหมือนกันใน 2 segments)
-
-**Error text**: `RUV1004: Duplicate route parameter: <param> used in both <segment1> and <segment2>`
-
-**Edge cases**:
-
-- `[slug]/[slug]` — ชื่อซ้ำใน parent-child
-- `[...slug]/[slug]` — catch-all + ปกติ ซ้ำ
-- `[slug]/[slug]/page.tsx` — ชื่อซ้ำ
-
-**วิธีแก้**: เปลี่ยนชื่อพารามิเตอร์ให้ต่างกัน เช่น `[slug]/[postId]`
-
-### RUV1005: Missing SEO Metadata
-
-**Title**: Missing SEO metadata
-
-**คำอธิบาย**: หน้าไม่มี `Meta` หรือ `Seo` component — อาจส่งผลต่อ SEO
-
-**Error text**: `RUV1005: Route <path> is missing SEO metadata` (warning — ไม่ fail build)
-
-**วิธีแก้**: เพิ่ม `<Meta>` component หรือ export metadata object:
-
-```ts
-// app/blog/[slug]/page.tsx
-import { Meta } from '@ruvyxa/react';
-
-export const metadata = {
-  title: 'บทความ',
-  description: 'คำอธิบาย',
-};
-
-// หรือ
-export default function Page() {
-  return (
-    <>
-      <Meta title="บทความ" description="คำอธิบาย" />
-      <article>...</article>
-    </>
-  );
-}
-```
-
-### RUV1006: Missing Layout
-
-**Title**: Missing layout file
-
-**คำอธิบาย**: ต้องการ layout แต่ไม่พบไฟล์ `layout.tsx` ในโฟลเดอร์นั้น (เช่น route group ที่พยายามใช้
-layout)
-
-**Error text**: `RUV1006: Required layout not found in <path>`
-
-**วิธีแก้**: สร้าง `layout.tsx`:
-
-```tsx
-// app/(marketing)/layout.tsx
-export default function MarketingLayout({ children }: { children: React.ReactNode }) {
-  return <div className="marketing">{children}</div>
-}
-```
-
-### RUV1007: Client Boundary Violation (Import Chain)
-
-```tsx
-// app/page.tsx → utils/api.ts → server/db.ts
-//                                  ↑ server-only ไปถึง client
-```
-
-**Title**: Client boundary violation via import chain
-
-**คำอธิบาย**: Import chain จาก client component ไปถึง server-only module — Ruvyxa ตรวจสอบ dependency
-graph ทั้งหมด
-
-**Error text**: `RUV1007: Client boundary violation: <client> → <intermediate> → <server-only>`
-
-**Edge cases**:
-
-- Chain ยาว 10 ไฟล์ — Ruvyxa ตรวจทุก node
-- Barrel imports (`index.ts` ที่ re-export)
-- Dynamic imports (`const mod = await import('./server-only')`)
-
-**วิธีแก้**:
-
-- ใช้ `'use server'` action แทน direct import
-- แยก server logic ไว้ใน `server/` directory ที่ Ruvyxa mark เป็น server-only
-- ใช้ `ruvyxa check` เพื่อหา boundary violations ก่อน build
-
-### RUV1008: Private Environment Variable in Client
-
-```tsx
-'use client'
-
-// ❌
-const dbUrl = process.env.DATABASE_URL // RUV1008
-```
-
-**Title**: Private environment variable exposed to client
+**Title**: Private environment variable leaked to client bundle
 
 **คำอธิบาย**: ตัวแปร environment ที่ไม่มี `RUVYXA_PUBLIC_` prefix ถูกใช้ใน client —
 เสี่ยง泄露 secret
 
-**Error text**: `RUV1008: Private environment variable <name> is exposed to client code`
+```
+RUV1008: Private environment variable leaked to client bundle
+
+  Variable: DATABASE_URL
+  File: app/components/UserCard.tsx:12
+
+  ⚠ This variable is NOT prefixed with RUVYXA_PUBLIC_.
+    It will be inlined in the client bundle and exposed to users.
+
+  Fix:
+    1. If this value is safe for clients, rename it to
+       RUVYXA_PUBLIC_DATABASE_URL in your .env file.
+    2. If this value must remain secret, move the usage
+       to a server component, API route, or server action.
+```
 
 **วิธีแก้**:
 
@@ -246,1085 +174,776 @@ const dbUrl = process.env.DATABASE_URL // RUV1008
 ```tsx
 'use client'
 
+// ❌ อันตราย
+const dbUrl = process.env.DATABASE_URL // RUV1008
+
 // ✅ ปลอดภัย
 const apiUrl = process.env.RUVYXA_PUBLIC_API_URL
 ```
 
-### RUV1009: Server-only Hook in Server Component
+### RUV1009: โมดูล client-only ถูก import ใน server graph
 
-```tsx
-// app/page.tsx (server component)
-export default function Page() {
-  useEffect(() => {
-    // RUV1009 — useEffect ต้องใช้ใน client
-    console.log('mounted')
-  }, [])
-  return <div>Hello</div>
-}
+**Title**: Client-only module imported in SSR graph
+
+**คำอธิบาย**: Server component import โมดูลที่ใช้ browser APIs — ไม่สามารถ render บน server ได้
+
+```
+RUV1009: Client-only module imported into SSR graph
+
+  File: app/components/Map.tsx:1
+  Import: leaflet
+
+  This module uses browser APIs and cannot be rendered on the server.
+
+  Fix: Use dynamic import with `{ ssr: false }` or wrap
+       in a client component boundary.
 ```
 
-**Title**: Server-only hook used in component
+**วิธีแก้**: ใช้ dynamic import with `{ ssr: false }` หรือแยก client component
 
-**คำอธิบาย**: Server component ใช้ React hook ที่ต้องมี `'use client'`
+### RUV1010: ไฟล์ในไดเรกทอรี server/ ถึง client graph ได้
 
-**Error text**: `RUV1009: Hook <hookName> is not available in server components`
+**Title**: File inside server/ directory reachable by client graph
 
-**Hooks ที่โดนตรวจ**: `useState`, `useEffect`, `useContext`, `useReducer`, `useCallback`, `useMemo`,
-`useRef`, `useImperativeHandle`, `useLayoutEffect`, `useDebugValue`, `useDeferredValue`,
-`useTransition`, `useSyncExternalStore`, `useId`
+**คำอธิบาย**: ไฟล์ที่อยู่ใน `server/` directory ถู import จาก client component — `server/` ต้องเป็น
+server-only
 
-**วิธีแก้**: เพิ่ม `'use client'` directive หรือแยก client component
+```
+RUV1010: File inside server/ directory reachable by client graph
 
-### RUV1010: Missing Server Action Directive
+  File: app/server/db.ts
+  Imported in: app/components/List.tsx
 
-```ts
-// app/actions.ts
-export async function createUser(data: FormData) {
-  'use server' // ต้องอยู่บรรทัดแรกของ function
-}
+  Files inside server/ directories must only be imported
+  from server components.
+
+  Fix: Move the shared logic to a file outside server/,
+       or restructure to avoid importing it from client code.
 ```
 
-**Title**: Missing `'use server'` directive in server action
-
-**คำอธิบาย**: ฟังก์ชันที่ใช้ `action()` wrapper หรือเรียกจาก client ต้องมี `'use server'` directive
-
-**Error text**: `RUV1010: Server action is missing 'use server' directive`
-
-**วิธีแก้**: เพิ่ม `'use server'` เป็นบรรทัดแรกของ function หรือเป็นบรรทัดแรกของไฟล์
+**วิธีแก้**: ย้าย shared logic ไปไว้นอก `server/` หรือปรับโครงสร้าง import
 
 ---
 
-## RUV1100-1199: Route Errors
+## RUV1100-1199: SSR / Render Errors
 
-ข้อผิดพลาดเกี่ยวกับ route system — การค้นหาและ resolve route
+ข้อผิดพลาดเกี่ยวกับ server-side rendering และ renderer discovery
 
-### RUV1100: Route File Not Found
+### RUV1100: React SSR ล้มเหลว
 
-**Title**: Route file not found
+**Title**: React SSR failed
 
-**คำอธิบาย**: Ruvyxa ไม่พบ route file สำหรับ path ที่ร้องขอ — generic 404
+**คำอธิบาย**: React server-side rendering ล้มเหลว — component error ระหว่าง render บน server
 
-**Error text**: `RUV1100: Route file not found for path <path>`
+**Error text**: `RUV1100: React SSR failed for route <path>: <detail>`
 
-**วิธีแก้**: ตรวจสอบว่าไฟล์อยู่ใน `app/` directory ถูกต้อง
+**สาเหตุทั่วไป**:
 
-### RUV1101: Route Not Found (404)
+- Component throw error ระหว่าง render
+- Data fetching error ใน async component
+- React error boundary ถึงขีดจำกัด
 
-**Title**: Route not found
+**วิธีแก้**: ตรวจ component, เพิ่ม error boundary (`error.tsx`), ใช้ `loading.tsx`
 
-**คำอธิบาย**: URL ไม่มี route ที่ตรงกัน — แสดง 404
+### RUV1101: SSR renderer ต้องการ projectRoot, appDir และ pageFile
 
-**Error text**: `RUV1101: No matching route for URL <url>`
+**Title**: SSR renderer missing required parameters
 
-**วิธีแก้**: สร้าง `app/not-found.tsx` สำหรับกำหนดหน้า 404
+**คำอธิบาย**: SSR renderer ถูกเรียกโดยไม่มีพารามิเตอร์ที่จำเป็น — projectRoot, appDir, pageFile
 
-```tsx
-// app/not-found.tsx
-import { Link } from '@ruvyxa/react'
+**Error text**: `RUV1101: SSR renderer requires projectRoot, appDir and pageFile`
 
-export default function NotFound() {
-  return (
-    <main>
-      <h1>404 — ไม่พบหน้า</h1>
-      <p>หน้านี้ไม่มีอยู่ในระบบ</p>
-      <Link href="/">กลับหน้าแรก</Link>
-    </main>
-  )
-}
-```
+**วิธีแก้**: นี่คือ framework bug — รายงานที่ https://github.com/anomalyco/ruvyxa/issues
 
-### RUV1102: Invalid Route Parameter
+### RUV1102: ไม่พบ SSR renderer
+
+**Title**: SSR renderer not found
+
+**คำอธิบาย**: Route มี layout แต่ไม่มี SSR renderer ที่ตรงกัน — อาจเกิดจาก page ไม่มี default export
 
 ```
-app/
-  blog/
-    [slug]/
-      page.tsx  → /blog/:slug
+RUV1102: SSR renderer was not found
 
-แต่ slug มี `/` → /blog/a/b/c
+  Route: /dashboard
+
+  The route has a layout but no matching SSR renderer.
+
+  Fix: Ensure the page file exports a default component.
 ```
 
-**Title**: Invalid route parameter value
-
-**คำอธิบาย**: Route parameter มีค่าที่ไม่ถูกต้อง — เช่น slug มี `/` ที่ทำให้ match หลาย segment
-
-**Error text**: `RUV1102: Invalid parameter <param> value: <value> in route <route>`
-
-**Edge cases**:
-
-- `[slug]` มี `/` — ใช้ `[...slug]` แทน
-- Parameter ไม่ตรง type (คาดหวัง number ได้ string)
-- Parameter ว่าง
-
-**วิธีแก้**:
-
-- ใช้ catch-all route `[...slug]` แทนถ้าต้องการหลาย segment
-- Validate parameter ใน page component
-- ใช้ `generateStaticParams` เพื่อจำกัดค่าที่ถูกต้อง
-
-### RUV1103: Static Path Conflict
-
-**Title**: Static path conflicts with dynamic route
-
-**คำอธิบาย**: เส้นทาง SSG (prerendered) ซ้อนทับกับ dynamic route
-
-**Error text**: `RUV1103: Static path <path> conflicts with dynamic route <route>`
-
-**ตัวอย่าง**:
-
-```
-app/
-  blog/
-    page.tsx        → /blog (static)
-    [slug]/
-      page.tsx      → /blog/:slug (dynamic)
-    hello-world/
-      page.tsx      → /blog/hello-world (conflict กับ [slug])
-```
-
-**วิธีแก้**: จัดลำดับ — static paths มี priority กว่า dynamic routes
-
-### RUV1104: Page Not in Manifest
-
-**Title**: Page missing from route manifest
-
-**คำอธิบาย**: ไฟล์ใน `app/` ไม่ถูกเพิ่มใน route manifest — มักเกิดจาก cache เก่าหรือ build
-ไม่สมบูรณ์
-
-**Error text**: `RUV1104: File <path> is not included in route manifest`
-
-**วิธีแก้**: รัน `ruvyxa clean && ruvyxa build` เพื่อ rebuild manifest
-
-### RUV1105: API Route Conflict
-
-**Title**: API route conflicts with page route
-
-**คำอธิบาย**: API route (`app/api/users/route.ts`) ซ้อนทับกับ page route ใน path เดียวกัน
-
-**Error text**: `RUV1105: API route <path> conflicts with page route <path>`
-
-**วิธีแก้**: เปลี่ยน path ของ API route — ใช้ `/api/` prefix
-
-### RUV1106: Route Group Misconfiguration
-
-**Title**: Route group misconfiguration
-
-**คำอธิบาย**: Route group (`(name)`) ไม่มี layout หรือใช้งานผิด
-
-**Error text**: `RUV1106: Route group <group> misconfiguration: <detail>`
-
-**วิธีแก้**: ตรวจสอบว่ามี `layout.tsx` ใน route group หรือไม่
-
-### RUV1107: Interception Route Error
-
-**Title**: Route interception error
-
-**คำอธิบาย**: Route interception (parallel routes, intercepting routes) ผิดพลาด
-
-**Error text**: `RUV1107: Route interception failed for <route>`
-
-**วิธีแก้**: ตรวจสอบการตั้งค่า `(..)` หรือ `(...)` ใน route structure
+**วิธีแก้**: ตรวจสอบว่า page file มี `export default function Page()`
 
 ---
 
-## RUV1200-1299: Config Errors
+## RUV1200-1299: API / Server Runtime
 
-ข้อผิดพลาดเกี่ยวกับ configuration — `ruvyxa.config.ts`
+ข้อผิดพลาดเกี่ยวกับ API routes, port binding, และ API renderer
 
-### RUV1200: Config Syntax Error
+### RUV1200: การเรียก API route ล้มเหลว
 
-**Title**: Config file syntax error
+**Title**: API route call failed
 
-**คำอธิบาย**: ไฟล์ config มี syntax error — parse ไม่ผ่าน
+**คำอธิบาย**: API route handler เรียกใช้แล้วล้มเหลว — unhandled exception หรือ network error
 
-**Error text**: `RUV1200: Syntax error in config file: <detail>`
+**Error text**: `RUV1200: API route <path> failed: <detail>`
 
-**วิธีแก้**: ตรวจ syntax — วงเล็บ, จุลภาค, เครื่องหมายคำพูด
-
-### RUV1201: Config Load Failed
-
-**Title**: Config file failed to load
-
-**คำอธิบาย**: ไม่สามารถโหลด `ruvyxa.config.ts` — runtime error หรือ import ผิด
-
-**Error text**: `RUV1201: Failed to load config file: <error>`
-
-**สาเหตุทั่วไป**:
-
-- Import path ผิด (`import { something } from 'wrong-package'`)
-- Runtime error ใน config (`throw new Error('...')`)
-- Circular dependency
-- Module not found (`ts-node` หรือ `jiti` ไม่สามารถ resolve)
-
-**วิธีแก้**: ตรวจ import, syntax, ติดตั้ง dependencies ที่จำเป็น
-
-### RUV1202: Unknown Config Field
-
-```ts
-export default defineConfig({
-  unknownField: true, // RUV1202
-})
-```
-
-**Title**: Unknown configuration field
-
-**คำอธิบาย**: ฟิลด์ที่ไม่มีใน schema ของ `defineConfig`
-
-**Error text**: `RUV1202: Unknown config field: <field>`
-
-**ค่าที่ถูกต้องทั้งหมด**:
-
-```typescript
-interface RuvyxaConfig {
-  appDir?: string // default: 'app'
-  output?: string // default: '.ruvyxa'
-  adapter?: Adapter // 'vercel' | 'netlify' | 'cloudflare' | 'node' | 'bun' | 'static' | 'railway' | 'render' | 'firebase' | 'aws'
-  runtime?: 'node' | 'bun' | 'workerd' | 'deno'
-  target?: 'server' | 'serverless' | 'edge' | 'static'
-  site?: SiteConfig
-  security?: SecurityConfig
-  images?: ImageConfig
-  cache?: CacheConfig
-  middleware?: MiddlewareConfig
-  plugins?: PluginConfig[]
-  debug?: DebugConfig
-  css?: CSSConfig
-  experimental?: Record<string, any>
-}
-```
-
-**วิธีแก้**: ตรวจชื่อฟิลด์ใน TypeScript definition — ใช้ autocomplete จาก `defineConfig`
-
-### RUV1203: Config Validation Error
-
-```ts
-export default defineConfig({
-  appDir: '/absolute/path', // RUV1203 — ต้องเป็น relative path
-})
-```
-
-**Title**: Configuration validation error
-
-**คำอธิบาย**: ค่า config ไม่ผ่าน validation — เช่น path ผิด, ค่าไม่อยู่ใน range
-
-**Error text**: `RUV1203: Validation error on field <field>: <detail>`
-
-**Validations ที่ Ruvyxa ตรวจ**:
-
-- `appDir`: ต้องเป็น relative path (ไม่เริ่มด้วย `/`)
-- `adapter`: ต้องเป็นชื่อ adapter ที่รองรับ
-- `site.url`: ต้องเป็น valid URL
-- `middleware.workers`: 1-8
-- `middleware.timeoutMs`: 1-300000
-- `security.actionLimit`: 1-1048576
-- `images.sizes`: แต่ละค่าต้อง between 32-4096
-
-**วิธีแก้**: ดูรายละเอียด error และแก้ไขค่าที่ผิด
-
-### RUV1204: Config Type Error
-
-**Title**: Configuration type error
-
-**คำอธิบาย**: ชนิดข้อมูลไม่ตรงกับ schema
-
-**Error text**: `RUV1204: Type error on field <field>: expected <type>, got <type>`
-
-**ตัวอย่าง**:
-
-- `workers: '4'` → ต้องเป็น number
-- `url: 123` → ต้องเป็น string
-- `plugins: {...}` → ต้องเป็น array
-
-**วิธีแก้**: แก้ไขชนิดข้อมูลให้ถูกต้อง — ใช้ TypeScript เพื่อ type checking
-
-### RUV1205: Missing Config File
-
-**Title**: Missing configuration file
-
-**คำอธิบาย**: ไม่พบ `ruvyxa.config.ts` — Ruvyxa ใช้ default config แทน
-
-**Error text**: `RUV1205: Config file not found, using defaults` (warning)
-
-**วิธีแก้**: สร้างไฟล์ config ถ้าต้องการค่าเฉพาะ (deployment, plugins, security)
-
-### RUV1206: Plugin Config Conflict
-
-**Title**: Plugin configuration conflict
-
-**คำอธิบาย**: สอง plugins มี config ที่ขัดแย้งกัน — เช่น กำหนดค่าเดียวกันทั้งคู่
-
-**Error text**: `RUV1206: Plugin <a> and <b> have conflicting config for <field>`
-
-**วิธีแก้**: รวม config หรือลบ plugin ที่ซ้ำซ้อน
-
-### RUV1207: Environment Variable Validation Error
-
-**Title**: Environment variable validation failed
-
-**คำอธิบาย**: ตัวแปร environment ไม่ผ่าน validation — เช่น รูปแบบผิด, ค่าขาด
-
-**Error text**: `RUV1207: Environment variable <name> validation failed: <detail>`
-
-**วิธีแก้**: ตรวจว่าตัวแปรถูกตั้งค่าถูกต้อง — ใช้ `requireEnv` plugin
-
----
-
-## RUV1300-1399: Build Errors
-
-ข้อผิดพลาดระหว่าง build process — compilation, resolution, bundle
-
-### RUV1300: Build Initialization Failed
-
-**Title**: Build initialization failed
-
-**คำอธิบาย**: ไม่สามารถเริ่มต้น build process — มักเกิดจาก dependency หาย
-
-**Error text**: `RUV1300: Build initialization failed: <detail>`
-
-**วิธีแก้**: ตรวจ dependencies, รัน `npm install`, ลบ node_modules แล้วติดตั้งใหม่
-
-### RUV1301: Compilation Error
-
-**Title**: TypeScript/JSX compilation error
-
-**คำอธิบาย**: TypeScript หรือ JSX syntax error — transpile ไม่ผ่าน
-
-**Error text**: `RUV1301: Compilation error in <file>:<line>:<column>: <message>`
-
-**สาเหตุทั่วไป**:
-
-- TypeScript type error
-- JSX syntax ผิด
-- Import ของไฟล์ที่ไม่มีอยู่
-- Type mismatch
-
-**วิธีแก้**: ดู stack trace — แก้ syntax error หรือ type error ที่ไฟล์นั้น
-
-### RUV1302: Module Resolution Failed
-
-**Title**: Module resolution failed
-
-**คำอธิบาย**: ไม่พบ module ที่ import — import path ไม่ถูกต้องหรือไม่ได้ติดตั้ง
-
-**Error text**: `RUV1302: Module <source> not found from <importer>`
-
-**Edge cases**:
-
-- npm package ไม่ได้ติดตั้ง — `npm install <package>`
-- Path relative ผิด — ตรวจ `./` หรือ `../`
-- Barrel export หาย — ตรวจ `index.ts` exports
-- Alias ไม่ถูกต้อง — ตรวจ `alias` plugin
-- Workspace protocol (`workspace:`) — ใช้ `"@ruvyxa/core": "workspace:*"` ใน dev
-
-**วิธีแก้**: `npm install` หรือตรวจ path import ให้ถูกต้อง
-
-### RUV1303: Bundle Failed
-
-**Title**: Bundle process failed
-
-**คำอธิบาย**: ไม่สามารถ bundle แอปพลิเคชัน — error ในระหว่าง tree-shaking, code-splitting, หรือ
-minification
-
-**Error text**: `RUV1303: Bundle failed: <detail>`
-
-**สาเหตุทั่วไป**:
-
-- Circular dependency
-- Dynamic import ผิดพลาด
-- Worker/bundle size เกิน limit
-- Plugin transform ทำให้ bundle เสีย
-- Side effect flag ผิด
-
-**วิธีแก้**: ตรวจ dependencies, ใช้ `ruvyxa clean` แล้ว build ใหม่, ตรวจ circular dependency
-
-### RUV1304: Image Optimization Failed
-
-**Title**: Image optimization failed
-
-**คำอธิบาย**: ไม่สามารถ optimize รูป — format ไม่รองรับ หรือไฟล์เสีย
-
-**Error text**: `RUV1304: Image optimization failed for <path>: <detail>`
-
-**Format ที่รองรับ**:
-
-| Format | Optimize   | แปลงเป็น   |
-| ------ | ---------- | ---------- |
-| JPEG   | ✓          | WebP, AVIF |
-| PNG    | ✓          | WebP, AVIF |
-| GIF    | ✓ (static) | WebP       |
-| SVG    | ✓ (minify) | —          |
-| WebP   | ✓          | AVIF       |
-| AVIF   | ✓          | —          |
-
-**วิธีแก้**: ตรวจว่ารูปเสียหายหรือ format ไม่รองรับ — แปลงเป็น JPEG/PNG ก่อน
-
-### RUV1305: Style Collection Failed
-
-**Title**: CSS/Style collection failed
-
-**คำอธิบาย**: ไม่สามารถ collect หรือ compile CSS — syntax error หรือ import ผิด
-
-**Error text**: `RUV1305: Style collection failed: <detail>`
-
-**สาเหตุทั่วไป**:
-
-- CSS syntax error (`{` ไม่ปิด, `;` ขาด)
-- PostCSS plugin error
-- `@import` path ผิด
-- TailwindCSS config error
-- CSS Modules import ผิด
-
-**วิธีแก้**: ตรวจ CSS syntax error หรือ import ที่ผิด
-
-### RUV1306: Boundary Check Failed
-
-**Title**: Server/client boundary check failed
-
-**คำอธิบาย**: Server/client boundary violation ใน build time — รายละเอียดใน RUV1000-1010
-
-**Error text**: `RUV1306: Boundary check failed: <count> violations found`
-
-**วิธีแก้**: รัน `ruvyxa check` เพื่อดูรายละเอียด boundary violations
-
-### RUV1307: Build Timeout
-
-**Title**: Build process timed out
-
-**คำอธิบาย**: Build ใช้เวลาเกินกำหนด — default timeout 300s (5 นาที)
-
-**Error text**: `RUV1307: Build timed out after <duration>ms`
-
-**สาเหตุทั่วไป**:
-
-- Infinite loop ใน plugin hook
-- Transform ไฟล์ใหญ่เกินไป (> 10MB)
-- Image optimization รูปใหญ่เกินไป
-- Module resolution ติด loop
-
-**วิธีแก้**:
-
-- เพิ่ม parallelism
-- ลดขนาด bundle (exclude large deps)
-- ตรวจ infinite loop ใน plugin
-- ใช้ `RUVYXA_BUILD_TIMEOUT` env ตั้งค่า timeout
-
-### RUV1308: Code Splitting Error
-
-**Title**: Code splitting error
-
-**คำอธิบาย**: Dynamic import (`import()`) ไม่สามารถ split ได้ — chunk ผิดพลาด
-
-**Error text**: `RUV1308: Code splitting failed for <module>: <detail>`
-
-**วิธีแก้**: ตรวจ dynamic import syntax, หลีกเลี่ยง dynamic import ที่มี expression
-
-### RUV1309: Minification Error
-
-**Title**: JavaScript/CSS minification error
-
-**คำอธิบาย**: Minifier (SWC/Terser) ไม่สามารถ minify ไฟล์ได้
-
-**Error text**: `RUV1309: Minification error in <file>: <detail>`
-
-**วิธีแก้**: ตรวจ syntax, ปิด minification ชั่วคราวเพื่อ debug (`minify: false`)
-
----
-
-## RUV1400-1499: Server Errors
-
-ข้อผิดพลาด runtime บน server — production, dev, start
-
-### RUV1400: Server Start Failed
-
-**Title**: Server failed to start
-
-**คำอธิบาย**: ไม่สามารถ start production server — port ถูกใช้ หรือ entry missing
-
-**Error text**: `RUV1400: Server failed to start: <detail>`
-
-**วิธีแก้**: ตรวจ port ไม่ซ้ำ, ตรวจ `build.json`, รัน `ruvyxa build` ก่อน `ruvyxa start`
-
-### RUV1401: Runtime Error
-
-**Title**: Server runtime error
-
-**คำอธิบาย**: Unhandled exception ใน server runtime — error ที่ไม่ถูก try/catch
-
-**Error text**: `RUV1401: Unhandled runtime error: <error>`
-
-**Edge cases**:
-
-- Async error ที่ไม่มี `.catch()`
-- Error ใน `getServerSideProps`-equivalent
-- Error ใน server component render
-- Error ใน middleware
-
-**วิธีแก้**: ดู stack trace ใน logs — เพิ่ม error boundary (`error.tsx`), ใช้ try/catch
-
-### RUV1402: Worker Pool Exhausted
-
-**Title**: Worker pool exhausted
-
-**คำอธิบาย**: Worker processes ทั้งหมดกำลังทำงาน — ไม่มี worker ว่างให้ request ใหม่
-
-**Error text**: `RUV1402: All <count> workers are busy, request <id> queued`
-
-**สาเหตุทั่วไป**:
-
-- Traffic spike
-- Worker ตาย (OOM) และไม่ restart ทัน
-- Request ใช้เวลานาน (> timeout)
-- ตั้ง `middleware.workers` น้อยเกินไป
-
-**วิธีแก้**:
-
-- เพิ่ม `middleware.workers` ใน config (max 8)
-- ลด request processing time
-- เปิด load balancing (multiple instances)
-- ตรวจสอบ memory leak
-
-### RUV1403: Server Cache Error
-
-**Title**: Server cache error
-
-**คำอธิบาย**: Cache system error — ไม่สามารถ read/write cache
-
-**Error text**: `RUV1403: Cache error: <detail>`
-
-**วิธีแก้**: รัน `ruvyxa clean` ล้าง cache directory
-
-### RUV1404: Action Execution Failed
-
-```ts
-'use server'
-import { action } from 'ruvyxa/server'
-
-export const doSomething = action(async () => {
-  throw new Error('Something went wrong') // RUV1404
-})
-```
-
-**Title**: Server action execution failed
-
-**คำอธิบาย**: Server action (`'use server'`) throw error — unhandled exception ใน action function
-
-**Error text**: `RUV1404: Server action <name> failed: <error>`
-
-**Edge cases**:
-
-- Validation error (input ไม่ถูก)
-- Database error
-- Authentication/authorization error
-- Network error (external API)
-
-**วิธีแก้**: จัดการ error ด้วย try/catch:
-
-```ts
-export const createUser = action(async (data: FormData) => {
-  try {
-    // validation
-    if (!data.get('email')) {
-      return { error: 'กรุณากรอกอีเมล', code: 'VALIDATION' }
-    }
-    // logic
-    return { success: true }
-  } catch (error) {
-    console.error('Action error:', error)
-    return { error: 'เกิดข้อผิดพลาด', code: 'RUV1404' }
-  }
-})
-```
-
-### RUV1405: API Route Error
+**วิธีแก้**: เพิ่ม try/catch ใน route handler:
 
 ```ts
 // app/api/users/route.ts
-export async function GET() {
-  throw new Error('Database connection failed') // RUV1405
-}
-```
-
-**Title**: API route handler error
-
-**คำอธิบาย**: API route handler throw error — unhandled exception
-
-**Error text**: `RUV1405: API route <path> handler failed: <error>`
-
-**วิธีแก้**: เพิ่ม error handling ใน route handler:
-
-```ts
 export async function GET() {
   try {
     const users = await db.user.findMany()
     return Response.json({ users })
   } catch (error) {
     console.error('API error:', error)
-    return Response.json({ error: 'RUV1405', message: 'Internal server error' }, { status: 500 })
+    return Response.json({ error: 'RUV1200', message: 'Internal server error' }, { status: 500 })
   }
 }
 ```
 
-### RUV1406: Session Error
+### RUV1201: ไม่พบพอร์ตเซิร์ฟเวอร์ที่ว่าง
 
-**Title**: Session validation error
+**Title**: No available server port
 
-**คำอธิบาย**: Session ไม่ถูกต้องหรือหมดอายุ — token expired, signature ผิด, หรือ user ถูกลบ
+**คำอธิบาย**: ไม่พบพอร์ตที่ว่างสำหรับ dev server หรือ production server — port ถูกใช้หมดช่วง
 
-**Error text**: `RUV1406: Session invalid or expired: <detail>`
+**Error text**: `RUV1201: No available port found in range <start>-<end>`
 
-**สาเหตุ**:
+**วิธีแก้**: ระบุ port ที่แน่นอนใน config (`server.port`) หรือตรวจสอบว่าไม่มี process ค้างอยู่
 
-- JWT หมดอายุ (`exp`)
-- JWT signature ไม่ตรง
-- Session ใน database ถูกลบ
-- User ถูกลบจากระบบ
-- Cookie ผิด
+### RUV1202: ไม่พบ API renderer
 
-**วิธีแก้**: ให้ผู้ใช้ login ใหม่ — redirect ไป `/auth/login`
+**Title**: API renderer not found
 
-### RUV1407: Middleware Error
+**คำอธิบาย**: ไม่พบ API renderer สำหรับ route — อาจเกิดจาก route structure ไม่ถูกต้อง
 
-**Title**: Middleware execution error
+**Error text**: `RUV1202: API renderer not found for route <path>`
 
-**คำอธิบาย**: Middleware function throw error ระหว่าง request
-
-**Error text**: `RUV1407: Middleware error in <file>:<line>: <detail>`
-
-**วิธีแก้**: ตรวจ middleware code — ใช้ try/catch ใน middleware
-
-### RUV1408: SSR Render Error
-
-**Title**: SSR rendering error
-
-**คำอธิบาย**: Server-side rendering ล้มเหลว — component error ระหว่าง render
-
-**Error text**: `RUV1408: SSR render error for route <path>: <detail>`
-
-**สาเหตุทั่วไป**:
-
-- Component throw error
-- Data fetching error
-- React error boundary reached
-- Memory limit (อย่าลืม `dangerouslySetInnerHTML`)
-
-**วิธีแก้**: ตรวจ component, เพิ่ม error boundary, ใช้ `loading.tsx`
-
-### RUV1409: Static Path Generation Error
-
-**Title**: Static path generation error
-
-**คำอธิบาย**: `generateStaticParams` ล้มเหลว — ไม่สามารถสร้าง static paths
-
-**Error text**: `RUV1409: generateStaticParams failed for route <path>: <detail>`
-
-**วิธีแก้**: ตรวจ `generateStaticParams` implementation — ตรวจ error ใน function
+**วิธีแก้**: ตรวจสอบว่าไฟล์ API route (`route.ts`) มี export ฟังก์ชัน HTTP method (`GET`, `POST`,
+ฯลฯ)
 
 ---
 
-## RUV1500-1599: Worker Errors
+## RUV1300-1399: Bundle / Compilation Errors
 
-ข้อผิดพลาดเกี่ยวกับ plugin worker process — crash, timeout, protocol
+ข้อผิดพลาดเกี่ยวกับ client hydration bundling, module resolution, และ MDX
 
-### RUV1500: Worker Pool Init Failed
+### RUV1300: Client hydration bundling ล้มเหลว
 
-**Title**: Worker pool initialization failed
+**Title**: Client hydration bundling failed
 
-**คำอธิบาย**: ไม่สามารถสร้าง worker pool — system resource ไม่พอ หรือ runtime ใช้งานไม่ได้
+**คำอธิบาย**: ไม่สามารถ bundle client-side JavaScript สำหรับ hydration — compilation error หรือ
+missing module
 
-**Error text**: `RUV1500: Worker pool initialization failed: <detail>`
+**Error text**: `RUV1300: Client hydration bundling failed: <detail>`
 
-**วิธีแก้**: ตรวจ system resource (RAM), ตรวจ Node.js/Bun version
+**วิธีแก้**: ตรวจสอบ dependency, รัน `ruvyxa clean && ruvyxa build` ใหม่
 
-### RUV1501: Worker Crash
+### RUV1303: ไม่พบ client route
 
-**Title**: Plugin worker process crashed
+**Title**: Client route not found
 
-**คำอธิบาย**: Plugin worker process (Node.js/Bun) หยุดทำงานกะทันหัน — uncaught exception, OOM, หรือ
-signal death
+**คำอธิบาย**: client bundle สำหรับ CSR route ไม่พบใน build output
 
-**Error text**: `RUV1501: Worker <id> crashed with signal <signal>: <detail>`
-
-**Edge cases**:
-
-- OOM (Out of Memory) — worker ใช้ RAM เกิน limit
-- Segmentation fault — native module ปัญหา
-- `process.exit()` ใน plugin code
-- Unhandled promise rejection
-
-**วิธีแก้**:
-
-- ตรวจ plugin code — ใช้ try/catch รอบทุก hook
-- ตรวจ memory usage — ลด plugin complexity
-- ใช้ `workers: 1` เพื่อ debug
-- เพิ่ม system memory
-
-### RUV1502: Worker Timeout
-
-**Title**: Plugin worker operation timed out
-
-**คำอธิบาย**: Plugin middleware/hook ใช้เวลาเกิน timeout — default 30s
-
-**Error text**: `RUV1502: Worker <id> timed out after <timeout>ms on hook <hook>`
-
-**Timeouts ตาม hook**:
-
-| Hook                                      | Default Timeout | Configurable               |
-| ----------------------------------------- | --------------- | -------------------------- |
-| `resolveId` / `onResolve`                 | 5s              | ✗                          |
-| `transform` / `onTransform`               | 30s             | ✗                          |
-| `middleware` / `onRequest` / `onResponse` | 30s             | ✓ (`middleware.timeoutMs`) |
-| `buildStart` / `onStart`                  | 30s             | ✗                          |
-| `buildEnd` / `onComplete`                 | 30s             | ✗                          |
-| `serverStart`                             | 30s             | ✗                          |
-| `serverEnd`                               | 10s             | ✗                          |
-
-**วิธีแก้**:
-
-- เพิ่ม `middleware.timeoutMs` ใน config (max 300,000ms)
-- Optimize plugin — ลด blocking operations
-- ใช้ async/await ให้ถูกต้อง
-
-### RUV1503: Worker Protocol Error
-
-**Title**: Plugin worker protocol error
-
-**คำอธิบาย**: Communication protocol ระหว่าง Rust server และ JS worker ผิดพลาด — message format,
-serialization, หรือ version mismatch
-
-**Error text**: `RUV1503: Worker protocol error: <detail>`
-
-**สาเหตุทั่วไป**:
-
-- Plugin version ไม่ compatible กับ Ruvyxa version
-- Message size เกิน limit (default 1MB)
-- JSON serialization ล้มเหลว (circular reference)
-- Socket registry version mismatch
-- Worker ส่ง response ผิด format
-
-**วิธีแก้**: อัปเดต Ruvyxa version และ plugin version ให้ตรงกัน
-
-### RUV1504: Worker Initialization Failed
-
-**Title**: Worker process initialization failed
-
-**คำอธิบาย**: ไม่สามารถ start worker process — runtime ไม่พร้อม
-
-**Error text**: `RUV1504: Worker initialization failed: <detail>`
-
-**สาเหตุ**:
-
-- Node.js ไม่ติดตั้ง
-- Bun ไม่ติดตั้ง (แต่ config ใช้ `runtime: 'bun'`)
-- Node.js version < 18
-- Plugin path ไม่ถูกต้อง
-- `node_modules` ขาด
-
-**วิธีแก้**: ตรวจว่าระบบมี Node.js 22+ หรือ Bun ติดตั้ง — `node --version`, `bun --version`
-
-### RUV1510: Socket Registry Connection Failed
-
-**Title**: Socket registry connection failed
-
-**คำอธิบาย**: ไม่สามารถเชื่อมต่อ socket registry ระหว่าง Rust และ JS worker
-
-**Error text**: `RUV1510: Socket registry connection failed: <detail>`
-
-**วิธีแก้**: รัน `ruvyxa clean && ruvyxa dev` ใหม่
-
-### RUV1511: Socket Registry Timeout
-
-**Title**: Socket registry operation timed out
-
-**คำอธิบาย**: Socket registry ไม่ตอบกลับภายใน timeout — worker อาจจะ busy หรือ dead
-
-**Error text**: `RUV1511: Socket registry timeout after <timeout>ms on <operation>`
-
-**วิธีแก้**: เพิ่ม timeout, ตรวจ worker health
-
-### RUV1512: Socket Registry Message Too Large
-
-**Title**: Socket registry message exceeds size limit
-
-**คำอธิบาย**: Message ที่ส่งระหว่าง Rust ↔ JS worker มีขนาดเกิน limit — default 1MB
-
-**Error text**: `RUV1512: Socket message size <size> exceeds limit <limit>`
-
-**วิธีแก้**: ลดขนาด message payload — หรือ split เป็น chunks
-
-### RUV1513: Socket Registry Queue Full
-
-**Title**: Socket registry message queue full
-
-**คำอธิบาย**: Queue ของ pending messages เต็ม — worker รับไม่ทัน
-
-**Error text**: `RUV1513: Socket registry queue full: <count> pending messages`
-
-**วิธีแก้**: เพิ่ม worker count, ลด frequency ของ messages
-
----
-
-## RUV1600-1699: Plugin Errors
-
-ข้อผิดพลาดเกี่ยวกับ plugin system — config, not found, hook failure
-
-### RUV1600: Plugin Registration Failed
-
-**Title**: Plugin registration failed
-
-**คำอธิบาย**: ไม่สามารถลงทะเบียน plugin — error ใน plugin constructor หรือ factory
-
-**Error text**: `RUV1600: Plugin <name> registration failed: <detail>`
-
-**วิธีแก้**: ตรวจ plugin code — constructor/factory throw error?
-
-### RUV1601: Plugin Config Invalid
-
-**Title**: Plugin configuration invalid
-
-**คำอธิบาย**: ค่าใน plugin options ไม่ถูกต้อง — เช่น ค่า = 0, field ว่าง, type ผิด
-
-**Error text**: `RUV1601: Plugin <name> config invalid on field <field>: <detail>`
-
-**ตัวอย่าง**:
-
-- `workers: 0` → ต้อง ≥ 1
-- `timeoutMs: -1` → ต้อง ≥ 1
-- `redirects: "string"` → ต้องเป็น array
-- Plugin name ว่าง → ต้องมี name
-
-**วิธีแก้**: ตั้งค่าให้ถูกต้องตาม schema ของ plugin
-
-### RUV1602: Plugin Config Out of Range
-
-**Title**: Plugin configuration out of range
-
-**คำอธิบาย**: ค่าเกินขีดจำกัดที่ Ruvyxa อนุญาต
-
-**Error text**:
-`RUV1602: Plugin <name> config field <field> value <value> out of range [<min>, <max>]`
-
-**Range สำหรับทุก field**:
-
-| Field                     | ขั้นต่ำ | สูงสุด                | Default             |
-| ------------------------- | ------- | --------------------- | ------------------- |
-| `middleware.workers`      | 1       | 8                     | 1                   |
-| `middleware.timeoutMs`    | 1       | 300,000               | 30,000              |
-| `middleware.pluginLimit`  | 1       | 268,435,456 (256 MiB) | 33,554,432 (32 MiB) |
-| `security.actionLimit`    | 1       | 1,048,576 (1 MiB)     | 262,144 (256 KiB)   |
-| `security.apiLimit`       | 1       | 5,242,880 (5 MiB)     | 1,048,576 (1 MiB)   |
-| `security.pluginLimit`    | 1       | 5,242,880 (5 MiB)     | 1,048,576 (1 MiB)   |
-| `cache.ssr.ttl`           | 0       | 86,400 (1 วัน)        | 60                  |
-| `cache.images.ttl`        | 0       | 3,153,6000 (1 ปี)     | 86,400              |
-| `images.sizes` (per size) | 32      | 4,096                 | —                   |
-
-**วิธีแก้**: ปรับค่าให้อยู่ในช่วงที่อนุญาต
-
-### RUV1603: Plugin Not Found
-
-**Title**: Plugin not found
-
-**คำอธิบาย**: ไม่พบ plugin package ใน node_modules — Ruvyxa มองหา `ruvyxa-plugin-<name>`
-หรือชื่อที่ระบุ
-
-**Error text**: `RUV1603: Plugin <name> not found — searched in <paths>`
-
-**วิธีแก้**:
-
-```bash
-# ตรวจว่าติดตั้งหรือยัง
-npm ls ruvyxa-plugin-<name>
-
-# ติดตั้ง
-npm install ruvyxa-plugin-<name>
-
-# หรือใช้ import โดยตรง
-import myPlugin from 'ruvyxa-plugin-my-plugin';
-// แทน name-based
 ```
+RUV1303: Client route was not found
 
-### RUV1604: Plugin Hook Failure
+  Route: /dashboard (type: csr)
 
-```ts
-hooks: {
-  buildStart() {
-    throw new Error('Plugin failed'); // RUV1604
-  },
-}
+  The client bundle for this CSR route was not found in the
+  build output.
+
+  Fix: Rebuild the application.
 ```
-
-**Title**: Plugin hook execution failed
-
-**คำอธิบาย**: Plugin hook throw error — unhandled exception ใน hook function
-
-**Error text**: `RUV1604: Plugin <name> hook <hook> failed: <error>`
-
-**Hooks ที่โดนตรวจ**: `onStart`, `onResolve`, `onTransform`, `onComplete`, `onRequest`,
-`onResponse`, `resolveId`, `transform`, `buildStart`, `buildEnd`, `serverStart`, `serverEnd`,
-`middleware`
-
-**วิธีแก้**: ตรวจ plugin code — ใช้ try/catch ใน hook
-
-```ts
-hooks: {
-  buildStart(ctx) {
-    try {
-      doRiskyOperation();
-    } catch (e) {
-      console.error('Plugin hook failed:', e);
-      // Don't throw — or throw with proper code
-    }
-  },
-}
-```
-
-### RUV1605: Plugin Dependency Conflict
-
-**Title**: Plugin dependency conflict
-
-**คำอธิบาย**: สอง plugins ต้องการ dependency version ที่ขัดแย้งกัน
-
-**Error text**: `RUV1605: Plugin <a> and <b> have conflicting dependency <dep>`
-
-**วิธีแก้**: ใช้ `overrides` ใน `package.json` หรือหันไปใช้ plugin ที่ compatible กัน
-
-### RUV1606: Plugin Circular Dependency
-
-**Title**: Plugin circular dependency detected
-
-**คำอธิบาย**: Plugins มี circular dependency — A เรียก B, B เรียก A
-
-**Error text**: `RUV1606: Circular plugin dependency: <chain>`
-
-**วิธีแก้**: จัดโครงสร้าง plugin ใหม่ — merge หรือแยก dependencies
-
----
-
-## RUV1700-1799: Deploy Errors
-
-ข้อผิดพลาดเกี่ยวกับ deployment — adapter, build artifacts, compatibility
-
-### RUV1700: Adapter Not Found
-
-**Title**: Deploy adapter not found
-
-**คำอธิบาย**: ไม่พบ adapter package ที่จะแปลง output สำหรับ platform
-
-**Error text**: `RUV1700: Adapter <name> not found — install @ruvyxa/adapter-<name>`
-
-**วิธีแก้**: ติดตั้ง adapter:
-
-```bash
-# Adapter packages
-npm install @ruvyxa/adapter-vercel
-npm install @ruvyxa/adapter-netlify
-npm install @ruvyxa/adapter-cloudflare
-npm install @ruvyxa/adapter-node
-npm install @ruvyxa/adapter-bun
-npm install @ruvyxa/adapter-static
-npm install @ruvyxa/adapter-railway
-npm install @ruvyxa/adapter-render
-npm install @ruvyxa/adapter-firebase
-npm install @ruvyxa/adapter-aws
-```
-
-### RUV1701: Adapter Build Failed
-
-**Title**: Adapter build transformation failed
-
-**คำอธิบาย**: Adapter ไม่สามารถแปลง build output สำหรับ platform — output ไม่ compatible
-หรือมีข้อจำกัด
-
-**Error text**: `RUV1701: Adapter <name> build failed: <detail>`
-
-**สาเหตุทั่วไป**:
-
-- Output ขนาดเกิน platform limit (Vercel: 50MB, Cloudflare: 1MB)
-- Native module ที่ platform ไม่รองรับ
-- Runtime API ที่ platform ไม่มี (เช่น `fs` ใน edge)
-- Node.js version ไม่ตรง
-
-**วิธีแก้**: ตรวจ compatibility, ลอง adapter อื่น, optimize output
-
-### RUV1702: Bundle Budget Exceeded
-
-**Title**: Bundle size exceeded budget
-
-**คำอธิบาย**: Bundle size เกิน budget ที่กำหนดใน `bundleBudget` plugin
-
-**Error text**: `RUV1702: Bundle budget exceeded: <type> <actual> > <limit>`
-
-**วิธีแก้**:
-
-- Tree shaking — ลบ unused exports
-- Code splitting — ใช้ `import()` แทน static import
-- ลด dependencies — ใช้ lightweight alternatives
-- Optimize images — ลดขนาด, ใช้ WebP/AVIF
-- ตรวจ bundle ด้วย `ruvyxa analyze`
-
-### RUV1703: Missing Build Artifacts
-
-**Title**: Required build artifacts are missing
-
-**คำอธิบาย**: Build output ไม่สมบูรณ์ — ขาดไฟล์ที่จำเป็นสำหรับ deployment
-
-**Error text**: `RUV1703: Missing required build artifact: <path>`
 
 **วิธีแก้**: รัน `ruvyxa clean && ruvyxa build` ใหม่
 
-### RUV1704: Adapter Incompatibility
+### RUV1304: Client bundle ถูกเรียกสำหรับ route ที่ไม่ใช่ page
 
-**Title**: Adapter incompatible with project features
+**Title**: Client bundle requested for non-page route
 
-**คำอธิบาย**: Adapter ไม่รองรับฟีเจอร์ที่แอปใช้ — เช่น static adapter แต่แอป ใช้ server actions
+**คำอธิบาย**: มีการร้องขอ client bundle สำหรับ route ที่ไม่ใช่ page (เช่น API route)
 
-**Error text**: `RUV1704: Adapter <name> does not support <feature>`
+```
+RUV1304: Client bundle requested for a non-page route
 
-**Feature compatibility ตาราง**:
+  Route: /api/hello
 
-| Feature        | node | bun | vercel | netlify | cloudflare | static | railway | render | firebase | aws |
-| -------------- | ---- | --- | ------ | ------- | ---------- | ------ | ------- | ------ | -------- | --- |
-| SSR            | ✓    | ✓   | ✓      | ✓       | ✓          | ✗      | ✓       | ✓      | ✓        | ✓   |
-| SSG            | ✓    | ✓   | ✓      | ✓       | ✓          | ✓      | ✓       | ✓      | ✓        | ✓   |
-| ISR            | ✗    | ✗   | ✓      | ✓       | ✗          | ✗      | ✗       | ✗      | ✗        | ✓   |
-| API Routes     | ✓    | ✓   | ✓      | ✓       | ✓          | ✗      | ✓       | ✓      | ✓        | ✓   |
-| Server Actions | ✓    | ✓   | ✓      | ✓       | ✓          | ✗      | ✓       | ✓      | ✓        | ✓   |
-| Middleware     | ✓    | ✓   | ✓      | ✓       | ✓          | ✗      | ✓       | ✓      | ✓        | ✓   |
-| Image Opt      | ✓    | ✓   | ✓      | ✓       | ✓          | ✓      | ✓       | ✓      | ✗        | ✓   |
-| Edge Functions | ✗    | ✗   | ✓      | ✓       | ✓          | ✗      | ✗       | ✗      | ✗        | ✓   |
-| WebSocket      | ✓    | ✓   | ✗      | ✗       | ✓          | ✗      | ✓       | ✓      | ✗        | ✗   |
+  API routes do not have client bundles.
 
-**วิธีแก้**: ใช้ adapter ที่รองรับฟีเจอร์นั้น หรือเปลี่ยนฟีเจอร์
+  Fix: This is likely a framework bug — report it.
+```
 
-### RUV1705: Missing Environment Variable for Deploy
+**วิธีแก้**: นี่คือ framework bug — รายงานที่ https://github.com/anomalyco/ruvyxa/issues
 
-**Title**: Required environment variable missing for deployment
+### RUV1311: MDX compilation error
 
-**คำอธิบาย**: Environment variable ที่ adapter ต้องการสำหรับ deploy ไม่ได้ตั้งค่า
+**Title**: MDX compilation error
 
-**Error text**: `RUV1705: Environment variable <name> is required for <adapter> deployment`
+**คำอธิบาย**: ไฟล์ MDX (.mdx) มี syntax error — compile ไม่ผ่าน
 
-**วิธีแก้**: ตั้งค่า env var ใน platform dashboard หรือ CI/CD secrets
+**Error text**: `RUV1311: MDX compilation error in <file>:<line>: <detail>`
 
-### RUV1706: Deploy Health Check Failed
+**วิธีแก้**: ตรวจสอบ syntax MDX — ดู error message ที่ระบุ
 
-**Title**: Deployment health check failed
+### RUV1312: Frontmatter YAML error
 
-**คำอธิบาย**: หลังจาก deploy แล้ว health endpoint ตอบกลับไม่สำเร็จ
+**Title**: Frontmatter YAML error
 
-**Error text**: `RUV1706: Deployment health check failed: <endpoint> returned <status>`
+**คำอธิบาย**: Frontmatter YAML ในไฟล์ MD/MDX มี syntax error
 
-**วิธีแก้**: ตรวจ health endpoint, logs, environment variables
+**Error text**: `RUV1312: Frontmatter YAML error in <file>: <detail>`
 
-### RUV1707: Staging Swap Failed
+**วิธีแก้**: ตรวจสอบ YAML frontmatter — indent, colon, quotes
 
-**Title**: Blue-green staging swap failed
+```mdx
+---
+title: 'บทความ'
+date: 2024-01-01
+tags: ['react', 'ruvyxa']
+---
 
-**คำอธิบาย**: การ swap จาก staging ไป production ล้มเหลว — staging build ไม่สมบูรณ์ หรือ health
-check ไม่ผ่าน
+เนื้อหา...
+```
 
-**Error text**: `RUV1707: Staging swap failed: <detail>`
+---
 
-**วิธีแก้**: ตรวจ staging build, รัน `ruvyxa deploy:status`, rollback ถ้าจำเป็น
+## RUV1400-1499: Style Errors
+
+ข้อผิดพลาดเกี่ยวกับ CSS compilation — Tailwind, Sass, CSS entries
+
+### RUV1400: Tailwind CSS compilation ล้มเหลว
+
+**Title**: Tailwind CSS compilation failed
+
+**คำอธิบาย**: Tailwind CSS CLI compilation ล้มเหลว — config error หรือ content path ไม่ถูกต้อง
+
+```
+RUV1400: Tailwind CSS compilation failed
+
+  Error: Tailwind CSS CLI exited with code 1
+
+  Fix: Check tailwind.config.ts for errors, ensure all
+       configured content paths exist.
+```
+
+**วิธีแก้**: ตรวจ `tailwind.config.ts`, ตรวจสอบ content paths
+
+### RUV1401: ไม่พบ Tailwind CSS CLI
+
+**Title**: Tailwind CSS CLI not found
+
+**คำอธิบาย**: Ruvyxa ใช้ Tailwind CSS CLI สำหรับ production build แต่ไม่พบใน node_modules
+
+```
+RUV1401: Tailwind CSS CLI was not found
+
+  Ruvyxa uses the Tailwind CSS CLI directly for production
+  builds, but it was not found in node_modules.
+
+  Fix: Install Tailwind CSS:
+       npm install -D tailwindcss @tailwindcss/postcss
+```
+
+**วิธีแก้**: ติดตั้ง Tailwind CSS:
+
+```bash
+npm install -D tailwindcss @tailwindcss/postcss
+```
+
+### RUV1402: Sass compilation ล้มเหลว
+
+**Title**: Sass compilation failed
+
+**คำอธิบาย**: ไฟล์ SCSS/Sass มี syntax error — compile ไม่ผ่าน
+
+```
+RUV1402: Sass compilation failed
+
+  File: app/styles/custom.scss:24
+  Error: Expected "{" after selector
+
+  Fix: Check the SCSS syntax around line 24.
+```
+
+**วิธีแก้**: ตรวจสอบ syntax SCSS/Sass
+
+### RUV1403: ไม่พบ CSS entry ที่กำหนดค่าไว้
+
+**Title**: Configured CSS entry not found
+
+**คำอธิบาย**: ไฟล์ CSS ที่กำหนดใน `css.entries` ไม่พบในระบบ
+
+```
+RUV1403: Configured CSS entry was not found at: ...
+
+  CSS entry: ./src/styles/main.css
+
+  The file specified in css.entries could not be found.
+
+  Fix: Check that the CSS file exists at the specified path.
+```
+
+**วิธีแก้**: ตรวจสอบว่าไฟล์ CSS มีอยู่ที่ path ที่ระบุ
+
+### RUV1404: CSS entry ต้องอยู่ภายใน project root
+
+**Title**: CSS entry must stay inside project root
+
+**คำอธิบาย**: CSS entry path ต้องอยู่ภายใน project root — ห้ามใช้ `../` ที่ออกนอก project
+
+```
+RUV1404: CSS entry must stay inside the project root
+
+  Path: ../shared/styles.css
+
+  CSS entries must be inside the project directory tree.
+
+  Fix: Move the CSS file into the project or use a symlink.
+```
+
+**วิธีแก้**: ย้ายไฟล์ CSS เข้ามาใน project หรือใช้ symlink
+
+---
+
+## RUV1500-1599: Worker / Static Params Errors
+
+ข้อผิดพลาดเกี่ยวกับ render worker, route action, static params, และ PPR
+
+### RUV1500: SSG/action render ล้มเหลว
+
+**Title**: SSG/action render failed
+
+**คำอธิบาย**: Static generation หรือ action render ล้มเหลว — worker crash หรือ runtime error
+
+```
+RUV1500: Worker crash
+
+  Worker: render-worker-2
+  Status: exit code 1
+
+  A render worker process crashed while handling a request.
+
+  Fix: Check server logs for the crash reason. Common causes:
+       - Out of memory
+       - Unhandled exception in route handler
+       - Native module incompatibility
+```
+
+**วิธีแก้**: ตรวจ server logs, ลด workload, ใช้ try/catch
+
+### RUV1501: ไม่พบไฟล์ route action
+
+**Title**: Route action file not found
+
+**คำอธิบาย**: Route มี action reference แต่ไม่พบไฟล์ action
+
+```
+RUV1501: Route action file was not found
+
+  Route: /contact
+  Expected: app/contact/action.ts
+
+  The action file for this route does not exist.
+
+  Fix: Create the action file at the expected path.
+```
+
+**วิธีแก้**: สร้างไฟล์ action ที่ path ที่คาดหวัง
+
+### RUV1510: Static params ต้องเป็น array หรือ object ที่มี params
+
+**Title**: Static params resolution failed
+
+**คำอธิบาย**: ค่า return จาก static params ไม่ถูกต้อง — ต้องเป็น array ของ objects
+
+```
+RUV1510: Static params resolution failed
+
+  Route: /blog/[slug]
+  getStaticParams returned: [{ slug: null }]
+
+  Static params values must be strings or numbers, not null.
+
+  Fix: Filter out null/undefined values before returning.
+```
+
+**วิธีแก้**: return array ของ parameter objects:
+
+```ts
+export const getStaticParams = async () => {
+  const posts = await fetchPosts()
+  return posts.filter((p) => p.slug).map((p) => ({ slug: p.slug }))
+}
+```
+
+### RUV1511: String shorthand ใช้ได้เฉพาะ route ที่มี segment dynamic ตัวเดียว
+
+**Title**: Static params shorthand invalid for multi-segment route
+
+**คำอธิบาย**: ใช้ string shorthand สำหรับ route ที่มีหลาย dynamic segments — ต้องใช้ object form
+
+```
+RUV1511: Static params shorthand invalid
+
+  Route: /products/[category]/[id]
+  getStaticParams returned: ["electronics"]
+
+  String shorthand is only valid for routes with exactly
+  one dynamic segment.
+
+  Fix: Use object form: [{ category: "electronics", id: "123" }]
+```
+
+**วิธีแก้**: ใช้ object form สำหรับ multi-segment routes
+
+### RUV1512: Static params entry ต้องเป็น object หรือ scalar
+
+**Title**: Static params entry must be object or scalar
+
+**คำอธิบาย**: แต่ละ entry ใน static params array ต้องเป็น object หรือ scalar value
+
+```
+RUV1512: Static params shape invalid
+
+  Route: /posts/[slug]
+  getStaticParams returned: "not-an-array"
+
+  getStaticParams must return an array of parameter objects.
+
+  Fix: Return an array, e.g., [{ slug: "hello" }, { slug: "world" }]
+```
+
+**วิธีแก้**: return array ของ parameter objects หรือ scalars
+
+### RUV1513: Static params cache duration ไม่ถูกต้อง
+
+**Title**: Static params cache duration invalid
+
+**คำอธิบาย**: ค่า cache duration ไม่ถูกต้อง — ต้องเป็น number (seconds) หรือ string pattern
+
+```
+RUV1513: Static params duration invalid
+
+  Route: /blog/[slug]
+  cache: "forever"
+
+  Cache duration must be a number (seconds) or a string like
+  "10m", "1h", "1d".
+
+  Fix: "forever" is not valid. Use "365d" or 31536000.
+```
+
+**รูปแบบที่รองรับ**: `"10m"`, `"1h"`, `"1d"`, `"30d"`, หรือ number (seconds)
+
+**วิธีแก้**: ใช้รูปแบบที่ถูกต้อง เช่น `"365d"` หรือ `31536000`
+
+### RUV1550: PPR render ล้มเหลว
+
+**Title**: PPR render failed
+
+**คำอธิบาย**: Partial Pre-Rendering (PPR) ล้มเหลวระหว่าง static shell generation
+
+```
+RUV1550: PPR render failed
+
+  Route: /dashboard
+
+  Partial pre-rendering encountered an error during the
+  static shell generation.
+
+  Fix: Check the component for dynamic data access during
+       the static shell phase.
+```
+
+**วิธีแก้**: ตรวจสอบ component สำหรับ dynamic data access ใน static shell phase
+
+---
+
+## RUV1600-1699: Config / Adapter Definition Errors
+
+ข้อผิดพลาดเกี่ยวกับ config loading, validation, และ adapter definition
+
+### RUV1600: การโหลด config ล้มเหลว
+
+**Title**: Config load failed
+
+**คำอธิบาย**: ไม่สามารถโหลด `ruvyxa.config.ts` — runtime error หรือ import ผิด
+
+**Error text**: `RUV1600: Failed to load config file: <error>`
+
+**สาเหตุทั่วไป**:
+
+- Import path ผิด
+- Runtime error ใน config
+- Module not found
+
+**วิธีแก้**: ตรวจ import, syntax, ติดตั้ง dependencies ที่จำเป็น
+
+### RUV1601: ค่าฟิลด์ config ไม่ถูกต้อง
+
+**Title**: Config field value invalid
+
+**คำอธิบาย**: ค่าใน config field ไม่ถูกต้อง — เช่น type ผิด หรือค่านอกช่วง
+
+**Error text**: `RUV1601: Config field <field> value <value> is invalid: <detail>`
+
+**วิธีแก้**: แก้ไขค่าฟิลด์ให้ถูกต้องตาม schema
+
+### RUV1602: ค่าฟิลด์ config เกินค่าสูงสุด
+
+**Title**: Config field value exceeds maximum
+
+**คำอธิบาย**: ค่าใน config field เกินขีดจำกัดสูงสุดที่อนุญาต
+
+**Error text**: `RUV1602: Config field <field> value <value> exceeds maximum <max>`
+
+**วิธีแก้**: ปรับค่าให้อยู่ในช่วงที่อนุญาต
+
+### RUV1603: Adapter ต้องมีฟังก์ชัน build()
+
+**Title**: Adapter must implement build()
+
+**คำอธิบาย**: Adapter object ไม่มีฟังก์ชัน `build()` — Ruvyxa ต้องการ `build()` สำหรับ deployment
+
+**Error text**: `RUV1603: Adapter <name> must have a build() function`
+
+**วิธีแก้**: เพิ่มฟังก์ชัน `build()` ใน adapter:
+
+```ts
+export default {
+  name: 'my-adapter',
+  build: async (context) => {
+    // implementation
+  },
+}
+```
+
+---
+
+## RUV1700-1799: Plugin Bridge Errors
+
+ข้อผิดพลาดเกี่ยวกับ communication ระหว่าง Rust host และ JS plugin worker
+
+### RUV1700: Plugin hook timeout / host หยุดทำงาน
+
+**Title**: Plugin hook timeout or host crashed
+
+**คำอธิบาย**: Plugin hook ใช้เวลาเกินกำหนด หรือ host process หยุดทำงานกะทันหัน
+
+```
+RUV1700: TypeScript plugin hook timed out after 30000 ms
+
+  Plugin: my-plugin
+  Hook: http.onRequest
+
+  The plugin exceeded middleware.timeoutMs.
+
+  Fix: Reduce plugin work or increase middleware.timeoutMs.
+```
+
+**วิธีแก้**: ลดงานใน plugin hook หรือเพิ่ม `middleware.timeoutMs`
+
+### RUV1701: Plugin protocol error
+
+**Title**: Plugin protocol error
+
+**คำอธิบาย**: Communication protocol ระหว่าง Rust host และ JS worker ผิดพลาด — invalid JSON หรือ
+message format
+
+```
+RUV1701: TypeScript plugin host returned invalid JSON
+
+  The plugin host sent malformed JSON over the IPC channel.
+
+  Fix: This is likely a framework or plugin bug — report it.
+```
+
+**วิธีแก้**: นี่คือ framework หรือ plugin bug — รายงานที่ GitHub issues
+
+### RUV1702: ไม่พบ Worker pool script
+
+**Title**: Worker pool script not found
+
+**คำอธิบาย**: ไม่พบ runtime script สำหรับ TypeScript plugin host (`plugin-runtime.mjs`)
+
+```
+RUV1702: Worker pool script was not found
+
+  Script: plugin-runtime.mjs
+
+  The TypeScript plugin host runtime script is missing from
+  the ruvyxa package installation.
+
+  Fix: Reinstall ruvyxa: npm install ruvyxa
+```
+
+**วิธีแก้**: ติดตั้ง ruvyxa ใหม่: `npm install ruvyxa`
+
+### RUV1704: Worker pool stream error
+
+**Title**: Worker pool stream error
+
+**คำอธิบาย**: IPC stream error ระหว่าง main process และ worker — communication ล้มเหลว
+
+**Error text**: `RUV1704: Worker pool stream error: <detail>`
+
+**วิธีแก้**: รีสตาร์ท dev server, ตรวจสอบ system resources
+
+---
+
+## RUV1800-1899: JS Runtime Errors
+
+ข้อผิดพลาดใน JavaScript runtime — module resolution, transform, circular dependencies
+
+### RUV1801: ไม่สามารถ resolve โมดูลได้
+
+**Title**: Module resolution failed
+
+**คำอธิบาย**: ไม่พบโมดูลที่ import — import path ไม่ถูกต้อง หรือไม่ได้ติดตั้ง package
+
+**Error text**: `RUV1801: Cannot resolve module <source> from <importer>`
+
+**วิธีแก้**: ตรวจสอบ import path หรือติดตั้ง package ที่ขาด:
+
+```bash
+# ตรวจ path
+import { something } from './correct/path'
+
+# ติดตั้ง package
+npm install <package-name>
+```
+
+### RUV1802: Oxc transform ล้มเหลว
+
+**Title**: Oxc transform failed
+
+**คำอธิบาย**: Oxc (Rust JavaScript/TypeScript transformer) ไม่สามารถ transform ไฟล์ได้ — syntax
+error
+
+**Error text**: `RUV1802: Oxc transform failed for <file>: <detail>`
+
+**วิธีแก้**: ตรวจสอบ syntax error ในไฟล์ที่ระบุ
+
+### RUV1803: ตรวจพบ circular dependency
+
+**Title**: Circular dependency detected
+
+**คำอธิบาย**: สองโมดูล import ซึ่งกันและกัน — สร้าง loop ใน dependency graph
+
+**Error text**: `RUV1803: Circular dependency detected: <chain>`
+
+**วิธีแก้**: แยก shared logic ไปไว้ในไฟล์ที่สาม หรือปรับโครงสร้าง import
+
+```
+// ❌ A → B → A
+// a.ts imports b.ts imports a.ts
+
+// ✅ A → C ← B
+// a.ts imports c.ts, b.ts imports c.ts
+```
+
+### RUV1804: JSX runtime ต้องเป็น classic หรือ automatic
+
+**Title**: JSX runtime must be 'classic' or 'automatic'
+
+**คำอธิบาย**: ค่า jsxRuntime ใน config ไม่ถูกต้อง — ต้องเป็น `"classic"` หรือ `"automatic"`
+
+**Error text**: `RUV1804: JSX runtime <value> is invalid. Must be "classic" or "automatic"`
+
+**วิธีแก้**: ตั้งค่า jsxRuntime เป็น `"classic"` หรือ `"automatic"` ใน config
+
+---
+
+## RUV2000-2200: Adapter / Plugin Definition Errors
+
+ข้อผิดพลาดเกี่ยวกับ adapter API, plugin definition, และ build hooks
+
+### RUV2000: BuildContext validation ล้มเหลว
+
+**Title**: BuildContext validation failed
+
+**คำอธิบาย**: BuildContext ที่ส่งให้ adapter ไม่ผ่าน validation — field ที่จำเป็นหายไป
+
+```
+RUV2000: BuildContext.root is required and must be a non-empty string
+
+  Adapter: vercelAdapter
+
+  Fix: Ensure the adapter receives a valid BuildContext.
+```
+
+**วิธีแก้**: ตรวจสอบว่า adapter ได้รับ BuildContext ที่ถูกต้อง
+
+### RUV2001: ค่า options ของ adapter ไม่ถูกต้อง
+
+**Title**: Adapter option invalid
+
+**คำอธิบาย**: ค่า options ที่ส่งให้ adapter ไม่ถูกต้อง — แต่ละ adapter มี validation ของตัวเอง
+
+```
+[RUV2001] vercelAdapter: "regions" must be a non-empty array of region codes, such as ["sin1"]
+[RUV2001] netlifyAdapter: "functionsDir" must not be an empty string
+[RUV2001] cloudflareAdapter: "workerEntry" must be a string
+[RUV2001] staticAdapter: "outputDir" overlaps protected build output
+```
+
+**วิธีแก้**: ดู error message และแก้ไข options ให้ถูกต้องตาม schema ของ adapter
+
+### RUV2102: Plugin definition ไม่ถูกต้อง
+
+**Title**: Invalid plugin definition
+
+**คำอธิบาย**: ฟังก์ชัน `definePlugin()` ส่งค่าที่ไม่ถูกต้อง — validation error จาก plugin schema
+
+```
+RUV2102: Ruvyxa plugin must be an object.
+RUV2102: Ruvyxa plugin must have a non-empty name.
+RUV2102: Ruvyxa plugin "my-plugin" register must be a function.
+RUV2102: Ruvyxa plugin "my-plugin" http.onRequest must be a function.
+```
+
+**วิธีแก้**: ดู error message ที่ระบุฟิลด์ที่ผิดพลาดและแก้ไข
+
+### RUV2200: Adapter build hook ล้มเหลว
+
+**Title**: Adapter build hook failed
+
+**คำอธิบาย**: Adapter `build()` hook ล้มเหลวระหว่าง build process
+
+**Error text**: `RUV2200: Adapter <name> build hook failed: <detail>`
+
+**วิธีแก้**: ตรวจสอบ error details, ตรวจ compatibility ของ adapter กับ project
+
+---
+
+## RUV3000-3201: Official Package Errors
+
+### @ruvyxa/database errors
+
+| Code        | Title                    | Cause                           | Fix                    |
+| ----------- | ------------------------ | ------------------------------- | ---------------------- |
+| **RUV3001** | Database operation error | Invalid args, model name unsafe | Check query parameters |
+| **RUV3002** | Adapter error            | Adapter-specific failure        | Check adapter logs     |
+| **RUV3003** | Connection failed        | Database unreachable            | Check DATABASE_URL     |
+
+### @ruvyxa/auth errors
+
+| Code        | Title                  | Cause                        | Fix                      |
+| ----------- | ---------------------- | ---------------------------- | ------------------------ |
+| **RUV3100** | Auth service error     | Magic link delivery failed   | Check email provider     |
+| **RUV3101** | Auth request invalid   | Cross-origin, body too large | Fix request, reduce body |
+| **RUV3102** | WebAuthn error         | Platform authenticator issue | Check browser            |
+| **RUV3103** | OAuth state invalid    | State mismatch or expired    | Re-authenticate          |
+| **RUV3104** | OAuth provider error   | Token/profile request failed | Check provider           |
+| **RUV3105** | Production store error | Non-durable store            | Use persistent store     |
+
+### @ruvyxa/realtime errors
+
+| Code        | Title          | Cause              | Fix                  |
+| ----------- | -------------- | ------------------ | -------------------- |
+| **RUV3201** | Realtime error | Protocol violation | Check message format |
 
 ---
 
@@ -1381,7 +1000,7 @@ export default function ErrorPage({
 
 ```
 app/error.tsx         → ระดับ root — ทุก route
-app/blog/error.tsx    → เฉพาะ /blog/* รoutes
+app/blog/error.tsx    → เฉพาะ /blog/* routes
 app/blog/[slug]/error.tsx → เฉพาะ /blog/:slug
 ```
 
@@ -1519,9 +1138,7 @@ app/dashboard/loading.tsx → เฉพาะ /dashboard/*
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
-│  ⚠  Ruvyxa Error                                              │
-│                                                                │
-│  RUV1008: Private environment variable                         │
+│  ⚠  RUV1008: Private environment variable                      │
 │                                                                │
 │  ┌─── File ─────────────────────────────────────────────────┐  │
 │  │  app/page.tsx:3:15                                        │  │
@@ -1577,17 +1194,17 @@ export const createUser = action(async (data: FormData) => {
     const name = data.get('name') as string
 
     if (!email || !email.includes('@')) {
-      throw new RuvyxaError('RUV1404', 'กรุณากรอกอีเมลที่ถูกต้อง')
+      throw new RuvyxaError('RUV1200', 'กรุณากรอกอีเมลที่ถูกต้อง')
     }
 
     if (!name || name.length < 2) {
-      throw new RuvyxaError('RUV1404', 'ชื่อต้องมีอย่างน้อย 2 ตัวอักษร')
+      throw new RuvyxaError('RUV1200', 'ชื่อต้องมีอย่างน้อย 2 ตัวอักษร')
     }
 
     // 2. Business logic
     const existing = await db.user.findUnique({ where: { email } })
     if (existing) {
-      throw new RuvyxaError('RUV1404', 'อีเมลนี้มีผู้ใช้แล้ว')
+      throw new RuvyxaError('RUV1200', 'อีเมลนี้มีผู้ใช้แล้ว')
     }
 
     const user = await db.user.create({
@@ -1608,7 +1225,7 @@ export const createUser = action(async (data: FormData) => {
     console.error('Unexpected error in createUser:', error)
     return {
       error: 'เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ',
-      code: 'RUV1404',
+      code: 'RUV1200',
     }
   }
 })
@@ -1674,7 +1291,7 @@ export async function GET(request: Request) {
     console.error('GET /api/users error:', error)
     return NextResponse.json(
       {
-        error: 'RUV1405',
+        error: 'RUV1200',
         message: 'ไม่สามารถดึงข้อมูลผู้ใช้ได้',
         details:
           process.env.NODE_ENV === 'development'
@@ -1696,7 +1313,7 @@ export async function POST(request: Request) {
     // Validate
     if (!body.email || !body.name) {
       return NextResponse.json(
-        { error: 'RUV1405', message: 'ข้อมูลไม่ครบ: email และ name' },
+        { error: 'RUV1200', message: 'ข้อมูลไม่ครบ: email และ name' },
         { status: 400 },
       )
     }
@@ -1709,7 +1326,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json(
       {
-        error: 'RUV1405',
+        error: 'RUV1200',
         message: isValidation ? 'ข้อมูล JSON ไม่ถูกต้อง' : 'ไม่สามารถสร้างผู้ใช้ได้',
       },
       { status },
@@ -1802,95 +1419,92 @@ ruvyxa trace             # build trace — timing, dependencies
 
 ## ตาราง Error Codes — ทุก code
 
-| Code        | Title                             | ช่วง     | Severity |
-| ----------- | --------------------------------- | -------- | -------- |
-| **RUV1000** | Missing 'use client' directive    | Boundary | Error    |
-| **RUV1001** | Private server import in client   | Boundary | Error    |
-| **RUV1002** | Client hook in server component   | Boundary | Error    |
-| **RUV1003** | Ambiguous route                   | Boundary | Error    |
-| **RUV1004** | Duplicate route parameter         | Boundary | Error    |
-| **RUV1005** | Missing SEO metadata              | Boundary | Warning  |
-| **RUV1006** | Missing layout file               | Boundary | Warning  |
-| **RUV1007** | Client boundary violation (chain) | Boundary | Error    |
-| **RUV1008** | Private env var in client         | Boundary | Error    |
-| **RUV1009** | Server-only hook in component     | Boundary | Error    |
-| **RUV1010** | Missing server action directive   | Boundary | Error    |
-| **RUV1100** | Route file not found              | Route    | Error    |
-| **RUV1101** | Route not found (404)             | Route    | Info     |
-| **RUV1102** | Invalid route parameter           | Route    | Error    |
-| **RUV1103** | Static path conflict              | Route    | Warning  |
-| **RUV1104** | Page not in manifest              | Route    | Error    |
-| **RUV1105** | API route conflict                | Route    | Error    |
-| **RUV1106** | Route group misconfiguration      | Route    | Warning  |
-| **RUV1107** | Interception route error          | Route    | Error    |
-| **RUV1200** | Config syntax error               | Config   | Error    |
-| **RUV1201** | Config load failed                | Config   | Error    |
-| **RUV1202** | Unknown config field              | Config   | Warning  |
-| **RUV1203** | Config validation error           | Config   | Error    |
-| **RUV1204** | Config type error                 | Config   | Error    |
-| **RUV1205** | Missing config file               | Config   | Warning  |
-| **RUV1206** | Plugin config conflict            | Config   | Error    |
-| **RUV1207** | Env var validation error          | Config   | Error    |
-| **RUV1300** | Build init failed                 | Build    | Error    |
-| **RUV1301** | Compilation error                 | Build    | Error    |
-| **RUV1302** | Module resolution failed          | Build    | Error    |
-| **RUV1303** | Bundle failed                     | Build    | Error    |
-| **RUV1304** | Image optimization failed         | Build    | Warning  |
-| **RUV1305** | Style collection failed           | Build    | Error    |
-| **RUV1306** | Boundary check failed             | Build    | Error    |
-| **RUV1307** | Build timeout                     | Build    | Error    |
-| **RUV1308** | Code splitting error              | Build    | Error    |
-| **RUV1309** | Minification error                | Build    | Error    |
-| **RUV1400** | Server start failed               | Server   | Error    |
-| **RUV1401** | Runtime error                     | Server   | Error    |
-| **RUV1402** | Worker pool exhausted             | Server   | Warning  |
-| **RUV1403** | Server cache error                | Server   | Warning  |
-| **RUV1404** | Action execution failed           | Server   | Error    |
-| **RUV1405** | API route error                   | Server   | Error    |
-| **RUV1406** | Session error                     | Server   | Warning  |
-| **RUV1407** | Middleware error                  | Server   | Error    |
-| **RUV1408** | SSR render error                  | Server   | Error    |
-| **RUV1409** | Static path generation error      | Server   | Error    |
-| **RUV1500** | Worker pool init failed           | Worker   | Error    |
-| **RUV1501** | Worker crash                      | Worker   | Error    |
-| **RUV1502** | Worker timeout                    | Worker   | Error    |
-| **RUV1503** | Worker protocol error             | Worker   | Error    |
-| **RUV1504** | Worker init failed                | Worker   | Error    |
-| **RUV1510** | Socket registry connection failed | Worker   | Error    |
-| **RUV1511** | Socket registry timeout           | Worker   | Error    |
-| **RUV1512** | Socket registry message too large | Worker   | Error    |
-| **RUV1513** | Socket registry queue full        | Worker   | Warning  |
-| **RUV1600** | Plugin registration failed        | Plugin   | Error    |
-| **RUV1601** | Plugin config invalid             | Plugin   | Error    |
-| **RUV1602** | Plugin config out of range        | Plugin   | Error    |
-| **RUV1603** | Plugin not found                  | Plugin   | Error    |
-| **RUV1604** | Plugin hook failure               | Plugin   | Error    |
-| **RUV1605** | Plugin dependency conflict        | Plugin   | Warning  |
-| **RUV1606** | Plugin circular dependency        | Plugin   | Error    |
-| **RUV1700** | Adapter not found                 | Deploy   | Error    |
-| **RUV1701** | Adapter build failed              | Deploy   | Error    |
-| **RUV1702** | Bundle budget exceeded            | Deploy   | Error    |
-| **RUV1703** | Missing build artifacts           | Deploy   | Error    |
-| **RUV1704** | Adapter incompatibility           | Deploy   | Error    |
-| **RUV1705** | Missing env var for deploy        | Deploy   | Error    |
-| **RUV1706** | Deploy health check failed        | Deploy   | Error    |
-| **RUV1707** | Staging swap failed               | Deploy   | Error    |
+| Code        | Title (Thai)                        | ช่วง              | Severity |
+| ----------- | ----------------------------------- | ----------------- | -------- |
+| **RUV1001** | ไม่พบไดเรกทอรี app                  | Boundary / Graph  | Error    |
+| **RUV1002** | Segment route dynamic ไม่ถูกต้อง    | Boundary / Graph  | Error    |
+| **RUV1003** | เส้นทาง route ขัดแย้งกัน            | Boundary / Graph  | Error    |
+| **RUV1004** | Page ไม่มี default export           | Boundary / Graph  | Error    |
+| **RUV1007** | โมดูล server-only ใน client graph   | Boundary / Graph  | Error    |
+| **RUV1008** | ตัวแปร env ส่วนบุคคลรั่วไหล         | Boundary / Graph  | Error    |
+| **RUV1009** | โมดูล client-only ใน server graph   | Boundary / Graph  | Error    |
+| **RUV1010** | ไฟล์ใน server/ ถึง client graph     | Boundary / Graph  | Error    |
+| **RUV1100** | React SSR ล้มเหลว                   | SSR / Render      | Error    |
+| **RUV1101** | SSR renderer ขาดพารามิเตอร์         | SSR / Render      | Error    |
+| **RUV1102** | ไม่พบ SSR renderer                  | SSR / Render      | Error    |
+| **RUV1200** | การเรียก API route ล้มเหลว          | API / Server      | Error    |
+| **RUV1201** | ไม่พบพอร์ตเซิร์ฟเวอร์ที่ว่าง        | API / Server      | Error    |
+| **RUV1202** | ไม่พบ API renderer                  | API / Server      | Error    |
+| **RUV1300** | Client hydration bundling ล้มเหลว   | Bundle / Compile  | Error    |
+| **RUV1303** | ไม่พบ client route                  | Bundle / Compile  | Error    |
+| **RUV1304** | Client bundle สำหรับ non-page route | Bundle / Compile  | Error    |
+| **RUV1311** | MDX compilation error               | Bundle / Compile  | Error    |
+| **RUV1312** | Frontmatter YAML error              | Bundle / Compile  | Error    |
+| **RUV1400** | Tailwind CSS compilation ล้มเหลว    | Style             | Error    |
+| **RUV1401** | ไม่พบ Tailwind CSS CLI              | Style             | Error    |
+| **RUV1402** | Sass compilation ล้มเหลว            | Style             | Error    |
+| **RUV1403** | ไม่พบ CSS entry ที่กำหนด            | Style             | Error    |
+| **RUV1404** | CSS entry ต้องอยู่ใน project root   | Style             | Error    |
+| **RUV1500** | SSG/action render ล้มเหลว           | Worker / Params   | Error    |
+| **RUV1501** | ไม่พบไฟล์ route action              | Worker / Params   | Error    |
+| **RUV1510** | Static params รูปแบบผิด             | Worker / Params   | Error    |
+| **RUV1511** | String shorthand ไม่ถูกต้อง         | Worker / Params   | Error    |
+| **RUV1512** | Static params entry ผิด             | Worker / Params   | Error    |
+| **RUV1513** | Static params cache duration ผิด    | Worker / Params   | Error    |
+| **RUV1550** | PPR render ล้มเหลว                  | Worker / Params   | Error    |
+| **RUV1600** | การโหลด config ล้มเหลว              | Config / Adapter  | Error    |
+| **RUV1601** | ค่าฟิลด์ config ไม่ถูกต้อง          | Config / Adapter  | Error    |
+| **RUV1602** | ค่าฟิลด์ config เกินค่าสูงสุด       | Config / Adapter  | Error    |
+| **RUV1603** | Adapter ต้องมี build()              | Config / Adapter  | Error    |
+| **RUV1700** | Plugin hook timeout / host หยุด     | Plugin Bridge     | Error    |
+| **RUV1701** | Plugin protocol error               | Plugin Bridge     | Error    |
+| **RUV1702** | ไม่พบ Worker pool script            | Plugin Bridge     | Error    |
+| **RUV1704** | Worker pool stream error            | Plugin Bridge     | Error    |
+| **RUV1801** | ไม่สามารถ resolve โมดูล             | JS Runtime        | Error    |
+| **RUV1802** | Oxc transform ล้มเหลว               | JS Runtime        | Error    |
+| **RUV1803** | Circular dependency                 | JS Runtime        | Error    |
+| **RUV1804** | JSX runtime ไม่ถูกต้อง              | JS Runtime        | Error    |
+| **RUV2000** | BuildContext validation ล้มเหลว     | Adapter / Plugin  | Error    |
+| **RUV2001** | ค่า options ของ adapter ไม่ถูกต้อง  | Adapter / Plugin  | Error    |
+| **RUV2102** | Plugin definition ไม่ถูกต้อง        | Adapter / Plugin  | Error    |
+| **RUV2200** | Adapter build hook ล้มเหลว          | Adapter / Plugin  | Error    |
+| **RUV3001** | Database operation error            | Official Packages | Error    |
+| **RUV3002** | Database adapter error              | Official Packages | Error    |
+| **RUV3003** | Database connection failed          | Official Packages | Error    |
+| **RUV3100** | Auth service error                  | Official Packages | Error    |
+| **RUV3101** | Auth request invalid                | Official Packages | Error    |
+| **RUV3102** | WebAuthn error                      | Official Packages | Error    |
+| **RUV3103** | OAuth state invalid                 | Official Packages | Error    |
+| **RUV3104** | OAuth provider error                | Official Packages | Error    |
+| **RUV3105** | Production store error              | Official Packages | Error    |
+| **RUV3201** | Realtime error                      | Official Packages | Error    |
 
 ---
 
 ## Troubleshooting — Quick Reference
 
-| Error Code   | ปัญหาที่พบบ่อย      | วิธีแก้ด่วน                                           |
-| ------------ | ------------------- | ----------------------------------------------------- |
-| RUV1000-1010 | Boundary violations | ตรวจ `'use client'` และ imports                       |
-| RUV1100-1105 | Route ไม่ match     | สร้าง `not-found.tsx`, ตรวจ route structure           |
-| RUV1201-1205 | Config error        | ตรวจ `ruvyxa.config.ts` — syntax, import, field names |
-| RUV1301-1304 | Build fails         | `ruvyxa clean && ruvyxa build` — ดู error message     |
-| RUV1401-1406 | Runtime error       | ดู stack trace, เพิ่ม try/catch, ตรวจ env vars        |
-| RUV1501-1504 | Worker failed       | รีสตาร์ท dev server, ตรวจ Node.js/Bun version         |
-| RUV1510-1513 | Socket registry     | อัปเดต Ruvyxa, ตรวจ plugin compatibility              |
-| RUV1600-1604 | Plugin config       | ตรวจ plugin options, range, npm install               |
-| RUV1700-1705 | Deploy              | ติดตั้ง adapter, optimize bundle, ตรวจ artifacts      |
+| Error Code(s)       | ปัญหาที่พบบ่อย      | วิธีแก้ด่วน                                         |
+| ------------------- | ------------------- | --------------------------------------------------- |
+| RUV1007-1010        | Boundary violations | ตรวจ `'use client'`, imports, env vars              |
+| RUV1001-1004        | Route discovery     | ตรวจ `app/` directory, route names, default exports |
+| RUV1100-1102        | SSR / Render        | ตรวจ component, `error.tsx`, default export         |
+| RUV1200-1202        | API / Port          | ตรวจ route handler, port config, try/catch          |
+| RUV1300, 1303-1304  | Bundle / Hydration  | `ruvyxa clean && ruvyxa build`, ดู error message    |
+| RUV1311-1312        | MDX / Frontmatter   | ตรวจ syntax MDX และ YAML                            |
+| RUV1400-1404        | Style / CSS         | ตรวจ Tailwind config, SCSS syntax, css.entries      |
+| RUV1500-1501        | Render / Action     | ดู server logs, ตรวจ action files                   |
+| RUV1510-1513        | Static params       | ตรวจ `getStaticParams` return shape                 |
+| RUV1550             | PPR                 | ตรวจ component ใน static shell phase                |
+| RUV1600-1603        | Config / Adapter    | ตรวจ config fields, adapter implements build()      |
+| RUV1700, 1702, 1704 | Plugin bridge       | รีสตาร์ท dev server, `npm install ruvyxa`           |
+| RUV1701             | Plugin protocol     | อัปเดต Ruvyxa, ตรวจ plugin compatibility            |
+| RUV1801-1804        | JS Runtime          | ตรวจ import paths, syntax, circular deps            |
+| RUV2000-2001        | Adapter config      | ตรวจ BuildContext และ adapter options               |
+| RUV2102             | Plugin definition   | ตรวจ `definePlugin()` return value                  |
+| RUV2200             | Build hook          | ตรวจ adapter compatibility                          |
+| RUV3001-3003        | Database            | ตรวจ DATABASE_URL, adapter logs                     |
+| RUV3100-3105        | Auth                | ตรวจ provider config, OAuth state                   |
+| RUV3201             | Realtime            | ตรวจ message format                                 |
 
 ---
 
@@ -1913,9 +1527,10 @@ ruvyxa trace             # build trace — timing, dependencies
 
 ## สรุป
 
-- Error codes: RUV1000-1799 — แบ่งเป็น 8 ช่วง: boundary, route, config, build, server, worker,
-  plugin, deploy
-- รวม 65+ error codes แต่ละตัวมี: code, title, คำอธิบาย, error text, วิธีแก้
+- Error codes: RUV1001-3201 — แบ่งเป็น 11 ช่วง: boundary/graph, SSR/render, API/server,
+  bundle/compile, style, worker/params, config/adapter, plugin bridge, JS runtime, adapter/plugin
+  def, official packages
+- รวม 50+ error codes แต่ละตัวมี: code, title, คำอธิบาย, error text, วิธีแก้
 - Error boundary: `error.tsx` (catch errors), `not-found.tsx` (404), `loading.tsx` (loading state)
 - Error overlay ใน dev mode — แสดง file, line, why, fix, dismiss, reload, open in editor
 - Server actions และ API routes: จัดการด้วย try/catch + `RuvyxaError`

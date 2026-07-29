@@ -65,56 +65,50 @@ struct SourceSpan {
 Fire when crossing server/client boundary illegally. Detected by the bundler during module graph
 analysis.
 
-| Code    | Title                         | Cause                                          | Fix                                               |
-| ------- | ----------------------------- | ---------------------------------------------- | ------------------------------------------------- |
-| RUV1000 | Server-only module in client  | `import "server-only"` in client bundle        | Remove import or restructure code                 |
-| RUV1001 | Server-only package in client | Server-side package import in `'use client'`   | Use `/client` subpath or move to server component |
-| RUV1002 | Client boundary violation     | Server component usage in client context       | Add `'use client'` or restructure                 |
-| RUV1003 | Ambiguous route               | Two files match same URL pattern               | Remove or rename conflicting file                 |
-| RUV1004 | Duplicate route               | Two files have identical URL                   | Delete one                                        |
-| RUV1005 | Invalid route parameter       | Route param does not match constraints         | Check `GetStaticParams` or path structure         |
-| RUV1006 | Hook called outside component | `useState`/`useEffect` outside React component | Only call hooks inside components                 |
-| RUV1007 | Import boundary violation     | Server-only import in client bundle            | Use `/client` subpath                             |
-| RUV1008 | Private env variable leaked   | `process.env.SECRET` in client bundle          | Prefix with `RUVYXA_PUBLIC_` or move to server    |
-| RUV1009 | Client-only module in SSR     | `'use client'` only module imported in SSR     | Add server-compatible fallback                    |
-| RUV1010 | `server/` directory in client | File inside `server/` reachable from client    | Restructure imports                               |
+| Code    | Title                                              | Cause                                                | Fix                                                    |
+| ------- | -------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------ |
+| RUV1001 | App directory was not found                        | Missing `app/` directory at project root             | Create `app/` directory                                |
+| RUV1002 | Invalid dynamic route segment                      | Route segment uses disallowed characters or syntax   | Use correct `[param]`, `[...param]`, or `[[...param]]` |
+| RUV1003 | Conflicting route paths                            | Two files match same URL pattern                     | Remove or rename conflicting file                      |
+| RUV1004 | Page is missing a default export                   | Page file lacks `export default`                     | Add `export default function Page() { ... }`           |
+| RUV1007 | Server-only module imported into client bundle     | `import "server-only"` reachable from client bundle  | Move server code behind API route or loader            |
+| RUV1008 | Private environment variable used in client bundle | `process.env.SECRET` in client-reachable code        | Prefix with `RUVYXA_PUBLIC_` or move to server         |
+| RUV1009 | Client-only module imported into SSR graph         | `'client-only'` module reachable from server runtime | Use dynamic import with `{ ssr: false }`               |
+| RUV1010 | Server directory module reached by client graph    | File inside `server/` directory imported from client | Restructure imports                                    |
 
-#### RUV1000 — Server-only module in client
+#### RUV1001 — App directory was not found
 
 ```
-RUV1000: Server-only module in client bundle
+RUV1001: App directory was not found
 
-  Module: server-only
-  File: app/components/UserCard.tsx:3
-  Import chain:
-    app/components/UserCard.tsx
-    app/lib/auth.ts
+  The project root does not contain an `app/` directory.
 
-  Fix: Remove the `import "server-only"` statement or
-       move the file out of the client component tree.
+  Fix: Create the `app/` directory at the project root.
 ```
 
-**Source**: `crates/ruvyxa_bundler/src/boundary.rs:66` **Detection**: At build time when bundler
-walks module graph and encounters `server-only` import in a client reachable module.
+**Source**: `crates/ruvyxa_graph/src/lib.rs:172`
 
-#### RUV1001 — Server-only package in client
-
-```
-RUV1001: Private import
-
-  File: app/components/Profile.tsx:1
-  Import: @ruvyxa/database
-
-  Fix: Use @ruvyxa/database from a server component or
-       server action only.
-```
-
-**Source**: `crates/ruvyxa_diagnostics/src/lib.rs`
-
-#### RUV1003 — Ambiguous route
+#### RUV1002 — Invalid dynamic route segment
 
 ```
-RUV1003: Ambiguous route
+RUV1002: Invalid dynamic route segment
+
+  File: app/products/[id].tsx
+
+  Route segment uses characters that are not allowed for
+  dynamic segments. Catch-all segments must be the final
+  URL segment.
+
+  Fix: Use `[param]` for single, `[...param]` for catch-all,
+       `[[...param]]` for optional catch-all.
+```
+
+**Source**: `crates/ruvyxa_graph/src/lib.rs:1138`
+
+#### RUV1003 — Conflicting route paths
+
+```
+RUV1003: Conflicting route paths
 
   Route: /products/[id]
   Files:
@@ -127,31 +121,42 @@ RUV1003: Ambiguous route
        they have different parameter names.
 ```
 
-#### RUV1007 — Import boundary violation
+**Source**: `crates/ruvyxa_graph/src/lib.rs:1501`
+
+#### RUV1004 — Page is missing a default export
 
 ```
-RUV1007: Private import
+RUV1004: Page is missing a default export
 
-  Package: @ruvyxa/database
-  File: app/components/UserList.tsx:1
+  File: app/about/page.tsx
+
+  Fix: Add `export default function Page() { ... }`
+```
+
+**Source**: `crates/ruvyxa_graph/src/lib.rs:300`
+
+#### RUV1007 — Server-only module imported into client bundle
+
+```
+RUV1007: Server-only module imported into client bundle
+
+  Module: server-only
+  File: app/components/UserCard.tsx:3
   Import chain:
-    app/components/UserList.tsx (client)
-    app/lib/db.ts
+    app/components/UserCard.tsx
+    app/lib/auth.ts
 
-  Server-only packages cannot be imported in client bundles.
-
-  Fix: Move the database access to a server action or
-       use @ruvyxa/auth/client instead of @ruvyxa/auth.
+  Fix: Remove the `import "server-only"` statement or
+       move the file out of the client component tree.
 ```
 
-**Source**: `crates/ruvyxa_bundler/src/boundary.rs:73` **Detection**: When bundler traces `import`
-from a client entry and reaches a package with `"sideEffects": false` or a known server-only
-package.
+**Source**: `crates/ruvyxa_bundler/src/boundary.rs:73` **Detection**: At build time when bundler
+walks module graph and encounters `server-only` import in a client reachable module.
 
-#### RUV1008 — Private env variable leaked
+#### RUV1008 — Private environment variable used in client bundle
 
 ```
-RUV1008: Private environment variable leaked to client bundle
+RUV1008: Private environment variable used in client bundle
 
   Variable: DATABASE_URL
   File: app/components/UserCard.tsx:12
@@ -175,7 +180,7 @@ component that would ship it to browsers.
 **Edge case**: Variables accessed only inside `if (typeof window === 'undefined')` guards are
 considered server-only and do not trigger RUV1008.
 
-#### RUV1009 — Client-only module in SSR
+#### RUV1009 — Client-only module imported into SSR graph
 
 ```
 RUV1009: Client-only module imported into SSR graph
@@ -191,10 +196,10 @@ RUV1009: Client-only module imported into SSR graph
 
 **Source**: `crates/ruvyxa_bundler/src/boundary.rs:132`
 
-#### RUV1010 — server/ directory in client
+#### RUV1010 — Server directory module reached by client graph
 
 ```
-RUV1010: File inside server/ directory reachable by client graph
+RUV1010: Server directory module reached by client graph
 
   File: app/server/db.ts
   Imported in: app/components/List.tsx
@@ -210,58 +215,39 @@ RUV1010: File inside server/ directory reachable by client graph
 
 ---
 
-### RUV1100–1199: Route Errors
+### RUV1100–1199: SSR Renderer Errors
 
-| Code    | Title                                   | Cause                                           | Fix                                       |
-| ------- | --------------------------------------- | ----------------------------------------------- | ----------------------------------------- |
-| RUV1100 | Route not found                         | No file matches requested URL                   | Create route file or check URL            |
-| RUV1101 | Route parse failure                     | File system scanning error                      | Check for invalid characters in filenames |
-| RUV1102 | Route conflict / SSR renderer not found | Layout and page conflict, or renderer missing   | Restructure route hierarchy               |
-| RUV1103 | Invalid layout export                   | Layout does not export default component        | Add `export default function Layout(...)` |
-| RUV1104 | Invalid page export                     | Page missing default export                     | Add `export default function Page(...)`   |
-| RUV1105 | Missing params export                   | Dynamic route without `GetStaticParams` for SSG | Export `GetStaticParams` function         |
-| RUV1106 | Params type mismatch                    | Route params do not match TypeScript types      | Check `params` prop type                  |
+| Code    | Title                      | Cause                                     | Fix                                               |
+| ------- | -------------------------- | ----------------------------------------- | ------------------------------------------------- |
+| RUV1100 | React SSR failed           | React rendering threw on server           | Check page component, imports, React dependencies |
+| RUV1101 | SSR renderer args missing  | SSR renderer called without required args | Framework bug — report                            |
+| RUV1102 | SSR renderer was not found | Route has layout but no SSR renderer      | Ensure page file exports a default component      |
 
-#### RUV1100 — Route not found
+#### RUV1100 — React SSR failed
 
 ```
-RUV1100: Route not found
+RUV1100: React SSR failed
 
-  URL: /products/123
-  Method: GET
+  Route: /dashboard
+  Error: The page component threw during server-side rendering.
 
-  None of the scanned routes matched this URL.
-
-  Scanned routes:
-    SSR  /
-    SSR  /about
-    SSR  /blog/[slug]
-    API  /api/hello
-
-  Fix: Create app/products/[id]/page.tsx
-       or check that the URL is correct.
+  Fix: Check the page component, its imports, and whether
+       React dependencies are installed.
 ```
 
-**Source**: `crates/ruvyxa_dev_server/src/render_pipeline.rs:773`
+**Source**: `crates/ruvyxa_dev_server/src/render_pipeline.rs:782`
 
-#### RUV1101 — Route parse failure
+#### RUV1101 — SSR renderer args missing
 
 ```
-RUV1101: Route parse failure
+RUV1101: SSR renderer requires projectRoot, appDir, and pageFile arguments
 
-  File: app/products/[id].tsx
-
-  File name contains invalid characters for route parsing.
-
-  Fix: Rename the file to use valid route naming conventions.
-       Dynamic segments: [param]
-       Catch-all: [...param]
-       Optional catch-all: [[...param]]
+  Fix: This is likely a framework bug — report it.
 ```
 
-**Source**: File system scanner
+**Source**: `packages/ruvyxa/runtime/ssr-renderer.mjs:21`
 
-#### RUV1102 — Route conflict / SSR renderer not found
+#### RUV1102 — SSR renderer was not found
 
 ```
 RUV1102: SSR renderer was not found
@@ -275,232 +261,85 @@ RUV1102: SSR renderer was not found
 
 **Source**: `crates/ruvyxa_dev_server/src/render_pipeline.rs:1205`
 
-#### RUV1103 — Invalid layout export
-
-```
-RUV1103: Invalid layout export
-
-  File: app/layout.tsx
-
-  Layout must export a default React component.
-
-  Fix: Add `export default function RootLayout({ children }) { ... }`
-```
-
-#### RUV1104 — Invalid page export
-
-```
-RUV1104: Page is missing a default export
-
-  File: app/about/page.tsx
-
-  Fix: Add `export default function Page() { ... }`
-```
-
-**Source**: `crates/ruvyxa_dev_server/src/render_pipeline.rs:752`
-
-#### RUV1105 — Missing params export
-
-```
-RUV1105: Missing params export
-
-  Route: /blog/[slug] (type: ssg)
-
-  SSG routes with dynamic segments must export getStaticParams.
-
-  Fix: Add `export const getStaticParams = async () => [...]`
-```
-
-#### RUV1106 — Params type mismatch
-
-```
-RUV1106: Params type mismatch
-
-  Route: /products/[id]
-  Expected: { id: string }
-  Received: { slug: string }
-
-  Fix: Check that the params object returned by getStaticParams
-       matches the route's dynamic segment names.
-```
-
 ---
 
-### RUV1200–1299: Config Errors
+### RUV1200–1299: API / Port Errors
 
-| Code    | Title                                   | Cause                                            | Fix                                      |
-| ------- | --------------------------------------- | ------------------------------------------------ | ---------------------------------------- |
-| RUV1200 | Unknown config field                    | Unrecognized field in `ruvyxa.config.ts`         | Remove or rename field                   |
-| RUV1201 | Config path not found                   | `appDir` or `outDir` does not exist              | Create directory or fix path             |
-| RUV1202 | Invalid port                            | Port outside 1024–65535                          | Use valid port range                     |
-| RUV1203 | Out of range                            | Value outside allowed range                      | Adjust value                             |
-| RUV1204 | Invalid integer                         | Expected number got string                       | Fix type                                 |
-| RUV1205 | Below minimum / Prerender path conflict | Value too low, or prerender path in build output | Increase value, or change prerender path |
-| RUV1206 | Missing required field                  | Plugin missing `name`                            | Add `name` to plugin config              |
-| RUV1207 | Invalid value range                     | Negative where positive required                 | Use positive number                      |
-| RUV1208 | Invalid IP address                      | `trustedProxyIps` contains invalid IP            | Fix IP format                            |
-| RUV1209 | Config file not found                   | `ruvyxa.config.ts` missing                       | Create config file                       |
-| RUV1210 | Config type error                       | Wrong type for config field                      | Fix value type                           |
+| Code    | Title                              | Cause                              | Fix                                          |
+| ------- | ---------------------------------- | ---------------------------------- | -------------------------------------------- |
+| RUV1200 | API route execution failed         | API route handler threw            | Check route handler code, add error handling |
+| RUV1201 | No available server port was found | All ports in range are in use      | Free a port or change `server.port` range    |
+| RUV1202 | API renderer was not found         | API route has no matching renderer | Ensure route file exports handler            |
 
-#### RUV1200 — Unknown config field
+#### RUV1200 — API route execution failed
 
 ```
-RUV1200: Unknown config field
+RUV1200: API route execution failed
 
-  Field: build.foo
-  File: ruvyxa.config.ts:10
+  Route: /api/users
+  Error: Handler threw an exception during execution.
 
-  "foo" is not a recognized field in "build".
-
-  Fix: Remove "foo" or check the configuration documentation
-       for the correct field name.
+  Fix: Check the API route handler code and add
+       proper error handling.
 ```
 
-**Source**: `crates/ruvyxa_dev_server/src/render_pipeline.rs:837`
+**Source**: `crates/ruvyxa_dev_server/src/render_pipeline.rs:846`
 
-#### RUV1201 — Config path not found
+#### RUV1201 — No available server port was found
 
 ```
-RUV1201: Config path not found
+RUV1201: No available server port was found
 
-  Field: appDir
-  Value: ./src/app
+  The dev server tried all ports in the configured range
+  but none were available.
 
-  The directory "./src/app" does not exist relative to
-  the project root.
-
-  Fix: Create the directory or update the path in config.
+  Fix: Free a port on your system or configure a
+       different port range in ruvyxa.config.ts.
 ```
 
 **Source**: `crates/ruvyxa_dev_server/src/port_binding.rs:97`
 
-#### RUV1202 — Invalid port
+#### RUV1202 — API renderer was not found
 
 ```
-RUV1202: Invalid port
+RUV1202: API renderer was not found
 
-  Field: server.port
-  Value: 99999
+  Route: /api/hello
 
-  Port must be between 1024 and 65535.
+  The route file does not export a compatible API handler.
 
-  Fix: Use a port in the valid range, e.g. 3000.
+  Fix: Ensure the route file exports a request handler
+       (GET, POST, etc.).
 ```
 
-#### RUV1203 — Out of range
-
-```
-RUV1203: Out of range
-
-  Field: image.quality
-  Value: 150
-
-  quality must be between 1 and 100.
-
-  Fix: Set quality to a value between 1 and 100.
-```
-
-#### RUV1205 — Prerender path cannot be inside build output
-
-```
-RUV1205: Prerender path `/ruvyxa/index.html` for route `/`
-         cannot be written inside the build output.
-
-  The prerender output path falls inside the .ruvyxa/ build output
-  directory.
-
-  Fix: Choose a different output path for this route.
-```
-
-**Source**: `crates/ruvyxa_cli/src/main.rs:2378`
-
-#### RUV1208 — Invalid IP address
-
-```
-RUV1208: Invalid IP address
-
-  Field: security.trustedProxyIps
-  Value: not-an-ip
-
-  "not-an-ip" is not a valid IP address.
-
-  Fix: Provide valid IPv4 or IPv6 addresses.
-```
-
-**Source**: `crates/ruvyxa_cli/src/main.rs:629`
-
-#### RUV1209 — Config file not found
-
-```
-RUV1209: Config file not found
-
-  Ruvyxa requires a configuration file.
-
-  Fix: Create ruvyxa.config.ts in your project root.
-       Minimal example:
-         import { config } from 'ruvyxa/config'
-         export default config({})
-```
+**Source**: `crates/ruvyxa_dev_server/src/render_pipeline.rs:1344`
 
 ---
 
-### RUV1300–1399: Build Errors
+### RUV1300–1399: Build / Compilation Errors
 
-| Code    | Title                                       | Cause                                   | Fix                                    |
-| ------- | ------------------------------------------- | --------------------------------------- | -------------------------------------- |
-| RUV1300 | Compilation error                           | TypeScript/JSX compilation failure      | Fix syntax error                       |
-| RUV1301 | Module resolution failure                   | Cannot resolve import                   | Install package or fix import path     |
-| RUV1302 | Bundle too large                            | Exceeds `bundleBudget` limits           | Reduce size or increase budget         |
-| RUV1303 | Minification error / Client route not found | Minifier error, or client route missing | Fix syntax, rebuild                    |
-| RUV1304 | Source map error / Client bundle non-page   | Source map generation failed            | Usually benign                         |
-| RUV1305 | Worker crash during build                   | Build worker fatal error                | Check logs, reduce parallelism         |
-| RUV1306 | Image optimization failure                  | Image processing error                  | Check file validity                    |
-| RUV1307 | Out of memory                               | Build exceeds memory                    | Reduce `build.workers` or increase RAM |
-| RUV1312 | Frontmatter YAML error                      | MD/MDX frontmatter syntax               | Fix YAML frontmatter                   |
+| Code    | Title                                | Cause                                   | Fix                      |
+| ------- | ------------------------------------ | --------------------------------------- | ------------------------ |
+| RUV1300 | Client hydration bundling failed     | Client bundle for hydration failed      | Check compilation errors |
+| RUV1303 | Client route was not found           | Client bundle for CSR route missing     | Rebuild the application  |
+| RUV1304 | Client bundle requested for non-page | Bundle requested for API/non-page route | Framework bug — report   |
+| RUV1311 | MDX compilation error                | MDX file has invalid syntax             | Fix MDX syntax           |
+| RUV1312 | Frontmatter YAML error               | MD/MDX frontmatter is invalid           | Fix YAML frontmatter     |
 
-#### RUV1300 — Compilation error
+#### RUV1300 — Client hydration bundling failed
 
 ```
-RUV1300: Compile error
+RUV1300: Client hydration bundling failed
 
-  File: app/page.tsx:15
-  Error: Unexpected token '}'
+  Error: The client bundle for hydration could not be built.
 
-  TypeScript compilation failed for this file.
-
-  Fix: Check for syntax errors around line 15.
+  Fix: Check the compilation output for syntax errors
+       in your components.
 ```
 
-**Source**: `crates/ruvyxa_dev_server/src/lib.rs:1835`
+**Source**: `crates/ruvyxa_dev_server/src/render_pipeline.rs:931`
 
-#### RUV1301 — Module resolution failure
-
-```
-RUV1301: Module resolution failure
-
-  Specifier: '@/components/Header'
-  Importer: app/page.tsx
-
-  Fix: Check that the import path is correct and the module
-       exists. If using path aliases, verify tsconfig.json paths.
-```
-
-#### RUV1302 — Bundle too large
-
-```
-RUV1302: Bundle too large
-
-  Bundle: client/dashboard.js
-  Size: 350 KB
-  Limit: 250 KB
-
-  This client bundle exceeds the bundleBudget limit.
-
-  Fix: Split the bundle with dynamic imports, or increase
-       bundleBudget.maxSize in config.
-```
-
-#### RUV1303 — Client route not found
+#### RUV1303 — Client route was not found
 
 ```
 RUV1303: Client route was not found
@@ -515,7 +354,7 @@ RUV1303: Client route was not found
 
 **Source**: `crates/ruvyxa_dev_server/src/render_pipeline.rs:886`
 
-#### RUV1304 — Client bundle for non-page route
+#### RUV1304 — Client bundle requested for non-page route
 
 ```
 RUV1304: Client bundle requested for a non-page route
@@ -529,58 +368,47 @@ RUV1304: Client bundle requested for a non-page route
 
 **Source**: `crates/ruvyxa_dev_server/src/render_pipeline.rs:894`
 
-#### RUV1305 — Worker crash during build
+#### RUV1311 — MDX compilation error
 
 ```
-RUV1305: Worker crash during build
+RUV1311: MDX compilation error
 
-  Worker: build-worker-3
-  Signal: SIGSEGV
+  File: app/blog/post.mdx:12
 
-  A build worker process exited unexpectedly.
+  The MDX file could not be compiled due to a syntax error.
 
-  Fix: Check worker logs for crash details. Reduce
-       build.workers to lower parallelism if memory-related.
+  Fix: Check the MDX syntax around the indicated line.
 ```
 
-#### RUV1306 — Image optimization failure
+**Source**: `packages/ruvyxa/runtime/compiler.mjs:1209`
+
+#### RUV1312 — Frontmatter YAML error
 
 ```
-RUV1306: Image optimization failure
+RUV1312: Frontmatter YAML error
 
-  File: public/images/logo.png
-  Error: Input file is corrupted
+  File: app/blog/post.mdx
 
-  Fix: Replace the corrupted image file with a valid one.
+  The YAML frontmatter in this file is invalid or missing
+  a closing delimiter.
+
+  Fix: Ensure frontmatter is valid YAML with proper
+       `---` delimiters.
 ```
 
-#### RUV1307 — Out of memory
-
-```
-RUV1307: Out of memory
-
-  Current: 6.2 GB used
-  Limit: 4 GB
-
-  The build process exceeded the available memory.
-
-  Fix: Reduce build.workers in config, increase system
-       memory, or enable swap.
-```
+**Source**: `packages/ruvyxa/runtime/compiler.mjs:1325`
 
 ---
 
-### RUV1400–1499: Server Errors
+### RUV1400–1499: Style Compilation Errors
 
-| Code    | Title                                                  | Cause                         | Fix                     |
-| ------- | ------------------------------------------------------ | ----------------------------- | ----------------------- |
-| RUV1400 | Server runtime error / Tailwind CSS compilation failed | Unhandled exception           | Add try/catch           |
-| RUV1401 | Tailwind CSS CLI not found                             | Missing Tailwind binary       | Install tailwindcss     |
-| RUV1402 | Sass compilation failed                                | SCSS processing error         | Fix SCSS syntax         |
-| RUV1403 | Stylesheet import not resolved                         | CSS @import failed            | Check import path       |
-| RUV1404 | CSS entry outside project root                         | CSS path escapes root         | Move CSS file           |
-| RUV1405 | HMR connection error                                   | WebSocket for HMR failed      | Refresh, check network  |
-| RUV1406 | Rate limit exceeded                                    | Too many requests from one IP | Wait or increase limits |
+| Code    | Title                                       | Cause                               | Fix                                  |
+| ------- | ------------------------------------------- | ----------------------------------- | ------------------------------------ |
+| RUV1400 | Tailwind CSS compilation failed             | Tailwind CLI error                  | Check tailwind config, content paths |
+| RUV1401 | Tailwind CSS CLI was not found              | Missing Tailwind in node_modules    | Install tailwindcss                  |
+| RUV1402 | Sass compilation failed                     | SCSS syntax error                   | Fix SCSS syntax                      |
+| RUV1403 | Configured CSS entry was not found          | CSS file from `css.entries` missing | Check file path                      |
+| RUV1404 | CSS entry must stay inside the project root | CSS path escapes project root       | Move CSS file into project           |
 
 #### RUV1400 — Tailwind CSS compilation failed
 
@@ -622,7 +450,7 @@ RUV1402: Sass compilation failed
 
 **Source**: `crates/ruvyxa_dev_server/src/style.rs:245`
 
-#### RUV1403 — Stylesheet import not resolved
+#### RUV1403 — Configured CSS entry was not found
 
 ```
 RUV1403: Configured CSS entry was not found at: ...
@@ -650,54 +478,24 @@ RUV1404: CSS entry must stay inside the project root
 
 **Source**: `crates/ruvyxa_dev_server/src/style.rs:188`
 
-#### RUV1405 — HMR connection error
-
-```
-RUV1405: HMR connection error
-
-  WebSocket connection to ws://localhost:3000/_ruvyxa/hmr failed.
-
-  Fix: Refresh the browser. If persistent, check that the
-       dev server is running and no firewall is blocking
-       WebSocket connections.
-```
-
-#### RUV1406 — Rate limit exceeded
-
-```
-RUV1406: Rate limit exceeded
-
-  IP: 192.168.1.100
-  Route: /api/contact
-  Limit: 600 requests per 60 seconds
-
-  Fix: Wait before retrying. If this is an expected traffic
-       pattern, increase security.actionRateLimit.max or
-       security.actionRateLimit.window.
-```
-
 ---
 
-### RUV1500–1599: Worker Errors
+### RUV1500–1599: Render / Static Generation Errors
 
-| Code    | Title                                        | Cause                                               | Fix                                  |
-| ------- | -------------------------------------------- | --------------------------------------------------- | ------------------------------------ |
-| RUV1500 | Worker crash / Action error                  | Worker exited unexpectedly, or action runtime error | Check logs, reduce workload          |
-| RUV1501 | Worker timeout / Route action file not found | Worker too slow, or action file missing             | Increase timeout, create action file |
-| RUV1502 | Worker protocol error                        | NDJSON message malformed                            | Usually framework bug — report       |
-| RUV1503 | Worker initialization failed                 | Worker could not start                              | Check Node version, dependencies     |
-| RUV1504 | Worker communication error                   | IPC failure between main process and worker         | Check system resources, restart      |
-| RUV1510 | Static params resolution failed              | `getStaticParams` returned invalid data             | Fix return shape                     |
-| RUV1511 | Static params shorthand invalid              | String shorthand for multi-segment route            | Use object form                      |
-| RUV1512 | Static params shape invalid                  | Return value is not an array                        | Return array                         |
-| RUV1513 | Static params duration invalid               | Cache duration format wrong                         | Use `"10m"` or `number`              |
-| RUV1550 | PPR render failed                            | Partial pre-render error                            | Check component, reduce complexity   |
-| RUV1700 | Worker timeout (middleware)                  | Plugin middleware exceeded timeout                  | Increase timeoutMs                   |
+| Code    | Title                                                | Cause                                         | Fix                                 |
+| ------- | ---------------------------------------------------- | --------------------------------------------- | ----------------------------------- |
+| RUV1500 | SSG / action render failed                           | SSG page or server action threw               | Check logs, fix component           |
+| RUV1501 | Route action file was not found                      | Action file for route is missing              | Create action file at expected path |
+| RUV1510 | Static params must be array or object with params    | `getStaticParams` returned invalid shape      | Fix return type                     |
+| RUV1511 | Static params shorthand needs single dynamic segment | String shorthand used for multi-segment route | Use object form                     |
+| RUV1512 | Static params entry must be object or scalar         | Return value element has wrong type           | Return array of objects             |
+| RUV1513 | Static params cache duration invalid                 | Cache duration format is wrong                | Use seconds or duration string      |
+| RUV1550 | PPR render failed                                    | Partial pre-render error                      | Check component, reduce complexity  |
 
-#### RUV1500 — Worker crash
+#### RUV1500 — SSG / action render failed
 
 ```
-RUV1500: Worker crash
+RUV1500: SSG render failed
 
   Worker: render-worker-2
   Status: exit code 1
@@ -710,37 +508,7 @@ RUV1500: Worker crash
        - Native module incompatibility
 ```
 
-**Source**: `crates/ruvyxa_dev_server/src/render_pipeline.rs:316`
-
-#### RUV1500 — Action returned duplicate realtime event metadata
-
-```
-RUV1500: Action returned duplicate realtime event metadata
-
-  Action: app/actions/chat/action.ts
-
-  The action handler returned multiple realtime event metadata
-  entries, but only one is allowed per action.
-
-  Fix: Remove duplicate sendMessage.realtime() calls.
-```
-
-**Source**: `crates/ruvyxa_dev_server/src/render_pipeline.rs:1027`
-
-#### RUV1500 — Action realtime event metadata exceeds 24 KiB
-
-```
-RUV1500: Action realtime event metadata exceeds 24 KiB
-
-  Action: app/actions/notifications/action.ts
-
-  The realtime event payload attached to this action is
-  too large.
-
-  Fix: Reduce the size of the event metadata to under 24 KiB.
-```
-
-**Source**: `crates/ruvyxa_dev_server/src/render_pipeline.rs:1053`
+**Source**: `crates/ruvyxa_dev_server/src/render_pipeline.rs:320`
 
 #### RUV1501 — Route action file was not found
 
@@ -757,38 +525,25 @@ RUV1501: Route action file was not found
 
 **Source**: `crates/ruvyxa_dev_server/src/render_pipeline.rs:972`
 
-#### RUV1501 — Worker timeout
-
-```
-RUV1501: Worker timeout
-
-  Worker: render-worker-1
-  Duration: 31.2s
-  Limit: 30s
-
-  The worker did not respond within the configured limit.
-
-  Fix: Reduce the workload in the route handler or increase
-       the timeout.
-```
-
 #### RUV1510 — Static params resolution failed
 
 ```
-RUV1510: Static params resolution failed
+RUV1510: Static params must be an array or an object with a params array
 
   Route: /blog/[slug]
   getStaticParams returned: [{ slug: null }]
 
-  Static params values must be strings or numbers, not null.
+  Static params values must be strings or numbers.
 
   Fix: Filter out null/undefined values before returning.
 ```
 
+**Source**: `packages/ruvyxa/runtime/worker-pool.mjs:614`
+
 #### RUV1511 — Static params shorthand invalid
 
 ```
-RUV1511: Static params shorthand invalid
+RUV1511: Static params shorthand at index requires exactly one dynamic route segment
 
   Route: /products/[category]/[id]
   getStaticParams returned: ["electronics"]
@@ -799,10 +554,12 @@ RUV1511: Static params shorthand invalid
   Fix: Use object form: [{ category: "electronics", id: "123" }]
 ```
 
+**Source**: `packages/ruvyxa/runtime/worker-pool.mjs:621`
+
 #### RUV1512 — Static params shape invalid
 
 ```
-RUV1512: Static params shape invalid
+RUV1512: Static params entry at index must be an object or scalar
 
   Route: /posts/[slug]
   getStaticParams returned: "not-an-array"
@@ -812,10 +569,12 @@ RUV1512: Static params shape invalid
   Fix: Return an array, e.g., [{ slug: "hello" }, { slug: "world" }]
 ```
 
-#### RUV1513 — Static params duration invalid
+**Source**: `packages/ruvyxa/runtime/worker-pool.mjs:629`
+
+#### RUV1513 — Static params cache duration invalid
 
 ```
-RUV1513: Static params duration invalid
+RUV1513: Static params cache must use seconds or a duration like 10m
 
   Route: /blog/[slug]
   cache: "forever"
@@ -823,8 +582,10 @@ RUV1513: Static params duration invalid
   Cache duration must be a number (seconds) or a string like
   "10m", "1h", "1d".
 
-  Fix: Use "forever" is not valid. Use "365d" or 31536000.
+  Fix: Use "365d" or 31536000 for one year.
 ```
+
+**Source**: `packages/ruvyxa/runtime/worker-pool.mjs:644`
 
 #### RUV1550 — PPR render failed
 
@@ -840,110 +601,87 @@ RUV1550: PPR render failed
        the static shell phase.
 ```
 
-**Source**: `crates/ruvyxa_dev_server/src/render_pipeline.rs:693`
+**Source**: `crates/ruvyxa_dev_server/src/render_pipeline.rs:697`
 
 ---
 
-### RUV1600–1699: Plugin Errors
+### RUV1600–1699: Config Errors
 
-| Code    | Title                      | Cause                                           | Fix                           |
-| ------- | -------------------------- | ----------------------------------------------- | ----------------------------- |
-| RUV1600 | Plugin boundary violation  | Plugin injected server data into client context | Fix plugin boundary           |
-| RUV1601 | Plugin hook timeout        | Plugin exceeded `pluginLimit`                   | Reduce work or increase limit |
-| RUV1602 | Plugin hook error          | Unhandled exception in plugin hook              | Fix plugin code               |
-| RUV1603 | Unknown plugin             | Plugin name not recognized                      | Install or register plugin    |
-| RUV1604 | Plugin configuration error | Invalid plugin options                          | Fix plugin options            |
+| Code    | Title                               | Cause                                   | Fix                                      |
+| ------- | ----------------------------------- | --------------------------------------- | ---------------------------------------- |
+| RUV1600 | Config load failure                 | Config file threw or returned error     | Check config syntax, run `ruvyxa doctor` |
+| RUV1601 | Config field invalid                | Config field has invalid value          | Fix the field value                      |
+| RUV1602 | Config field exceeds maximum        | Config field value above allowed limit  | Reduce value                             |
+| RUV1603 | Adapter must provide build function | `config.adapter` missing `build` method | Ensure adapter exports `build(context)`  |
 
-#### RUV1600 — Plugin boundary violation
-
-```
-RUV1600: Plugin boundary violation
-
-  Plugin: my-analytics
-  Hook: resolveId
-  Detail: Plugin attempted to access process.env.SECRET_KEY
-          from a client-side context.
-
-  Fix: Check that the plugin does not inject server-only
-       values into client-facing hooks.
-```
-
-**Source**: Config validation, server startup. Plugins cannot inject server-only data into client
-bundles. The same `RUVYXA_PUBLIC_` rules apply inside plugins.
-
-#### RUV1601 — Plugin hook timeout
+#### RUV1600 — Config load failure
 
 ```
-RUV1601: Plugin hook timeout
+RUV1600: Config load failure
 
-  Plugin: my-analytics
-  Hook: buildEnd
-  Duration: 6.2s (limit: 5.0s)
+  The configuration file threw an error during loading
+  or validation.
 
-  Fix: Reduce work in the hook or increase security.pluginLimit
-       in ruvyxa.config.ts.
+  Fix: Check ruvyxa.config.ts for syntax errors and
+       run `ruvyxa doctor` for diagnostics.
 ```
 
-**Source**: `crates/ruvyxa_middleware/src/plugin_host.rs:480`
+**Source**: `crates/ruvyxa_cli/src/main.rs:1115`, `packages/ruvyxa/runtime/config-renderer.mjs:60`
 
-#### RUV1603 — Unknown plugin
-
-```
-RUV1603: Unknown plugin
-
-  Plugin: my-custom-plugin
-
-  "my-custom-plugin" is not a registered plugin name. Ensure
-  the plugin is installed and imported in ruvyxa.config.ts.
-
-  Fix: npm install my-custom-plugin
-       Then add "import myCustomPlugin from 'my-custom-plugin'"
-```
-
-#### RUV1604 — Plugin configuration error
+#### RUV1601 — Config field invalid
 
 ```
-RUV1604: Plugin configuration error
+RUV1601: Config field `server.port` must be greater than zero
 
-  Plugin: requireEnv
-  Detail: "variables" must be a non-empty array of strings
+  Field: server.port
+  Value: -1
 
-  Fix: Pass an array of environment variable names:
-       options: { variables: ["DATABASE_URL"] }
+  Fix: Provide a positive value for the field.
 ```
+
+**Source**: `crates/ruvyxa_cli/src/main.rs:595`, `packages/ruvyxa/runtime/config-renderer.mjs:16`
+
+#### RUV1602 — Config field exceeds maximum
+
+```
+RUV1602: Config field `security.pluginLimit` must not exceed 10485760 bytes
+
+  Field: security.pluginLimit
+  Value: 99999999
+
+  Fix: Reduce the value to within the allowed limit.
+```
+
+**Source**: `crates/ruvyxa_cli/src/main.rs:609`, `packages/ruvyxa/runtime/config-renderer.mjs:335`
+
+#### RUV1603 — Adapter must provide build function
+
+```
+RUV1603: config.adapter must provide a build(context) function
+
+  The adapter configuration does not include a build method.
+
+  Fix: Ensure the adapter exports `build(context)` that
+       returns an output object.
+```
+
+**Source**: `packages/ruvyxa/runtime/config-renderer.mjs:582`
 
 ---
 
-### RUV1700–1799: Deploy / Adapter Errors
+### RUV1700–1799: Plugin Host & Worker Pool Errors
 
-| Code    | Title                                                     | Cause                           | Fix                             |
-| ------- | --------------------------------------------------------- | ------------------------------- | ------------------------------- |
-| RUV1700 | Adapter not found                                         | Specified adapter not installed | Install adapter package         |
-| RUV1701 | Adapter build failed                                      | Adapter transform error         | Check compatibility             |
-| RUV1702 | Manifest generation failed / Worker pool script not found | Build JSON write failure        | Check disk/permissions, rebuild |
-| RUV1703 | Deploy config missing                                     | Platform config file not found  | Create config file              |
-| RUV1704 | Adapter incompatible                                      | Strategy not supported          | Change strategy or adapter      |
-| RUV1705 | Node adapter entry not found                              | Missing server.js               | Rebuild                         |
-| RUV1706 | Static adapter SSR route                                  | SSR in static build             | Use SSG or switch adapter       |
+| Code    | Title                               | Cause                                           | Fix                                 |
+| ------- | ----------------------------------- | ----------------------------------------------- | ----------------------------------- |
+| RUV1700 | Plugin hook timed out / host exited | Plugin exceeded timeout or crashed              | Increase timeout or fix plugin code |
+| RUV1701 | Plugin protocol error               | Invalid JSON, bad hook return, or unsafe path   | Usually framework bug — report      |
+| RUV1702 | Worker pool script was not found    | Plugin runtime script missing from installation | Reinstall ruvyxa                    |
+| RUV1704 | Worker pool stream error            | Worker pool stream communication error          | Check logs, framework bug — report  |
 
-#### RUV1700 — Adapter not found
+#### RUV1700 — Plugin hook timed out / host exited
 
 ```
-RUV1700: Adapter not found
-
-  Adapter: "vercel"
-
-  The "vercel" adapter is not installed.
-
-  Fix: npm install -D @ruvyxa/adapter-vercel
-```
-
-**Source**: `crates/ruvyxa_cli/src/main.rs:3147`, `crates/ruvyxa_middleware/src/plugin_host.rs:533`
-
-#### RUV1700 — TypeScript plugin hook timed out
-
-```
-RUV1700: TypeScript plugin hook timed out after 30000 ms
+RUV1700: TypeScript plugin hook `http.onRequest` timed out after 30000 ms
 
   Plugin: my-plugin
   Hook: http.onRequest
@@ -953,10 +691,6 @@ RUV1700: TypeScript plugin hook timed out after 30000 ms
   Fix: Reduce plugin work or increase middleware.timeoutMs.
 ```
 
-**Source**: `crates/ruvyxa_middleware/src/plugin_host.rs:480`
-
-#### RUV1700 — TypeScript plugin host exited before responding
-
 ```
 RUV1700: TypeScript plugin host exited before responding (status: 1)
 
@@ -965,9 +699,10 @@ RUV1700: TypeScript plugin host exited before responding (status: 1)
   Fix: Check plugin code for unhandled exceptions.
 ```
 
-**Source**: `crates/ruvyxa_middleware/src/plugin_host.rs:524`
+**Source**: `crates/ruvyxa_middleware/src/plugin_host.rs:480`,
+`crates/ruvyxa_middleware/src/plugin_host.rs:524`
 
-#### RUV1701 — TypeScript plugin protocol error
+#### RUV1701 — Plugin protocol error
 
 ```
 RUV1701: TypeScript plugin host returned invalid JSON
@@ -976,10 +711,6 @@ RUV1701: TypeScript plugin host returned invalid JSON
 
   Fix: This is likely a framework or plugin bug — report it.
 ```
-
-**Source**: `crates/ruvyxa_middleware/src/plugin_host.rs:544`
-
-#### RUV1701 — TypeScript request middleware returned invalid result
 
 ```
 RUV1701: TypeScript request middleware returned an invalid result
@@ -991,10 +722,6 @@ RUV1701: TypeScript request middleware returned an invalid result
 
   Fix: Check the return value of the onRequest handler.
 ```
-
-**Source**: `crates/ruvyxa_middleware/src/plugin_host.rs:304`
-
-#### RUV1701 — Plugin returned an unsafe request path
 
 ```
 RUV1701: Plugin returned an unsafe request path
@@ -1008,7 +735,8 @@ RUV1701: Plugin returned an unsafe request path
        absolute paths or http(s) URLs.
 ```
 
-**Source**: `crates/ruvyxa_dev_server/src/plugin_bridge.rs:240`
+**Source**: `crates/ruvyxa_middleware/src/plugin_host.rs:240`,
+`crates/ruvyxa_dev_server/src/plugin_bridge.rs:240`
 
 #### RUV1702 — Worker pool script was not found
 
@@ -1025,34 +753,91 @@ RUV1702: Worker pool script was not found
 
 **Source**: `crates/ruvyxa_dev_server/src/worker_pool.rs:877`
 
-#### RUV1704 — Adapter strategy incompatibility
+#### RUV1704 — Worker pool stream error
 
 ```
-RUV1704: Adapter incompatible
+RUV1704: Worker pool stream error
 
-  Route: /dashboard (type: isr)
-  Adapter: cloudflare
+  The worker pool encountered a stream communication error
+  while handling a request.
 
-  The Cloudflare adapter does not support ISR because it
-  requires persistent storage.
-
-  Fix: Use SSG or SSR for this route, or switch to a
-       different adapter (e.g., Vercel or Node).
+  Fix: Check server logs for details. This may be a
+       framework bug — report it.
 ```
 
 **Source**: `crates/ruvyxa_dev_server/src/worker_pool.rs:307`
 
 ---
 
-### RUV2000–2102: CLI / Config / Plugin Definition Errors
+### RUV1800–1899: Compiler Errors
 
-| Code    | Title                     | Cause                       | Fix                        |
-| ------- | ------------------------- | --------------------------- | -------------------------- |
-| RUV2000 | Adapter config error      | BuildContext validation     | Fix adapter configuration  |
-| RUV2001 | Adapter option error      | Invalid adapter options     | Fix adapter options        |
-| RUV2102 | Invalid plugin definition | `definePlugin()` type error | Return valid plugin object |
+| Code    | Title                        | Cause                                   | Fix                                 |
+| ------- | ---------------------------- | --------------------------------------- | ----------------------------------- |
+| RUV1801 | Module resolution failed     | Import specifier could not be resolved  | Fix import path or install package  |
+| RUV1802 | Oxc transform failed         | JavaScript/TypeScript transform error   | Fix syntax error in source file     |
+| RUV1803 | Circular dependency detected | Two or more modules import each other   | Break the cycle with dynamic import |
+| RUV1804 | Invalid JSX runtime          | `build.jsxRuntime` is not a valid value | Use `"classic"` or `"automatic"`    |
 
-#### RUV2000 — Adapter config error
+#### RUV1801 — Module resolution failed
+
+```
+RUV1801: cannot resolve 'missing-module' from app/page.tsx
+
+  Specifier: missing-module
+  Importer: app/page.tsx
+
+  Fix: Check that the import path is correct and the module
+       exists. Install missing packages.
+```
+
+**Source**: `packages/ruvyxa/runtime/compiler.mjs:393`
+
+#### RUV1802 — Oxc transform failed
+
+```
+RUV1802: Oxc transform failed for app/page.tsx: syntax error
+
+  Fix: Check the file for JavaScript/TypeScript syntax errors.
+```
+
+**Source**: `packages/ruvyxa/runtime/compiler.mjs:1499`
+
+#### RUV1803 — Circular dependency detected
+
+```
+RUV1803: circular dependency detected: app/utils/a.ts -> app/utils/b.ts -> app/utils/a.ts
+
+  Two or more modules form a circular import chain.
+
+  Fix: Break the cycle by extracting shared logic into
+       a separate module or using dynamic imports.
+```
+
+**Source**: `packages/ruvyxa/runtime/compiler.mjs:484`
+
+#### RUV1804 — Invalid JSX runtime
+
+```
+RUV1804: JSX runtime must be `classic` or `automatic`, got `modern`
+
+  Fix: Set build.jsxRuntime to "classic" or "automatic"
+       in ruvyxa.config.ts.
+```
+
+**Source**: `packages/ruvyxa/runtime/compiler.mjs:1508`
+
+---
+
+### RUV2000–2102: Adapter / Config / Plugin Definition Errors
+
+| Code    | Title                     | Cause                        | Fix                        |
+| ------- | ------------------------- | ---------------------------- | -------------------------- |
+| RUV2000 | BuildContext validation   | Adapter BuildContext invalid | Fix adapter configuration  |
+| RUV2001 | Adapter option error      | Invalid adapter options      | Fix adapter options        |
+| RUV2102 | Invalid plugin definition | `definePlugin()` type error  | Return valid plugin object |
+| RUV2200 | Adapter build hook failed | Adapter `build()` threw      | Check adapter logs         |
+
+#### RUV2000 — BuildContext validation failed
 
 ```
 RUV2000: BuildContext.root is required and must be a non-empty string
@@ -1100,15 +885,20 @@ RUV2102: Ruvyxa plugin "my-plugin" head.children is only supported on script, st
 All validation errors from `definePlugin()` use `RUV2102` prefix. The error message pinpoints the
 exact field that failed validation.
 
----
+#### RUV2200 — Adapter build hook failed
 
-### RUV2200–2210: Build / Prerender Errors
+```
+RUV2200: Adapter build hook failed
 
-| Code    | Title                  | Cause                          | Fix                                   |
-| ------- | ---------------------- | ------------------------------ | ------------------------------------- |
-| RUV2200 | Build error            | Generic build failure          | Check preceding diagnostics           |
-| RUV2202 | No prerendered pages   | Static adapter on SSR-only app | Add SSG routes or skip static adapter |
-| RUV2210 | Strategy not supported | Adapter rejects strategy       | Use different strategy                |
+  Adapter: vercelAdapter
+
+  The adapter's build() function threw an error.
+
+  Fix: Check the adapter logs for details. This may indicate
+       a misconfiguration or platform issue.
+```
+
+**Source**: `crates/ruvyxa_cli/src/main.rs:1212`
 
 ---
 
@@ -1419,7 +1209,7 @@ If a server action throws (not returns) an error:
 
 ```typescript
 throw new Error('Unauthorized')
-// → RUV1400: Server runtime error
+// → RUV1500: SSG / action render failed
 // → Client receives 500 with error digest in production
 // → In dev, error overlay shows the stack trace
 ```
@@ -1442,7 +1232,7 @@ export async function GET(request: Request) {
     return Response.json(
       {
         error: 'Failed to fetch users',
-        code: 'RUV1400',
+        code: 'RUV1200',
         details: {},
         requestId: 'req_abc123',
       },
@@ -1457,7 +1247,7 @@ export async function GET(request: Request) {
 ```json
 {
   "error": "Human-readable message",
-  "code": "RUV1400",
+  "code": "RUV1200",
   "details": {},
   "requestId": "req_abc123"
 }
@@ -1476,11 +1266,10 @@ export async function GET(request: Request) {
 | ---------------- | ------ | ------- |
 | Validation error | 400    | —       |
 | Unauthorized     | 401    | —       |
-| Not found        | 404    | RUV1100 |
-| Rate limited     | 429    | RUV1406 |
-| Internal error   | 500    | RUV1400 |
-| Plugin timeout   | 500    | RUV1601 |
-| Adapter error    | 502    | RUV1701 |
+| Not found        | 404    | —       |
+| Internal error   | 500    | RUV1200 |
+| Plugin timeout   | 500    | RUV1700 |
+| Adapter error    | 502    | RUV2200 |
 
 ---
 
@@ -1539,7 +1328,7 @@ export const getStaticParams = async () => {
 }
 ```
 
-### Guard Against RUV1200-1210 (Config Errors)
+### Guard Against Config Errors
 
 ```typescript
 // ✅ Good — use the config() helper for type checking
@@ -1550,8 +1339,8 @@ export default config({
 
 // ❌ Bad — typos are not caught
 export default {
-  server: { port: '3000' }, // RUV1204 — string, not number
-  build: { split: 'none' }, // RUV1200 — unknown value
+  server: { port: '3000' }, // RUV1601 — string, not number
+  build: { split: 'none' }, // RUV1601 — unknown value
 }
 ```
 
@@ -1629,46 +1418,45 @@ In production, errors return HTTP 500 or show `error.tsx` fallback. The overlay 
 
 ### During `ruvyxa dev`
 
-| Symptom                    | Likely Error                              | Action                                   |
-| -------------------------- | ----------------------------------------- | ---------------------------------------- |
-| Error overlay on page load | RUV1300 (compilation), RUV1007 (boundary) | Check file indicated in overlay          |
-| Page renders blank         | RUV1400 (runtime error in component)      | Add `error.tsx`, check browser console   |
-| HMR not updating           | RUV1405 (WebSocket lost)                  | Refresh browser, check network           |
-| Slow page loads            | RUV1501 (SSR timeout)                     | Optimize component, reduce data fetching |
-| 404 for existing route     | RUV1100 (route not found)                 | Check route naming, file location        |
-| 500 on form submit         | RUV1400 (action error)                    | Check action code, add error handling    |
-| Plugin not running         | RUV1603 (unknown plugin)                  | Check plugin is imported and listed      |
+| Symptom                    | Likely Error                                     | Action                                   |
+| -------------------------- | ------------------------------------------------ | ---------------------------------------- |
+| Error overlay on page load | RUV1300 (hydration bundling), RUV1007 (boundary) | Check file indicated in overlay          |
+| Page renders blank         | RUV1100 (SSR error in component)                 | Add `error.tsx`, check browser console   |
+| HMR not updating           | Refresh browser, check network                   | —                                        |
+| Slow page loads            | RUV1100 (SSR render slow)                        | Optimize component, reduce data fetching |
+| 404 for existing route     | Route not exported                               | Check route naming, file location        |
+| 500 on form submit         | RUV1500 (action error)                           | Check action code, add error handling    |
+| Plugin not running         | RUV1601 (config invalid)                         | Check plugin configuration               |
 
 ### During `ruvyxa build`
 
-| Symptom                                  | Likely Error                               | Action                                 |
-| ---------------------------------------- | ------------------------------------------ | -------------------------------------- |
-| Build fails immediately                  | RUV1200 (config), RUV1209 (missing config) | Run `ruvyxa doctor`                    |
-| Build fails during compilation           | RUV1300 (syntax error)                     | Fix indicated syntax error             |
-| Build fails at module resolution         | RUV1301 (missing import)                   | Install package or fix import path     |
-| Build succeeds but output missing routes | RUV1101 (route parse)                      | Check filenames for invalid characters |
-| Build succeeds but bundle too large      | RUV1302 (budget exceeded)                  | Optimize or adjust bundleBudget        |
-| Build OOM                                | RUV1307 (memory)                           | Reduce `build.workers`, increase RAM   |
-| Image optimization fails                 | RUV1306 (corrupt image)                    | Replace corrupt image file             |
+| Symptom                                  | Likely Error                           | Action                                 |
+| ---------------------------------------- | -------------------------------------- | -------------------------------------- |
+| Build fails immediately                  | RUV1600 (config load failure)          | Run `ruvyxa doctor`                    |
+| Build fails during compilation           | RUV1802 (Oxc transform), RUV1311 (MDX) | Fix indicated syntax error             |
+| Build fails at module resolution         | RUV1801 (module not resolved)          | Install package or fix import path     |
+| Build succeeds but output missing routes | RUV1002 (invalid route segment)        | Check filenames for invalid characters |
+| Build succeeds but circular deps found   | RUV1803 (circular dependency)          | Break the dependency cycle             |
+| Build OOM                                | Not a numbered error                   | Reduce `build.workers`, increase RAM   |
 
 ### During `ruvyxa check`
 
 | Symptom                      | Likely Error          | Action                       |
 | ---------------------------- | --------------------- | ---------------------------- |
-| Boundary violations reported | RUV1000-1009          | Restructure imports          |
-| Route conflicts reported     | RUV1003 (ambiguous)   | Rename conflicting files     |
-| Config validation errors     | RUV1200-1210          | Fix config file              |
-| SSG params missing           | RUV1105, RUV1510-1513 | Add/export `getStaticParams` |
+| Boundary violations reported | RUV1007-1010          | Restructure imports          |
+| Route conflicts reported     | RUV1003 (conflicting) | Rename conflicting files     |
+| Config validation errors     | RUV1600-1602          | Fix config file              |
+| SSG params missing           | RUV1510-1513          | Add/export `getStaticParams` |
 
 ### During Deployment
 
-| Symptom                  | Likely Error                   | Action                       |
-| ------------------------ | ------------------------------ | ---------------------------- |
-| Build fails in CI        | RUV1700 (adapter missing)      | Install adapter package      |
-| 502 on all routes        | RUV1704 (incompatible adapter) | Change adapter or strategy   |
-| Static site has no pages | RUV1706 (SSR in static)        | Use SSG or Node adapter      |
-| Functions timeout        | RUV1700 (exceeded maxDuration) | Increase timeout or optimize |
-| Cold starts are slow     | RUV1503 (init failure)         | Use `build.warm: true`       |
+| Symptom                  | Likely Error                  | Action                       |
+| ------------------------ | ----------------------------- | ---------------------------- |
+| Build fails in CI        | RUV2200 (adapter hook failed) | Check adapter logs           |
+| 502 on all routes        | RUV2200 (adapter build error) | Check adapter configuration  |
+| Static site has no pages | RUV2200 (adapter mismatch)    | Use correct adapter          |
+| Functions timeout        | RUV1700 (plugin timeout)      | Increase timeout or optimize |
+| Cold starts are slow     | Not a numbered error          | Use `build.warm: true`       |
 
 ---
 
@@ -1681,18 +1469,20 @@ Range       Category          Where to look
 ──────────  ────────────────  ──────────────────────
 RUV1000     Boundary          03-server-client-components.md
 RUV1010     Boundary          bundler boundary check
-RUV1100     Route             02-routing.md
-RUV1200     Config            11-configuration.md
-RUV1300     Build             12-cli-commands.md
-RUV1400     Server runtime    architecture/worker-pool.md
-RUV1500     Worker            architecture/worker-pool.md
-RUV1510     Static params     05-data-loading-cache.md
-RUV1550     PPR               05-data-loading-cache.md
-RUV1600     Plugin            14-plugins.md
-RUV1700     Deploy            13-deployment.md
-RUV2000     Adapter           13-deployment.md
-RUV2102     Plugin def        14-plugins.md
-RUV2200     Build             12-cli-commands.md
+RUV1100     SSR               render_pipeline.rs
+RUV1200     API / Port        render_pipeline.rs, port_binding.rs
+RUV1300     Build             compiler.mjs, render_pipeline.rs
+RUV1311     MDX               compiler.mjs
+RUV1400     Style             style.rs
+RUV1500     Render / SSG      render_pipeline.rs, worker-pool.mjs
+RUV1510     Static params     worker-pool.mjs
+RUV1550     PPR               render_pipeline.rs
+RUV1600     Config            main.rs, config-renderer.mjs
+RUV1700     Plugin host       plugin_host.rs, worker_pool.rs
+RUV1800     Compiler          compiler.mjs
+RUV2000     Adapter           @ruvyxa/core/utils.ts
+RUV2102     Plugin def        @ruvyxa/core/plugin.ts
+RUV2200     Adapter build     main.rs, adapter-runner.mjs
 RUV3001     Database          15-official-packages.md
 RUV3100     Auth              15-official-packages.md
 RUV3201     Realtime          15-official-packages.md
@@ -1703,7 +1493,7 @@ RUV3201     Realtime          15-official-packages.md
 | Error source            | File                                              |
 | ----------------------- | ------------------------------------------------- |
 | Bundler boundary checks | `crates/ruvyxa_bundler/src/boundary.rs`           |
-| Build diagnostics       | `crates/ruvyxa_diagnostics/src/lib.rs`            |
+| Graph route validation  | `crates/ruvyxa_graph/src/lib.rs`                  |
 | Dev server rendering    | `crates/ruvyxa_dev_server/src/render_pipeline.rs` |
 | Worker pool             | `crates/ruvyxa_dev_server/src/worker_pool.rs`     |
 | Style compilation       | `crates/ruvyxa_dev_server/src/style.rs`           |
@@ -1711,6 +1501,11 @@ RUV3201     Realtime          15-official-packages.md
 | Config validation       | `crates/ruvyxa_cli/src/main.rs`                   |
 | Plugin bridge           | `crates/ruvyxa_dev_server/src/plugin_bridge.rs`   |
 | Plugin validation       | `packages/@ruvyxa/core/src/plugin.ts`             |
+| Compiler (JS)           | `packages/ruvyxa/runtime/compiler.mjs`            |
+| Config renderer (JS)    | `packages/ruvyxa/runtime/config-renderer.mjs`     |
+| Worker pool (JS)        | `packages/ruvyxa/runtime/worker-pool.mjs`         |
+| SSR renderer (JS)       | `packages/ruvyxa/runtime/ssr-renderer.mjs`        |
+| API renderer (JS)       | `packages/ruvyxa/runtime/api-renderer.mjs`        |
 | Auth errors             | `packages/@ruvyxa/auth/src/index.ts`              |
 | Database errors         | `packages/@ruvyxa/database/src/index.ts`          |
 | Realtime errors         | `packages/@ruvyxa/realtime/src/plugin.ts`         |
@@ -1725,13 +1520,13 @@ RUV3201     Realtime          15-official-packages.md
 | Blank white page               | Uncaught client error           | Check browser console, add `error.tsx`   |
 | RUV1003 after adding file      | Two files match same URL        | Remove duplicate route file              |
 | RUV1008 on build               | Private env in client component | Rename to `RUVYXA_PUBLIC_*`              |
-| RUV1200 on project creation    | Typo in config                  | Run `ruvyxa doctor`                      |
-| RUV1301 for local import       | Incorrect import path           | Use relative path or alias               |
-| RUV1400 after deploy           | Missing env var                 | Set env on platform                      |
-| RUV1500 on worker pool         | Worker crashed                  | Check server logs, restart               |
-| RUV1501 on render              | Route too slow                  | Optimize or increase timeout             |
-| RUV1601 with plugins           | Plugin too slow                 | Increase `pluginLimit`                   |
-| RUV1700 on build               | Adapter package missing         | `npm install @ruvyxa/adapter-<name>`     |
+| RUV1600 on project creation    | Typo in config                  | Run `ruvyxa doctor`                      |
+| RUV1801 for local import       | Incorrect import path           | Use relative path or alias               |
+| RUV1100 after deploy           | SSR render failure              | Check page component, dependencies       |
+| RUV1500 on worker pool         | SSG / action render failed      | Check server logs, restart               |
+| RUV1501 on render              | Route action file missing       | Create action file at expected path      |
+| RUV1700 with plugins           | Plugin timeout or crash         | Increase timeout or fix plugin code      |
+| RUV2200 on build               | Adapter build hook failed       | Check adapter logs, configuration        |
 | 404 on existing route          | Route not exported              | Add `export default function Page()`     |
 | 500 on server action           | Validation failed               | Check action error return                |
 | Error overlay not showing      | `debug.overlay: false`          | Enable in config                         |
@@ -1744,12 +1539,12 @@ RUV3201     Realtime          15-official-packages.md
 
 ## Next Steps
 
-- **[02-routing.md](./02-routing.md)** — Resolve route conflicts (RUV1100-1106)
+- **[02-routing.md](./02-routing.md)** — Resolve route conflicts (RUV1002-1004)
 - **[03-server-client-components.md](./03-server-client-components.md)** — Understand boundary
-  (RUV1000-1008)
+  (RUV1007, RUV1009, RUV1010)
 - **[05-data-loading-cache.md](./05-data-loading-cache.md)** — Static params (RUV1510-1513)
 - **[10-environment-variables.md](./10-environment-variables.md)** — Fix RUV1008 leaks
-- **[11-configuration.md](./11-configuration.md)** — Fix config errors (RUV1200-1210)
-- **[13-deployment.md](./13-deployment.md)** — Fix deploy errors (RUV1700-1706)
-- **[14-plugins.md](./14-plugins.md)** — Fix plugin errors (RUV1600-1604)
+- **[11-configuration.md](./11-configuration.md)** — Fix config errors (RUV1600-1602)
+- **[13-deployment.md](./13-deployment.md)** — Fix deploy errors (RUV2000, RUV2001, RUV2200)
+- **[14-plugins.md](./14-plugins.md)** — Fix plugin errors (RUV1700, RUV1701, RUV2102)
 - **[15-official-packages.md](./15-official-packages.md)** — Fix auth/database/realtime errors
