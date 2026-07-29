@@ -127,9 +127,9 @@ page last — and renders the result into `<head>`:
 
 ```tsx
 // app/layout.tsx
-import type { RouteMeta } from '@ruvyxa/react'
+import type { Meta } from '@ruvyxa/react'
 
-export const meta: RouteMeta = {
+export const meta: Meta = {
   titleTemplate: '%s · Acme',
   title: 'Acme',
   description: 'Everything Acme builds.',

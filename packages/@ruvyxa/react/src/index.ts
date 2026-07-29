@@ -14,13 +14,7 @@ export type {
 } from './image.js'
 export { Seo } from './seo.js'
 export type { SeoArticle, SeoAuthor, SeoBreadcrumb, SeoProps } from './seo.js'
-export type {
-  RouteMeta,
-  RouteMetaAlternate,
-  RouteMetaContext,
-  RouteMetaExport,
-  RouteMetaFactory,
-} from './meta.js'
+export type { Meta, MetaAlternate, MetaContext, MetaExport, MetaFactory } from './meta.js'
 export { Answer } from './answer.js'
 export type { AnswerProps, AnswerSource } from './answer.js'
 export { Link } from './link.js'

@@ -9,14 +9,14 @@
  *
  * ```tsx
  * // app/layout.tsx
- * export const meta: RouteMeta = {
+ * export const meta: Meta = {
  *   titleTemplate: '%s — Ruvyxa',
  *   siteName: 'Ruvyxa',
  *   description: 'The React framework with a native heart.',
  * }
  *
  * // app/blog/[slug]/page.tsx — receives the layout's template
- * export const meta: RouteMetaFactory = ({ params }) => ({
+ * export const meta: MetaFactory = ({ params }) => ({
  *   title: params.slug,
  *   canonical: `https://ruvyxa.dev/blog/${params.slug}`,
  * })
@@ -28,7 +28,7 @@
  */
 
 /** One `<link rel="alternate" hreflang>` entry. */
-export interface RouteMetaAlternate {
+export interface MetaAlternate {
   /** BCP 47 tag, or `x-default`. */
   hreflang: string
   /** Absolute URL of the alternate document. */
@@ -36,14 +36,14 @@ export interface RouteMetaAlternate {
 }
 
 /** Render context passed to a `meta` function. */
-export interface RouteMetaContext {
+export interface MetaContext {
   /** Concrete request path, e.g. `/blog/hello`. */
   path: string
   /** Dynamic segment values for this request. */
   params: Record<string, string>
 }
 
-export interface RouteMeta {
+export interface Meta {
   /** Document title. Formatted by the nearest ancestor `titleTemplate`. */
   title?: string
   /**
@@ -66,7 +66,7 @@ export interface RouteMeta {
    */
   lang?: string
   /** `<link rel="alternate" hreflang>` entries for other locales of this page. */
-  alternates?: readonly RouteMetaAlternate[]
+  alternates?: readonly MetaAlternate[]
   /** Preview image URL used by X and Open Graph consumers. */
   image?: string
   /** Alternative text for `image`. */
@@ -89,7 +89,7 @@ export interface RouteMeta {
 }
 
 /** A `meta` export declared as a function of the current request. */
-export type RouteMetaFactory = (context: RouteMetaContext) => RouteMeta
+export type MetaFactory = (context: MetaContext) => Meta
 
 /** Either shape accepted by `export const meta`. */
-export type RouteMetaExport = RouteMeta | RouteMetaFactory
+export type MetaExport = Meta | MetaFactory

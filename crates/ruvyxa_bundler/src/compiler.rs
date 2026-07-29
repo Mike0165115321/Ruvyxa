@@ -256,84 +256,231 @@ pub fn transform_with_options(
     Ok(Codegen::new().build(&program).code)
 }
 
+/// True when some line's first non-blank character is `@`.
+///
+/// A decorator is always the first thing on its line, so a file without such a
+/// line has nothing to strip. Answering that with a plain line scan lets the
+/// overwhelming majority of modules skip the tokenizer below entirely — they
+/// are returned byte-for-byte, and no tokenizer limitation can reach them.
+fn has_decorator_candidate(source: &str) -> bool {
+    source
+        .lines()
+        .any(|line| line.trim_start().starts_with('@'))
+}
+
 /// Strip legacy decorators while preserving source line positions.
+///
+/// Oxc rejects legacy decorators, so they are removed before it parses. Finding
+/// them means tokenizing far enough to know whether an `@` is code, and getting
+/// that wrong is expensive: a misplaced `@` deletion produces an unterminated
+/// string and a parse failure that names the file rather than the construct that
+/// confused the scan.
+///
+/// Two rules keep the tokenizer small enough to be right.
+///
+/// First, a decorator occupies the start of its line. Only constructs that can
+/// *span* lines can therefore hide a line-leading `@`: block comments and
+/// template literals. Regular expressions and `'`/`"` strings cannot contain a
+/// raw newline, so nothing inside one is ever mistaken for a decorator and
+/// neither needs a tokenizer state of its own.
+///
+/// Second, a `'` or `"` that does not close before the end of its line was never
+/// a string delimiter. Treating it as one is what used to desynchronize the
+/// scan: an apostrophe in prose or in JSX text — `React's`, `<p>don't</p>` —
+/// swallowed the file up to the next quote character, after which real code was
+/// read as string content and real strings as code. Quotes are still tracked, so
+/// that a `` ` `` inside `'...'` cannot open a phantom template, but the
+/// line-bounded rule means a stray apostrophe costs nothing beyond its own line.
+///
+/// A removed decorator leaves behind exactly the newlines it spanned, so every
+/// later line keeps its original number.
 fn strip_decorators(source: &str) -> String {
-    let mut out = String::with_capacity(source.len());
-    let chars: Vec<char> = source.chars().collect();
-    let len = chars.len();
+    if !has_decorator_candidate(source) {
+        return source.to_string();
+    }
+
+    let bytes = source.as_bytes();
+    let len = bytes.len();
+    let mut out = Vec::with_capacity(len);
     let mut i = 0;
+    // Open template literals, innermost last. `None` means the scan is in the
+    // template's text; `Some(depth)` means it is inside that template's `${}`
+    // interpolation, with `depth` unmatched `{` still to close.
+    let mut templates: Vec<Option<usize>> = Vec::new();
 
     while i < len {
-        if matches!(chars[i], '"' | '\'' | '`') {
-            let quote = chars[i];
-            out.push(quote);
-            i += 1;
-            while i < len {
-                if chars[i] == '\\' && i + 1 < len {
-                    out.push(chars[i]);
-                    out.push(chars[i + 1]);
+        // Inside template text, only an escape, a `${`, or the closing backtick
+        // is meaningful. Everything else — including `@` at a line start — is
+        // literal text of the template.
+        if matches!(templates.last(), Some(None)) {
+            match bytes[i] {
+                b'\\' if i + 1 < len => {
+                    out.extend_from_slice(&bytes[i..i + 2]);
                     i += 2;
-                    continue;
                 }
-                out.push(chars[i]);
-                if chars[i] == quote {
+                b'$' if i + 1 < len && bytes[i + 1] == b'{' => {
+                    out.extend_from_slice(b"${");
+                    i += 2;
+                    *templates.last_mut().expect("template context is open") = Some(0);
+                }
+                b'`' => {
+                    out.push(b'`');
                     i += 1;
+                    templates.pop();
+                }
+                byte => {
+                    out.push(byte);
+                    i += 1;
+                }
+            }
+            continue;
+        }
+
+        // Comments are copied verbatim. Their contents are prose, so nothing
+        // written inside one may change how the rest of the file is read.
+        if bytes[i] == b'/' && i + 1 < len && bytes[i + 1] == b'/' {
+            while i < len && bytes[i] != b'\n' {
+                out.push(bytes[i]);
+                i += 1;
+            }
+            continue;
+        }
+        if bytes[i] == b'/' && i + 1 < len && bytes[i + 1] == b'*' {
+            out.extend_from_slice(b"/*");
+            i += 2;
+            while i < len {
+                if bytes[i] == b'*' && i + 1 < len && bytes[i + 1] == b'/' {
+                    out.extend_from_slice(b"*/");
+                    i += 2;
                     break;
                 }
+                out.push(bytes[i]);
                 i += 1;
             }
             continue;
         }
 
-        if chars[i] == '@' {
-            let mut j = i;
-            while j > 0 && chars[j - 1] != '\n' {
-                if !matches!(chars[j - 1], ' ' | '\t') {
-                    break;
-                }
-                j -= 1;
-            }
-            if j == i || chars[j..i].iter().all(|c| matches!(c, ' ' | '\t')) {
-                i += 1;
-                while i < len && (chars[i].is_alphanumeric() || matches!(chars[i], '_' | '.')) {
+        if bytes[i] == b'`' {
+            out.push(b'`');
+            i += 1;
+            templates.push(None);
+            continue;
+        }
+
+        if matches!(bytes[i], b'"' | b'\'') {
+            i = copy_line_bounded_string(bytes, i, &mut out);
+            continue;
+        }
+
+        if let Some(depth) = templates.last_mut().and_then(Option::as_mut) {
+            match bytes[i] {
+                b'{' => *depth += 1,
+                b'}' if *depth == 0 => {
+                    out.push(b'}');
                     i += 1;
+                    // The interpolation closed; the enclosing template resumes.
+                    *templates.last_mut().expect("template context is open") = None;
+                    continue;
                 }
-                if i < len && chars[i] == '(' {
-                    let mut depth = 1;
-                    i += 1;
-                    while i < len && depth > 0 {
-                        match chars[i] {
-                            '(' => depth += 1,
-                            ')' => depth -= 1,
-                            '"' | '\'' | '`' => {
-                                let quote = chars[i];
-                                i += 1;
-                                while i < len {
-                                    if chars[i] == '\\' {
-                                        i += 2;
-                                        continue;
-                                    }
-                                    if chars[i] == quote {
-                                        break;
-                                    }
-                                    i += 1;
-                                }
-                            }
-                            _ => {}
-                        }
-                        i += 1;
-                    }
-                }
-                out.push('\n');
-                continue;
+                b'}' => *depth -= 1,
+                _ => {}
             }
         }
 
-        out.push(chars[i]);
+        if bytes[i] == b'@' && starts_line(bytes, i) {
+            let end = skip_decorator(bytes, i);
+            // Emit the newlines the decorator spanned and nothing else. A
+            // decorator on its own line leaves the line blank; a multi-line
+            // `@Component({...})` leaves as many blank lines as it occupied.
+            // Every later line then keeps its original number, which is what
+            // source maps and Oxc's diagnostics are read against.
+            let spanned_lines = bytes[i..end].iter().filter(|byte| **byte == b'\n').count();
+            out.resize(out.len() + spanned_lines, b'\n');
+            i = end;
+            continue;
+        }
+
+        out.push(bytes[i]);
         i += 1;
     }
 
-    out
+    String::from_utf8(out).expect("scanner copies whole UTF-8 sequences verbatim")
+}
+
+/// Copy a `'`/`"` literal, giving up at the end of the line.
+///
+/// Returns the index just past the closing quote, or just past the opening one
+/// when the line ends first — an unclosed quote was an apostrophe in prose or
+/// JSX text, and the scan has to resume as if it had never opened.
+fn copy_line_bounded_string(bytes: &[u8], open: usize, out: &mut Vec<u8>) -> usize {
+    let quote = bytes[open];
+    let len = bytes.len();
+    let mut i = open + 1;
+    while i < len {
+        match bytes[i] {
+            b'\n' => break,
+            b'\\' if i + 1 < len && bytes[i + 1] != b'\n' => i += 2,
+            byte if byte == quote => {
+                out.extend_from_slice(&bytes[open..=i]);
+                return i + 1;
+            }
+            _ => i += 1,
+        }
+    }
+    out.push(quote);
+    open + 1
+}
+
+/// True when only blanks separate `at` from the start of its line.
+fn starts_line(bytes: &[u8], at: usize) -> bool {
+    bytes[..at]
+        .iter()
+        .rev()
+        .take_while(|byte| **byte != b'\n')
+        .all(|byte| matches!(byte, b' ' | b'\t' | b'\r'))
+}
+
+/// Return the index just past a decorator that begins at `at`.
+fn skip_decorator(bytes: &[u8], at: usize) -> usize {
+    let len = bytes.len();
+    let mut i = at + 1;
+    // Identifier bytes. Anything above ASCII is a continuation byte of a
+    // non-ASCII identifier character, which JavaScript allows in a name.
+    while i < len
+        && (bytes[i].is_ascii_alphanumeric()
+            || matches!(bytes[i], b'_' | b'$' | b'.')
+            || bytes[i] >= 0x80)
+    {
+        i += 1;
+    }
+    if i >= len || bytes[i] != b'(' {
+        return i;
+    }
+
+    let mut depth = 1usize;
+    i += 1;
+    while i < len && depth > 0 {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            quote @ (b'"' | b'\'' | b'`') => {
+                i += 1;
+                while i < len {
+                    if bytes[i] == b'\\' && i + 1 < len {
+                        i += 2;
+                        continue;
+                    }
+                    if bytes[i] == quote {
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    i
 }
 
 #[cfg(test)]
@@ -385,6 +532,149 @@ mod tests {
         let out = strip_decorators("@Injectable()\nclass Service {}");
         assert!(!out.contains("@Injectable"));
         assert!(out.contains("class Service"));
+    }
+
+    #[test]
+    fn indented_decorators_are_still_stripped() {
+        let out = strip_decorators("class Service {\n  @observable()\n  value = 1;\n}");
+        assert!(!out.contains("@observable"));
+        assert!(out.contains("value = 1;"));
+    }
+
+    /// An apostrophe in prose is not a string delimiter. Reading it as one used
+    /// to leave the scanner mis-synchronized for the rest of the file, so the
+    /// `@` of the next scoped import was deleted as a decorator and the module
+    /// no longer parsed.
+    #[test]
+    fn apostrophes_in_comments_do_not_shift_the_scan() {
+        let source = concat!(
+            "/**\n",
+            " * React's head hoisting.\n",
+            " */\n",
+            "import { Seo } from '@ruvyxa/react';\n",
+            "export default function Page() { return Seo; }\n",
+        );
+        let out = strip_decorators(source);
+        assert!(
+            out.contains("'@ruvyxa/react'"),
+            "scoped specifier must survive: {out}"
+        );
+        assert_eq!(out, source, "a file with no decorator must be unchanged");
+    }
+
+    #[test]
+    fn line_comment_apostrophes_do_not_shift_the_scan() {
+        let source = "// doesn't matter\nimport x from '@scope/pkg';\n";
+        assert_eq!(strip_decorators(source), source);
+    }
+
+    /// `@` inside a string or after other code is never a decorator.
+    #[test]
+    fn at_signs_that_do_not_start_a_line_are_preserved() {
+        let source = "const to = 'user@example.com';\nconst pkg = '@scope/name';\n";
+        assert_eq!(strip_decorators(source), source);
+    }
+
+    #[test]
+    fn transform_accepts_comment_apostrophes_before_scoped_imports() {
+        let source = concat!(
+            "/* it's fine */\n",
+            "import { Seo } from '@ruvyxa/react';\n",
+            "export const meta = { title: 'x' };\n",
+            "export default function Page() { return Seo; }\n",
+        );
+        assert!(
+            transform(source, false).is_ok(),
+            "comment apostrophe must not break parsing"
+        );
+    }
+
+    /// The overwhelming majority of modules have no decorator. They must come
+    /// back byte-for-byte, whatever they contain.
+    #[test]
+    fn sources_without_a_decorator_are_returned_unchanged() {
+        for source in [
+            "const label = <p>don't</p>;\nconst re = /['\"]/g;\n",
+            "const css = `\n@media (min-width: 40rem) { a { color: red } }\n`;\n",
+            "const email = 'user@example.com';\nconst pkg = '@scope/name';\n",
+            "// it's fine\nimport x from '@scope/pkg';\n",
+            "const s = \"a ` backtick inside a string\";\nconst t = 'and @here too';\n",
+        ] {
+            assert_eq!(strip_decorators(source), source, "source: {source}");
+        }
+        assert!(!has_decorator_candidate("const pkg = '@scope/name';\n"));
+        assert!(has_decorator_candidate(
+            "class S {\n  @observable x = 1;\n}\n"
+        ));
+    }
+
+    /// An unclosed quote is prose, not a string. It must not carry the scan
+    /// past its own line, or the decorator after it goes unstripped.
+    #[test]
+    fn unclosed_quotes_do_not_hide_a_later_decorator() {
+        for source in [
+            "const label = <p>don't</p>;\n@Injectable()\nclass S {}\n",
+            "const re = /['\"]/g;\n@Injectable()\nclass S {}\n",
+            "// TODO: it's broken\n@Injectable()\nclass S {}\n",
+        ] {
+            let out = strip_decorators(source);
+            assert!(!out.contains("@Injectable"), "decorator survived:\n{out}");
+            assert!(out.contains("class S {}"), "body lost:\n{out}");
+        }
+    }
+
+    /// A line-leading `@` inside a template literal is CSS or prose, not a
+    /// decorator, including across an interpolation.
+    #[test]
+    fn line_leading_at_inside_a_template_is_left_alone() {
+        let source = concat!(
+            "@Injectable()\n",
+            "class S {\n",
+            "  css = `\n",
+            "@media (min-width: ${size}rem) {\n",
+            "  a { content: '}' }\n",
+            "}\n",
+            "`;\n",
+            "}\n",
+        );
+        let out = strip_decorators(source);
+        assert!(!out.contains("@Injectable"), "decorator kept:\n{out}");
+        assert!(out.contains("@media"), "template text lost:\n{out}");
+        assert!(out.contains("${size}"), "interpolation lost:\n{out}");
+    }
+
+    #[test]
+    fn decorator_arguments_and_dollar_names_are_consumed_whole() {
+        let out = strip_decorators("@Inject$ed({ a: ')', b: `)` })\nclass S {}\n");
+        assert_eq!(out, "\nclass S {}\n");
+    }
+
+    /// Every later line has to keep its original number, or Oxc's diagnostics
+    /// and the emitted source map point at the wrong line.
+    #[test]
+    fn stripping_preserves_the_line_count() {
+        for source in [
+            "@A()\n@B\nclass S {\n  @C() m() {}\n}\n",
+            "@Component({\n  selector: 'x',\n})\nclass S {}\n",
+            "class S {\n  @observable()\n  value = 1;\n}\n",
+        ] {
+            let out = strip_decorators(source);
+            assert!(!out.contains('@'), "decorators remain:\n{out}");
+            assert_eq!(
+                source.lines().count(),
+                out.lines().count(),
+                "line drift for:\n{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_ascii_source_survives_the_byte_scan() {
+        let source = "// ค่าเริ่มต้น — em dash\n@Injectable()\nclass บริการ {}\n";
+        let out = strip_decorators(source);
+        assert!(out.contains("ค่าเริ่มต้น"));
+        assert!(out.contains("class บริการ {}"));
+        assert!(!out.contains("@Injectable"));
     }
 
     #[test]

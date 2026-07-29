@@ -15,8 +15,8 @@
   SSR, SSG, PPR, prerender, and serverless. Client-side navigation does not change it.
 - Metadata is composed as a sibling of the route's layouts, so a suspended layout cannot hold the
   document title back past the flushed shell, and no wrapper element is created per render.
-- Added `RouteMeta`, `RouteMetaFactory`, `RouteMetaExport`, `RouteMetaContext`, and
-  `RouteMetaAlternate` types to `@ruvyxa/react`.
+- Added `Meta`, `MetaFactory`, `MetaExport`, `MetaContext`, and `MetaAlternate` types to
+  `@ruvyxa/react`.
 
 ### Crawler Discovery Files
 

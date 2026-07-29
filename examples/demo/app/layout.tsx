@@ -24,6 +24,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <a href="/about">About</a>
               <a href="/blog">Blog</a>
               <a href="/todos">Todos</a>
+              <a href="/hooks">Hooks</a>
+              <a href="/loader">Loader</a>
+              <a href="/seo">SEO</a>
               <a href="/env">Env</a>
               <a href="/catchall/foo/bar">Catch-all</a>
               <a href="/api/health">API</a>
