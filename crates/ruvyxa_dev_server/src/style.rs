@@ -47,8 +47,8 @@ pub fn collect_styles(root: &Path, app_dir: &Path, entries: &[PathBuf]) -> Resul
         for import in parse_module(&source).imports {
             let specifier = strip_import_suffix(&import.specifier);
             if is_css_specifier(specifier) || is_sass_specifier(specifier) {
-                let resolved =
-                    resolve_style_import(&root, base_dir, specifier).ok_or_else(|| {
+                let resolved = resolve_style_import(&root, base_dir, specifier, &tsconfig)
+                    .ok_or_else(|| {
                         Diagnostic::new("RUV1403", "Stylesheet import could not be resolved")
                             .explain(format!(
                                 "`{specifier}` is imported from {}.",
@@ -71,17 +71,94 @@ pub fn collect_styles(root: &Path, app_dir: &Path, entries: &[PathBuf]) -> Resul
         }
     }
 
-    let mut visited_styles = BTreeSet::new();
-    let mut files = Vec::new();
-    let mut css = String::new();
+    let mut walk = StyleWalk::new(&root, &tsconfig);
     for style in style_seeds {
-        append_style(&root, &style, &mut visited_styles, &mut files, &mut css)?;
+        append_style(&mut walk, &style)?;
     }
 
     Ok(StyleCollection {
-        css: escape_style_end_tags(&css),
-        files,
+        css: escape_style_end_tags(&walk.css),
+        files: walk.files,
     })
+}
+
+/// Accumulator shared by every stylesheet reached during one collection.
+///
+/// The seed loop, the CSS `@import` recursion, and the Sass dependency walk all
+/// contribute to the same output, so the deduplication state has to be shared
+/// between them rather than rebuilt per stylesheet.
+struct StyleWalk<'a> {
+    root: &'a Path,
+    /// Loaded once by the caller. Resolving a bare stylesheet specifier used to
+    /// re-read and re-parse `tsconfig.json` from disk on every occurrence.
+    tsconfig: &'a TsConfigPaths,
+    /// Stylesheets already appended to `css`.
+    visited: BTreeSet<PathBuf>,
+    /// Membership index for `files`. A linear `Vec::contains` per contributing
+    /// file made recording the file list quadratic in the number of
+    /// stylesheets.
+    file_index: BTreeSet<PathBuf>,
+    /// Sass files whose import graph has already been walked.
+    sass_walked: BTreeSet<PathBuf>,
+    files: Vec<PathBuf>,
+    css: String,
+}
+
+impl<'a> StyleWalk<'a> {
+    fn new(root: &'a Path, tsconfig: &'a TsConfigPaths) -> Self {
+        Self {
+            root,
+            tsconfig,
+            visited: BTreeSet::new(),
+            file_index: BTreeSet::new(),
+            sass_walked: BTreeSet::new(),
+            files: Vec::new(),
+            css: String::new(),
+        }
+    }
+
+    /// Record a file as contributing to the collection, at most once.
+    fn record_file(&mut self, file: PathBuf) {
+        if self.file_index.insert(file.clone()) {
+            self.files.push(file);
+        }
+    }
+
+    /// Record every file reachable through a Sass entry's import graph.
+    ///
+    /// `sass_walked` spans the whole collection rather than one entry. Shared
+    /// partials are the normal shape of a Sass project, and re-reading each of
+    /// them once per importing stylesheet was the cost this walk was paying. A
+    /// partial skipped here as already walked was already recorded by whichever
+    /// entry reached it first, so the recorded set is unchanged.
+    fn collect_sass_dependencies(&mut self, entry: &Path) {
+        let root = self.root;
+        let mut pending = vec![canonical_or_original(entry.to_path_buf())];
+        let mut discovered = BTreeSet::new();
+
+        while let Some(file) = pending.pop() {
+            if !self.sass_walked.insert(file.clone()) {
+                continue;
+            }
+            discovered.insert(file.clone());
+            let Ok(source) = fs::read_to_string(&file) else {
+                continue;
+            };
+            let base_dir = file.parent().unwrap_or(root);
+            for specifier in sass_imports(&source) {
+                if specifier.starts_with("sass:") || is_remote_style(&specifier) {
+                    continue;
+                }
+                if let Some(dependency) = resolve_sass_import(root, base_dir, &specifier) {
+                    pending.push(dependency);
+                }
+            }
+        }
+
+        for file in discovered {
+            self.record_file(file);
+        }
+    }
 }
 
 fn collect_application_seeds(app_dir: &Path, scripts: &mut VecDeque<PathBuf>) {
@@ -145,32 +222,25 @@ fn collect_explicit_entry(root: &Path, entry: &Path, styles: &mut Vec<PathBuf>) 
     Ok(())
 }
 
-fn append_style(
-    root: &Path,
-    file: &Path,
-    visited: &mut BTreeSet<PathBuf>,
-    files: &mut Vec<PathBuf>,
-    output: &mut String,
-) -> Result<()> {
+fn append_style(walk: &mut StyleWalk<'_>, file: &Path) -> Result<()> {
+    let root = walk.root;
+    let tsconfig = walk.tsconfig;
     let file = canonical_or_original(file.to_path_buf());
-    if !visited.insert(file.clone()) {
+    if !walk.visited.insert(file.clone()) {
         return Ok(());
     }
 
     let source = fs::read_to_string(&file)?;
     if imports_tailwind(&source) {
-        output.push_str(&compile_tailwind_css(root, &file)?);
-        output.push('\n');
-        files.push(file);
+        let compiled = compile_tailwind_css(root, &file)?;
+        walk.css.push_str(&compiled);
+        walk.css.push('\n');
+        walk.record_file(file);
         return Ok(());
     }
 
     let source = if is_sass_path(&file) {
-        for dependency in sass_dependency_paths(root, &file) {
-            if !files.contains(&dependency) {
-                files.push(dependency);
-            }
-        }
+        walk.collect_sass_dependencies(&file);
         compile_sass_file(&file, root).map_err(|error| {
             Diagnostic::new("RUV1402", "Sass compilation failed")
                 .explain(error)
@@ -193,51 +263,26 @@ fn append_style(
             continue;
         } else if is_css_specifier(specifier) {
             let base_dir = file.parent().unwrap_or(root);
-            let dependency = resolve_style_import(root, base_dir, specifier).ok_or_else(|| {
-                Diagnostic::new("RUV1403", "CSS @import could not be resolved")
-                    .explain(format!(
-                        "`{specifier}` is imported from {}.",
-                        file.display()
-                    ))
-                    .at_file(&file)
-            })?;
-            append_style(root, &dependency, visited, files, output)?;
+            let dependency =
+                resolve_style_import(root, base_dir, specifier, tsconfig).ok_or_else(|| {
+                    Diagnostic::new("RUV1403", "CSS @import could not be resolved")
+                        .explain(format!(
+                            "`{specifier}` is imported from {}.",
+                            file.display()
+                        ))
+                        .at_file(&file)
+                })?;
+            append_style(walk, &dependency)?;
         } else if is_preprocessor_specifier(specifier) {
             return Err(unsupported_preprocessor(&file, specifier));
         }
     }
 
-    output.push_str(&remove_local_css_imports(&source, &imports));
-    output.push('\n');
-    if !files.contains(&file) {
-        files.push(file);
-    }
+    walk.css
+        .push_str(&remove_local_css_imports(&source, &imports));
+    walk.css.push('\n');
+    walk.record_file(file);
     Ok(())
-}
-
-fn sass_dependency_paths(root: &Path, entry: &Path) -> Vec<PathBuf> {
-    let mut pending = vec![canonical_or_original(entry.to_path_buf())];
-    let mut visited = BTreeSet::new();
-
-    while let Some(file) = pending.pop() {
-        if !visited.insert(file.clone()) {
-            continue;
-        }
-        let Ok(source) = fs::read_to_string(&file) else {
-            continue;
-        };
-        let base_dir = file.parent().unwrap_or(root);
-        for specifier in sass_imports(&source) {
-            if specifier.starts_with("sass:") || is_remote_style(&specifier) {
-                continue;
-            }
-            if let Some(dependency) = resolve_sass_import(root, base_dir, &specifier) {
-                pending.push(dependency);
-            }
-        }
-    }
-
-    visited.into_iter().collect()
 }
 
 fn sass_imports(source: &str) -> Vec<String> {
@@ -345,13 +390,23 @@ fn resolve_script_import(
         .or_else(|| resolve_specifier(root, specifier))
 }
 
-fn resolve_style_import(root: &Path, base_dir: &Path, specifier: &str) -> Option<PathBuf> {
+/// Resolve a stylesheet specifier.
+///
+/// `tsconfig` is passed in rather than loaded here: this runs once per import
+/// occurrence, and loading it locally re-read and re-parsed the project's
+/// `tsconfig.json` every time.
+fn resolve_style_import(
+    root: &Path,
+    base_dir: &Path,
+    specifier: &str,
+    tsconfig: &TsConfigPaths,
+) -> Option<PathBuf> {
     let candidate = if specifier.starts_with('.') {
         base_dir.join(specifier)
     } else if specifier.starts_with('/') {
         root.join(specifier.trim_start_matches('/'))
     } else {
-        if let Some(mapped) = TsConfigPaths::load(root).resolve(specifier)
+        if let Some(mapped) = tsconfig.resolve(specifier)
             && mapped.is_file()
         {
             return Some(canonical_or_original(mapped));
@@ -805,6 +860,88 @@ mod tests {
         let collection = collect_styles(root, &app, &[]).unwrap();
 
         assert!(collection.css.contains(".theme { color: navy; }"));
+    }
+
+    /// The nested `@import` path resolves aliases through the `TsConfigPaths`
+    /// carried by the walk. Only the top-level script-import path was covered
+    /// before, so a regression in the carried config would have gone unnoticed.
+    #[test]
+    fn resolves_aliased_css_imports_nested_inside_a_stylesheet() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let app = root.join("app");
+        let styles = root.join("styles");
+        fs::create_dir_all(&app).unwrap();
+        fs::create_dir_all(&styles).unwrap();
+        fs::write(
+            root.join("tsconfig.json"),
+            r#"{"compilerOptions":{"baseUrl":".","paths":{"@styles/*":["styles/*"]}}}"#,
+        )
+        .unwrap();
+        fs::write(app.join("page.tsx"), "import './entry.css'").unwrap();
+        fs::write(
+            app.join("entry.css"),
+            "@import '@styles/tokens.css';\n.entry { color: navy; }",
+        )
+        .unwrap();
+        fs::write(styles.join("tokens.css"), ".tokens { color: teal; }").unwrap();
+
+        let collection = collect_styles(root, &app, &[]).unwrap();
+
+        assert!(collection.css.contains(".tokens { color: teal; }"));
+        assert!(collection.css.contains(".entry { color: navy; }"));
+        assert!(
+            collection
+                .files
+                .iter()
+                .any(|file| file.ends_with("tokens.css"))
+        );
+    }
+
+    /// A partial shared by several entries is walked once and recorded once.
+    /// Sharing the Sass traversal state across entries must not drop it from
+    /// the dependency list, and must not let it be recorded twice.
+    #[test]
+    fn records_a_shared_sass_partial_exactly_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let app = root.join("app");
+        fs::create_dir_all(&app).unwrap();
+        fs::write(
+            app.join("page.tsx"),
+            "import './left.scss'; import './right.scss'",
+        )
+        .unwrap();
+        fs::write(app.join("_shared.scss"), "$accent: rebeccapurple;").unwrap();
+        fs::write(
+            app.join("left.scss"),
+            "@use './shared' as s; .left { color: s.$accent; }",
+        )
+        .unwrap();
+        fs::write(
+            app.join("right.scss"),
+            "@use './shared' as s; .right { color: s.$accent; }",
+        )
+        .unwrap();
+
+        let collection = collect_styles(root, &app, &[]).unwrap();
+
+        assert!(collection.css.contains(".left"));
+        assert!(collection.css.contains(".right"));
+
+        let shared = collection
+            .files
+            .iter()
+            .filter(|file| file.ends_with("_shared.scss"))
+            .count();
+        assert_eq!(shared, 1, "shared partial must be recorded once");
+
+        let unique: BTreeSet<&PathBuf> = collection.files.iter().collect();
+        assert_eq!(
+            unique.len(),
+            collection.files.len(),
+            "dependency list must not contain duplicates"
+        );
     }
 
     #[test]

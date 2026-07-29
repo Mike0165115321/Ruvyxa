@@ -287,6 +287,25 @@ function createRouter(): RouterInstance {
     }
   }
 
+  /**
+   * Append one `modulepreload` hint, or report that the document already has it.
+   *
+   * The guard is per href rather than per route: shared chunks belong to more
+   * than one route by definition, so prefetching a second route that reuses a
+   * chunk would otherwise append a duplicate hint for a module the document has
+   * already asked for. Returns `false` when the hint was already present.
+   */
+  function preloadModule(src: string): boolean {
+    if (document.querySelector(`link[rel="modulepreload"][href="${CSS.escape(src)}"]`)) {
+      return false
+    }
+    const link = document.createElement('link')
+    link.rel = 'modulepreload'
+    link.href = src
+    document.head.append(link)
+    return true
+  }
+
   function prefetch(href: string): void {
     const url = resolveInternalUrl(href)
     if (!url) return
@@ -297,20 +316,12 @@ function createRouter(): RouterInstance {
       // `modulepreload` warms the network and the module graph without
       // executing the bundle, so a prefetch cannot register a tree factory
       // built from the wrong parameters.
-      if (
-        document.querySelector(`link[rel="modulepreload"][href="${CSS.escape(matched.route.src)}"]`)
-      ) {
-        return
-      }
-      const link = document.createElement('link')
-      link.rel = 'modulepreload'
-      link.href = matched.route.src
-      document.head.append(link)
+      //
+      // A route already hinted was hinted together with its shared chunks, so
+      // there is nothing left for this call to do.
+      if (!preloadModule(matched.route.src)) return
       for (const chunk of matched.route.sharedChunks ?? []) {
-        const chunkLink = document.createElement('link')
-        chunkLink.rel = 'modulepreload'
-        chunkLink.href = chunk.src
-        document.head.append(chunkLink)
+        preloadModule(chunk.src)
       }
     })
   }

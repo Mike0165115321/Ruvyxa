@@ -62,6 +62,25 @@ export function useRuvyxaLoader<T>(
   const loaderRef = useRef(loader)
   loaderRef.current = loader
 
+  // `deps` is caller-supplied, so its length can change between renders — a
+  // list built from state is the obvious case. Spreading it into the effect's
+  // dependency array would make that array change size, which React rejects
+  // outright ("The final argument passed to useEffect changed size between
+  // renders"). Comparing the array here and exposing a counter keeps the
+  // effect's dependency array a fixed shape while preserving React's own
+  // comparison rule: a refetch happens when any entry stops being `Object.is`
+  // equal to the previous render's entry.
+  const depsRef = useRef<unknown[]>(deps)
+  const depsVersionRef = useRef(0)
+  if (
+    depsRef.current.length !== deps.length ||
+    depsRef.current.some((value, index) => !Object.is(value, deps[index]))
+  ) {
+    depsRef.current = deps
+    depsVersionRef.current += 1
+  }
+  const depsVersion = depsVersionRef.current
+
   const execute = useCallback(() => {
     if (!enabled) {
       // Disabling the hook must retire an in-flight request. Otherwise its
@@ -102,7 +121,7 @@ export function useRuvyxaLoader<T>(
       mountedRef.current = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [execute, ...deps])
+  }, [execute, depsVersion])
 
   const refetch = useCallback(() => {
     execute()
