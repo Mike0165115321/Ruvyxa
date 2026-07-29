@@ -1,700 +1,183 @@
-# CLI & Build Pipeline (`ruvyxa_cli`)
+# CLI Architecture
 
-**Files**: `crates/ruvyxa_cli/src/main.rs` (6338 lines), `crates/ruvyxa_cli/src/image_optimizer.rs`
-(443 lines)
+**Crate**: `ruvyxa_cli`  
+**Source**: `crates/ruvyxa_cli/src/main.rs` (~7500 lines, 4 sibling modules: `image_optimizer`,
+`image_usage`, `site_discovery`)
 
-Command dispatch via clap, config loading from `ruvyxa.config.ts` (evaluated by the selected
-Node/Bun runtime), build orchestration, and image optimization.
-
----
-
-## Command Structure
-
-```rust
-#[derive(clap::Parser)]
-pub struct Cli {
-    #[command(subcommand)]
-    pub command: Command,
-}
-
-pub enum Command {
-    Dev(ServerArgs),              // --root, --host, --port
-    Build(BuildArgs),             // --root, --target
-    Check(ProjectArgs),           // --root
-    Start(ServerArgs),            // --root, --host, --port
-    Preview(ServerArgs),          // --root, --host, --port
-    Routes(ProjectArgs),          // --root
-    Analyze(ProjectArgs),         // --root
-    Doctor(ProjectArgs),          // --root
-    Clean(ProjectArgs),           // --root
-    Trace(TraceArgs),             // <route> --root
-    Bench(BenchArgs),             // --root, --samples (3), --json
-    TestParity(ProjectArgs),      // --root  (alias: parity)
-    Plugin(PluginArgs),           // plugin create <name> [--dir <relative-path>]
-}
-
-pub struct ProjectArgs { pub root: PathBuf, pub runtime: Option<CliRuntime> }
-pub struct ServerArgs { pub root: PathBuf, pub host: Option<String>, pub port: Option<u16> }
-pub struct BuildArgs { pub root: PathBuf, pub target: Option<BuildTarget> }
-pub struct AnalyzeArgs {
-    pub root: PathBuf,
-    pub runtime: Option<CliRuntime>,
-    pub format: AnalyzeFormat, // auto | human | json | sarif
-    pub output: Option<PathBuf>,
-}
-pub struct DoctorArgs {
-    pub root: PathBuf,
-    pub target: Option<BuildTarget>,
-    pub adapter: Option<String>,
-    pub runtime: Option<CliRuntime>,
-    pub json: bool,
-}
-pub struct TraceArgs { pub route: String, pub root: PathBuf }
-pub struct BenchArgs { pub root: PathBuf, pub samples: usize, pub json: bool }
-pub struct PluginArgs { pub command: PluginCommand }
-pub enum PluginCommand { Create(PluginCreateArgs) }
-pub struct PluginCreateArgs { pub name: String, pub root: PathBuf, pub dir: Option<PathBuf> }
+## Entry Point
 
 ```
-
-| Command         | What it does                                              |
-| --------------- | --------------------------------------------------------- |
-| `dev`           | Start dev server with HMR                                 |
-| `build`         | Production build → `.ruvyxa/`                             |
-| `check`         | `tsc --noEmit` + `test:parity`                            |
-| `start`         | Serve production build                                    |
-| `preview`       | Preview production build locally                          |
-| `routes`        | Print discovered route table                              |
-| `analyze`       | Validate routes/imports/boundaries; human, JSON, or SARIF |
-| `doctor`        | Check setup and adapter/route compatibility               |
-| `clean`         | Remove `.ruvyxa/`                                         |
-| `trace`         | Inspect one route by path (JSON)                          |
-| `bench`         | Benchmark (discovery, analysis, build)                    |
-| `test:parity`   | Dev/prod route comparison + smoke renders                 |
-| `plugin create` | Copy the canonical publishable plugin package             |
-
----
-
-## Dev Command
-
-```rust
-fn dev(args: ServerArgs) -> Result<()> {
-    let config = load_project_config(&args.root)?;
-    let server_config = dev_server_config(&args, &config);
-    ruvyxa_dev_server::serve(server_config).await
+struct Cli {
+    command: Command
 }
 ```
 
-Maps ProjectConfig fields to `ServerConfig::dev()`.
+No global flags (`root`, `verbose`, etc.) — each subcommand carries its own args. Clap v4 with
+styled ANSI output.
 
-## Build Command
+## Command Enum (13 variants)
 
-```rust
-fn build(args: BuildArgs) -> Result<()> {
-    build_with_output(args, true)  // produce output = true
-}
+| Variant      | Args Struct   | Purpose                                                                                                |
+| ------------ | ------------- | ------------------------------------------------------------------------------------------------------ |
+| `Dev`        | `ServerArgs`  | Axum dev server with HMR, file watching, live reload                                                   |
+| `Build`      | `BuildArgs`   | Production build: route discovery, validation, client bundling, SSG/ISR/PPR prerender, adapter, commit |
+| `Check`      | `ProjectArgs` | `tsc --noEmit` + parity test; production readiness gate                                                |
+| `Start`      | `ServerArgs`  | Axum production server from `.ruvyxa/` output                                                          |
+| `Preview`    | `ServerArgs`  | Same as `Start` — alias for local preview of production build                                          |
+| `Routes`     | `ProjectArgs` | Discover and print route table (kind, path, file, strategy)                                            |
+| `Analyze`    | `AnalyzeArgs` | Validate routes, imports, server/client boundary; output as Human, JSON, or SARIF                      |
+| `Doctor`     | `DoctorArgs`  | Full project diagnostics: versions, tools, adapter compatibility, dependency check                     |
+| `Clean`      | `ProjectArgs` | Remove `.ruvyxa/` output directory                                                                     |
+| `Trace`      | `TraceArgs`   | Inspect one route manifest entry by route path, print as JSON                                          |
+| `Bench`      | `BenchArgs`   | Benchmark route discovery + analysis + production build over N samples                                 |
+| `TestParity` | `ProjectArgs` | Build then compare dev vs production route manifests + smoke render (alias: `parity`)                  |
+| `Plugin`     | `PluginArgs`  | Subcommand `PluginCommand::Create(PluginCreateArgs)` — scaffold plugin package                         |
+
+## Args Structs
+
+```
+struct ProjectArgs          { root: PathBuf, runtime: Option<CliRuntime> }
+struct ServerArgs           { root: PathBuf, host: Option<String>, port: Option<u16>, runtime: Option<CliRuntime> }
+struct BuildArgs            { root: PathBuf, target: Option<BuildTarget>, adapter: Option<String>, runtime: Option<CliRuntime> }
+struct AnalyzeArgs          { root: PathBuf, runtime: Option<CliRuntime>, format: AnalyzeFormat, output: Option<PathBuf> }
+struct DoctorArgs           { root: PathBuf, target: Option<BuildTarget>, adapter: Option<String>, runtime: Option<CliRuntime>, json: bool }
+struct TraceArgs            { route: String, root: PathBuf }
+struct BenchArgs            { root: PathBuf, samples: usize, json: bool }
+struct PluginArgs           { command: PluginCommand }
+  enum PluginCommand        { Create(PluginCreateArgs) }
+    struct PluginCreateArgs { name: String, root: PathBuf, dir: Option<PathBuf> }
 ```
 
-Full pipeline (see [Build Pipeline](#build-pipeline) below).
+## Key Enums
 
-## Check Command
-
-```rust
-fn check(args: ProjectArgs) -> Result<()> {
-    run_typecheck(&args.root)?;      // tsc --noEmit
-    test_parity(ProjectArgs { ... }).await  // full parity test
-}
+```
+BuildTarget  → Node | Bun | Edge | Static
+CliRuntime   → Node | Bun
+AnalyzeFormat → Auto | Human | Json | Sarif
 ```
 
-## Start Command
+`BuildTarget` is also `serde::Deserialize` and stored as `config.runtime`. The CLI `--runtime` flag
+uses `CliRuntime` (Node | Bun only) and maps to `JavaScriptRuntime` (from `ruvyxa_dev_server`).
 
-```rust
-fn start(args: ServerArgs) -> Result<()> {
-    let config = load_project_config(&args.root)?;
-    let server_config = production_server_config(&args, &config);
-    // app_dir → out_dir/server/app
-    // public_dir → out_dir/assets
-    ruvyxa_dev_server::serve(server_config).await
-}
+## Config Loading
+
+`load_project_config(root)` flow:
+
+1. Detect `RUVYXA_RUNTIME` env var or `--runtime` CLI override
+2. Find `config-renderer.mjs` in npm runtime scripts
+3. If absent → return default `ProjectConfig` with `dependency_hash = "no-config"`
+4. Spawn Node/Bun subprocess to evaluate `ruvyxa.config.ts`
+5. If runtime mismatch → re-render with correct runtime
+6. Parse JSON output → `ConfigRendererOutput { ok, config, code, message, stack, dependency_hash }`
+7. Validate paths (appDir, outDir, CSS entries, security limits, proxy IPs)
+8. Return `ProjectConfig`
+
+Config types (all `#[serde(deny_unknown_fields)]`):
+
+```
+ProjectConfig        { app_dir, out_dir, runtime, rendering, server, css, build, debug, images, security, cache, site, middleware, plugins, adapter, adapter_options }
+ServerConfigOptions  { host, port }
+CssConfigOptions     { entries: Vec<String> }
+BuildConfigOptions   { minify, sourcemap, tree_shaking, split_strategy, parallelism, jsx_runtime, es_target, emit_chunk_manifest, prebundle_dependencies, prerender_cache }
+RenderingConfigOptions { default_strategy, default_revalidate }
+DebugConfigOptions   { overlay, traces }
+SecurityConfigOptions  { action_body_limit, api_body_limit, plugin_response_body_limit, action_rate_limit, same_origin, fetch_metadata, trusted_proxy_ips, security_headers }
+CacheConfigOptions   { route_manifest, css, build_dir }
+BuildPluginConfig    { name, head: Vec<PluginHeadEntry> }
 ```
 
----
-
-## Configuration System
-
-### Two-phase loading
-
-**Phase 1: Node/Bun evaluation**
-
-```rust
-fn load_project_config(root: &Path) -> Result<ProjectConfig> {
-    let renderer = find_runtime_script(root, "config-renderer.mjs")?;
-    // If not found → return ProjectConfig::default() with hash "no-config"
-
-    let output = Command::new(runtime.executable())
-        .arg(&renderer)
-        .arg(root)
-        .output()?;
-
-    let result: ConfigRendererOutput = serde_json::from_slice(&output.stdout)?;
-    if !result.ok {
-        return Err(RuvyxaError::Message(format!(
-            "config evaluation failed: {} - {}",
-            result.code.unwrap_or_default(),
-            result.message.unwrap_or_default()
-        )));
-    }
-
-    let mut config = result.config.unwrap_or_default();
-    config.config_dependency_hash = result.dependency_hash.unwrap_or_default();
-    config.validate_paths(root)?;
-    Ok(config)
-}
-```
-
-**ConfigRendererOutput**:
-
-```rust
-struct ConfigRendererOutput {     // #[serde(rename_all = "camelCase")]
-    ok: bool,
-    config: Option<ProjectConfig>,
-    code: Option<String>,
-    message: Option<String>,
-    stack: Option<String>,
-    dependency_hash: Option<String>,
-}
-```
-
-`config-renderer.mjs` evaluated `ruvyxa.config.ts`, maps `defineConfig(...)` output, serializes to
-JSON stdout.
-
-**Phase 2: Rust validation**
-
-```rust
-impl ProjectConfig {
-    fn validate_paths(&self, root: &Path) -> Result<()> {
-        validate_project_relative_path("appDir", &self.app_dir(), root)?;
-        validate_project_relative_path("outDir", &self.out_dir(), root)?;
-        for (i, entry) in self.css.entries.iter().enumerate() {
-            validate_project_relative_path(&format!("css.entries[{}]", i), entry, root)?;
-        }
-        validate_bounded_limit("actionLimit", self.security.action_body_limit_bytes)?;
-        validate_bounded_limit("apiLimit", self.security.api_body_limit_bytes)?;
-        validate_plugin_response_limit(self.security.plugin_response_body_limit_bytes)?;
-        validate_trusted_proxy_ips(&self.security.trusted_proxy_ips)?;
-        self.parse_jsx_runtime()?;
-        Ok(())
-    }
-}
-```
-
-- `validate_project_relative_path`: reject absolute, root-dir, parent-dir. Reject path traversal
-  (`..`).
-- `validate_bounded_limit`: must be > 0 and ≤ `MAX_BODY_LIMIT`.
-- `validate_plugin_response_limit`: must be > 0 and ≤ `MAX_PLUGIN_RESPONSE_BODY_LIMIT_BYTES`.
-- `validate_trusted_proxy_ips`: each parses as `std::net::IpAddr`.
-- `parse_jsx_runtime`: `"jsx"` config value → `JsxRuntime::Automatic` (default) or `Classic`.
-
-### `ProjectConfig` struct
-
-```rust
-#[derive(Debug, Clone, Default, Deserialize)]      // #[serde(deny_unknown_fields)]
-#[serde(rename_all = "camelCase")]
-pub struct ProjectConfig {
-    pub app_dir: Option<String>,                    // default "app"
-    pub out_dir: Option<String>,                    // default ".ruvyxa"
-    pub runtime: Option<BuildTarget>,
-    #[serde(rename = "react")]
-    pub _react: Option<serde_json::Value>,          // reserved, unused
-    #[serde(rename = "typescript")]
-    pub _typescript: Option<serde_json::Value>,     // reserved, unused
-
-    #[serde(default, rename = "render")]
-    pub rendering: RenderingConfigOptions,
-    #[serde(default)]
-    pub server: ServerConfigOptions,
-    #[serde(default)]
-    pub css: CssConfigOptions,
-    #[serde(default)]
-    pub build: BuildConfigOptions,
-    #[serde(default)]
-    pub debug: DebugConfigOptions,
-    #[serde(default, rename = "image")]
-    pub images: ImageOptimizationOptions,
-    #[serde(default)]
-    pub security: SecurityConfigOptions,
-    #[serde(default)]
-    pub cache: CacheConfigOptions,
-    #[serde(default)]
-    pub middleware: MiddlewareConfig,
-    #[serde(default)]
-    pub plugins: Vec<BuildPluginConfig>,
-    #[serde(rename = "adapter")]
-    pub adapter: Option<serde_json::Value>,
-    #[serde(rename = "adapterOptions")]
-    pub adapter_options: Option<serde_json::Value>,
-
-    #[serde(skip)]
-    pub config_dependency_hash: String,
-    #[serde(skip)]
-    pub javascript_runtime_override: Option<JavaScriptRuntime>,
-}
-
-// Sub-config structs:
-pub struct RenderingConfigOptions {
-    #[serde(rename = "strategy")]
-    pub default_strategy: Option<RenderStrategy>,
-    #[serde(rename = "revalidate")]
-    pub default_revalidate: Option<u64>,
-}
-
-pub struct ServerConfigOptions {
-    pub host: Option<String>,
-    pub port: Option<u16>,
-}
-
-pub struct CssConfigOptions {
-    #[serde(default)]
-    pub entries: Vec<String>,
-}
-
-pub struct BuildConfigOptions {
-    pub minify: Option<bool>,
-    #[serde(rename = "map")]
-    pub sourcemap: Option<bool>,
-    #[serde(rename = "treeShake")]
-    pub tree_shaking: Option<bool>,
-    #[serde(rename = "split")]
-    pub split_strategy: Option<String>,
-    #[serde(rename = "workers")]
-    pub parallelism: Option<usize>,
-    #[serde(rename = "jsx")]
-    pub jsx_runtime: Option<String>,
-    #[serde(rename = "target")]
-    pub es_target: Option<String>,
-    #[serde(rename = "manifest")]
-    pub emit_chunk_manifest: Option<bool>,
-    #[serde(rename = "warm")]
-    pub prebundle_dependencies: Option<bool>,
-    #[serde(rename = "prerenderCache")]
-    pub prerender_cache: Option<bool>,
-}
-
-pub struct DebugConfigOptions {
-    pub overlay: Option<bool>,
-    pub traces: Option<bool>,
-}
-
-pub struct ImageOptimizationOptions {
-    pub optimize: Option<bool>,    // default true
-    pub quality: Option<u8>,       // default 82
-    pub lossless: Option<bool>,    // default false
-    pub workers: Option<usize>,    // default 0 = rayon global
-}
-
-pub struct SecurityConfigOptions {
-    #[serde(rename = "actionLimit")]
-    pub action_body_limit_bytes: Option<usize>,
-    #[serde(rename = "apiLimit")]
-    pub api_body_limit_bytes: Option<usize>,
-    #[serde(rename = "pluginLimit")]
-    pub plugin_response_body_limit_bytes: Option<usize>,
-    #[serde(rename = "actionRateLimit")]
-    pub action_rate_limit: Option<ActionRateLimitOptions>,
-    #[serde(rename = "sameOrigin")]
-    pub same_origin_actions: Option<bool>,
-    #[serde(rename = "fetchMeta")]
-    pub fetch_metadata_actions: Option<bool>,
-    #[serde(default, rename = "trustedProxyIps")]
-    pub trusted_proxy_ips: Vec<String>,
-    #[serde(rename = "headers")]
-    pub security_headers: Option<bool>,
-}
-
-pub struct ActionRateLimitOptions {
-    pub max: Option<usize>,
-    pub window: Option<u64>,
-}
-
-pub struct CacheConfigOptions {
-    #[serde(rename = "routes")]
-    pub route_manifest: Option<bool>,
-    pub css: Option<bool>,
-    #[serde(rename = "dir")]
-    pub build_dir: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BuildPluginConfig {
-    pub name: String,
-}
-```
-
----
-
-## Build Pipeline (`build_with_output`)
-
-```rust
-fn build_with_output(args: BuildArgs, produce_output: bool) -> Result<()>
-```
-
-### Phase 1: Config load
-
-```rust
-let config = load_project_config(&args.root)?;
-```
-
-### Phase 2: Route discovery
-
-```rust
-let discover_opts = DiscoverOptions::new(app_dir)
-    .with_rendering_defaults(
-        config.rendering.default_strategy,
-        config.rendering.default_revalidate,
-    );
-let manifest = discover_routes(discover_opts)?;
-```
-
-### Phase 3: Validation
-
-```rust
-let report = validate_app(&args.root, &manifest)?;
-if !report.is_ok() {
-    // Print diagnostics, bail
-}
-```
-
-### Phase 4: Style collection
-
-```rust
-let styles = collect_styles(&args.root, &app_dir, &config.style_entries)?;
-```
-
-### Phase 5: Staging directory
-
-```rust
-let out_dir = args.root.join(config.out_dir());
-let staging = out_dir.join(".ruvyxa-staging-<random>");
-// Copy directories:
-copy_dir(app_dir, staging.join("server/app"))?;
-copy_dir_if_exists(components_dir, staging.join("server/components"))?;
-copy_dir_if_exists(server_dir, staging.join("server/server"))?;
-// Copy style files to staging
-```
-
-### Phase 6: Image optimization
-
-```rust
-if produce_output {
-    optimize_public_images(
-        &args.root.join("public"),
-        &staging.join("assets"),
-        &out_dir.join("cache/images"),
-        &config.images,
-    )?;
-}
-```
-
-### Phase 7: Write manifest
-
-```rust
-write_manifest(&manifest, staging.join("manifest.json"))?;
-```
-
-### Phase 8: Emit client bundles
-
-```rust
-if produce_output {
-    let client_manifest = emit_client_bundles(
-        &manifest, &config, &args.root, &app_dir, &staging,
-    )?;
-    write_json(staging.join("client/manifest.json"), &client_manifest)?;
-}
-```
-
-**`emit_client_bundles_with_runtime` details**:
-
-```rust
-fn emit_client_bundles_with_runtime(
-    root: &Path, app_dir: &Path,
-    manifest: &RouteManifest, client_dir: &Path,
-    build: &BuildConfigOptions, plugins: &[BuildPluginConfig],
-    cache: RuvyxaBuildCache<'_>, runtime: JavaScriptRuntime,
-) -> Result<serde_json::Value>
-```
-
-1. Filter page routes only.
-2. Determine parallelism: `config.build.parallelism.unwrap_or_else(num_cpus::get)`.
-3. Build `BundleContext` (with caches). If plugins are configured, create the ordered plugin hook
-   host.
-4. Split strategy:
-   - **Route** (default): prepare all routes in parallel → detect shared modules across >=2 routes →
-     emit `shared.js` → emit per-route bundles importing shared registry.
-   - **Single**: emit each route independently.
-5. Write output JS + source maps + chunk manifest.
-6. Print build stats (module counts, sizes, cache hits).
-
-### Phase 9: Pre-render static routes
-
-```rust
-if produce_output {
-    let prerender_result = prerender_static_routes(
-        &manifest, config, &staging, &args.root,
-    )?;
-    write_json(staging.join("prerender/manifest.json"), &prerender_result)?;
-}
-```
-
-**`prerender_static_routes` details**:
-
-Filter SSG/ISR/PPR/CSR routes. For each:
-
-| Strategy               | Action                                                              |
-| ---------------------- | ------------------------------------------------------------------- |
-| CSR                    | Emit minimal HTML shell                                             |
-| SSG with params        | `resolve_static_params()` via worker pool → render each param combo |
-| SSG static             | Single render                                                       |
-| ISR                    | Single render (dev) or skip (prod — request-time)                   |
-| PPR with params        | `resolve_static_params()` → `render_ssg(mode="ppr")`                |
-| PPR static             | `render_ssg(mode="ppr")`                                            |
-| Dynamic without params | Skip (request-time only)                                            |
-
-Prerender jobs dispatched with max parallelism 2. Each job writes HTML to
-`prerender/<path>/index.html`.
-
-**Prerender artifact cache**:
-
-```rust
-struct PrerenderArtifactCache {
-    directory: PathBuf,                    // out_dir/cache/prerender
-    dependency_hash: String,
-    render_context_hash: String,
-    fingerprints: Arc<ArtifactFingerprintCache>,
-    enabled: bool,
-}
-```
-
-Cache validation: version==1, dependency_hash match, render_context_hash match, all file
-fingerprints match. On hit → hardlink cached HTML to output. On miss → render + write to cache.
-
-### Phase 10: Crawler discovery files
-
-After prerendering, the build combines static page routes, concrete prerendered paths, and
-configured `site.sitemap.additionalPaths`. It validates the production origin, applies exclusions,
-merges defaults and per-URL metadata, escapes URLs, and writes protocol-limited sitemap shards plus
-`robots.txt` into staged assets. Rich entries support modification dates, change frequencies,
-priorities, language alternates, images, and videos with conditional XML namespaces. Project-owned
-public files and exact application routes suppress core generation for their path. See
-[Crawler Discovery](site-discovery.md) for ownership and serving contracts.
-
-### Phase 11: Build metadata
-
-```rust
-let build_info = BuildInfo {
-    version: env!("CARGO_PKG_VERSION"),
-    timestamp: chrono::Utc::now(),
-    routes: manifest.routes.len(),
-    page_routes: report.page_routes,
-    api_routes: report.api_routes,
-    target: args.target,
-    config_hash: config.config_dependency_hash.clone(),
-    image_report: image_report.summary(),
-    client_bundle_manifest: ...,
-    prerender_manifest: ...,
-};
-write_json(staging.join("build.json"), &build_info);
-```
-
-### Phase 12: Atomic commit
-
-```rust
-commit_staged_build_outputs(&staging, &out_dir)?;
-// Replaces/creates out_dir atomically:
-// 1. If out_dir exists: rename to out_dir + ".old"
-// 2. Rename staging → out_dir
-// 3. Remove old (failure → restore from old)
-```
-
-### Phase 13: Print report
-
-```rust
-print_build_report(&build_info, &styles, elapsed);
-// Route table, sizes, timing summary, image report
-```
-
----
-
-## Image Optimizer (`image_optimizer.rs`)
-
-### `ImageOptimizationOptions`
-
-```rust
-pub struct ImageOptimizationOptions {
-    pub optimize: bool,        // default true
-    pub quality: u8,           // default 82
-    pub lossless: bool,        // default false
-    pub parallelism: usize,    // default 0 = rayon global default
-}
-```
-
-### `optimize_public_images(public_dir, assets_dir, cache_dir, options) → ImageReport`
-
-```rust
-pub struct ImageReport {
-    pub input_files: usize,
-    pub output_files: usize,
-    pub optimized: usize,
-    pub copied: usize,
-    pub skipped: usize,
-    pub errors: Vec<String>,
-    pub input_bytes: u64,
-    pub output_bytes: u64,
-    pub duration_ms: u64,
-}
-```
-
-Algorithm:
-
-1. **Discover**: walk `public_dir` recursively, collect all files.
-2. **Collision check**: if both `name.png` and `name.jpg` exist → error (same output stem).
-3. **Process each file**:
-
-```rust
-for entry in entries {
-    let ext = entry.extension().to_lowercase();
-
-    // Non-optimizable formats → copy as-is
-    if !matches!(ext, "png" | "jpg" | "jpeg") || !options.optimize {
-        fs::copy(entry, assets_dir.join(entry.file_name()))?;
-        continue;
-    }
-
-    // Decode
-    let img = match image::open(&entry) {
-        Ok(img) => img,
-        Err(_) => {
-            // Decode failed → copy as-is
-            fs::copy(entry, assets_dir.join(entry.file_name()))?;
-            continue;
-        }
-    };
-
-    // Cache key
-    let cache_key = blake3::hash(format!(
-        "{}:{}\n{}",
-        options.quality,
-        options.lossless as u8,
-        blake3::hash(&fs::read(&entry)?)
-    )).to_hex();
-
-    let cache_file = cache_dir.join(&cache_key).with_extension("webp");
-
-    // Cache hit → hardlink
-    if cache_file.exists() {
-        fs::hard_link(&cache_file, output_file)?;
-        continue;
-    }
-
-    // Encode WebP
-    let encoder = webp::Encoder::from_image(&img)?;
-    let webp = if options.lossless {
-        encoder.encode_lossless()
-    } else {
-        encoder.encode(options.quality as f32)
-    };
-
-    // Write to cache + hardlink to output
-    fs::write(&cache_file, &*webp)?;
-    fs::hard_link(&cache_file, output_file)?;
-}
-```
-
-4. **Parallelism**: `rayon::ThreadPoolBuilder::new().num_threads(options.workers).build()` if
-   workers specified, else default global pool.
-
-5. **Write manifest**: `.ruvyxa-images.json` with
-   `{ files: [{ input, output, width, height, format, optimized }] }`.
-
----
-
-## Plugin Build Hook Bridge
-
-Bridges Rust bundler plugin system to JS plugins configured in `ruvyxa.config.ts`. The `BuildHooks`
-trait defines the internal boundary:
-
-```rust
-pub struct BuildHookContext {
-    pub project_root: PathBuf,
-    pub importer: Option<PathBuf>,
-    pub target: BundleTarget,
-}
-
-pub struct TransformOutput {
-    pub code: String,
-    pub map: Option<String>,
-}
-
-pub trait BuildHooks: Send + Sync {
-    fn host_name(&self) -> &str;
-
-    fn resolve_id(
-        &self, specifier: &str, importer: Option<&Path>,
-        context: &BuildHookContext,
-    ) -> Result<Option<PathBuf>>;  // default: Ok(None)
-
-    fn transform(
-        &self, code: &str, id: &Path,
-        context: &BuildHookContext,
-    ) -> Result<Option<TransformOutput>>;  // default: Ok(None)
-}
-```
-
-**`BuildHookPipeline`**: ordered host pipeline. Executes hooks in registration order.
-
-```rust
-pub struct BuildHookPipeline {
-    hosts: Arc<Vec<Arc<dyn BuildHooks>>>,
-}
-```
-
-- `resolve_id`: iterates hosts, first `Some(path)` match wins.
-- `transform_with_map`: chains transforms — each host receives previous output; last non-None source
-  map is preserved.
-
-Each Node/Bun host owns a `register()` registry, so closures and module-level state are shared only
-inside that host. `build.onComplete` runs after committed production output.
-
----
-
-## Dev/Production Server Config Mapping
-
-### `dev_server_config(args, config) → ServerConfig`
-
-```rust
-ServerConfig {
-    root: args.root,
-    app_dir: root / config.app_dir(),
-    public_dir: root / "public",
-    client_dir: out_dir / "client",
-    prerender_dir: Some(out_dir / "prerender"),
-    host: args.host.unwrap_or(config.server.host.unwrap_or(DEFAULT_HOST)),
-    port: args.port.unwrap_or(config.server.port.unwrap_or(DEFAULT_PORT)),
-    watch: true,
-    error_overlay: config.debug.overlay.unwrap_or(true),
-    debug_traces: config.debug.traces.unwrap_or(false),
-    action_body_limit_bytes: config.security.action_body_limit_bytes.unwrap_or(DEFAULT),
-    action_rate_limit_max: action_rate.max,
-    action_rate_limit_window: Duration::from_secs(action_rate.window),
-    // ... map all other fields from config
-}
-```
-
-### `production_server_config(args, config) → ServerConfig`
-
-Same structure but:
-
-- `app_dir = out_dir / "server" / config.app_dir()` (compiled output)
-- `public_dir = out_dir / "assets"` (optimized images)
-- `watch = false`
-- `error_overlay = false`
+## Config Override Priority
+
+`RUVYXA_RUNTIME` env → `--runtime` CLI flag → `config.runtime` → default detection. The `--adapter`
+CLI flag parses through `parse_adapter_name()` which accepts 10 known names (node, bun, static,
+vercel, netlify, cloudflare, railway, render, firebase, aws) or any npm package name. Platform
+auto-detection reads 6 env vars (VERCEL, NETLIFY, CF_PAGES, RAILWAY_PROJECT_ID, RENDER, AWS_APP_ID).
+
+## Build Pipeline
+
+`build_with_output(args, show_summary)` runs **in order**:
+
+1. **Config load** — `load_project_config()`
+2. **Route discovery** — `discover_project_routes()` → `RouteManifest`
+3. **Validation** — `validate_app()` → fails on any diagnostic
+4. **Plugin start** — `TypeScriptPluginBuildSession::run_start(out_dir)` — spawns persistent Node
+   worker running `plugin-runtime.mjs`
+5. **Staging dir** — atomic temp directory under `out_dir`; cleanup guard on drop
+6. **Asset preparation** (parallel thread scope):
+   - Style collection → `collect_styles()`
+   - Copy `app/`, `components/`, `server/` → staging `server/`
+   - Image optimization → `optimize_public_images()` → staging `assets/`
+   - Copy style source files
+7. **Client bundling** (parallel with asset prep) — `emit_client_bundles_with_session()`:
+   - Per-route bundle preparation (module resolution, content-hash caching)
+   - Shared route module extraction (modules used by ≥2 routes)
+   - Route-split bundling via `ruvyxa_bundler`
+   - Artifact cache with content-addressed fingerprinting (blake3-256)
+   - Writes per-route JS + source maps to staging `client/`
+   - Emits `route-manifest.json` (lean, browser-safe)
+   - Emits `chunk-manifest.json` (if `build.manifest` enabled)
+8. **Pre-rendering** — `prerender_static_routes()` — SSG/ISR/PPR/CSR:
+   - Parallel worker pool (Node subprocesses, bounded by `parallelism`)
+   - Artifact cache by dependency hash + render context hash + file fingerprints
+   - CSR routes → minimal shell HTML
+   - SSG/ISR → full render via worker pool
+   - PPR → static shell (Suspense fallbacks)
+   - Writes `prerender/manifest.json`
+9. **Discovery files** — sitemap.xml, robots.txt via `write_discovery_files()`
+10. **Platform adapter auto-detect** — matches hosting env vars when no adapter configured
+11. **Build info JSON** — writes `staging/build.json`
+12. **Commit staging** — `commit_staged_build_outputs()`:
+    - Backup existing output → rename staging → remove backup (with Windows retry)
+13. **Plugin complete** — `TypeScriptPluginBuildSession::run_complete(out_dir, manifest)`
+14. **Adapter runner** (if adapter configured or detected) — `run_adapter_runner()` spawns
+    `adapter-runner.mjs` which produces artifact reports
+
+## Module Resolution & Bundler
+
+`emit_client_bundles_with_session()` uses `ruvyxa_bundler::BundleContext`:
+
+- Creates `CompileCache` and `ResolveGraphCache` at `cache/bundler/`
+- When plugins present → attaches `BuildHookPipeline` with `TypeScriptPluginBridge` hooks
+- Plugin hooks: `resolve_id`, `load`, `transform` — each communicates with persistent Node worker
+  via NDJSON over stdin/stdout
+- Supports `SplitStrategy::Route` (default) and `SplitStrategy::Single`
+- Client bundling respects minify, sourcemap, tree-shaking, JSX runtime (classic/automatic), ES
+  target (es2018–esnext)
+- Progress bar on TTY; silent in pipes/CI
+
+## Plugin Host
+
+`TypeScriptPluginBuildSession` manages a persistent Node process running `plugin-runtime.mjs`:
+
+- `run_start(out_dir)` → calls `build.start` hook
+- `run_complete(out_dir, manifest)` → calls `build.complete` hook
+- Hooks are used during bundling via `TypeScriptPluginBridge` which implements `BuildHooks` trait
+- Worker protocol: JSON line → stdin, JSON line ← stdout, errors → stderr
+- Round-robin across workers for concurrent hook calls
+
+## Plugin Create Scaffolding
+
+`plugin create <name>` copies 6 template files from `templates/plugin/`:
+
+- `src/index.ts`, `test/plugin.test.mjs`, `package.json`, `tsconfig.json`, `README.md`, `.gitignore`
+- Replaces `__PLUGIN_NAME__`, `__PLUGIN_IDENTIFIER__`, `__RUVYXA_VERSION__`
+- Validates plugin name: lowercase + digits + single hyphens only
+- Default dir is `<name>` under root; `--dir` overrides (must be relative, no `..`)
+- Package is named `ruvyxa-plugin-<name>`
+
+## CLI Normalization
+
+Before clap parsing, `normalized_cli_args()` normalizes option and command casing (case-insensitive
+matching to canonical forms). This makes `ruvyxa BUILD --Target node` equivalent to
+`ruvyxa build --target node`.
+
+## Error Handling
+
+- `anyhow::Result` with `.context()` for all failures
+- Error codes: `RUV1205` (prerender path escape), `RUV1600`–`RUV1602` (config validation),
+  `RUV1700`–`RUV1701` (plugin errors), `RUV2200`–`RUV2203` (adapter errors)
+- Diagnostics bubble through `fail_on_diagnostics()` which prints each diagnostic and bails with
+  count
+- Invalid config fields rejected at deserialization via `deny_unknown_fields`
+- Security limits validated against hard ceilings from `ruvyxa_dev_server` constants
+- Build staging directory has drop-guard cleanup; commit failures trigger rollback

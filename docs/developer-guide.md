@@ -1,84 +1,77 @@
 # Ruvyxa Developer Guide
 
-This guide is for framework contributors: people changing the Rust workspace, Ruvyxa CLI, npm
-packages, adapters, templates, runtime, or integration fixtures. Application authors should begin
-with the [User Guide](guides/index.md).
+**Audience**: framework contributors changing Rust crates, npm packages, adapters, templates, or
+runtime.
 
-## 1. Local requirements and setup
+**Application authors**: start at [User Guide](guides/en/01-getting-started.md).
 
-Install Node.js 22.12 or later, pnpm 11 or later, and Rust 1.96 or later (Rust edition 2024). The
-minimum Node version matches the native Oxc transformer used by the runtime compiler. Then run the
-platform setup script from the repository root:
+---
 
-```powershell
-.\setup.bat
-```
-
-On macOS or Linux, run:
+## 1. Setup
 
 ```bash
-./setup.sh
-```
+# Requirements
+node --version  # ≥ 22.12
+pnpm --version  # ≥ 11
+rustc --version # ≥ 1.96 (edition 2024)
 
-The setup script installs the locked dependencies, builds all workspace packages, and compiles the
-Ruvyxa CLI. Then inspect the integration fixture:
+# Install
+.\setup.bat        # Windows
+./setup.sh         # macOS/Linux
 
-```bash
+# Verify
 cargo run -p ruvyxa_cli -- doctor --root examples/demo
 cargo run -p ruvyxa_cli -- routes --root examples/demo
 ```
 
-Do not commit generated output: `target/`, `node_modules/`, `.ruvyxa/`, `dist/`, `.npm-pack/`, and
-`.npm-smoke/`. Preserve the distinction between browser-safe `RUVYXA_PUBLIC_` variables and
-server-only secrets at every layer.
+Setup installs locked deps, builds workspace packages, compiles CLI.
 
-## 2. Repository map
+**Never commit**: `target/`, `node_modules/`, `.ruvyxa/`, `dist/`, `.npm-pack/`, `.npm-smoke/`.
 
-```text
-npm package: ruvyxa
-  └─ bin/ruvyxa.js -> platform-specific Ruvyxa CLI binary
-       ├─ crates/ruvyxa_cli          commands, config loading, build orchestration
-       ├─ crates/ruvyxa_graph        route discovery, render detection, validation
-       ├─ crates/ruvyxa_bundler      TS/JSX/MDX compilation, Oxc transforms, resolution, linking, maps, minification
-       ├─ crates/ruvyxa_dev_server   Axum server, HMR, router, cache, Node/Bun worker pool, CSS minification
-       ├─ crates/ruvyxa_middleware   Tower middleware and plugin bridge
-       └─ crates/ruvyxa_diagnostics  structured RUV#### diagnostics
+---
+
+## 2. Repo Map
+
+```
+packages/ruvyxa/bin/ruvyxa.js → platform-specific CLI binary
+  └─ crates/
+       ├── ruvyxa_cli          Commands, config loading, build orchestration
+       ├── ruvyxa_graph        Route discovery, render detection, validation
+       ├── ruvyxa_bundler      TS/JSX/MDX compilation, Oxc transforms, resolution, linking, minification
+       ├── ruvyxa_dev_server   Axum server, HMR, router, cache, Node/Bun worker pool, styles
+       ├── ruvyxa_middleware   Tower middleware + plugin bridge
+       └── ruvyxa_diagnostics  Structured RUV#### diagnostics
 
 packages/
-  ├─ ruvyxa                    CLI launcher, runtime bridge, public re-exports
-  ├─ @ruvyxa/core              config and server APIs, types, adapter contracts
-  ├─ @ruvyxa/react             Image, Seo, hydration, loaders, error boundaries
-  ├─ @ruvyxa/adapter-*         deployment adapter packages
-  ├─ @ruvyxa/cli-*             platform-specific native binaries (darwin-arm64, linux-arm64, linux-x64, win32-arm64, win32-x64)
-  └─ create-ruvyxa             scaffold command and minimal template packaging
+  ├── ruvyxa                   Re-exports @ruvyxa/core + runtime scripts
+  ├── @ruvyxa/core             Config types, server APIs, adapter contracts
+  ├── @ruvyxa/react            Image, SEO, hydration, loaders, error boundaries
+  ├── @ruvyxa/auth             Sessions, OAuth, magic-link, WebAuthn
+  ├── @ruvyxa/database         Typed CRUD with Prisma/DynamoDB/custom adapters
+  ├── @ruvyxa/realtime         Action-driven WebSocket transport
+  ├── @ruvyxa/adapter-*        10 platform adapters (vercel, netlify, cloudflare, node, bun, static, …)
+  ├── @ruvyxa/cli-*            5 platform binaries (darwin-arm64, linux-arm64, linux-x64, win32-arm64, win32-x64)
+  └── create-ruvyxa            Scaffold CLI + template packaging
 ```
 
-Framework contracts often span Rust and TypeScript. A change to configuration, runtime files,
-package exports, or starter behaviour must be checked in both places. Do not change a TypeScript
-type and assume the Ruvyxa CLI will accept it: `ruvyxa_cli` deserializes a strict runtime
-configuration independently.
+---
 
-## 3. Working loop and verification
-
-Read the touched module, direct callers, tests, and the closest demo example before editing. Start
-with the narrowest useful check and expand only when shared behaviour changes.
+## 3. Working Loop
 
 ```bash
-# Targeted Rust work
+# Narrowest check first, expand only when shared behavior changes
 cargo test -p ruvyxa_graph --locked
 cargo test -p ruvyxa_cli --locked
-
-# Targeted JavaScript package work
 pnpm --filter ruvyxa test
 pnpm --filter ruvyxa check
 
-# End-to-end application signal
+# E2E signal via demo
 cargo run -p ruvyxa_cli -- analyze --root examples/demo
 cargo run -p ruvyxa_cli -- check --root examples/demo
 cargo run -p ruvyxa_cli -- test:parity --root examples/demo
 ```
 
-Before handing off framework, runtime, template, or packaging work, run the applicable broad checks:
+**Full suite before handoff**:
 
 ```bash
 cargo fmt --all -- --check
@@ -92,177 +85,128 @@ pnpm release:validate
 pnpm pack:smoke
 ```
 
-If Windows reports that `target/debug/ruvyxa.exe` is locked, stop the development server or other
-process holding that executable before retrying. Do not delete the whole `target/` directory merely
-to hide a file-lock problem.
+---
 
-## 4. Change map
+## 4. Change Guide
 
-| Change                                                         | Primary surface                               | Minimum proof                         |
-| -------------------------------------------------------------- | --------------------------------------------- | ------------------------------------- |
-| CLI command, config parsing, build orchestration               | `crates/ruvyxa_cli/src/main.rs`               | relevant Rust test plus demo `check`  |
-| route matching, validation, rendering detection                | `crates/ruvyxa_graph/src/lib.rs`              | graph test plus `routes`/`analyze`    |
-| compilation, linking, source maps, Oxc transforms/minification | `crates/ruvyxa_bundler`                       | bundler tests plus demo build         |
-| CSS collection, minification, style HMR                        | `crates/ruvyxa_dev_server/src/style.rs`       | crate tests plus demo build           |
-| API/action/HMR/server behaviour                                | `crates/ruvyxa_dev_server`                    | crate tests plus parity               |
-| core config or server API                                      | `packages/@ruvyxa/core/src`                   | package test/check                    |
-| npm launcher or runtime script                                 | `packages/ruvyxa`                             | package test and `pnpm pack:smoke`    |
-| generated starter                                              | `templates/minimal`, `packages/create-ruvyxa` | create-package test and pack smoke    |
-| cross-cutting application behaviour                            | `examples/demo`                               | `analyze`, `check`, and `test:parity` |
+| Change                           | Primary Surface                         | Minimum Proof                     |
+| -------------------------------- | --------------------------------------- | --------------------------------- |
+| CLI command, config parsing      | `crates/ruvyxa_cli/src/main.rs`         | Rust test + demo `check`          |
+| Route matching, validation       | `crates/ruvyxa_graph/src/lib.rs`        | Graph test + `routes`/`analyze`   |
+| Compilation, linking, transforms | `crates/ruvyxa_bundler`                 | Bundler tests + demo build        |
+| CSS, style HMR                   | `crates/ruvyxa_dev_server/src/style.rs` | Crate tests + demo build          |
+| API/action/HMR/server            | `crates/ruvyxa_dev_server`              | Crate tests + parity              |
+| Core config/server API           | `packages/@ruvyxa/core/src`             | Package test/check                |
+| npm launcher/runtime             | `packages/ruvyxa`                       | Package test + `pnpm pack:smoke`  |
+| Template/starter                 | `templates/minimal`, `create-ruvyxa`    | Create test + pack smoke          |
+| Cross-cutting app behavior       | `examples/demo`                         | `analyze`, `check`, `test:parity` |
 
-Add a Rust test beside shared Rust behaviour. Add a Node test under `tests/packages/**` when
-changing a public config, runtime, package, or template contract. Never weaken an existing test just
-to make a change pass.
+### Config Field Lifecycle
 
-## 5. Public contracts that must remain aligned
+1. Add type + docs in `packages/@ruvyxa/core`
+2. Add matching Rust field (`camelCase`)
+3. Validate in Rust (unsafe/impossible values)
+4. Wire to dev + production paths
+5. Add tests for accepted/rejected values
+6. Update user guide if app-visible
 
-### CLI
+Unknown config keys **fail** — never silently ignored.
 
-The supported command surface is:
+### Rendering Detection Order (preserve)
 
-```text
-dev, build, check, start, preview, routes, analyze, doctor,
-clean, trace, bench, test:parity (with parity alias)
-```
+1. `'use client'` directive → CSR
+2. `export const ppr = true` → PPR
+3. `export const revalidate = <n>` → ISR
+4. `getStaticParams` / `staticParams` → SSG
+5. Static route (no dynamic markers) → SSG
+6. No match → SSR (default)
 
-Preserve command names, option names, output semantics, and the public build/root defaults unless
-the change explicitly introduces a breaking release.
+### Server/Client Boundary (preserve)
 
-### Configuration
+| Rule                             | Code    | Severity   |
+| -------------------------------- | ------- | ---------- |
+| `"server-only"` in client bundle | RUV1007 | Error      |
+| Private `process.env` in client  | RUV1008 | Error      |
+| `"client-only"` in SSR bundle    | RUV1009 | Warning    |
+| `server/` dir in client graph    | RUV1010 | Error      |
+| Only `RUVYXA_PUBLIC_*` in client | —       | Convention |
 
-`ruvyxa.config.ts` is a strict contract. The core package defines TypeScript types, while the Ruvyxa
-CLI validates and deserializes the runtime representation. When adding a field:
+---
 
-1. Add the type and documentation in `packages/@ruvyxa/core`.
-2. Add the matching Rust config field with the correct camelCase mapping.
-3. Validate unsafe or impossible values in Rust.
-4. Wire the value to development and production server/build paths.
-5. Add tests for accepted and rejected values.
-6. Update the user guide if an app author can use the option.
+## 5. Packaging Rules
 
-Unknown configuration keys intentionally fail rather than being ignored. This prevents configuration
-typos from silently changing deployment behaviour.
+- Tarballs must NOT contain tests or `workspace:` dependencies
+- Must include every runtime script, template, platform binary, launcher
+- npm strips `.gitignore` from tarballs → `create-ruvyxa` renames to `gitignore` → scaffold restores
+  as `.gitignore`
+- `ruvyxa/bin/ruvyxa.js` must be `100755` in Git and tarball (Vercel requirement)
+- Verify with: `git ls-files --stage packages/ruvyxa/bin/ruvyxa.js` + `pnpm pack:smoke`
 
-### Routes, rendering, and boundaries
+---
 
-- Reject duplicate and ambiguous routes rather than applying undocumented precedence.
-- Preserve the rendering detection order: client directive, PPR, ISR, `getStaticParams`, static
-  candidate, then SSR.
-- Preserve server/client validation for `server-only`, `client-only`, `server/` imports, and private
-  environment access.
-- Keep private variables server-only; only `RUVYXA_PUBLIC_` values can enter client bundles.
+## 6. Release Order
 
-### Packaging
+`pnpm release:bump <version>` syncs all workspace packages + crates + starter deps to one version.
 
-Published tarballs must not contain tests or `workspace:` protocol dependencies. They must include
-every runtime script, template file, platform binary, and launcher required by the public command.
+Publish order (from `.github/workflows/release.yml`):
 
-### Releases
+1. Native CLI packages (`@ruvyxa/cli-*`)
+2. Shared JS packages (`@ruvyxa/core`, `@ruvyxa/react`, …)
+3. All adapters
+4. `ruvyxa`
+5. `create-ruvyxa`
 
-`pnpm release:bump <version>` synchronizes every workspace package, Rust crate, and starter
-dependency to one release version. The release workflow then publishes native CLI packages first,
-followed by shared JavaScript packages, every official `@ruvyxa/adapter-*` package, `ruvyxa`, and
-`create-ruvyxa` in that order. The list and the clean `npm install ruvyxa@<version>` verification
-are kept directly in `.github/workflows/release.yml`, so adding an adapter requires updating that
-workflow in the same change.
+Adding an adapter = update the workflow in the same change.
 
-## 6. Diagnostics
+---
 
-User-visible framework diagnostics use the `RUV####` format. A new diagnostic should include:
+## 7. Diagnostics (RUV####)
 
-1. A code in the appropriate range.
-2. A concise title.
-3. An explanation of the violated contract.
-4. The file location when known.
-5. A concrete suggested fix.
+New diagnostic needs:
 
-Do not emit a generic build error when the framework can identify the source route, import,
-configuration field, or boundary violation. Add tests for the new diagnostic and update the
-appropriate English guide if users need to act on it.
+1. Code in appropriate range
+2. Concise title
+3. Explanation of violated contract
+4. File location when known
+5. Concrete suggested fix
+6. Tests for the diagnostic
+7. English guide update if user-facing
 
-## 7. Templates and scaffold packaging
+---
 
-The source starters are `templates/minimal/`, `templates/blog/`, `templates/crud/`, and
-`templates/api-backend/`. `packages/create-ruvyxa/scripts/prepare-template.mjs` copies all four into
-the ignored package template before packing. Keep observable starter behaviour, the CLI template
-list, and package tests aligned.
+## 8. Templates
 
-npm omits nested `.gitignore` files from package tarballs. The prepare script therefore renames the
-packaged copy to `gitignore`; the scaffold restores it as `.gitignore` in the generated application.
-This is intentional and is covered by `pnpm pack:smoke`. Do not replace it with an npm ignore rule
-that removes the starter's ignore file again.
+Source starters: `templates/minimal/`, `templates/blog/`, `templates/crud/`,
+`templates/api-backend/`
 
-The starter uses the normal npm binary:
+`packages/create-ruvyxa/scripts/prepare-template.mjs` copies all four into package before packing.
 
-```json
-"build": "ruvyxa build"
-```
+Keep starter scripts consistent: `dev`, `build`, `start`, `check`.
 
-Keep `dev`, `build`, `start`, and `check` consistent with this standard pattern when changing the
-starter. The package, rather than every consuming application, is responsible for publishing the
-launcher with executable permission.
+---
 
-## 8. Vercel executable-bit regression
+## 9. Demo as Integration Fixture
 
-`ruvyxa` declares an npm binary at `packages/ruvyxa/bin/ruvyxa.js`. That file must be executable
-(`100755`) in Git and in the published tarball. Otherwise environments such as Vercel can fail
-before the framework starts:
-
-```text
-node_modules/.bin/ruvyxa: Permission denied
-```
-
-Verify both layers:
+`examples/demo` exercises static, dynamic, catch-all, API, action, MDX, env, style, and
+rendering-strategy paths.
 
 ```bash
-git ls-files --stage packages/ruvyxa/bin/ruvyxa.js
-pnpm pack:smoke
+pnpm --dir examples/demo doctor      # Setup check
+pnpm --dir examples/demo routes      # Route table
+pnpm --dir examples/demo analyze     # Route/import/boundary problems
+pnpm --dir examples/demo check       # Typecheck + build + parity
+pnpm --dir examples/demo trace /blog # Single route inspection
 ```
 
-The Git mode must begin with `100755`. Pack smoke checks the tar header, runs the extracted Ruvyxa
-launcher through Node, verifies the packed create command, and confirms that its generated
-application contains `.gitignore`.
+Use `analyze` first for route/import/boundary problems, `check` for full readiness.
 
-When changing launcher behaviour, Ruvyxa CLI binary discovery, optional platform packages, or
-package `files` lists, always run `pnpm release:validate` and `pnpm pack:smoke`. Do not rely only on
-a workspace symlink: published package contents and permissions are the deployment contract.
+---
 
-## 9. The demo as an integration system
+## 10. Known Boundaries
 
-`examples/demo` is more than a showcase. It exercises static, dynamic, catch-all, API, action, MDX,
-environment, style, and rendering-strategy behaviour through the same paths users run. Use it to
-localize flexibility and parity problems:
-
-```bash
-pnpm --dir examples/demo doctor
-pnpm --dir examples/demo routes
-pnpm --dir examples/demo analyze
-pnpm --dir examples/demo typecheck
-pnpm --dir examples/demo check
-```
-
-Use `analyze` first for route/import/boundary problems. Use `check` for type checking, production
-build, development/production route comparison, and page smoke rendering. Use `trace` to inspect one
-manifest entry. Do not hard-code framework versions or route counts in the demo health endpoint;
-`doctor` and `routes` are the runtime sources of truth.
-
-## 10. Known boundaries and honest documentation
-
-Document only what source code and tests support.
-
-- Rendering strategy selection is source scanning with a documented precedence order; recommend
-  explicit route exports for important deployment behaviour.
-- Configuration paths are restricted to the project root to prevent traversal. External styles or
-  assets need a project-local import/copy strategy.
-- Adapter packages return typed output metadata and declarative build artifacts. The config renderer
-  executes `adapter.build()` and the CLI re-runs it after building to materialize artifacts within
-  staging before it commits `build.json`. Function artifacts compile route TS/TSX into an executable
-  `.mjs` static registry bundle; handlers load that registry rather than raw manifest paths. Static
-  adapters intentionally do not create serverless or edge request handlers.
-- `check` is an application-readiness signal, not a browser E2E suite, load test, or security audit.
-  Add verification in the layer changed by a feature.
-
-The maintained documentation is intentionally split: `docs/guides/` for application authors and
-`docs/developer-guide.md` for framework contributors. Keep the root README, create-package README,
-demo README, commands, defaults, security limits, and deployment statements in agreement whenever a
-user journey changes.
+- Document only what source code and tests support
+- Rendering strategy = source scanning with documented precedence (not a runtime toggle)
+- Config paths restricted to project root (prevents traversal)
+- Adapter `build()` runs within staging before atomic commit
+- `check` is application-readiness signal, not E2E/load/security audit
+- If Windows locks `target/debug/ruvyxa.exe` → stop dev server, don't delete `target/`

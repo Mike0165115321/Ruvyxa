@@ -186,7 +186,7 @@
 
 ### CLI & diagnostics
 
-- **12 verified commands** — `dev`, `build`, `check`, `start`, `preview`, `routes`, `analyze`,
+- **13 verified commands** — `dev`, `build`, `check`, `start`, `preview`, `routes`, `analyze`,
   `doctor`, `clean`, `trace`, `bench`, and `test:parity`.
 - **`build`** — production output supports `--target node`, `edge`, or `static`. Pre-renders SSG,
   ISR, PPR, and CSR pages at build time via parallel worker pool (`MAX_PRERENDER_PARALLELISM: 2`).
@@ -299,12 +299,22 @@ isolated starters, use local tarball overrides for an unpublished Ruvyxa release
 
 ## Documentation
 
-| Guide                                                  | Description                              |
-| ------------------------------------------------------ | ---------------------------------------- |
-| [User Guide](docs/guides/index.md)                     | Build and deploy a Ruvyxa app — EN & TH  |
-| [Developer Guide](docs/developer-guide.md)             | Develop, test, and package the framework |
-| [Architecture Overview](docs/architecture/overview.md) | System architecture and module reference |
-| [Getting Started](docs/guides/en/getting-started.md)   | Create your first Ruvyxa app             |
+| Guide                                                             | Description                               |
+| ----------------------------------------------------------------- | ----------------------------------------- |
+| [User Guide](docs/index.md)                                       | Build and deploy a Ruvyxa app — EN & TH   |
+| [Developer Guide](docs/developer-guide.md)                        | Develop, test, and package the framework  |
+| [Architecture Overview](docs/architecture/overview.md)            | System architecture and module reference  |
+| [Getting Started](docs/guides/en/01-getting-started.md)           | Create your first Ruvyxa app              |
+| [Routing](docs/guides/en/02-routing.md)                           | File-system routes, layouts, route groups |
+| [Rendering Strategies](docs/guides/en/04-rendering-strategies.md) | SSR, SSG, ISR, CSR, PPR                   |
+| [Data Loading & Cache](docs/guides/en/05-data-loading-cache.md)   | Loaders, cache(), TTL, invalidation       |
+| [Server Actions](docs/guides/en/06-server-actions.md)             | Type-safe mutations with validation       |
+| [API Reference](docs/guides/en/17-api-reference.md)               | Complete @ruvyxa/react + @ruvyxa/core API |
+| [Architecture: Graph](docs/architecture/graph.md)                 | Route discovery and validation            |
+| [Architecture: Bundler](docs/architecture/bundler.md)             | TypeScript compilation and linking        |
+| [Architecture: Dev Server](docs/architecture/dev-server.md)       | Axum server, HMR, worker pool             |
+| [Architecture: Diagnostics](docs/architecture/diagnostics.md)     | Error codes, SARIF output                 |
+| [Architecture: Security](docs/architecture/security.md)           | Boundary enforcement, env safety          |
 
 ---
 
@@ -529,20 +539,21 @@ cache examples.
 
 ## CLI
 
-| Command               | Purpose                                                                            |
-| --------------------- | ---------------------------------------------------------------------------------- |
-| `ruvyxa dev`          | Start the development server with HMR and file watching                            |
-| `ruvyxa build`        | Build production output to `.ruvyxa/` (supports `--target node`, `edge`, `static`) |
-| `ruvyxa check`        | Run app-level production readiness checks (typecheck, build, parity, smoke)        |
-| `ruvyxa start`        | Serve production output with the same runtime semantics as dev                     |
-| `ruvyxa preview`      | Alias for `ruvyxa start` (preview production build locally)                        |
-| `ruvyxa routes`       | Print the discovered route table                                                   |
-| `ruvyxa analyze`      | Validate routes, imports, and server/client boundaries (structured JSON)           |
-| `ruvyxa doctor`       | Check project health, dependencies, environment, and Ruvyxa CLI status             |
-| `ruvyxa trace <path>` | Print route matching details for a URL                                             |
-| `ruvyxa bench`        | Benchmark route discovery, analysis, validation, and production builds             |
-| `ruvyxa test:parity`  | Compare dev/prod routes and smoke-render page routes                               |
-| `ruvyxa clean`        | Remove `.ruvyxa/` build output                                                     |
+| Command                | Purpose                                                                            |
+| ---------------------- | ---------------------------------------------------------------------------------- |
+| `ruvyxa dev`           | Start the development server with HMR and file watching                            |
+| `ruvyxa build`         | Build production output to `.ruvyxa/` (supports `--target node`, `edge`, `static`) |
+| `ruvyxa check`         | Run app-level production readiness checks (typecheck, build, parity, smoke)        |
+| `ruvyxa start`         | Serve production output with the same runtime semantics as dev                     |
+| `ruvyxa preview`       | Alias for `ruvyxa start` (preview production build locally)                        |
+| `ruvyxa routes`        | Print the discovered route table                                                   |
+| `ruvyxa analyze`       | Validate routes, imports, and server/client boundaries (structured JSON)           |
+| `ruvyxa doctor`        | Check project health, dependencies, environment, and Ruvyxa CLI status             |
+| `ruvyxa trace <path>`  | Print route matching details for a URL                                             |
+| `ruvyxa bench`         | Benchmark route discovery, analysis, validation, and production builds             |
+| `ruvyxa test:parity`   | Compare dev/prod routes and smoke-render page routes                               |
+| `ruvyxa plugin create` | Scaffold a publishable plugin package                                              |
+| `ruvyxa clean`         | Remove `.ruvyxa/` build output                                                     |
 
 ---
 
@@ -609,9 +620,12 @@ as a deployment entrypoint.
 | Package                                                             | Description                                                                |
 | ------------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | [`ruvyxa`](packages/ruvyxa)                                         | CLI, runtime bridge, and public framework entrypoints                      |
-| [`create-ruvyxa`](packages/create-ruvyxa)                           | Minimal app scaffolder                                                     |
+| [`create-ruvyxa`](packages/create-ruvyxa)                           | Minimal app scaffolder (4 starters)                                        |
 | [`@ruvyxa/core`](packages/@ruvyxa/core)                             | Typed config, server APIs, cache helpers, responses, and adapter contracts |
-| [`@ruvyxa/react`](packages/@ruvyxa/react)                           | React integration package (error boundary, hydration, useLoader)           |
+| [`@ruvyxa/react`](packages/@ruvyxa/react)                           | React components, hooks, SEO, error boundary, hydration (59 exports)       |
+| [`@ruvyxa/auth`](packages/@ruvyxa/auth)                             | Provider-driven authentication (GitHub, Google, Discord, magic link)       |
+| [`@ruvyxa/database`](packages/@ruvyxa/database)                     | Typed database adapter facade (Prisma, DynamoDB)                           |
+| [`@ruvyxa/realtime`](packages/@ruvyxa/realtime)                     | WebSocket transport for opted-in server actions                            |
 | [`@ruvyxa/adapter-node`](packages/@ruvyxa/adapter-node)             | Node deployment adapter                                                    |
 | [`@ruvyxa/adapter-vercel`](packages/@ruvyxa/adapter-vercel)         | Vercel serverless adapter                                                  |
 | [`@ruvyxa/adapter-cloudflare`](packages/@ruvyxa/adapter-cloudflare) | Cloudflare edge adapter                                                    |

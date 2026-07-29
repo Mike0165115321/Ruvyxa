@@ -1,169 +1,224 @@
-# Concurrency Model & Performance
+# Concurrency Model · โมเดลการทำงานพร้อมกัน
 
-How Ruvyxa uses threads, locks, channels, and parallelism across the Rust layer.
+**Scope**: Cross-crate (dev server, bundler, diagnostics)
 
----
+## สรุป
 
-## Lock & synchronization map
-
-| Component                          | Mechanism                                        | Crate       | Rationale                                          |
-| ---------------------------------- | ------------------------------------------------ | ----------- | -------------------------------------------------- |
-| **ResolveGraphCache.resolutions**  | `DashMap<(Arc<str>, Arc<str>), Option<PathBuf>>` | dashmap     | Read-heavy, lock-free reads, 64 shards             |
-| **ResolveGraphCache.sources**      | `DashMap<PathBuf, CachedSource>`                 | dashmap     | Concurrent source reads                            |
-| **ResolveGraphCache.tsconfigs**    | `DashMap<PathBuf, CachedTsConfig>`               | dashmap     | Infrequent tsconfig reads                          |
-| **ResolveGraphCache.dependencies** | `DashMap<DependencyCacheKey, Arc<[PathBuf]>>`    | dashmap     | Cached dep lists                                   |
-| **CompileCache.memory**            | `Arc<Mutex<HashMap<String, MemEntry>>>`          | std::sync   | Write infrequent, LRU needs correct order          |
-| **CompileCache.disk**              | Atomic file writes (temp + rename)               | std::fs     | No concurrent write to same key possible           |
-| **RenderCache.entries**            | `tokio::sync::RwLock<HashMap<...>>`              | tokio       | Async access, read-mostly                          |
-| **RenderCache.order**              | `tokio::sync::RwLock<VecDeque<...>>`             | tokio       | Held together with entries during write            |
-| **RenderCache.hits/misses**        | `AtomicU64`                                      | std::sync   | Relaxed ordering, stats only                       |
-| **HmrTracker.file_to_routes**      | `parking_lot::RwLock<BTreeMap<...>>`             | parking_lot | Synchronous use (notify callback, no tokio)        |
-| **HmrTracker.route_to_files**      | `parking_lot::RwLock<BTreeMap<...>>`             | parking_lot | Same as above                                      |
-| **RuntimeCache.manifest**          | `tokio::sync::RwLock<Option<...>>`               | tokio       | Async manifest reads/writes                        |
-| **RuntimeCache.styles**            | `tokio::sync::RwLock<Option<...>>`               | tokio       | Async style reads/invalidation                     |
-| **RuntimeCache.router**            | `tokio::sync::RwLock<Option<...>>`               | tokio       | Async router rebuild on manifest change            |
-| **WorkerPool.workers**             | `StdRwLock<Vec<Arc<Worker>>>`                    | std::sync   | Infrequent writes (failure recovery)               |
-| **WorkerPool.next_worker**         | `AtomicU64`                                      | std::sync   | Relaxed cursor for fair ties after load comparison |
-| **Worker.stdin_tx**                | `StdMutex<Option<mpsc::Sender<String>>>`         | std::sync   | Drop = signal shutdown                             |
-| **Worker.pending.entries**         | `Arc<Mutex<BTreeMap<String, PendingResponse>>>`  | tokio       | Serialize request lifecycle mutations              |
-| **Worker.pending.count**           | `AtomicUsize`                                    | std::sync   | Lock-free load observation during worker selection |
-| **Worker.child**                   | `Mutex<Option<Child>>`                           | std::sync   | Protect kill_on_drop + shutdown                    |
-| **ISR revalidating set**           | `tokio::sync::Mutex<HashSet<String>>`            | tokio       | Async lock, coalesce concurrent revalidations      |
-| **Action rate limiter**            | `Arc<Mutex<ActionRateLimiter>>`                  | std::sync   | Single writer, fast section                        |
-| **Content module cache**           | `OnceLock<Mutex<HashMap<...>>>`                  | std::sync   | Global shared, lazy init                           |
-| **PluginHost.worker**              | `tokio::sync::Mutex<PluginWorker>`               | tokio       | Serialize calls to the persistent plugin runtime   |
+Ruvyxa uses three distinct concurrency domains: (1) async Tokio for I/O, (2) dedicated OS threads
+for SSR rendering, (3) parallel compilation via rayon for bundling. Each domain is designed for its
+workload — no one-size-fits-all runtime.
 
 ---
 
-## Channel types & capacities
+## Domain 1: Async I/O (Tokio)
 
-| Channel             | Type                                       | Capacity                         | Purpose                                                          |
-| ------------------- | ------------------------------------------ | -------------------------------- | ---------------------------------------------------------------- |
-| HMR broadcast       | `tokio::sync::broadcast::Sender<String>`   | 64                               | HMR events to all WebSocket clients. Drops oldest on overflow.   |
-| Worker stdin        | `mpsc::Sender<String>` per worker          | 256                              | Request serialization to Node subprocess                         |
-| Worker response     | `mpsc::Sender<WorkerResponse>` per request | 16 (MAX_PENDING_RESPONSE_FRAMES) | Per-request response channel, bounded backpressure for streaming |
-| Dev server shutdown | `tokio::sync::watch::Sender<bool>`         | 1                                | Signal server shutdown                                           |
+### Where
 
----
+- Dev server HTTP accept loop
+- HMR WebSocket connections
+- Static file serving
+- Server action handlers
 
-## Parallelism model
+### Mechanism
 
-### Rayon parallelism (CPU-bound)
+```rust
+use tokio::net::TcpListener;
+use axum::{Router, serve};
 
-| Task                            | Pattern                                                | Notes                                                                  |
-| ------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------- |
-| Module resolution (phase 2 BFS) | `frontier.par_iter()`                                  | I/O + CPU mix; each frontier level resolved in parallel                |
-| Module compilation              | `compiled.par_iter()` → Oxc transform                  | Per-module compilation fully parallel                                  |
-| Linker (parallel)               | `modules.par_chunks()` → IIFE generation               | For >=8 modules; generates segments in parallel, concatenates serially |
-| Image sources                   | `sources.par_iter()` → decode + optimize               | Configurable `workers` limits the enclosing Rayon pool                 |
-| Image outputs per source        | `rayon::join(primary, variants)` + `widths.par_iter()` | Full-size and responsive encoders share immutable decoded pixels       |
+#[tokio::main]
+async fn main() {
+    let app = Router::new()
+        .route("/", get(handler));
 
-### Scoped OS threads (blocking build work)
+    let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    serve(listener, app).await.unwrap();
+}
+```
 
-| Task                     | Pattern                                   | Notes                                                                    |
-| ------------------------ | ----------------------------------------- | ------------------------------------------------------------------------ |
-| Route bundle preparation | atomic cursor → scoped worker threads     | Dynamic bounded queue; results sorted back into manifest order           |
-| Build preparation        | nested `thread::scope()` workers          | Style scan, source copies, and public assets use disjoint work units     |
-| Build phase overlap      | preparation worker + client bundle caller | Both read one project snapshot and write separate staging subdirectories |
+### Runtime
 
-### Tokio async parallelism (I/O-bound)
+Multiple Tokio runtimes exist:
 
-| Task                         | Pattern                                     | Notes                                                       |
-| ---------------------------- | ------------------------------------------- | ----------------------------------------------------------- |
-| Dev server: request handling | Concurrent Axum handlers                    | One task per request                                        |
-| Worker pool: send to workers | Concurrent `JoinSet`                        | All workers invalidated in parallel                         |
-| Static-parameter discovery   | `tokio::spawn()` per dynamic route          | Existing worker pool bounds work; awaited in manifest order |
-| Prerender rendering          | bounded `JoinSet`                           | Default max 4; explicit `build.workers` capped at 8         |
-| ISR revalidation             | `tokio::spawn()` per revalidation           | Non-blocking background refresh                             |
-| File watcher                 | OS notify callback → sync → broadcast       | notify runs on dedicated OS thread                          |
-| Worker stdin/out/stderr      | 3 concurrent Tokio tasks per worker process | Independent reader/writer/drain                             |
+| Runtime            | Scope                | Thread count                                  |
+| ------------------ | -------------------- | --------------------------------------------- |
+| Main runtime       | Dev server, CLI      | Multi-thread (default: available_parallelism) |
+| Per-worker runtime | SSR rendering thread | Current-thread (1 worker = 1 runtime)         |
+| Build runtime      | CLI build pipeline   | Current-thread (sequential)                   |
 
----
+### Why Tokio (not smol, monoio)
 
-## Critical paths & bottleneck analysis
-
-### Hot paths (per-request, dev server)
-
-1. **Route lookup**: `RadixRouter::find()` — O(path_depth). Radix trie with linear-scan static
-   children. Acceptable for typical routes (depth < 10).
-
-2. **Render cache get**: `RwLock<HashMap>.read()` + `VecDeque` promote — O(1). Tokio RwLock handles
-   concurrent reads efficiently.
-
-3. **Worker pool send**: inspect each worker's atomic pending count without taking its response-map
-   mutex, starting at a rotating cursor, then use the least-loaded worker. The scan is bounded to
-   2-8 workers and the NDJSON channel write itself is O(1).
-
-4. **HTML composition**: string search (`find_ascii_case`) + `format!()` — negligible.
-
-5. **Style collection refresh** (on CSS change): import graph BFS + `grass` Sass compilation — may
-   take 50-200ms. Cached normally, only recomputed on invalidation.
-
-### Hot paths (per-request, production)
-
-Same as dev minus HMR + error overlay overhead. Cache TTL is higher (1800s vs 300s).
-
-### Build hot paths
-
-1. **Route discovery**: `WalkDir` of `app/`. Typical depth < 5, file count < 500.
-
-2. **Preparation + client bundling**: source/style/public-asset preparation overlaps client route
-   bundling because both read the same immutable project snapshot and write disjoint staging trees.
-   Style source materialization runs after directory copies where output paths can overlap.
-
-3. **Client bundling**: route preparation uses a bounded dynamic queue across scoped OS threads;
-   resolver, compiler, and linker internals use a separate Rayon pool. Keeping the scheduler levels
-   separate prevents nested Rayon work from recursively consuming the route-worker pool, while the
-   shared cursor avoids static-chunk tail imbalance. Oxc transforms dominate larger graphs.
-
-4. **Image optimization**: decode + `webp::Encoder` is the heaviest per-file preparation task.
-   Sources, full-size output, and responsive widths use the same bounded Rayon pool.
-
-5. **Prerendering**: dynamic `getStaticParams` calls and render jobs use the Node worker pool
-   concurrently. Deterministic collection keeps manifest and error order stable.
+- Axum is built on Tokio. Using a different async runtime would require a bridging layer.
+- Tokio's work-stealing scheduler distributes I/O across available cores. One accept loop does not
+  starve others.
+- `tokio::task::spawn_blocking` is available for CPU-bound operations that cannot be async (e.g.,
+  heavy JSON serialization).
 
 ---
 
-## Lock contention scenarios
+## Domain 2: Dedicated Thread Pool (SSR Rendering)
 
-| Scenario                                       | Risk     | Mitigation                                                             |
-| ---------------------------------------------- | -------- | ---------------------------------------------------------------------- |
-| Concurrent render cache reads                  | Low      | tokio RwLock, read-mostly                                              |
-| Render cache write + invalidate simultaneously | Medium   | Both locks held together briefly; write path uncommon in prod (cached) |
-| Worker pending map insert/remove               | Low      | Mutex serializes lifecycle writes; selection reads an atomic counter   |
-| Compile cache LRU eviction                     | Low      | Local Mutex, held only during check-and-evict                          |
-| ResolveGraphCache high concurrency             | Very low | DashMap: 64 shards, RwLock per shard, avg 1/64 contention              |
-| HMR event during render cache write            | Low      | Different lock types (parking_lot vs tokio)                            |
-| ISR revalidation set                           | Low      | Tokio Mutex held only for insert/remove; short section                 |
+### Where
+
+- React `renderToString` / `renderToPipeableStream`
+- Build-time static page generation (`ruvyxa build` for SSG routes)
+
+### Mechanism
+
+```rust
+pub struct WorkerPool {
+    workers: Vec<WorkerHandle>,
+    sender: crossbeam_channel::Sender<WorkerTask>,
+    receiver: crossbeam_channel::Receiver<WorkerResult>,
+}
+```
+
+### Why Not Tokio `spawn_blocking`
+
+`spawn_blocking` uses Tokio's blocking thread pool. This pool is unbounded by default and shared
+with all other blocking operations. A burst of SSR renders could exhaust the pool, stalling other
+blocking tasks (e.g., file I/O). A dedicated bounded pool provides isolation.
+
+### Bounded Channels
+
+```
+Sender (bounded, 2× worker_count) → Workers pull tasks
+                                   → Workers push results
+Receiver (bounded, 2× worker_count) ← Results
+```
+
+Bounded channels provide backpressure. If all workers are busy and the queue is full, `dispatch()`
+blocks the server accept loop — this is intentional: it signals overload to the client via
+connection queueing rather than accepting more work than can be handled.
 
 ---
 
-## Performance tuning levers
+## Domain 3: Parallel Compilation (rayon)
 
-| Parameter                         | Where set          | Default             | Max               | Effect                                 |
-| --------------------------------- | ------------------ | ------------------- | ----------------- | -------------------------------------- |
-| `build.workers`                   | `ruvyxa.config.ts` | CPU count           | —                 | Parallel bundling & prerendering       |
-| `middleware.workers`              | `ruvyxa.config.ts` | 1                   | 8                 | Stateless plugin middleware processes  |
-| `middleware.timeoutMs`            | `ruvyxa.config.ts` | 30000               | 300000            | Timeout for one middleware hook        |
-| `RUVYXA_RENDER_CACHE_SIZE`        | Env var            | 1024 dev / 512 prod | 16384             | More cache = fewer SSR renders         |
-| `RUVYXA_WORKER_TIMEOUT_MS`        | Env var            | 30000               | i32::MAX          | Timeout for stalled workers            |
-| `RUVYXA_JSX_RUNTIME`              | Env var (auto-set) | automatic           | automatic/classic | JSX transform runtime                  |
-| `security.actionRateLimit.max`    | Config             | varies              | —                 | Actions per window per key             |
-| `security.actionRateLimit.window` | Config             | varies              | —                 | Rate limit window seconds              |
-| `image.quality`                   | Config             | 82                  | 0-100             | WebP quality (lower = faster, smaller) |
-| `image.parallelism`               | Config             | 0 (global)          | —                 | Dedicated image thread count           |
+### Where
+
+- File compilation during build (multiple `.tsx` / `.ts` files)
+- Module graph analysis (traversal is parallelized per-module)
+- Static path generation (one path per rayon job)
+
+### Mechanism
+
+```rust
+use rayon::prelude::*;
+
+fn compile_all(inputs: &[BundleInput]) -> Vec<CompiledModule> {
+    inputs.par_iter()
+        .map(|input| compile_file(input))
+        .collect()
+}
+```
+
+### Why rayon (not manual threads)
+
+- Work-stealing: if one file takes longer to compile, other threads steal remaining work.
+- Global thread pool: rayon maintains a thread pool matching `available_parallelism`. No thread
+  creation overhead per `par_iter` call.
+- No `Send + Sync` gymnastics: rayon handles data distribution.
+
+### Parallelism Boundaries
+
+| Phase                 | Parallelism                     | Method                    |
+| --------------------- | ------------------------------- | ------------------------- |
+| Route discovery       | Sequential (single walk)        | Not parallelizable        |
+| Module compilation    | File-level parallel             | rayon `par_iter`          |
+| Module linking        | Sequential (IIFE concatenation) | Single-threaded           |
+| Boundary checking     | Module-graph BFS                | Sequential (single graph) |
+| Static page rendering | Path-level parallel             | Worker pool dispatch      |
+| Minification          | File-level parallel             | rayon `par_iter`          |
 
 ---
 
-## Memory characteristics
+## Domain 4: Shared State Concurrency
 
-| Component                        | Approx memory per unit                       |
-| -------------------------------- | -------------------------------------------- |
-| Compiled module (compiled cache) | ~50-200KB (JS string + deps)                 |
-| Resolved module (resolve cache)  | ~10-100KB (source + deps)                    |
-| Render cache entry               | ~5-500KB (HTML string)                       |
-| Source file cache                | ~size of file (mmap for >64KB)               |
-| Compile cache (disk)             | ~500KB-2MB per key (blake3-keyed JS on disk) |
-| Worker process (Node)            | ~50-150MB per worker                         |
+### Module Registry
 
-Total per-dev-session: ~200-500MB (4 workers + compile cache + render cache + source cache).
+```rust
+pub type ModuleRegistry = Arc<RwLock<HashMap<String, CompiledModule>>>;
+```
+
+- Readers (workers rendering routes): `read()` lock — multiple concurrent reads.
+- Writer (HMR updating a module): `write()` lock — exclusive, blocks readers.
+- Granularity: per-module lock? No — single `RwLock` over the entire registry. HMR updates are rare
+  (one file change at a time). The write lock is held briefly (insert one entry). Readers contend
+  for the read lock but do not block each other.
+
+### Diagnostic Collector
+
+```rust
+pub type SharedCollector = Arc<Mutex<DiagnosticCollector>>;
+```
+
+- `Mutex`, not `RwLock`: writes are more frequent than reads during the build phase.
+- Contention is low: diagnostics are pushed in sequence, not in tight loops.
+
+### Cache
+
+```rust
+pub type SharedCache = Arc<Mutex<LruCache<String, CacheEntry>>>;
+```
+
+- `Mutex` protects LRU internals (linked list reordering on access).
+- Cache hits are fast (microseconds). Mutex hold time is negligible.
+
+---
+
+## Lock Ordering
+
+```
+ModuleRegistry (RwLock) → never acquired while holding
+  DiagnosticCollector (Mutex) or
+  SharedCache (Mutex)
+
+Acquire order:
+  1. SharedCache
+  2. ModuleRegistry (read or write)
+  3. DiagnosticCollector
+```
+
+Enforced by code review. Deadlock is impossible if this order is maintained (no cycle in the
+resource allocation graph).
+
+---
+
+## Atomic Operations
+
+```rust
+static NEXT_TASK_ID: AtomicU64 = AtomicU64::new(0);
+```
+
+Task IDs are monotonically increasing, generated without a mutex. No ABA problem (IDs are never
+reused).
+
+---
+
+## Concurrency by Crate
+
+| Crate                | Sync primitives                       | Threading model                   |
+| -------------------- | ------------------------------------- | --------------------------------- |
+| `ruvyxa_graph`       | None (pure functions)                 | Sequential                        |
+| `ruvyxa_bundler`     | `rayon`                               | Parallel (file-level)             |
+| `ruvyxa_dev_server`  | `Arc<RwLock>`, `Arc<Mutex>`, channels | Mixed (async I/O + thread pool)   |
+| `ruvyxa_middleware`  | `Arc<PluginHost>`                     | Async (Tokio tower layers)        |
+| `ruvyxa_diagnostics` | `Arc<Mutex>`                          | Sequential                        |
+| `ruvyxa_cli`         | Tokio runtime                         | Async (main) + sequential (build) |
+
+---
+
+## Why This Design
+
+1. **Three separate concurrency strategies** — Async I/O, thread pool rendering, and parallel
+   compilation each have different optimal strategies. A single `#[tokio::main]` for everything
+   would bottleneck CPU-bound SSR rendering against I/O-bound HTTP serving.
+2. **Bounded channels for backpressure** — When the system is overloaded, bounded channels cause the
+   accept loop to block, which causes the OS to queue TCP connections. This is the correct behavior
+   — better to queue at the network layer than to accept requests that will time out.
+3. **`rayon` over async compilation** — Compilation is pure CPU work with no I/O waiting. `rayon` is
+   more efficient than `tokio::task::spawn_blocking` for CPU parallelism because it uses
+   work-stealing and avoids Tokio's task scheduling overhead.
+4. **Granular `RwLock` per registry** — HMR updates are write-heavy but infrequent. Multiple
+   concurrent reads (from the worker pool) do not block each other. A single `Mutex` would serialize
+   all reads.

@@ -1,686 +1,287 @@
-# Dev Server (`ruvyxa_dev_server`)
+# Dev Server
 
-**Files**: `crates/ruvyxa_dev_server/src/` (6 files, ~8,000 lines)
+**Crate**: `ruvyxa_dev_server` —
+`crates/ruvyxa_dev_server/src/{lib,router,render_cache,hmr_tracker,worker_pool,style,action_security,port_binding,render_pipeline,plugin_bridge,plugin_head,html_document,env_file,static_assets,cli_output}.rs`
 
-Am server powered by Axum + Tokio. Handles HTTP requests, WebSocket HMR, route matching via Radix
-trie, render caching, Node worker pool management, and style collection.
-
----
-
-## Configuration Types
-
-### `ServerConfig`
-
-```rust
-pub struct ServerConfig {
-    pub root: PathBuf,                          // Project root
-    pub app_dir: PathBuf,                       // root/app (dev) or out_dir/server/app (prod)
-    pub public_dir: PathBuf,                    // root/public (dev) or out_dir/assets (prod)
-    pub client_dir: PathBuf,                    // root/.ruvyxa/client
-    pub prerender_dir: PathBuf,                 // root/.ruvyxa/prerender
-    pub host: String,                           // default "0.0.0.0"
-    pub port: u16,                              // default 3000
-    pub watch: bool,                            // true = dev mode
-    pub cache_route_manifest: bool,
-    pub cache_css: bool,
-    pub style_entries: Vec<PathBuf>,            // additional CSS entry points
-    pub prebundle_dependencies: bool,
-    pub runtime: JavaScriptRuntime,             // Node or Bun
-    pub jsx_runtime: JsxRuntime,
-    pub error_overlay: bool,                    // show diagnostic overlay in browser
-    pub debug_traces: bool,
-    pub action_body_limit_bytes: usize,
-    pub api_body_limit_bytes: usize,
-    pub plugin_response_body_limit_bytes: usize,
-    pub action_rate_limit_max: usize,
-    pub action_rate_limit_window: Duration,
-    pub same_origin_actions: bool,
-    pub fetch_metadata_actions: bool,
-    pub trusted_proxy_ips: Vec<IpAddr>,
-    pub security_headers: bool,
-    pub middleware: MiddlewareConfig,
-    pub plugins_enabled: bool,
-    pub default_render_strategy: Option<RenderStrategy>,
-    pub default_revalidate: Option<u64>,
-}
-```
-
-### `AppState`
-
-```rust
-struct AppState {
-    config: ServerConfig,
-    reload_tx: broadcast::Sender<String>,              // HMR WebSocket fan-out
-    runtime_cache: Arc<RuntimeCache>,                   // manifest, router, CSS
-    action_limiter: Arc<Mutex<ActionRateLimiter>>,
-    worker_pool: Arc<NodeWorkerPool>,
-    render_cache: Arc<RenderCache>,
-    isr_revalidating: Arc<tokio::sync::Mutex<HashSet<String>>>,
-    hmr_tracker: Arc<HmrTracker>,
-    plugin_runtime: Option<Arc<PluginHost>>,
-}
-
-struct RuntimeCache {
-    manifest: tokio::sync::RwLock<Option<RouteManifest>>,
-    styles: tokio::sync::RwLock<Option<StyleCacheEntry>>,
-    router: tokio::sync::RwLock<Option<RadixRouter>>,
-}
-
-struct StyleCacheEntry {
-    css: String,
-    files: BTreeSet<PathBuf>,   // normalized, case-folded on Windows
-}
-```
+Axum HTTP server with HMR (WebSocket), radix-trie route matching, LRU render cache, persistent
+Node/Bun worker pool, style collection pipeline, action security middleware, TypeScript plugin host,
+and realtime event broadcasting.
 
 ---
 
-## `serve(config) → Result<()>` — Full Startup Sequence
+## ServerConfig
 
-### 1. Validate limits
+30 fields. Constructed via `ServerConfig::dev(root, host, port)` or
+`ServerConfig::production(root, host, port)`.
 
-```rust
-config.validate_limits()  // body limits > 0, rate limits > 0
-```
+| Field                              | Type                     | Dev default                      | Production default                |
+| ---------------------------------- | ------------------------ | -------------------------------- | --------------------------------- |
+| `root`                             | `PathBuf`                | `root`                           | `root`                            |
+| `app_dir`                          | `PathBuf`                | `root.join("app")`               | `root.join(".ruvyxa/server/app")` |
+| `public_dir`                       | `PathBuf`                | `root.join("public")`            | `root.join(".ruvyxa/assets")`     |
+| `client_dir`                       | `PathBuf`                | `root.join(".ruvyxa/client")`    | `root.join(".ruvyxa/client")`     |
+| `prerender_dir`                    | `PathBuf`                | `root.join(".ruvyxa/prerender")` | `root.join(".ruvyxa/prerender")`  |
+| `host`                             | `String`                 | `host`                           | `host`                            |
+| `port`                             | `u16`                    | `port`                           | `port`                            |
+| `watch`                            | `bool`                   | `true`                           | `false`                           |
+| `cache_route_manifest`             | `bool`                   | `true`                           | `true`                            |
+| `cache_css`                        | `bool`                   | `true`                           | `true`                            |
+| `style_entries`                    | `Vec<PathBuf>`           | `Vec::new()`                     | `Vec::new()`                      |
+| `prebundle_dependencies`           | `bool`                   | `true`                           | `false`                           |
+| `runtime`                          | `JavaScriptRuntime`      | `JavaScriptRuntime::detect()`    | `JavaScriptRuntime::detect()`     |
+| `jsx_runtime`                      | `JsxRuntime`             | `Automatic`                      | `Automatic`                       |
+| `error_overlay`                    | `bool`                   | `true`                           | `false`                           |
+| `debug_traces`                     | `bool`                   | `false`                          | `false`                           |
+| `action_body_limit_bytes`          | `usize`                  | `1MB`                            | `1MB`                             |
+| `api_body_limit_bytes`             | `usize`                  | `10MB`                           | `10MB`                            |
+| `plugin_response_body_limit_bytes` | `usize`                  | `32MB`                           | `32MB`                            |
+| `action_rate_limit_max`            | `usize`                  | `600`                            | `600`                             |
+| `action_rate_limit_window`         | `Duration`               | `60s`                            | `60s`                             |
+| `same_origin_actions`              | `bool`                   | `true`                           | `true`                            |
+| `fetch_metadata_actions`           | `bool`                   | `true`                           | `true`                            |
+| `trusted_proxy_ips`                | `Vec<IpAddr>`            | `Vec::new()`                     | `Vec::new()`                      |
+| `security_headers`                 | `bool`                   | `true`                           | `true`                            |
+| `middleware`                       | `MiddlewareConfig`       | `default()`                      | `default()`                       |
+| `plugins_enabled`                  | `bool`                   | `false`                          | `false`                           |
+| `plugin_head`                      | `Vec<PluginHeadEntry>`   | `Vec::new()`                     | `Vec::new()`                      |
+| `default_render_strategy`          | `Option<RenderStrategy>` | `None`                           | `None`                            |
+| `default_revalidate`               | `Option<u64>`            | `None`                           | `None`                            |
 
-### 2. Route discovery
-
-```rust
-let manifest = discover_routes(discover_options(&config))?;
-```
-
-### 3. Broadcast channel
-
-```rust
-let (reload_tx, _) = broadcast::channel::<String>(64);  // capacity 64, drops oldest
-```
-
-### 4. Runtime environment
-
-```rust
-let env = runtime_env(&config);
-// Loads .env + .env.local from project root
-// Inserts RUVYXA_JSX_RUNTIME=automatic|classic
-```
-
-### 5. Node worker pool
-
-```rust
-let worker_pool = NodeWorkerPool::start(&config.root, env).await?;
-```
-
-### 6. Dependency warmup (dev only)
-
-```rust
-if config.watch && config.prebundle_dependencies {
-    let warmup_pool = worker_pool.clone();
-    let warmup_routes = dependency_warmup_routes(&config, &manifest);
-    tokio::spawn(async move {
-        warmup_pool.warmup(&warmup_root, warmup_routes).await;
-    });
-}
-```
-
-### 7. Render cache
-
-```rust
-let render_cache = if config.watch {
-    RenderCache::default_dev()   // capacity=1024, TTL=300s
-} else {
-    RenderCache::default_production()  // capacity=512, TTL=1800s
-};
-```
-
-Capacity also configurable via `RUVYXA_RENDER_CACHE_SIZE` env var (capped at 16384).
-
-### 8. HMR tracker
-
-```rust
-let hmr_tracker = Arc::new(HmrTracker::new());
-hmr_tracker.populate_from_manifest(&manifest.routes);
-```
-
-### 9. Middleware & plugins
-
-```rust
-let middleware_stack = MiddlewareStack::new(config.middleware.clone());
-middleware_stack.validate()?;
-
-let plugin_runtime = if !config.plugins.is_empty() {
-    Some(Arc::new(PluginHost::start(&config.root, runtime_script, runtime_executable)?))
-} else {
-    None
-};
-```
-
-### 10. Axum Router
-
-```rust
-let state = Arc::new(AppState { ... });
-
-let router = Router::new()
-    .route("/__ruvyxa/hmr", get(hmr_ws))
-    .route("/__ruvyxa/client", get(client_bundle))
-    .route("/__ruvyxa/action",
-        post(action_endpoint)
-            .layer(DefaultBodyLimit::max(config.action_body_limit_bytes)))
-    .route("/__ruvyxa/trace", get(trace_endpoint))
-    .fallback(handle_request)
-    .with_state(state.clone());
-```
-
-Then applied middleware stack layers (compression, CORS, rate limiting, timing, logging, headers,
-custom, plugins) + security headers.
-
-### 11. Bind listener
-
-```rust
-let mut port = config.port;
-let listener = loop {
-    match TcpListener::bind((config.host, port)).await {
-        Ok(l) => break l,
-        Err(_) if port < config.port + 100 => port += 1,
-        Err(e) => return Err(e.into()),
-    }
-};
-// Port fallback: try up to config.port + 100
-```
-
-### 12. Graceful shutdown
-
-```rust
-let (shutdown_tx, shutdown_rx) = watch::channel(false);
-
-axum::serve(listener, router)
-    .with_graceful_shutdown(async {
-        tokio::signal::ctrl_c().await.ok();
-        // OR watch channel true
-    })
-    .await?;
-
-// After shutdown:
-worker_pool.shutdown().await;  // 5s grace period
-```
+Validation rejects zero/over-limit values (absolute bounds: `MAX_ACTION_BODY_LIMIT_BYTES=16MB`,
+`MAX_API_BODY_LIMIT_BYTES=256MB`, `MAX_ACTION_RATE_LIMIT_REQUESTS=10000`,
+`MAX_ACTION_RATE_LIMIT_WINDOW_SECS=86400`, `MAX_PLUGIN_RESPONSE_BODY_LIMIT_BYTES=256MB`).
 
 ---
 
-## Request Lifecycle (`handle_request`)
-
-### 1. Parse canonical path
+## JavaScriptRuntime
 
 ```rust
-fn canonical_request_path(raw_path: &str) -> Result<String>
+pub enum JavaScriptRuntime { Node, Bun }
 ```
 
-- Require an absolute path, split by `/`, and discard empty segments to normalize duplicate and
-  trailing slashes.
-- Percent-decode each segment exactly once with the internal strict hex/UTF-8 decoder.
-- Reject `.`, `..`, decoded `/` or `\`, empty decoded values, and Unicode control characters.
-- Reject malformed percent encoding (invalid hex, truncated, or invalid UTF-8).
-- The browser and serverless matchers mirror these segment rules so Unicode/static routing,
-  parameters, and prerender cache paths agree with development.
-
-### 2. Read body
-
-```rust
-if request.method() != Method::GET && request.method() != Method::HEAD {
-    let body_bytes = axum::body::to_bytes(body, config.api_body_limit_bytes)
-        .await
-        .map_err(|_| StatusCode::PAYLOAD_TOO_LARGE)?;
-}
-```
-
-### 3. Request middleware
-
-```rust
-if let Some(host) = &state.plugin_runtime {
-    match host.execute_request(plugin_request).await? {
-        MiddlewareRequestResult::Response(response) => return response.into_response(),
-        MiddlewareRequestResult::Request(replacement) => apply_request(replacement),
-    }
-}
-```
-
-### 4. Render dispatch
-
-```rust
-// Try static files first
-if let Some(resp) = serve_client_file(&state, &path).await {
-    return resp;
-}
-if let Some(resp) = serve_public_file(&state, &path, &req).await {
-    return resp;
-}
-
-// Route lookup
-let router = state.runtime_cache.router().await;
-let Some(route_match) = router.find(&path) else {
-    return 404 plain error page;
-};
-
-match route_match.route.kind {
-    RouteKind::Page => render_page_by_strategy(&state, &route_match, body).await,
-    RouteKind::Api  => render_api_pooled(&state, &route_match, method, headers, body).await,
-}
-```
-
-### 5. HTML composition (Page routes)
-
-```rust
-fn compose_document(rendered: &str, head_content: &str, hmr: &str) -> String
-```
-
-Algorithm (all tag searches case-insensitive):
-
-1. If `<html` found:
-   - If `<head` found → inject `head_content` before `</head>`.
-   - Else if `<body` found → insert `<head>{head_content}</head>` before `<body>`.
-   - Else → insert `<head>{head_content}</head>` after opening `<html>` tag.
-   - Inject `hmr` before `</body>`.
-2. Otherwise → wrap in full HTML scaffold:
-   ```html
-   <!doctype html>
-   <html lang="en">
-     <head>
-       <meta charset="utf-8" />
-       <meta name="viewport" content="width=device-width,initial-scale=1" />
-       {head_content}
-     </head>
-     <body>
-       {rendered}{hmr}
-     </body>
-   </html>
-   ```
-
-**Head content**: `<link rel="icon" href="/ruvyxa.png">` + `<style data-ruvyxa-css>{css}</style>`
-
-**HMR content**: `<script>/* WebSocket HMR */</script>` (dev only)
-
-**Client hydration**: Injects `__RUVYXA_ROUTE_PARAMS__`, `__RUVYXA_REQUEST_PATH__`, preload hints,
-`<script type="module" src="/__ruvyxa/client?path=...">`.
-
-### 6. Response middleware
-
-```rust
-if let Some(host) = &state.plugin_runtime {
-    if let Some(replacement) = host.execute_response(plugin_request, plugin_response).await? {
-        return replacement.into_response();
-    }
-}
-```
-
-### 7. Security headers
-
-```rust
-fn finalize_security_headers(response: Response) -> Response {
-    response.headers_mut().insert("X-Content-Type-Options", "nosniff");
-    response.headers_mut().insert("X-Frame-Options", "DENY");
-    // ... configured headers
-}
-```
+| Method                         | Returns   | Description                                      |
+| ------------------------------ | --------- | ------------------------------------------------ |
+| `command()`                    | `&str`    | `"node"` or `"bun"`                              |
+| `executable()`                 | `PathBuf` | Resolves `bun.exe` behind `.cmd` shim on Windows |
+| `is_available()`               | `bool`    | Checks `--version` exit code                     |
+| `detect()`                     | `Self`    | Node preferred, Bun fallback                     |
+| `from_availability(node, bun)` | `Self`    | Explicit selection                               |
 
 ---
 
-## Render Strategies
+## Framework Endpoints
 
-### SSR (`render_page_ssr`)
+| Route                                  | Method | Handler            | Purpose                                                 |
+| -------------------------------------- | ------ | ------------------ | ------------------------------------------------------- |
+| `/__ruvyxa/hmr`                        | GET    | `hmr_ws`           | HMR WebSocket — broadcasts file-change JSON to browsers |
+| `/__ruvyxa/client`                     | GET    | `client_bundle`    | On-demand compiled client JS bundles per route          |
+| `/__ruvyxa/hydration-loader.js`        | GET    | `hydration_loader` | Client hydration loader script                          |
+| `/__ruvyxa/client/route-manifest.json` | GET    | `client_manifest`  | Live route table for browser router                     |
+| `/__ruvyxa/action`                     | POST   | `action_endpoint`  | Server action dispatch                                  |
+| `/__ruvyxa/trace`                      | GET    | `trace_endpoint`   | Runtime route trace (debug only)                        |
 
-```
-1. RenderCache::get(ssr_cache_key(path, params))
-2. On miss: worker_pool.render_ssr() → compose HTML → RenderCache::put()
-3. Return cached/rendered HTML
-```
-
-```rust
-pub fn ssr_cache_key(request_path: &str, params: &RouteParams) -> String {
-    if params.is_empty() {
-        format!("ssr:{}", request_path)
-    } else {
-        format!("ssr:{}?{}", request_path, serde_json::to_string(params).unwrap())
-    }
-}
-```
-
-### SSG (`render_page_ssg`)
-
-```
-1. Production: check prerender_dir/<path>/index.html
-2. Dev: RenderCache::get(ssg_cache_key)
-3. On miss: worker_pool.render_ssg(mode="full")
-4. Cache indefinitely (no TTL, kept until invalidated)
-```
-
-### ISR (`render_page_isr`)
-
-```
-1. RenderCache::get_stale_with_age(isr_cache_key) → (value, age)
-2. If cached:
-   - If age >= revalidate_seconds: spawn_isr_revalidation()
-   - Serve stale value (even if expired)
-3. If not cached:
-   - Production prerender: check prerender_dir
-   - Dev: render synchronously
-4. Return HTML
-```
-
-**Revalidation coalescing**:
-
-```rust
-pub async fn spawn_isr_revalidation(
-    state: &AppState, key: String, ...
-) {
-    let mut in_flight = state.isr_revalidating.lock().await;
-    if in_flight.contains(&key) {
-        return;  // Already revalidating
-    }
-    in_flight.insert(key.clone());
-    drop(in_flight);
-
-    let state = Arc::clone(state);
-    tokio::spawn(async move {
-        let html = render_isr_background(&state, ...).await;
-        state.render_cache.put(&key, &html).await;
-        state.isr_revalidating.lock().await.remove(&key);
-    });
-}
-```
-
-### CSR (`render_page_csr`)
-
-Returns minimal HTML shell:
-
-```html
-<!doctype html>
-<html lang="en">
-  <head>
-    ...{head_content}...
-  </head>
-  <body>
-    <div id="__ruvyxa"></div>
-    {hmr}{client_hydration}
-  </body>
-</html>
-```
-
-### PPR (`render_page_ppr`)
-
-```rust
-worker_pool.render_ssg(mode="ppr")  // static shell → dynamic slots streamed
-```
+Reserved paths (collision rejection): `/__ruvyxa/hmr`, `/__ruvyxa/client`, `/__ruvyxa/action`,
+`/__ruvyxa/trace`.
 
 ---
 
-## Endpoint Handlers
+## Key Modules
 
-### `GET /__ruvyxa/hmr` → WebSocket
+### RadixRouter (`router.rs`)
 
 ```rust
-async fn hmr_ws(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> Response {
-    ws.on_upgrade(|mut socket| async move {
-        let mut rx = state.reload_tx.subscribe();
-        loop {
-            match rx.recv().await {
-                Ok(msg) => {
-                    if socket.send(Message::Text(msg.into())).await.is_err() {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-    })
+pub struct RadixRouter { root: TrieNode, patterns: Vec<Vec<PatternSegment>> }
+impl RadixRouter {
+    pub fn compile(manifest: &RouteManifest) -> Self;
+    pub fn find<'a>(&self, manifest: &'a RouteManifest, request_path: &str) -> Option<RouteMatch<'a>>;
 }
 ```
 
-### `GET /__ruvyxa/client?path=` → JS bundle
+`compile()` builds a trie from manifest routes. `find()` walks the trie by path segment: static
+children first, then `[param]`, then `[...rest]`/`[[...rest]]`. Returns matched `RouteEntry` with
+extracted `RouteParams`. Parameter names come from the matched route's pattern, not the trie node
+(sibling routes with different param names share one node).
+
+### RenderCache (`render_cache.rs`)
 
 ```rust
-async fn client_bundle(
-    State(state): State<Arc<AppState>>,
-    Query(ClientBundleQuery { path }): Query<ClientBundleQuery>,
-) -> Response {
-    match render_client_bundle_pooled(&state, &path).await {
-        Ok(js) => (
-            StatusCode::OK,
-            [("content-type", "text/javascript; charset=utf-8")],
-            js,
-        ).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [("content-type", "text/javascript; charset=utf-8")],
-            format!("console.error({});", serde_json::to_string(&e.to_string()).unwrap()),
-        ).into_response(),
-    }
+pub struct RenderCache { entries, order, capacity, ttl, hits, misses }
+impl RenderCache {
+    pub fn new(capacity: usize, ttl_secs: u64) -> Self;
+    pub fn default_dev() -> Self;        // 1024 entries, 300s TTL
+    pub fn default_production() -> Self; // 512 entries, 1800s TTL
+    pub async fn get(&self, key: &str) -> Option<String>;
+    pub async fn get_arc(&self, key: &str) -> Option<Arc<str>>;
+    pub async fn get_stale_with_age(&self, key: &str) -> Option<(String, Duration)>;
+    pub async fn put(&self, key: String, value: String);
+    pub async fn invalidate_all(&self) -> usize;
+    pub async fn invalidate_prefix(&self, prefix: &str) -> usize;
+    pub async fn invalidate_route(&self, route_path: &str) -> usize;
+    pub fn invalidate_all_blocking(&self) -> usize;
+    pub fn invalidate_prefix_blocking(&self, prefix: &str) -> usize;
+    pub fn invalidate_route_blocking(&self, route_path: &str) -> usize;
 }
 ```
 
-### `POST /__ruvyxa/action?path=&name=` → Server action
+Thread-safe LRU with O(1) get/put/eviction via hash-indexed doubly-linked recency list. Entries
+TTL-expired on read. ISR uses `get_stale_with_age` to serve stale while revalidating. `blocking_*`
+methods for file-watcher sync context.
+
+### HmrTracker (`hmr_tracker.rs`)
 
 ```rust
-async fn action_endpoint(
-    State(state): State<Arc<AppState>>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    Query(ActionQuery { path, name }): Query<ActionQuery>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    // 1. Validate request
-    validate_action_request(&state.config, &headers, &body)?;
+pub struct HmrTracker { file_to_routes: BTreeMap<PathBuf, BTreeSet<String>>, route_to_files }
+impl HmrTracker {
+    pub fn new() -> Self;
+    pub fn populate_from_manifest(&self, routes: &[RouteEntry]);
+    pub fn register_route(&self, route_path: &str, source_files: &[PathBuf]);
+    pub fn compute_update(&self, changed_paths: &[PathBuf]) -> HmrUpdate;
+    pub fn clear(&self);
+}
+pub struct HmrUpdate {
+    pub affected_routes: Vec<String>,
+    pub full_reload: bool,
+    pub changed_files: Vec<PathBuf>,
+    pub event_type: HmrEventType,
+}
+pub enum HmrEventType { CssUpdate, ComponentUpdate, FullReload }
+```
 
-    // 2. Parse payload
-    validate_action_payload(&headers, &body)?;
+Reverse map: changed file → affected routes. Css-only → `CssUpdate`. Layout change → `FullReload`.
+Unknown untracked file → `FullReload`.
 
-    // 3. Rate limit
-    let key = action_rate_limit_key(peer, &headers, &path, &name);
-    if !state.action_limiter.lock().unwrap().allow(&key) {
-        let retry = state.action_limiter.lock().unwrap().retry_after_seconds(&key);
-        return (StatusCode::TOO_MANY_REQUESTS, [("retry-after", retry.to_string())]).into_response();
-    }
+### NodeWorkerPool (`worker_pool.rs`)
 
-    // 4. Execute
-    let result = state.worker_pool.render_action(
-        &state.config.root, &path, &name,
-        payload_json, content_type,
-    ).await;
-
-    match result {
-        Ok(response) => response.into(),
-        Err(e) => error_response(e),
-    }
+```rust
+pub struct NodeWorkerPool { workers, worker_script, env, runtime, next_worker, response_timeout }
+impl NodeWorkerPool {
+    pub async fn start(root, env) -> Result<Self>;
+    pub async fn start_with_runtime(root, env, runtime) -> Result<Self>;
+    pub async fn shutdown(&self);
+    pub async fn warmup(&self, project_root, routes) -> usize;
+    pub async fn invalidate(&self, paths: Vec<String>);
+    pub fn invalidate_from_watcher(&self, paths) -> Result<usize, String>;
+    pub async fn render_ssr(&self, ...) -> Result<WorkerResponse>;
+    pub async fn render_client(&self, ...) -> Result<WorkerResponse>;
+    pub async fn render_ssg(&self, ...) -> Result<WorkerResponse>;
+    pub async fn resolve_static_params(&self, ...) -> Result<WorkerResponse>;
 }
 ```
 
-**`validate_action_request`** checks:
+Persistent Node/Bun processes communicating via NDJSON over stdin/stdout. Pool size: 2-8 (default
+CPU count clamped). Least-loaded worker selection with rotating start offset. Failed workers
+replaced automatically; idempotent requests retried once.
 
-- Body size ≤ `action_body_limit_bytes`
-- Content-Type is valid (JSON or form)
-- `same_origin_actions` → validate `Origin` header matches server origin
-- `fetch_metadata_actions` → validate `Sec-Fetch-Site` is `same-origin`
-
-### `GET /__ruvyxa/trace?path=`
+### StyleCollection (`style.rs`)
 
 ```rust
-async fn trace_endpoint(
-    State(state): State<Arc<AppState>>,
-    Query(TraceQuery { path }): Query<TraceQuery>,
-) -> Response {
-    if !state.config.watch || !state.config.debug_traces {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    let manifest = state.runtime_cache.manifest.read().await;
-    let route = manifest.as_ref()
-        .and_then(|m| m.routes.iter().find(|r| r.path == path));
-    serde_json::to_value(route).unwrap().into_response()
-}
+pub struct StyleCollection { pub css: String, pub files: Vec<PathBuf> }
+pub fn collect_styles(root, app_dir, entries) -> Result<StyleCollection>;
+pub fn minify_css(css: &str) -> String;
 ```
 
----
+Walks `app/` script imports, resolves CSS/SCSS/Sass dependencies, compiles Sass, scopes CSS Modules,
+compiles Tailwind via `@tailwindcss/cli`. Minifies in production mode. Escapes `</style` in output.
 
-## Dev Error Overlay
-
-When a `Diagnostic` error occurs in dev mode:
+### ActionSecurity (`action_security.rs`)
 
 ```rust
-fn dev_diagnostic_overlay(diag: &Diagnostic) -> Response {
-    let frame = extract_code_frame(&diag.span);  // 5 lines around error
-    render_error_overlay(ErrorOverlayView {
-        code: diag.code,
-        title: diag.title,
-        location: diag.span.as_ref().map(span_to_string),
-        detail: &diag.explanation,
-        code_frame: frame,
-        suggested_fix: &diag.suggested_fix,
-        import_chain: &diag.import_chain,
-        affected_routes: &diag.affected_routes,
-    })
-}
+pub(crate) fn validate_action_request(headers, body_len, config, peer) -> Option<Response>;
+pub(crate) fn validate_action_payload(headers, body) -> Result<(&str, String), Box<Response>>;
+pub(crate) struct ActionRateLimiter { /* per-key sliding window */ }
 ```
 
-**`render_error_overlay`** produces a full HTML page with:
+Validates: body size ≤ configured limit, Content-Type (JSON or form), same-origin (Origin == Host),
+Fetch Metadata, rate limit. Rate-limit key includes client IP (forwarded from trusted proxies),
+action path, and action name.
 
-- Dark backdrop with blur
-- Card dialog: error code (red badge), title, location
-- Source code frame (dark terminal-style, error line marked with `>` and `← error`)
-- Suggested fix (green box with lightbulb)
-- Import chain (collapsible accordion)
-- Affected routes (collapsible)
-- Stack trace (collapsible)
-- Close button (hides overlay, shows page underneath)
-
-All values HTML-escaped via `escape_html()`.
-
----
-
-## File Watcher (dev mode)
-
-Uses `notify::recommended_watcher()`. Watches project root.
-
-### Event filter
+### PortBinding (`port_binding.rs`)
 
 ```rust
-fn ignored_watch_path(path: &Path) -> bool {
-    top_level_ignored(path) ||
-    path_contains(path, ".ruvyxa") ||
-    path_contains(path, "node_modules")
-}
+pub(crate) async fn bind_listener(config, address) -> Result<(TcpListener, SocketAddr)>;
 ```
 
-### Event processing
-
-```rust
-fn handle_change(state: &AppState, paths: Vec<PathBuf>) {
-    // Filter Access events, filter ignored paths
-    let update = hmr_tracker.compute_update(&paths);
-
-    if update.full_reload {
-        runtime_cache.invalidate();
-        render_cache.invalidate_all_blocking();
-    } else {
-        runtime_cache.invalidate_styles_for_paths(&paths);
-        for route_path in &update.affected_routes {
-            render_cache.invalidate_route_blocking(route_path);
-        }
-    }
-
-    // Notify workers about changed files
-    worker_pool.invalidate_from_watcher(&path_strings);
-
-    // Broadcast to browsers
-    let payload = serde_json::json!({
-        "type": update.event_type.as_str(),
-        "paths": paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
-        "affectedRoutes": update.affected_routes,
-        "fullReload": update.full_reload,
-    });
-    let _ = reload_tx.send(payload.to_string());
-}
-```
-
-Worker invalidation uses `try_send()` (non-blocking, file watcher callback has no tokio runtime). If
-fails → force full reload.
+Tries configured port, then scans +100 upward. On conflict, prints owner detection (netstat/lsof)
+and binds first available.
 
 ---
 
-## Public File Serving
+## serve() Flow
 
-```rust
-async fn serve_public_file(state: &AppState, path: &str, req: &Request) -> Option<Response>
-```
+`serve(config: ServerConfig) -> Result<()>`:
 
-1. `public_dir.join(path.trim_start_matches('/'))`.
-2. Check file exists, is file (not directory).
-3. Read file + compute blake3 ETag.
-4. Conditional GET: if `If-None-Match` matches ETag → return `304 Not Modified`.
-5. Determine MIME type from extension.
-6. Return with `cache-control: public, max-age=3600, must-revalidate` + ETag. Only content-hashed
-   client bundles receive the one-year immutable policy.
-
-MIME types: `.js`→text/javascript, `.css`→text/css, `.html`→text/html, `.json`→application/json,
-`.txt`→text/plain UTF-8, `.xml`→application/xml UTF-8, `.svg`→image/svg+xml,
-`.png`/`.jpg`/`.jpeg`/`.webp`/`.ico`→image/*, `.woff2`→font/woff2, etc.
-
----
-
-## Action Rate Limiter
-
-```rust
-struct ActionRateLimiter {
-    hits: HashMap<String, Vec<Instant>>,   // key → hit timestamps
-    max_hits: usize,
-    window: Duration,
-    max_keys: usize,                        // 10,000 — evict expired on insert
-}
-
-impl ActionRateLimiter {
-    fn allow(&mut self, key: &str) -> bool {
-        // 1. Get or insert key's hits vec
-        // 2. Prune expired hits (outside window)
-        // 3. If hits.len() >= max_hits: return false
-        // 4. Push Instant::now(), return true
-    }
-
-    fn retry_after_seconds(&self, key: &str) -> u64 {
-        // Seconds until oldest hit falls out of window
-    }
-}
-```
-
-Key format depends on config:
-
-- `key_by: "ip"` → `peer_addr.to_string()`
-- `key_by: "header:<name>"` → `headers.get(name).to_str()`
+1. `validate_limits()` — reject over-limit body/rate config
+2. Discover routes, compile `RadixRouter`
+3. Start `NodeWorkerPool` via `start_with_runtime`
+4. Warmup: spawn background pre-bundling of page dependencies (when `watch` &&
+   `prebundle_dependencies`)
+5. Create `RenderCache` (dev or production), `HmrTracker`, `MiddlewareStack`
+6. Start TypeScript plugin host if `plugins_enabled`
+7. Validate realtime config from plugin descriptor (path starts with `/`, no `?`/`#`/`*`, heartbeat
+   5-120s, capacity 16-4096, no collision with reserved framework routes)
+8. Build `AppState` with all components
+9. Start file watcher (if `watch`): uses `notify` crate, ignores
+   `.git`/`.ruvyxa`/`target`/`dist`/`.npm-pack`/`.npm-smoke`/`node_modules`
+10. Register Axum routes, apply middleware stack, security headers middleware
+11. Bind listener with port fallback
+12. Serve with graceful shutdown (Ctrl-C / SIGTERM, 5s timeout)
 
 ---
 
-## Radix Router
+## File Watcher & HMR
 
-See [RadixRouter](#radix-router-internals) for trie implementation details: compilation from
-RouteManifest, segment classification, lookup algorithm, param extraction, static-vs-dynamic
-priority.
+`start_watcher()` registers `notify` recursive watches on `watch_paths` (project root if exists). On
+file event:
 
----
+1. Filter ignored paths
+2. `hmr_tracker.compute_update(paths)` → affected routes and event type
+3. If `full_reload` or no affected routes: full invalidation (manifest + render cache)
+4. Else: selective invalidation (styles only if CSS dep changed, render cache per route)
+5. `worker_pool.invalidate_from_watcher(paths)` — queued via `try_send` (non-blocking, sync-safe)
+6. Notify plugin runtime via `plugin_runtime.notify_file_change()`
+7. Broadcast JSON payload via `reload_tx` to all connected HMR WebSocket clients
 
-## Render Cache
-
-See [render_cache.rs](#render-cache-internals) for caching details: LRU implementation, TTL
-expiration, cache key formats, ISR stale-while-revalidate, blockng invalidation for file watcher.
-
----
-
-## HMR Tracker
-
-See [hmr_tracker.rs](#hmr-tracker-internals) for bidirectional maps, compute_update algorithm, event
-type determination (CssUpdate vs ComponentUpdate vs FullReload).
+HMR WebSocket handler validates Origin (cross-site connection blocked), then streams broadcast
+messages. Payload shape: `{ type, paths, affectedRoutes, fullReload }`.
 
 ---
 
-## Style Collection
+## Realtime Runtime
 
-See [style.rs](#style-collection-internals) for import-graph-driven CSS collection, Sass
-compilation, Tailwind integration, CSS module scoping, minification.
+`RealtimeRuntime { path, heartbeat, tx }` — created from TypeScript plugin host descriptor.
+Validates: path is absolute, no URL special chars, heartbeat 5-120s, capacity 16-4096, no collision
+with reserved framework routes.
+
+Realtime WebSocket handler:
+
+- Validates Origin (same as HMR)
+- Parses `?channels=comma,separated` query (1-16 channels, 128 bytes each, alphanumeric + `:. _/-`)
+- Filters broadcast events by channel subscription
+- Sends heartbeat pings at configured interval
+- Sends `{"version":1,"type":"resync","reason":"lagged"}` on channel lag
 
 ---
 
-## Worker Pool
+## Under the Hood
 
-See [Worker Pool doc](worker-pool.md) for complete internals: pool initialization, NDJSON protocol,
-streaming API responses, failure recovery, bundle cache invalidation.
+- **Router**: Radix trie, O(path depth) lookup. Static segments prioritized over params, params over
+  catch-alls. No regex.
+- **Worker pool**: Persistent Node/Bun processes. Each communicates via NDJSON over stdin/stdout.
+  Pool size clamped 2-8. Least-loaded selection, auto-replacement on failure.
+- **Render cache**: LRU with hash-indexed doubly-linked list. Keys prefixed by render type (`ssr:`,
+  `client:`) and optionally strategy namespace (`ssg:`, `isr:`, `ppr:`). TTL-based expiry.
+- **HMR**: Reverse dependency map from `HmrTracker`. Only evicts affected routes. CSS-only edits
+  never invalidate JS bundles. Layout changes trigger full reload.
+- **Style pipeline**: Import-graph walk from `app/` scripts, resolves TS path aliases, compiles
+  Sass, scopes CSS Modules, compiles Tailwind. Minified in production.
+- **Action security**: Multi-layer: body limit, content-type check, same-origin (Origin vs Host),
+  Fetch Metadata, per-key sliding-window rate limiter with forwarded-proxy support.
+- **Port binding**: Sequential fallback +100 ports. Detects and prints the owning process via
+  `netstat`/`lsof`.
+- **Plugin host**: TypeScript middleware via `PluginHost` pool. Request/response round-trip
+  serialized over stdio. Realtime configured via plugin descriptor.
+- **Security headers**: Applied to all responses unless `security_headers: false`. Defaults:
+  `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`,
+  `X-Frame-Options: DENY`, `Cross-Origin-Opener-Policy: same-origin`,
+  `Cross-Origin-Resource-Policy: same-origin`,
+  `Permissions-Policy: camera=(), microphone=(), geolocation=()`.

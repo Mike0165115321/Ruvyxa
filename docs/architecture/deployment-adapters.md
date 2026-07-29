@@ -1,130 +1,256 @@
-# Deployment Adapter Architecture
+# Deployment Adapters · อาดาปเตอร์สำหรับการปรับใช้
 
-## Scope
+**Scope**: Platform adapter packages (`@ruvyxa/adapter-*`)
 
-- Project: Ruvyxa monorepo
-- Inspection date: 2026-07-25
-- Intake and final scope: zero-config Railway, Render, Firebase Hosting, and AWS hosting
-- Pass level: Full Mode
-- Pass reason: the change crosses Rust CLI, TypeScript runtime, public package contracts,
-  infrastructure output, npm packaging, tests, and user documentation
-- Inspected: root manifests, CLI build flow, adapter runner, core adapter types/utilities, all
-  existing first-party adapters and tests, release scripts, deployment guides
-- Skipped: application rendering internals unrelated to adapter artifact materialization; live
-  provider accounts and credentials
+## สรุป
 
-## Confirmed Architecture
+Adapters transform Ruvyxa build output into platform-specific formats. Each adapter implements a
+common interface: receive compiled bundles + route manifest → produce deployable artifact.
 
-The deployment path has one control flow and one artifact security boundary:
+---
 
-```mermaid
-flowchart LR
-    CLI["ruvyxa build"] --> Select["config / --adapter / environment detection"]
-    Select --> Runner["runtime/adapter-runner.mjs"]
-    Runner --> Package["@ruvyxa/adapter-provider"]
-    Package --> Contract["AdapterOutput artifacts"]
-    Contract --> Stage["atomic .ruvyxa staging"]
-    Contract --> Allowlist["project-scope allowlist"]
-    Stage --> Deploy[".ruvyxa/deploy/provider"]
-    Allowlist --> Native["provider-native root output"]
+## Adapter Interface
+
+```typescript
+// packages/ruvyxa/src/adapters/types.ts
+
+export interface Adapter {
+  name: string
+
+  /**
+   * Called during ruvyxa build. Transform build output to platform format.
+   */
+  adapt(options: AdaptOptions): Promise<AdaptResult>
+}
+
+export interface AdaptOptions {
+  /** Route manifest */
+  manifest: RouteManifest
+  /** Client bundle output directory */
+  clientOutDir: string
+  /** Server bundle output directory */
+  serverOutDir: string
+  /** Project root */
+  root: string
+  /** Build configuration */
+  config: BuildConfig
+}
+
+export interface AdaptResult {
+  /** Directory containing deploy-ready output */
+  outputDir: string
+  /** Platform-specific configuration files written */
+  generated: string[]
+}
 ```
 
-| Component                                        | Responsibility                                                                                              | Evidence strength |
-| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- | ----------------- |
-| `crates/ruvyxa_cli/src/main.rs`                  | Parse built-in names, select stable host environment signals, invoke the runner after the atomic core build | Direct            |
-| `packages/ruvyxa/runtime/adapter-runner.mjs`     | Resolve adapter packages, validate route capabilities, materialize artifacts, constrain project-root writes | Direct            |
-| `packages/@ruvyxa/core/src/types.ts`             | Public adapter/artifact contract and platform metadata                                                      | Direct            |
-| `packages/@ruvyxa/core/src/standalone-server.ts` | Shared long-lived Node HTTP runtime for Node, Bun, Railway, Render, and Amplify compute                     | Direct            |
-| `packages/@ruvyxa/adapter-*`                     | Provider-native artifact declaration and runtime bridge                                                     | Direct            |
-| `scripts/pack-smoke.mjs`                         | Prove first-party adapters remain resolvable after npm packing                                              | Direct            |
+The CLI discovers the adapter from `package.json` dependencies:
 
-## Read-only Capability Inspection
-
-`adapter-runner.mjs` has separate `build` and `inspect` modes. Inspection evaluates the adapter's
-declarative output to report `name`, `target`, `runtime`, `platform`, and `supports`, but skips
-route artifact validation and materialization. The CLI uses this protocol from `doctor` and compares
-every manifest route with the adapter capability set before deployment:
-
-```text
-doctor --adapter static --json
-  -> adapter.supports = [ssg, csr]
-  -> unsupportedRoutes = [{ path: /api/health, requires: api }]
+```javascript
+const adapterPackage = Object.keys(pkg.dependencies || {}).find((dep) =>
+  dep.startsWith('@ruvyxa/adapter-'),
+)
 ```
 
-Adapters that omit `supports` retain the existing full-featured default. The protocol is additive;
-ordinary builds still validate capabilities immediately before materialization.
+---
 
-## Provider Boundaries
+## Built-in Adapters
 
-| Provider            | Runtime model                             | Native output                                            | Selection                                                  |
-| ------------------- | ----------------------------------------- | -------------------------------------------------------- | ---------------------------------------------------------- |
-| Railway             | Long-lived Node process                   | standalone server + `railway.json`                       | `RAILWAY_PROJECT_ID`                                       |
-| Render              | Long-lived Node process                   | standalone server + `render.yaml` Blueprint              | `RENDER`                                                   |
-| Firebase Hosting    | CDN static files + Cloud Functions v2     | publish directory + functions codebase + `firebase.json` | explicit `--adapter firebase` or `RUVYXA_ADAPTER=firebase` |
-| AWS Amplify Hosting | static primitive + Node compute primitive | `.amplify-hosting/` deployment specification             | `AWS_APP_ID`                                               |
+| Package                      | Platform            | Output                               |
+| ---------------------------- | ------------------- | ------------------------------------ |
+| `@ruvyxa/adapter-node`       | Node.js HTTP server | `server.js` + `client/` directory    |
+| `@ruvyxa/adapter-static`     | Static hosting      | `out/` directory (SSG HTML + assets) |
+| `@ruvyxa/adapter-vercel`     | Vercel Functions    | `.vercel/output/` config             |
+| `@ruvyxa/adapter-netlify`    | Netlify Functions   | `netlify.toml` + functions           |
+| `@ruvyxa/adapter-cloudflare` | Cloudflare Workers  | `wrangler.toml` + worker script      |
+| `@ruvyxa/adapter-docker`     | Docker container    | `Dockerfile` + `nginx.conf`          |
 
-Firebase has no stable Hosting build-environment signal because deployment is initiated by the
-Firebase CLI. Account authentication and project selection are external prerequisites, not framework
-configuration.
+---
 
-AWS support intentionally targets AWS Amplify Hosting. “AWS” does not imply automatic provisioning
-of unrelated AWS services such as ECS, RDS, API Gateway, or arbitrary IAM resources.
+## Adapter: Node
 
-## Decisions
+### Output Structure
 
-1. Add one first-party package per provider.
-   - Rejected: alias every provider to `adapter-node`.
-   - Reason: Firebase and Amplify require native manifests and runtime signatures.
-   - Reversal cost: low; packages remain isolated behind the existing adapter contract.
-2. Reuse the shared standalone server for long-lived Node hosts and Amplify compute.
-   - Rejected: copy the full HTTP runtime into each package.
-   - Reason: request ordering, static fallback, cookies, cache headers, and ISR behavior must not
-     drift across hosts.
-3. Add an additive `isrCache: "tmp"` standalone option for immutable compute bundles.
-   - Reason: Amplify compute can write only under `/tmp`; Node/Railway/Render retain the existing
-     bundle-local default.
-4. Preserve user-authored provider configuration with `skipIfExists`.
-   - Reason: generated defaults must never replace deliberate infrastructure configuration.
+```
+.ruvyxa/output/
+  ├── server.js              # CJS bundle with all server modules
+  ├── client/                # Static assets
+  │   ├── index.js
+  │   ├── about.js
+  │   └── ...
+  ├── package.json           # Start script
+  └── manifest.json          # Route manifest
+```
 
-## Findings and Corrections
+### Runtime
 
-### Built-in registry duplication
+`server.js` exports a `createServer()` function:
 
-- Evidence: provider names appear in the Rust CLI, JS runner, `ruvyxa` dependencies, pack smoke,
-  type unions, tests, and docs.
-- Impact: omitting any registry can make development pass while packed installs fail.
-- Severity: Medium
-- Confidence: Direct
-- Correction: every provider addition updates and tests the complete registry/package path.
+```javascript
+module.exports.createServer = function (options) {
+  // Start Axum/Axum-compatible HTTP server
+  // Load route manifest
+  // Serve client/ as static files
+  // Handle SSR via embedded server modules
+}
+```
 
-### Project-root artifact boundary
+---
 
-- Evidence: the runner rejects every project-scope path outside an explicit allowlist.
-- Impact: broadening the allowlist to arbitrary paths would let adapter code overwrite project
-  source or configuration.
-- Severity: High
-- Confidence: Direct
-- Correction: allow only the exact provider discovery paths and retain traversal/containment tests.
+## Adapter: Static
 
-## Risks and Operational Limits
+### Output Structure
 
-- Firebase dynamic deployment requires a Blaze-enabled project because Cloud Functions backs SSR and
-  API routes. Firebase Hosting requests to a function have a provider timeout.
-- Firebase runtime dependencies are installed from the generated function `package.json` during
-  deployment; provider CLI validation remains an operational proof beyond local unit tests.
-- Amplify compute has ephemeral, instance-local `/tmp` storage. ISR refreshes work per warm instance
-  but are not a durable cross-instance cache.
-- Native WebSocket realtime is supported on Railway and Render, not Firebase Functions or Amplify
-  compute.
-- Project/account creation, credentials, billing, secrets, domains, and production rollout are
-  explicitly outside this adapter boundary.
+```
+.ruvyxa/static/
+  ├── index.html
+  ├── about/index.html
+  ├── blog/[slug]/index.html   # One per static param
+  ├── _next/static/            # Client bundles
+  └── manifest.json
+```
 
-## Validation Gate
+### Build Process
 
-1. Claim traceability: all implementation claims map to the paths above; provider constraints are
-   based on provider-native output contracts.
-2. Scope alignment: final scope matches the requested four providers; AWS is explicitly bounded to
-   Amplify Hosting.
-3. Handoff readiness: provider selection, outputs, limitations, verification, and unsafe scope
-   expansions are recorded here.
-4. Open architecture questions: none identified for the implemented boundary.
+1. Run `ruvyxa build` (full SSG detection)
+2. For each SSG route: call `getStaticPaths()`, render each path to HTML
+3. Write HTML to `out/` with directory structure matching the URL
+4. Copy client bundles to `out/_next/static/`
+5. Generate `404.html` (customizable)
+
+---
+
+## Adapter: Vercel
+
+### Output Structure
+
+```
+.ruvyxa/vercel/
+  └── .vercel/output/
+      ├── config.json          # Vercel output config
+      └── static/
+          ├── index.html
+          └── ...
+      └── functions/
+          ├── __ruvyxa.func/
+          │   ├── .vc-config.json
+          │   └── server.js
+          └── blog/[slug].func/
+              ├── .vc-config.json
+              └── server.js
+```
+
+### `.vc-config.json`
+
+```json
+{
+  "runtime": "nodejs18.x",
+  "handler": "server.js",
+  "launcherType": "Nodejs",
+  "shouldAddHelpers": true
+}
+```
+
+---
+
+## Adapter: Cloudflare
+
+### Output Structure
+
+```
+.ruvyxa/cloudflare/
+  ├── wrangler.toml
+  ├── worker.js              # Compiled worker (ESM)
+  └── assets/                 # Static assets
+```
+
+### `wrangler.toml`
+
+```toml
+name = "ruvyxa-app"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+[site]
+bucket = "assets"
+```
+
+`worker.js` is an ES module that exports `fetch`:
+
+```javascript
+export default {
+  async fetch(request, env, ctx) {
+    // Match route, render, return Response
+  },
+}
+```
+
+---
+
+## Adapter: Docker
+
+### Output Structure
+
+```
+.ruvyxa/docker/
+  ├── Dockerfile
+  ├── nginx.conf
+  ├── server/               # Server bundle
+  │   └── server.js
+  └── public/               # Client bundles
+      └── index.js
+```
+
+### Dockerfile
+
+```dockerfile
+FROM node:18-alpine
+WORKDIR /app
+COPY server/ server/
+COPY public/ public/
+EXPOSE 3000
+CMD ["node", "server/server.js"]
+```
+
+### nginx.conf (optional)
+
+```nginx
+server {
+    listen 80;
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+    }
+    location /_next/static {
+        # Immutable static assets
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+}
+```
+
+---
+
+## Adapter Selection
+
+```rust
+pub fn detect_adapter(root: &Path) -> Result<String>
+pub fn run_adapter(adapter: &str, options: &AdaptOptions) -> Result<String>
+```
+
+`detect_adapter` reads `package.json` dependencies. Falls back to `@ruvyxa/adapter-node` if no
+adapter is found. `run_adapter` shells out to the adapter's Node.js entry point.
+
+---
+
+## Why This Design
+
+1. **Adapter as npm package, not built-in** — Users install only the adapter they need. No dead code
+   from unused platforms. Adding a new platform is `npm install @ruvyxa/adapter-xxx` — no framework
+   update.
+2. **Common interface with platform-specific output** — Every adapter receives the same
+   `AdaptOptions`. The transform logic is isolated per adapter. Changes to one platform never affect
+   another.
+3. **`detect_adapter` at build time** — No `ruvyxa.config.ts` adapter field needed. The presence of
+   `@ruvyxa/adapter-vercel` in `package.json` is sufficient. Convention over configuration.
+4. **Node adapter is the default** — Every Node.js deployment works with zero configuration.
+   `ruvyxa build` with no adapter package installed still produces a runnable `server.js`.

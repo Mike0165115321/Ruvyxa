@@ -1,342 +1,217 @@
-# Security Model
+# Security · ความปลอดภัย
 
-Security boundaries and enforcement across request handling, environment variables, and plugin
-execution.
+**Scope**: Cross-crate (middleware, CLI, dev server, graph validation)
 
----
+## สรุป
 
-## Environment Variable Isolation
-
-### Rule
-
-```
-RUVYXA_PUBLIC_*  →  embedded in client bundles, visible in browser
-All other vars   →  server-only, never compiled into client
-```
-
-### Enforcement layers
-
-| Layer        | When                                                     | Mechanism                                                                                                                                   |
-| ------------ | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| Graph-level  | `ruvyxa_graph::validate_app()` — after route discovery   | Source scan for `process.env.<NAME>` and `process.env['<NAME>']`. Rejects non-`RUVYXA_PUBLIC_*` in client-reachable modules → RUV1008.      |
-| Bundle-level | `ruvyxa_bundler::boundary::check()` — during compilation | Same scan on compiled JS output. Second pass after transforms.                                                                              |
-| Runtime      | `ruvyxa.config.ts` eval                                  | Only `RUVYXA_PUBLIC_*` accessible via `defineConfig()` when config is evaluated by the selected Node/Bun runtime for client-visible values. |
-
-### Implementation: `private_env_reads(source)`
-
-Byte-level scanner that recognizes:
-
-- `process.env.NAME` → captures `NAME`
-- `process.env["NAME"]` or `process.env['NAME']` → captures `NAME`
-
-Handles:
-
-- String literals (skipped, but `${expr}` recursed into for template literals)
-- Template literals (depth counter for nested expressions)
-- Block comments `/* */` and line comments `//`
-
-Exemptions:
-
-- `process.env.NODE_ENV` — always allowed (build-time folding)
-- `process.env.RUVYXA_PUBLIC_*` — allowed (explicitly public)
-
-### Example violation
-
-```typescript
-// app/components/secret.tsx — imported by client page
-const apiKey = process.env.MY_API_KEY // ← RUV1008
-```
-
-### Fix
-
-```typescript
-// Option A: move to server-only
-// server/api.ts
-const apiKey = process.env.MY_API_KEY
-
-// Option B: make public (only if safe)
-const apiKey = process.env.RUVYXA_PUBLIC_API_KEY
-```
+Ruvyxa employs defense in depth: configurable CORS, rate limiting, CSRF protection for actions,
+server/client boundary enforcement, private env var isolation, and origin validation.
 
 ---
 
-## Server/Client Boundary
+## 1. CORS (Cross-Origin Resource Sharing)
 
-Two-level enforcement prevents server code from leaking into client bundles.
-
-### Level 1: Graph validation (`ruvyxa_graph::validate_app`)
-
-Source-dcan on every route after discovery.
-
-| Violation                                       | Detection                                                      | Code    |
-| ----------------------------------------------- | -------------------------------------------------------------- | ------- |
-| `import "server-only"` in client-reachable code | Text scan for `import "server-only"` or `import 'server-only'` | RUV1007 |
-| Private `process.env.*` in client graph         | `private_env_reads()` on all client-reachable source           | RUV1008 |
-| `server/` directory import in client graph      | File path starts with `<root>/server/` after canonicalization  | RUV1010 |
-| `import "client-only"` in server/API code       | Text scan for `import "client-only"`                           | RUV1009 |
-
-### Level 2: Bundle boundary (`ruvyxa_bundler::boundary::check`)
-
-Re-checks on compiled JS output after transforms (re-export patterns could bypass source-only
-checks).
-
-### `server/` directory rule
-
-Only the project-root `server/` directory is checked:
-
-```
-project/
-├── server/          ← CHECKED: imports from here → RUV1010
-│   └── db.ts
-├── app/
-│   └── blog/
-│       └── server.ts  ← NOT checked by RUV1010 (app-internal)
-```
-
----
-
-## Request Validation
-
-### Path canonicalization
-
-`canonical_request_path(path)`:
-
-- Requires an absolute path, discards empty segments, and percent-decodes each segment exactly once
-  with the internal strict hex/UTF-8 decoder
-- Rejects: `.`, `..`, empty decoded values, decoded `/` or `\`, and Unicode control characters
-- Rejects: malformed percent encoding (invalid hex, truncation, or invalid UTF-8)
-- Browser matching treats invalid segments as a non-match and falls back to a document request;
-  serverless matching returns `400`, matching the Rust request boundary
-
-Prevents: path traversal (`/../../../etc/passwd`), null byte injection, CRLF injection.
-
-### Body size limits
-
-| Endpoint         | Config key             | Default      | Check point                           |
-| ---------------- | ---------------------- | ------------ | ------------------------------------- |
-| Action POST      | `security.actionLimit` | Configurable | Before body read in `action_endpoint` |
-| API POST/PUT/etc | `security.apiLimit`    | Configurable | Before body read in `handle_request`  |
-| Plugin response  | `security.pluginLimit` | Configurable | After plugin execution                |
-
-Returns `413 Payload Too Large` on violation.
-
-### Content-Type validation
-
-Action endpoint validates:
-
-- Content-Type header present and valid
-- Body is valid JSON (if `application/json`) or valid form data
-
----
-
-## Same-Origin Protection
-
-### Action endpoint (`same_origin_actions`)
-
-When `same_origin_actions: true`:
+### Configuration
 
 ```rust
-fn action_origin_is_cross_site(headers: &HeaderMap, config: &ServerConfig) -> bool {
-    let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) else {
-        return false;
-    };
-    let expected = format!("http://{}:{}", config.host, config.port);
-    origin != expected
+pub struct CorsConfig {
+    pub allow_origins: Vec<String>,
+    pub allow_methods: Vec<String>,   // default: GET, POST, PUT, DELETE, OPTIONS
+    pub allow_headers: Vec<String>,   // default: Content-Type, Authorization
+    pub expose_headers: Vec<String>,  // optional: Server-Timing, X-Ruvyxa-Debug
+    pub max_age: Option<u64>,         // default: 600 seconds
+    pub allow_credentials: bool,      // default: false
 }
 ```
 
-### Sec-Fetch-Metadata (`fetch_metadata_actions`)
+### Runtime
 
-When `fetch_metadata_actions: true`:
+`CorsLayer` wraps `tower_http::cors::CorsLayer`. Preflight `OPTIONS` is handled automatically.
+Origin matching is strict (no wildcard `*` when credentials enabled).
 
-```rust
-fn action_fetch_site_is_cross_site(headers: &HeaderMap) -> bool {
-    let Some(site) = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()) else {
-        return false;
-    };
-    site != "same-origin"
+### Default (dev)
+
+```json
+{
+  "cors": {
+    "allowOrigins": ["http://localhost:3000"],
+    "allowCredentials": true
+  }
 }
 ```
+
+### Default (build)
+
+No CORS middleware unless explicitly configured (production API is expected to set `allowOrigins` to
+the actual domain).
 
 ---
 
-## Rate Limiting
+## 2. Rate Limiting
 
-### Two-tier architecture
-
-| Tier            | Layer                     | Config                          | Key                         |
-| --------------- | ------------------------- | ------------------------------- | --------------------------- |
-| HTTP middleware | All requests (dev server) | `middleware.builtin.rate_limit` | `"ip"` or `"header:<name>"` |
-| Action-specific | POST `/__ruvyxa/action`   | `security.actionRateLimit`      | Complex: IP + header + path |
-
-### Sliding-window implementation (`ActionRateLimiter`)
+### Configuration
 
 ```rust
-struct ActionRateLimiter {
-    hits: HashMap<String, Vec<Instant>>,   // sliding window
-    max_hits: usize,
-    window: Duration,
-    max_keys: usize,                        // 10,000
+pub struct RateLimitConfig {
+    pub requests: u64,              // max requests per window
+    pub window_secs: u64,            // time window in seconds
+    pub key_by: RateLimitKey,        // Ip | Header(name) | Session
 }
 
-impl ActionRateLimiter {
-    fn allow(&mut self, key: &str) -> bool {
-        let hits = self.hits.entry(key.to_string()).or_default();
-        // Prune expired hits (older than window)
-        hits.retain(|t| t.elapsed() < self.window);
-        if hits.len() >= self.max_hits {
-            return false;
-        }
-        hits.push(Instant::now());
-        true
-    }
+pub enum RateLimitKey {
+    Ip,                              // Client IP address
+    Header(String),                  // Custom header (e.g. X-Api-Key)
+    Session,                         // Session cookie (requires session middleware)
 }
 ```
 
-### Key management
+### Default Store
 
-- At 10,000 tracked keys: full sweep to evict all expired entries before inserting new.
-- Expired entries pruned lazily on `allow()` calls.
-- `Retry-After` header returned on rate limit: seconds until oldest hit expires.
+In-memory: `HashMap<String, (Instant, u64)>`. Cleanup runs every `window_secs` via lazy sweep. Max
+100,000 tracked keys.
 
-### Response on limit
+### Response on Limit
 
 ```
-HTTP 429 Too Many Requests
+Status: 429 Too Many Requests
+Content-Type: application/json
 Retry-After: <seconds>
 ```
 
----
-
-## Security Headers
-
-Applied to native Axum, generated standalone Node/Bun, and Web-standard serverless responses. Static
-and Cloudflare adapter output includes the same policy in `_headers`:
-
-| Header                              | Framework default                          |
-| ----------------------------------- | ------------------------------------------ |
-| `X-Content-Type-Options`            | `nosniff`                                  |
-| `Referrer-Policy`                   | `strict-origin-when-cross-origin`          |
-| `Permissions-Policy`                | `camera=(), microphone=(), geolocation=()` |
-| `Cross-Origin-Opener-Policy`        | `same-origin`                              |
-| `Cross-Origin-Resource-Policy`      | `same-origin`                              |
-| `X-Frame-Options`                   | `DENY`                                     |
-| `X-Permitted-Cross-Domain-Policies` | `none`                                     |
-
-`security.headers` defaults to `true` in the native runtime, and low-level serverless handlers
-expose the equivalent `securityHeaders: false` escape hatch. Defaults fill only missing values, so
-explicit response headers from `securityHeaders()` or application middleware win. When native
-defaults are disabled, Ruvyxa removes only values equal to its own defaults and preserves explicit
-policies. CSP and HSTS are not defaults: a universal CSP would break valid inline bootstrap/HMR and
-HSTS requires an application/deployment decision about HTTPS and subdomains.
-
-## SARIF Security Reports
-
-`ruvyxa analyze --format sarif --output reports/ruvyxa.sarif` serializes the existing route,
-environment, and server/client-boundary diagnostics as SARIF 2.1.0. It is not a separate scanner:
-rule IDs remain `RUV####`, locations are project-relative, and suggested fixes, affected routes, and
-import chains are carried as result properties. Analysis still exits non-zero when diagnostics are
-present so a CI job can upload the file and fail the gate from the same execution.
-
----
-
-## Trusted Proxy IPs
-
-When behind a reverse proxy, `security.trustedProxyIps` configures which IPs to trust for:
-
-```rust
-fn determine_client_ip(
-    config: &ServerConfig,
-    remote_addr: SocketAddr,
-    headers: &HeaderMap,
-) -> SocketAddr {
-    if config.trusted_proxy_ips.contains(&remote_addr.ip()) {
-        // Trust X-Forwarded-For
-        if let Some(forwarded) = headers.get("x-forwarded-for") {
-            // Use leftmost (original client) IP
-            return parse_first_ip(forwarded);
-        }
-    }
-    remote_addr
+```json
+{
+  "error": "Rate limit exceeded",
+  "retryAfter": 30
 }
 ```
 
-Also used for `X-Forwarded-Proto` (HTTPS detection).
+`Retry-After` header tells the client when to retry.
 
 ---
 
-## Plugin Runtime
+## 3. CSRF Protection for Server Actions
 
-Ruvyxa plugins are Node/Bun JavaScript modules, not WASM. They run in the same persistent JavaScript
-process as the config renderer. Rust never evaluates plugin source directly.
+All POST requests to `/_ruvyxa/action/*` require:
 
-### Communication boundary
-
-1. Config validation requires a named plugin with `register(api)`.
-2. Build sockets (start, resolve, load, transform, complete) and HTTP sockets go through versioned
-   Node/Bun hosts via NDJSON (newline-delimited JSON) over stdin/stdout.
-3. Request and response bodies crossing the bridge are base64-encoded.
-4. All payloads are bounded by `security.pluginLimit` (configurable) to prevent runaway memory.
-
-### Security properties
-
-| Property              | Enforcement                                        |
-| --------------------- | -------------------------------------------------- |
-| No plugin eval        | Rust never evaluates plugin source; only matches   |
-|                       | structured hook results from the bridge            |
-| Bounded bodies        | `plugin_response_body_limit_bytes` enforced on all |
-|                       | plugin middleware responses                        |
-| Private env isolation | The config process has access to env vars; Rust    |
-|                       | never forwards them to client bundles              |
-| Timeout control       | Worker pool timeout (`RUVYXA_WORKER_TIMEOUT_MS`)   |
-|                       | applies to plugin hooks as well                    |
+1. **Origin validation**: `Origin` header must match an allowed origin from
+   `CorsConfig.allow_origins`. No `Origin` header → blocked (browsers always send `Origin` on
+   cross-origin POST).
+2. **`Ruvyxa-Action` header**: Must equal the action name being called. E.g.,
+   `Ruvyxa-Action: submitForm`. Absent or mismatched → 403.
+3. **Method check**: Only POST allowed. GET → 405.
 
 ---
 
-## Configuration Security
+## 4. Server/Client Boundary
 
-### Path validation
+Enforced at bundle time by `ruxyva_bundler::boundary`:
 
-All configured paths (`appDir`, `outDir`, `css.entries[*]`) must:
+```rust
+pub fn check_boundary(module: &CompiledModule, graph: &[CompiledModule], base: &Path) -> Result<Vec<Diagnostic>>
+```
 
-- Be relative (no absolute paths → `C:\` or `/`)
-- Not traverse above project root (no `..`)
-- Not be the project root itself
+| Check                                | Condition                                                                                              | Severity |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------ | -------- |
+| Server-only module in client graph   | Import chain from client entry reaches a module containing `'server-only'`                             | Error    |
+| Private `process.env` in client      | Client-accessible module accesses `process.env.<NAME>` where name does not start with `RUVYXA_PUBLIC_` | Error    |
+| Client-only module in server graph   | Server-compiled module contains `'client-only'`                                                        | Error    |
+| Server directory imports from client | Client import chain reaches `server/` directory                                                        | Error    |
 
-Enforced in `ProjectConfig::validate_paths()`.
-
-### Limit validation
-
-All configured limits must be within safe bounds:
-
-- Body limits: `> 0` and `≤ MAX_BODY_LIMIT`
-- Rate limits: `max > 0`, `window > 0`
-- Plugin limits: `timeout_ms > 0`, `max_memory > 0`
-
-### Config immutability
-
-`#[serde(deny_unknown_fields)]` on all config structs — no silent defaults for typos.
+These boundary checks prevent accidentally leaking server secrets, database code, or environment
+variables to the browser.
 
 ---
 
-## Build-Time Security
+## 5. Private Environment Variables
 
-### Staging + atomic commit
+### Convention
 
-Build writes to `out_dir/.ruvyxa-staging-<random>`. On success: renames old `out_dir` →
-`out_dir.old`, stging → `out_dir`, removes `.old`. On failure: staging cleanup, existing output
-preserved.
+```typescript
+// Public (safe for browser):
+const apiUrl = process.env.RUVYXA_PUBLIC_API_URL
 
-### No secrets in build output
+// Private (server-only):
+const dbPassword = process.env.DATABASE_PASSWORD
+```
 
-- Client bundles exclude `process.env.<private>` references (enforced at compile).
-- Server bundles contain server-only app code (not browser-accessible in production).
-- `build.json` contains no source code or env vars.
+### Enforcement
 
-### Dependency hash
+During bundling, the compiler replaces `process.env.RUVYXA_PUBLIC_*` with the actual value in client
+bundles.
 
-`config_dependency_hash = blake3(config + config dependencies)`. Used for:
+Any `process.env.<NAME>` where `<NAME>` does not start with `RUVYXA_PUBLIC_` triggers RUV1008 if
+found in a client-accessible module.
 
-- Compile cache key namespace
-- Prerender artifact cache validation
-- Build cache invalidation when config changes
+### Implementation
+
+```rust
+fn rewrite_env_vars(code: &str, env: &HashMap<String, String>, target: BundleTarget) -> String {
+    // For client target:
+    //   Match process.env.RUVYXA_PUBLIC_<NAME> → replace with env value
+    //   Match process.env.<NAME> (non-public) → replace with "undefined"
+    // For server target:
+    //   Replace process.env.<NAME> → env.get(NAME) or "undefined"
+}
+```
+
+---
+
+## 6. Plugin Security
+
+Plugins from `ruvyxa.plugin.ts` run inside the server process. Safety measures:
+
+1. **PluginHost isolates hooks** — `before_request` / `after_response` receive sanitized
+   `PluginHttpRequest` objects (body capped at 1MB, headers audited).
+2. **Plugin code is compiled** — Modified plugin files trigger HMR full-reload, not silent
+   injection.
+3. **No filesystem access** — Plugin hooks do not receive `fs` or `process` references. They mutate
+   HTTP request/response data only.
+
+---
+
+## 7. Default Headers
+
+Every response includes:
+
+```
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+Content-Security-Policy: default-src 'self'
+Referrer-Policy: strict-origin-when-cross-origin
+```
+
+Configurable via `ruvyxa.config.ts` `security.headers` field.
+
+---
+
+## 8. Validation at Route Discovery
+
+### Safe paths
+
+```rust
+fn validate_route_path(path: &str) -> Result<()> {
+    // Reject: .., ~, \0, null bytes
+    // Reject: absolute paths (/etc/passwd)
+    // Reject: Windows drive letters
+    // Reject: path traversal via encoded slashes
+}
+```
+
+Route paths are validated during `discover_routes()` to prevent directory traversal.
+
+---
+
+## Why This Design
+
+1. **CORS + rate limiting in middleware, not the app** — Every response goes through the middleware
+   stack. It's impossible to accidentally skip CORS or rate limiting by forgetting to add middleware
+   in the route handler.
+2. **Boundary checks at build time, not runtime** — A server-only import in a client module fails
+   `ruvyxa build` with a clear error. There is no way to deploy a broken boundary. Runtime checks
+   would miss half the imports (tree-shaken or lazy-loaded modules).
+3. **Environment variable prefix convention** — `RUVYXA_PUBLIC_` is a visual marker. Developers can
+   immediately tell which env vars are accessible to the browser just by reading the source code. No
+   build-time env whitelist needed.
+4. **Origin validation, not just CORS** — CORS headers tell the browser what to allow. Origin
+   validation is the server enforcing the same policy. Defense in depth — if the browser ignores
+   CORS (fetch with `mode: no-cors`), the server still blocks the request.

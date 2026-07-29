@@ -1,184 +1,264 @@
-# Diagnostic Codes Reference
+# Diagnostics · การวินิจฉัย
 
-Every framework error has a structured `RUV####` code with title, explanation, source location, and
-suggested fix. Defined in `ruvyxa_diagnostics` and raised by every crate.
+**Crate**: `ruvyxa_diagnostics`  
+**Module**: `crates/ruvyxa_diagnostics/src/lib.rs`
 
-> **Current recovery reference:** [Error Handling](../guides/en/error-handling.md) is the
-> authoritative, complete application-facing RUV catalogue. It also covers error.tsx, notFound(),
-> API responses, actions, client loaders, hydration reporting, and explicit treatment of
-> forwarded/reserved and test-only codes. Keep this page as the diagnostic architecture overview.
+## สรุป
+
+Central diagnostic types for the Ruvyxa framework. `Diagnostic` carries a structured error with
+source span, import chain, suggested fix, and affected routes. `RuvyxaError` is the unified error
+enum — wraps `Diagnostic`, `std::io::Error`, or a plain `String`. SARIF 2.1.0 serialization for CI
+integration (GitHub Code Scanning, GitLab SAST).
 
 ---
 
-## Diagnostic struct
+## Core Data Structures
+
+### SourceSpan
 
 ```rust
-pub struct Diagnostic {
-    pub code: &'static str,            // "RUV1007"
-    pub title: &'static str,           // human-readable one-liner
-    pub explanation: String,           // what went wrong, why
-    pub span: Option<SourceSpan>,      // file:line:col
-    pub import_chain: Vec<String>,     // trace for boundary violations
-    pub suggested_fix: String,         // actionable fix text
-    pub affected_routes: Vec<String>,  // route IDs impacted
-}
-
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceSpan {
     pub file: PathBuf,
-    pub line: Option<usize>,
-    pub column: Option<usize>,
+    pub line: Option<u32>,
+    pub column: Option<u32>,
 }
+```
 
+Points to a source file, optionally with line/column. Both positional fields are `Option` — a bare
+file reference (e.g. missing file) is valid.
+
+### Diagnostic
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Diagnostic {
+    pub code: &'static str,
+    pub title: String,
+    pub explanation: String,
+    pub span: Option<SourceSpan>,
+    pub import_chain: Vec<PathBuf>,
+    pub suggested_fix: Option<String>,
+    pub affected_routes: Vec<String>,
+}
+```
+
+| Field             | Type                 | Purpose                                    |
+| ----------------- | -------------------- | ------------------------------------------ |
+| `code`            | `&'static str`       | Error code, e.g. `"RUV1001"`               |
+| `title`           | `String`             | Short human-readable summary               |
+| `explanation`     | `String`             | Long-form why-this-happened                |
+| `span`            | `Option<SourceSpan>` | Source location (file + optional line/col) |
+| `import_chain`    | `Vec<PathBuf>`       | Import trace for boundary violations       |
+| `suggested_fix`   | `Option<String>`     | How to resolve the issue                   |
+| `affected_routes` | `Vec<String>`        | Routes impacted by this error              |
+
+---
+
+## Builder Pattern
+
+```rust
+Diagnostic::new(code, title)
+    .explain("why")                        // set explanation
+    .at_file("path/to/file.rs")            // set span, no line/col
+    .at_file_with_span("path.rs", 42, 5)   // set span with line + col
+    .suggest("move the import")            // set suggested_fix
+```
+
+Each builder method consumes and returns `Self` (not `&mut self`), enabling chaining. `at_file` and
+`at_file_with_span` overwrite the span. All methods are additive — no validation or side effects.
+
+---
+
+## Display Format
+
+```
+CODE: title
+File: /path/to/file.rs:42:5
+
+Why:
+  explanation text
+
+Fix:
+  suggested fix text
+
+Affected routes:
+  /blog/[slug]
+  /about
+```
+
+Span line omission adjusts format: no line → `File: path`, line without column → `File: path:line`.
+Sections omitted when empty.
+
+---
+
+## RuvyxaError
+
+```rust
+#[derive(Debug, Error)]
 pub enum RuvyxaError {
+    #[error("{0}")]
     Diagnostic(Box<Diagnostic>),
-    Io { message: String, source: Option<Arc<std::io::Error>> },
+
+    #[error("{message}")]
+    Io {
+        message: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("{0}")]
     Message(String),
 }
+```
 
+Three variants:
+
+- **Diagnostic** — wraps a `Box<Diagnostic>`, delegates `Display` to Diagnostic's formatter.
+- **Io** — structured I/O error preserving the source `std::io::Error`.
+- **Message** — plain string fallback.
+
+### Trait Impls
+
+```rust
+impl From<Diagnostic> for RuvyxaError   // wraps into Diagnostic variant
+impl From<std::io::Error> for RuvyxaError // wraps into Io variant
 pub type Result<T> = std::result::Result<T, RuvyxaError>;
 ```
 
 ---
 
-## Graph Diagnostics (RUV1xxx)
-
-Raised by `ruvyxa_graph`.
-
-| Code        | Title                       | Condition                                                                                  | Fix                                                                  |
-| ----------- | --------------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------- |
-| **RUV1001** | App directory was not found | `app/` directory missing at project root                                                   | Create `app/` dir or set `appDir` in config to an existing directory |
-| **RUV1002** | Invalid route segment       | Dynamic segment syntax error: `[a b]`, `[]`, `[.name]`, brackets inside plain text segment | Use `[param]`, `[...rest]`, or `[[...rest]]`                         |
-| **RUV1003** | Conflicting route paths     | Two routes map to same match shape (e.g. `/blog/[slug]` and `/blog/[id]` both → `/blog/:`) | Differentiate paths with unique static prefix segments               |
-| **RUV1004** | Missing default export      | Page component file has no `export default`                                                | Add `export default function Page() { ... }` to the page file        |
-
-## Boundary Diagnostics (RUV1xxx)
-
-Raised by `ruvyxa_graph` and `ruvyxa_bundler`.
-
-| Code        | Title                                             | Condition                                                                       | Fix                                                                                            |
-| ----------- | ------------------------------------------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| **RUV1007** | Server-only module imported into client graph     | `import "server-only"` detected in client-reachable module                      | Move server logic to `server/` dir, `action.ts`, or remove server-only import from client code |
-| **RUV1008** | Private environment variable used in client graph | `process.env.VARIABLE` (not `RUVYXA_PUBLIC_*`) in client bundle                 | Rename to `RUVYXA_PUBLIC_VARIABLE` or move env read to server-only code                        |
-| **RUV1009** | Client-only module imported into server graph     | `import "client-only"` in API/server module                                     | Remove client-only dependency from server-side code                                            |
-| **RUV1010** | Server directory module reached by client graph   | File under project-root `server/` directory imported by client-reachable module | Move importable logic out of `server/` dir, or keep imports server-side                        |
-
-## Server Runtime Diagnostics (RUV11xx–RUV16xx)
-
-Raised by `ruvyxa_dev_server`.
-
-### SSR Errors
-
-| Code        | Title                  | Condition                                                | Fix                                                               |
-| ----------- | ---------------------- | -------------------------------------------------------- | ----------------------------------------------------------------- |
-| **RUV1100** | React SSR failed       | `renderToString()` threw in a JavaScript worker          | Check component for errors, missing imports, invalid JSX          |
-| **RUV1102** | SSR renderer not found | `runtime/ssr-renderer.mjs` missing in JavaScript workers | Reinstall `ruvyxa` package or verify runtime scripts are included |
-
-### API Errors
-
-| Code        | Title                      | Condition                                               | Fix                                                                   |
-| ----------- | -------------------------- | ------------------------------------------------------- | --------------------------------------------------------------------- |
-| **RUV1200** | API route execution failed | API handler threw uncaught error in a JavaScript worker | Check API route for errors, verify request shape matches expectations |
-| **RUV1201** | No available server port   | Could not bind to port after 100 fallback attempts      | Free a port in range or change configured port                        |
-| **RUV1202** | API renderer not found     | `runtime/api-renderer.mjs` missing                      | Reinstall `ruvyxa`                                                    |
-
-### Client Bundle Errors
-
-| Code        | Title                      | Condition                                          | Fix                                                        |
-| ----------- | -------------------------- | -------------------------------------------------- | ---------------------------------------------------------- |
-| **RUV1300** | Client bundling failed     | Bundle compilation error during dev client request | Check the page file and its imports for compilation errors |
-| **RUV1303** | Client route not found     | Requested route path not in manifest               | Check route file exists and follows naming convention      |
-| **RUV1304** | Client bundle for non-page | Client bundle requested for API route              | API routes don't have client bundles; only page routes     |
-
-### Style Errors
-
-| Code        | Title                        | Condition                                                     | Fix                                               |
-| ----------- | ---------------------------- | ------------------------------------------------------------- | ------------------------------------------------- |
-| **RUV1402** | Sass compilation failed      | `grass` Sass compiler failed (syntax error, import not found) | Fix Sass syntax or ensure imported files exist    |
-| **RUV1403** | Stylesheet import unresolved | CSS `@import` or Sass `@use` has unresolvable path            | Use valid relative path or install the dependency |
-
-### SSG / ISR / Action / PPR Errors
-
-| Code        | Title                 | Condition                            | Fix                                                     |
-| ----------- | --------------------- | ------------------------------------ | ------------------------------------------------------- |
-| **RUV1500** | SSG render failed     | Static generation render threw error | Check the page component for runtime errors             |
-| **RUV1501** | Action file not found | Server action handler file missing   | Create the `action.ts` file or fix the action name      |
-| **RUV1550** | PPR render failed     | Partial pre-rendering failed         | Check for errors in static or dynamic parts of the page |
-
-### Config Validation Errors
-
-| Code        | Title                  | Condition               | Fix                                                 |
-| ----------- | ---------------------- | ----------------------- | --------------------------------------------------- |
-| **RUV1600** | Config load failed     | Config rendering error  | Check ruvyxa.config.ts syntax and runtime           |
-| **RUV1601** | Config value too small | Limit value ≤ 0         | Set positive value for body limit, rate limit, etc. |
-| **RUV1602** | Config value too large | Limit value exceeds MAX | Reduce value to within allowed bounds               |
-
-## Middleware & Plugin Diagnostics (RUV2xxx)
-
-Raised by `ruvyxa_middleware`.
-
-| Code        | Title                       | Condition                                                                                           | Fix                                                                                 |
-| ----------- | --------------------------- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| **RUV2000** | Middleware config error     | Invalid middleware configuration (bad header name, incompatible CORS settings, negative rate limit) | Fix the config value per validation error message                                   |
-| **RUV2001** | Middleware execution failed | Tower middleware layer panicked or returned error                                                   | Check custom middleware implementation, verify dependencies                         |
-| **RUV2100** | Plugin runtime error        | Plugin runtime could not start or returned invalid protocol data                                    | Check the Node/Bun runtime and plugin setup                                         |
-| **RUV2101** | Plugin hook error           | Plugin callback threw or returned an unsupported value                                              | Check the named hook and return `undefined`, `Request`, or `Response` as documented |
-| **RUV2102** | Plugin definition invalid   | `definePlugin` received an unsupported shape (bad hook, head entry, or no declared behavior)        | Fix the declaration named in the message                                            |
-
-## Official Package Diagnostics (RUV3xxx)
-
-Raised by the official state packages during adapter calls, authentication requests, and builds.
-
-| Code             | Package            | Condition                                                     | Fix                                                                  |
-| ---------------- | ------------------ | ------------------------------------------------------------- | -------------------------------------------------------------------- |
-| **RUV3001**      | `@ruvyxa/database` | Invalid model, operation, arguments, or required environment  | Correct the query/options and keep database environment vars private |
-| **RUV3002**      | `@ruvyxa/database` | Adapter has no mapped model or operation                      | Correct Prisma model mapping or implement the transport operation    |
-| **RUV3003**      | `@ruvyxa/database` | Transaction requested from an adapter without transactions    | Supply an adapter with atomic transaction support                    |
-| **RUV3100–3104** | `@ruvyxa/auth`     | Auth runtime, request, rate limit, token, or provider failure | Inspect the named provider/store and preserve atomic store semantics |
-| **RUV3105**      | `@ruvyxa/auth`     | Process-local auth store used in a production build           | Configure durable session/token and rate-limit stores                |
-| **RUV3201**      | `@ruvyxa/realtime` | Native realtime selected for an unsupported deployment        | Self-host with Node/Bun or remove the native realtime plugin         |
-
----
-
-## Diagnostic Code Ranges
-
-| Range   | Source crate        | Category                              |
-| ------- | ------------------- | ------------------------------------- |
-| RUV10xx | `ruvyxa_graph`      | Route discovery & validation          |
-| RUV11xx | `ruvyxa_dev_server` | SSR rendering                         |
-| RUV12xx | `ruvyxa_dev_server` | API & server                          |
-| RUV13xx | `ruvyxa_dev_server` | Client bundles                        |
-| RUV14xx | `ruvyxa_dev_server` | Styles                                |
-| RUV15xx | `ruvyxa_dev_server` | SSG/ISR/Actions/PPR                   |
-| RUV16xx | `ruvyxa_dev_server` | Config validation                     |
-| RUV20xx | `ruvyxa_middleware` | Middleware config & execution         |
-| RUV21xx | `ruvyxa_middleware` | Plugin bridge                         |
-| RUV30xx | `@ruvyxa/database`  | Database adapter and query validation |
-| RUV31xx | `@ruvyxa/auth`      | Authentication and store safety       |
-| RUV32xx | `@ruvyxa/realtime`  | Realtime deployment compatibility     |
-
----
-
-## Adding a new diagnostic
-
-Required fields:
-
-1. **Code**: choose next available in correct range.
-2. **Title**: concise one-liner describing the violation.
-3. **Explanation**: what the contract is and why it was violated.
-4. **Span**: file location when known (use `SourceSpan::from_path` if no line/column).
-5. **Suggested fix**: concrete, actionable instruction. Use `format!()` for dynamic values.
-
-Example:
+## SARIF Integration
 
 ```rust
-Diagnostic::new(
-    "RUV1010",
-    "Server directory in client graph",
-    format!("File '{}' is inside the server/ directory but is reachable from client code '{}'.", server_file.display(), entry),
-    SourceSpan::from_path(&entry),
-    format!("Move shared logic out of server/ to a shared module, or keep imports of '{}' only in server/API files.", server_file.display()),
-)
+pub fn diagnostics_to_sarif(
+    diagnostics: &[Diagnostic],
+    tool_name: &str,
+    tool_version: &str,
+    project_root: &Path,
+) -> serde_json::Value
 ```
 
-Add tests for the new diagnostic. If user action is needed for recovery, update `docs/guides/` with
-the error code and resolution steps.
+Produces SARIF 2.1.0:
+
+```json
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "ruvyxa",
+          "version": "0.1.0",
+          "informationUri": "https://github.com/ruvyxa/ruvyxa",
+          "rules": [
+            {
+              "id": "RUV1001",
+              "name": "RUV1001",
+              "shortDescription": { "text": "Private import" },
+              "fullDescription": { "text": "A client module imports server-only code." },
+              "defaultConfiguration": { "level": "error" },
+              "help": { "text": "Move the import behind a server boundary." }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "RUV1001",
+          "level": "error",
+          "message": { "text": "Private import: A client module imports server-only code." },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": { "uri": "app/page.tsx" },
+                "region": { "startLine": 4, "startColumn": 7 }
+              }
+            }
+          ],
+          "properties": {
+            "suggestedFix": "Move the import behind a server boundary.",
+            "affectedRoutes": [],
+            "importChain": []
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+Key behavior:
+
+- **Rules deduplicated** by `code` via `BTreeMap` — preserves insertion order, keeps first
+  occurrence.
+- **URIs project-relative** — each file path is stripped of `project_root` prefix after
+  normalization.
+- **`help` omitted** when `suggested_fix` is `None`.
+- **`region` omitted** when span lacks line/column.
+- **`properties`** carries `suggestedFix`, `affectedRoutes`, `importChain` as supplemental data.
+
+---
+
+## Error Code Catalog
+
+| Code    | Title                                                           | Crate             |
+| ------- | --------------------------------------------------------------- | ----------------- |
+| RUV1001 | App directory was not found                                     | graph             |
+| RUV1002 | Invalid dynamic route segment / Catch-all must be final segment | graph             |
+| RUV1003 | Conflicting route paths                                         | graph             |
+| RUV1004 | Page is missing a default export                                | graph, dev_server |
+| RUV1007 | Server-only module imported into client graph                   | graph             |
+| RUV1008 | Private environment variable used in client graph               | graph             |
+| RUV1009 | Client-only module imported into server/SSR graph               | graph, bundler    |
+| RUV1010 | Server directory module reached by client graph                 | graph             |
+| RUV1100 | React SSR failed                                                | dev_server        |
+| RUV1102 | SSR renderer was not found                                      | dev_server        |
+| RUV1200 | API route execution failed                                      | dev_server        |
+| RUV1201 | No available server port was found                              | dev_server        |
+| RUV1202 | API renderer was not found                                      | dev_server        |
+| RUV1300 | Client hydration bundling failed / Compile error                | dev_server        |
+| RUV1303 | Client route was not found                                      | dev_server        |
+| RUV1304 | Client bundle requested for a non-page route                    | dev_server        |
+| RUV1400 | Tailwind CSS compilation failed                                 | dev_server        |
+| RUV1401 | Tailwind CSS CLI was not found                                  | dev_server        |
+| RUV1402 | Sass compilation failed                                         | dev_server        |
+| RUV1403 | CSS import / stylesheet could not be resolved                   | dev_server        |
+| RUV1404 | CSS entry must stay inside the project root                     | dev_server        |
+| RUV1500 | SSG render failed                                               | dev_server        |
+| RUV1501 | Route action file was not found                                 | dev_server        |
+| RUV1550 | PPR render failed                                               | dev_server        |
+| RUV1702 | Worker pool script was not found                                | dev_server        |
+| RUV9999 | Sensitive compiler detail (generic fallback)                    | dev_server        |
+
+Codes are string constants (`&'static str`), not enum variants — any crate can emit any code without
+touching the diagnostics crate.
+
+---
+
+## Under the Hood
+
+### `normalized_canonical_path`
+
+```rust
+pub fn normalized_canonical_path(path: &Path) -> PathBuf
+```
+
+Wraps `std::fs::canonicalize` then strips the Windows `\\?\` verbatim prefix on `cfg(windows)`.
+Falls back to the original path when the file does not exist. Used inside SARIF serialization to
+produce paths that JavaScript runtimes (Bun, Node) can pass to `pathToFileURL`.
+
+### SARIF rule deduplication
+
+Uses `BTreeMap<&str, &Diagnostic>` keyed by `code`. Because `BTreeMap` iterates in key order, rules
+are sorted alphabetically by code in the output. The first diagnostic for each code is used as the
+rule template — subsequent diagnostics with the same code are still emitted as separate results but
+reference the same rule.
+
+### Error scope
+
+This crate owns only the type definitions and SARIF serializer. The actual error emission happens in
+domain crates (`ruvyxa_graph`, `ruvyxa_bundler`, `ruvyxa_dev_server`) which construct `Diagnostic`
+values directly via the builder pattern. There is no centralized error registry — codes are
+conventional strings.
