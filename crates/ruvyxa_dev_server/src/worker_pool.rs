@@ -593,10 +593,19 @@ impl Worker {
                 };
                 let id = response.id.clone();
                 let terminal = response.is_terminal();
+                let starts_stream = response.frame.as_deref() == Some("api-start");
                 let pending_response = reader_pending.response(&id, terminal).await;
                 let Some(pending_response) = pending_response else {
                     continue;
                 };
+
+                // A request becomes a stream the moment `api-start` is read,
+                // not when the HTTP consumer observes it. Marking it here keeps
+                // the transport-failure paths below correct even when the
+                // worker exits before the consumer task is scheduled.
+                if starts_stream {
+                    pending_response.streaming.store(true, Ordering::Release);
+                }
 
                 if pending_response.sender.send(response).await.is_err() {
                     reader_pending.remove(&id).await;
@@ -712,6 +721,9 @@ impl Worker {
 
         match response.frame.as_deref() {
             Some("api-start") => {
+                // The stdout reader already flagged this request as streaming;
+                // repeat it here so the flag holds for any caller that builds a
+                // body stream without going through that reader.
                 channel.streaming.store(true, Ordering::Release);
                 Ok(WorkerApiResponse {
                     response,
