@@ -202,6 +202,7 @@ pub fn bundle_shared_route_modules(
         context.graph_cache(),
         context.build_hooks(),
         input.target,
+        input.options.jsx_runtime,
         Some(context.incremental()),
     )?;
     let (compiled, _) = compiler::compile_graph_with_hooks_and_maps(
@@ -314,6 +315,7 @@ fn prepare_bundle_with_parts(
         graph_cache,
         build_hooks,
         input.target,
+        input.options.jsx_runtime,
         Some(incremental),
     )?;
 
@@ -960,6 +962,52 @@ mod tests {
             "expected automatic JSX runtime in output, got: {}",
             &out.code[..out.code.len().min(500)]
         );
+    }
+
+    #[test]
+    fn client_bundle_inlines_automatic_jsx_runtime() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = ruvyxa_diagnostics::normalized_canonical_path(temp.path());
+        let app = root.join("app");
+        let react = root.join("node_modules/react");
+        fs::create_dir_all(&app).unwrap();
+        fs::create_dir_all(&react).unwrap();
+
+        fs::write(
+            react.join("package.json"),
+            r#"{"exports":{".":"./index.js","./jsx-runtime":"./jsx-runtime.js"}}"#,
+        )
+        .unwrap();
+        fs::write(react.join("index.js"), "module.exports = {};").unwrap();
+        fs::write(
+            react.join("jsx-runtime.js"),
+            "module.exports = { jsx() { return 'jsxRuntimeMarker'; }, jsxs() {} };",
+        )
+        .unwrap();
+
+        // No explicit `react` import: the automatic transform injects the
+        // `react/jsx-runtime` import after the graph walk, so the resolver has
+        // to seed that edge itself or the browser receives a bare specifier.
+        let page = app.join("page.tsx");
+        fs::write(
+            &page,
+            "export default function Page() { return <main>Ready</main>; }",
+        )
+        .unwrap();
+
+        let mut input = client_input(&root, &app, page, vec![], "/");
+        input.options.jsx_runtime = JsxRuntime::Automatic;
+        input.options.source_map = false;
+        input.options.emit_chunk_manifest = false;
+        let out = bundle(input).unwrap();
+
+        assert!(
+            !out.code.contains("\"react/jsx-runtime\"")
+                && !out.code.contains("'react/jsx-runtime'"),
+            "jsx runtime leaked as a bare specifier: {}",
+            &out.code[..out.code.len().min(500)]
+        );
+        assert!(out.code.contains("jsxRuntimeMarker"));
     }
 
     #[test]

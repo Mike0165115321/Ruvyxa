@@ -47,7 +47,7 @@ use serde::{Deserialize, Deserializer};
 
 use crate::hooks::{BuildHookContext, BuildHookPipeline};
 use crate::incremental::{FreshnessStatus, IncrementalGraphCache};
-use crate::{BundleError, BundleTarget, Result};
+use crate::{BundleError, BundleTarget, JsxRuntime, Result};
 use crate::{ast, minifier};
 
 /// A resolved module: its canonical path and raw source text.
@@ -109,10 +109,16 @@ struct DependencyCacheKey {
     base_dir: Arc<str>,
     source_hash: [u8; 32],
     target: u8,
+    /// Automatic JSX injects an extra `react/jsx-runtime` edge, so the same
+    /// source resolves to a different dependency set per JSX runtime.
+    jsx_automatic: bool,
 }
 
 /// Threshold above which source files are read via memory-mapping.
 const MMAP_THRESHOLD_BYTES: u64 = 64 * 1024;
+
+/// Module the automatic JSX transform imports its factory helpers from.
+const JSX_RUNTIME_SPECIFIER: &str = "react/jsx-runtime";
 
 /// Shared resolver cache for a batch of bundle jobs.
 ///
@@ -887,10 +893,12 @@ pub fn resolve_graph_with_cache(
         cache,
         &BuildHookPipeline::empty(),
         BundleTarget::Client,
+        JsxRuntime::Automatic,
     )
 }
 
 /// Walk the import graph using a shared resolver/source cache and TypeScript build hooks.
+#[allow(clippy::too_many_arguments)]
 pub fn resolve_graph_with_hooks(
     entry_source: &str,
     entry_label: &str,
@@ -899,6 +907,7 @@ pub fn resolve_graph_with_hooks(
     cache: &ResolveGraphCache,
     build_hooks: &BuildHookPipeline,
     target: BundleTarget,
+    jsx_runtime: JsxRuntime,
 ) -> Result<Vec<ResolvedModule>> {
     resolve_graph_with_incremental(
         entry_source,
@@ -908,6 +917,7 @@ pub fn resolve_graph_with_hooks(
         cache,
         build_hooks,
         target,
+        jsx_runtime,
         None,
     )
 }
@@ -922,6 +932,7 @@ pub(crate) fn resolve_graph_with_incremental(
     cache: &ResolveGraphCache,
     build_hooks: &BuildHookPipeline,
     target: BundleTarget,
+    jsx_runtime: JsxRuntime,
     incremental: Option<&IncrementalGraphCache>,
 ) -> Result<Vec<ResolvedModule>> {
     let project_root = ruvyxa_diagnostics::normalized_canonical_path(project_root);
@@ -945,6 +956,7 @@ pub(crate) fn resolve_graph_with_incremental(
         cache,
         build_hooks,
         target,
+        jsx_runtime,
     )?;
 
     order.push(entry_key.clone());
@@ -1039,6 +1051,7 @@ pub(crate) fn resolve_graph_with_incremental(
                         cache,
                         build_hooks,
                         target,
+                        jsx_runtime,
                     )?
                 };
 
@@ -1097,6 +1110,7 @@ pub(crate) fn resolve_graph_with_incremental(
 /// Specifiers within a single module are resolved sequentially (they share
 /// the same base_dir and are typically few), but the cache lookups are
 /// contention-free thanks to DashMap's sharded design.
+#[allow(clippy::too_many_arguments)]
 fn collect_deps_cached(
     source: &str,
     base_dir: &Path,
@@ -1105,6 +1119,7 @@ fn collect_deps_cached(
     cache: &ResolveGraphCache,
     build_hooks: &BuildHookPipeline,
     target: BundleTarget,
+    jsx_runtime: JsxRuntime,
 ) -> Result<ResolvedDependencies> {
     if build_hooks.host_count() == 0 {
         let key = DependencyCacheKey {
@@ -1115,6 +1130,7 @@ fn collect_deps_cached(
                 BundleTarget::Ssr => 1,
                 BundleTarget::Edge => 2,
             },
+            jsx_automatic: matches!(jsx_runtime, JsxRuntime::Automatic),
         };
         if let Some(dependencies) = cache.dependencies.get(&key) {
             return Ok(ResolvedDependencies {
@@ -1130,6 +1146,7 @@ fn collect_deps_cached(
             cache,
             build_hooks,
             target,
+            jsx_runtime,
         )?;
         cache
             .dependencies
@@ -1145,6 +1162,7 @@ fn collect_deps_cached(
         cache,
         build_hooks,
         target,
+        jsx_runtime,
     )
 }
 
@@ -1157,8 +1175,23 @@ fn collect_deps_uncached(
     cache: &ResolveGraphCache,
     build_hooks: &BuildHookPipeline,
     target: BundleTarget,
+    jsx_runtime: JsxRuntime,
 ) -> Result<ResolvedDependencies> {
-    let specifiers = extract_specifiers(source);
+    let parsed = ast::parse_module(source);
+    let mut specifiers = parsed.import_specifiers();
+
+    // The automatic JSX transform injects `import { jsx as _jsx } from
+    // "react/jsx-runtime"` *after* this graph walk, so the specifier never
+    // appears in the source being scanned. Seed the edge here; without it the
+    // linker treats the injected import as an external package and emits a bare
+    // specifier that no browser can resolve.
+    if matches!(jsx_runtime, JsxRuntime::Automatic)
+        && parsed.has_jsx
+        && !specifiers.iter().any(|s| s == JSX_RUNTIME_SPECIFIER)
+    {
+        specifiers.push(JSX_RUNTIME_SPECIFIER.to_string());
+    }
+
     let mut dependencies = ResolvedDependencies {
         paths: Vec::with_capacity(specifiers.len()),
         aliases: BTreeMap::new(),
@@ -1257,6 +1290,7 @@ fn is_css_module_specifier(specifier: &str) -> bool {
 ///
 /// This is a lightweight line-oriented scanner — not a full AST parse.  It
 /// handles the common patterns used inside Ruvyxa projects.
+#[cfg(test)]
 fn extract_specifiers(source: &str) -> Vec<String> {
     ast::parse_module(source).import_specifiers()
 }
@@ -1458,6 +1492,7 @@ mod tests {
             &ResolveGraphCache::new(),
             &BuildHookPipeline::empty(),
             BundleTarget::Client,
+            JsxRuntime::Automatic,
         )
         .unwrap();
 
@@ -1484,6 +1519,7 @@ mod tests {
             &ResolveGraphCache::new(),
             &BuildHookPipeline::empty(),
             BundleTarget::Client,
+            JsxRuntime::Automatic,
         )
         .unwrap();
 
