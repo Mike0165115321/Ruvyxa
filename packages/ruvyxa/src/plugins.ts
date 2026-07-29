@@ -744,6 +744,8 @@ export interface SitemapOptions {
   siteUrl: string
   /** Route paths or trailing-`*` patterns excluded from the sitemap. */
   exclude?: string[]
+  /** Concrete root-relative paths that are not present in the route manifest. */
+  additionalPaths?: string[]
   /** Also write a `robots.txt` referencing the sitemap. @default false */
   robots?: boolean
 }
@@ -756,19 +758,40 @@ export interface SitemapOptions {
 export function sitemap(options: SitemapOptions): RuvyxaPlugin {
   const siteUrl = normalizeSiteUrl(options?.siteUrl, 'sitemap')
   const exclude = options.exclude ?? []
+  exclude.forEach((pattern, index) => validateRoutePattern(pattern, `sitemap.exclude[${index}]`))
+  const additionalPaths = options.additionalPaths ?? []
+  additionalPaths.forEach((routePath, index) => {
+    if (!isConcreteApplicationPath(routePath)) {
+      throw new TypeError(`sitemap.additionalPaths[${index}] must be a concrete /path`)
+    }
+  })
 
   return definePlugin({
     name: 'ruvyxa:sitemap',
     register({ build }) {
       build.onComplete((context) => {
-        const paths = manifestPagePaths(context).filter(
+        const paths = uniqueStrings([...manifestPagePaths(context), ...additionalPaths]).filter(
           (routePath) => !exclude.some((pattern) => matchSource(pattern, routePath) !== null),
         )
-        const entries = paths
-          .map((routePath) => `  <url><loc>${escapeXml(siteUrl + routePath)}</loc></url>`)
-          .join('\n')
-        const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries}\n</urlset>\n`
-        writePublicAsset(context, 'sitemap.xml', xml)
+        const documents = sitemapDocuments(paths, siteUrl)
+        if (documents.length === 1) {
+          writePublicAsset(context, 'sitemap.xml', documents[0])
+        } else {
+          documents.forEach((document, index) => {
+            writePublicAsset(context, `sitemap-${index}.xml`, document)
+          })
+          const entries = documents
+            .map(
+              (_, index) =>
+                `  <sitemap><loc>${escapeXml(`${siteUrl}/sitemap-${index}.xml`)}</loc></sitemap>`,
+            )
+            .join('\n')
+          writePublicAsset(
+            context,
+            'sitemap.xml',
+            `<?xml version="1.0" encoding="UTF-8"?>\n<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries}\n</sitemapindex>\n`,
+          )
+        }
         if (options.robots === true) {
           writePublicAsset(
             context,
@@ -783,14 +806,15 @@ export function sitemap(options: SitemapOptions): RuvyxaPlugin {
 
 export interface RobotsRule {
   /** @default "*" */
-  userAgent?: string
-  allow?: string[]
-  disallow?: string[]
+  userAgent?: string | string[]
+  allow?: string | string[]
+  disallow?: string | string[]
+  crawlDelay?: number
 }
 
 export interface RobotsOptions {
   /** Access rules per user agent. Defaults to allowing everything. */
-  rules?: RobotsRule[]
+  rules?: RobotsRule | RobotsRule[]
   /** Separate OpenAI search discovery from model-training access. */
   openAi?: {
     /** Controls OAI-SearchBot. */
@@ -799,12 +823,21 @@ export interface RobotsOptions {
     training?: boolean
   }
   /** Absolute sitemap URL appended as a `Sitemap:` line. */
-  sitemap?: string
+  sitemap?: string | string[]
+  /** Preferred absolute site origin written as a `Host:` record. */
+  host?: string
 }
 
 /** Generates `robots.txt` into the build's public asset directory. */
 export function robots(options: RobotsOptions = {}): RuvyxaPlugin {
-  const rules = options.rules?.length ? [...options.rules] : [{ userAgent: '*', allow: ['/'] }]
+  const configuredRules = options.rules
+    ? Array.isArray(options.rules)
+      ? options.rules
+      : [options.rules]
+    : []
+  const rules: RobotsRule[] = configuredRules.length
+    ? configuredRules.map((rule) => ({ ...rule }))
+    : [{ userAgent: '*', allow: ['/'] }]
   for (const [field, userAgent] of [
     ['search', 'OAI-SearchBot'],
     ['training', 'GPTBot'],
@@ -814,7 +847,13 @@ export function robots(options: RobotsOptions = {}): RuvyxaPlugin {
       throw new TypeError(`robots: openAi.${field} must be a boolean`)
     }
     if (access === undefined) continue
-    if (rules.some((rule) => (rule.userAgent ?? '*').toLowerCase() === userAgent.toLowerCase())) {
+    if (
+      rules.some((rule) =>
+        stringList(rule.userAgent ?? '*', 'robots.rules.userAgent').some(
+          (agent) => agent.toLowerCase() === userAgent.toLowerCase(),
+        ),
+      )
+    ) {
       throw new TypeError(`robots: ${userAgent} is configured by both rules and openAi.${field}`)
     }
     rules.push({ userAgent, ...(access ? { allow: ['/'] } : { disallow: ['/'] }) })
@@ -824,14 +863,35 @@ export function robots(options: RobotsOptions = {}): RuvyxaPlugin {
     name: 'ruvyxa:robots',
     register({ build }) {
       build.onComplete((context) => {
-        const blocks = rules.map((rule) => {
-          const lines = [`User-agent: ${rule.userAgent ?? '*'}`]
-          for (const value of rule.allow ?? []) lines.push(`Allow: ${value}`)
-          for (const value of rule.disallow ?? []) lines.push(`Disallow: ${value}`)
-          return lines.join('\n')
+        const blocks = rules.flatMap((rule, ruleIndex) => {
+          const agents = stringList(rule.userAgent ?? '*', `robots.rules[${ruleIndex}].userAgent`)
+          const allow = stringList(rule.allow, `robots.rules[${ruleIndex}].allow`)
+          const disallow = stringList(rule.disallow, `robots.rules[${ruleIndex}].disallow`)
+          for (const agent of agents) validateRobotsAgent(agent, ruleIndex)
+          for (const value of [...allow, ...disallow]) validateRobotsPath(value, ruleIndex)
+          if (
+            rule.crawlDelay !== undefined &&
+            (!Number.isSafeInteger(rule.crawlDelay) || rule.crawlDelay < 0)
+          ) {
+            throw new TypeError(
+              `robots.rules[${ruleIndex}].crawlDelay must be a non-negative integer`,
+            )
+          }
+          return agents.map((agent) => {
+            const lines = [`User-agent: ${agent}`]
+            for (const value of allow) lines.push(`Allow: ${value}`)
+            for (const value of disallow) lines.push(`Disallow: ${value}`)
+            if (rule.crawlDelay !== undefined) lines.push(`Crawl-delay: ${rule.crawlDelay}`)
+            return lines.join('\n')
+          })
         })
         let body = blocks.join('\n\n') + '\n'
-        if (options.sitemap) body += `\nSitemap: ${options.sitemap}\n`
+        const sitemaps = stringList(options.sitemap, 'robots.sitemap')
+        for (const sitemapUrl of sitemaps) {
+          validateAbsoluteHttpUrl(sitemapUrl, 'robots.sitemap')
+          body += `\nSitemap: ${sitemapUrl}\n`
+        }
+        if (options.host) body += `\nHost: ${normalizeSiteUrl(options.host, 'robots.host')}\n`
         writePublicAsset(context, 'robots.txt', body)
       })
     },
@@ -2128,7 +2188,101 @@ function normalizeSiteUrl(value: unknown, plugin: string): string {
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new TypeError(`${plugin}: siteUrl must be an absolute http(s) URL`)
   }
+  if (
+    parsed.username ||
+    parsed.password ||
+    (parsed.pathname !== '/' && parsed.pathname !== '') ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    throw new TypeError(`${plugin}: siteUrl must contain only an http(s) origin`)
+  }
   return parsed.href.replace(/\/+$/, '')
+}
+
+const SITEMAP_MAX_URLS = 50_000
+const SITEMAP_MAX_BYTES = 50 * 1024 * 1024
+const SITEMAP_HEADER =
+  '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+const SITEMAP_FOOTER = '</urlset>\n'
+
+function sitemapDocuments(paths: string[], siteUrl: string): string[] {
+  const documents: string[] = []
+  let entries: string[] = []
+  let bytes = Buffer.byteLength(SITEMAP_HEADER + SITEMAP_FOOTER)
+  for (const routePath of paths) {
+    const encodedPath = routePath.split('/').map(encodeURIComponent).join('/')
+    const location = siteUrl + encodedPath
+    if ([...location].length > 2_048) {
+      throw new TypeError(`sitemap: URL exceeds 2048 characters: ${location}`)
+    }
+    const entry = `  <url><loc>${escapeXml(location)}</loc></url>\n`
+    const entryBytes = Buffer.byteLength(entry)
+    if (
+      entries.length > 0 &&
+      (entries.length === SITEMAP_MAX_URLS || bytes + entryBytes > SITEMAP_MAX_BYTES)
+    ) {
+      documents.push(SITEMAP_HEADER + entries.join('') + SITEMAP_FOOTER)
+      entries = []
+      bytes = Buffer.byteLength(SITEMAP_HEADER + SITEMAP_FOOTER)
+    }
+    if (bytes + entryBytes > SITEMAP_MAX_BYTES) {
+      throw new TypeError(`sitemap: ${routePath} cannot fit within the 50 MB sitemap limit`)
+    }
+    entries.push(entry)
+    bytes += entryBytes
+  }
+  documents.push(SITEMAP_HEADER + entries.join('') + SITEMAP_FOOTER)
+  return documents
+}
+
+function isConcreteApplicationPath(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.startsWith('/') &&
+    !/[\\?#\[\]*]|[\u0000-\u001f\u007f]/.test(value) &&
+    !value.split('/').some((segment) => segment === '.' || segment === '..')
+  )
+}
+
+function stringList(value: string | string[] | undefined, field: string): string[] {
+  if (value === undefined) return []
+  const values = Array.isArray(value) ? value : [value]
+  if (values.some((entry) => typeof entry !== 'string' || entry === '')) {
+    throw new TypeError(`${field} must be a non-empty string or string array`)
+  }
+  return values
+}
+
+function validateRobotsAgent(value: string, ruleIndex: number): void {
+  if (value !== '*' && !/^[A-Za-z_-]+$/.test(value)) {
+    throw new TypeError(`robots.rules[${ruleIndex}].userAgent must be "*" or a crawler token`)
+  }
+}
+
+function validateRobotsPath(value: string, ruleIndex: number): void {
+  if (!value.startsWith('/') || /[\r\n\0]/.test(value)) {
+    throw new TypeError(
+      `robots.rules[${ruleIndex}] paths must start with "/" and contain no controls`,
+    )
+  }
+}
+
+function validateAbsoluteHttpUrl(value: string, field: string): void {
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    throw new TypeError(`${field} must contain absolute http(s) URLs`)
+  }
+  if (
+    (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') ||
+    parsed.username ||
+    parsed.password ||
+    /[\r\n\0]/.test(value)
+  ) {
+    throw new TypeError(`${field} must contain absolute http(s) URLs`)
+  }
 }
 
 function normalizeRoutes(routes: string[] | undefined, plugin: string): string[] | undefined {

@@ -611,10 +611,12 @@ async fn serve_public_file(state: &AppState, path: &str, req: &Request) -> Optio
 3. Read file + compute blake3 ETag.
 4. Conditional GET: if `If-None-Match` matches ETag → return `304 Not Modified`.
 5. Determine MIME type from extension.
-6. Return with `cache-control: public, max-age=31536000, immutable` + ETag.
+6. Return with `cache-control: public, max-age=3600, must-revalidate` + ETag. Only content-hashed
+   client bundles receive the one-year immutable policy.
 
 MIME types: `.js`→text/javascript, `.css`→text/css, `.html`→text/html, `.json`→application/json,
-`.svg`→image/svg+xml, `.png`/`.jpg`/`.jpeg`/`.webp`/`.ico`→image/*, `.woff2`→font/woff2, etc.
+`.txt`→text/plain UTF-8, `.xml`→application/xml UTF-8, `.svg`→image/svg+xml,
+`.png`/`.jpg`/`.jpeg`/`.webp`/`.ico`→image/*, `.woff2`→font/woff2, etc.
 
 ---
 

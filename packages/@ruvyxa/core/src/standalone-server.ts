@@ -101,7 +101,7 @@ const MIME_TYPES = {
   '.gif': 'image/gif',
   '.ico': 'image/x-icon',
   '.txt': 'text/plain; charset=utf-8',
-  '.xml': 'application/xml',
+  '.xml': 'application/xml; charset=utf-8',
   '.woff': 'font/woff',
   '.woff2': 'font/woff2',
   '.wasm': 'application/wasm',

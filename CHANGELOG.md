@@ -24,8 +24,12 @@
   URLs the build prerendered, instead of leaving both to opt-in plugins. A file of the same name in
   `public/` always wins.
 - Added the `site` configuration block: `url`, `sitemap`, and `robots`. When `url` is absent the
-  build reads the `RUVYXA_SITE_URL` environment variable. A sitemap needs absolute URLs, so without
-  either the build warns and writes only `robots.txt`.
+  build resolves a production-only origin from `RUVYXA_SITE_URL`, Vercel, or Netlify. Structured
+  options now support sitemap exclusions/additional paths and Next-style robots rule groups.
+- Sitemap output now validates and escapes absolute URLs and automatically shards at the protocol's
+  50,000 URL or 50 MB limits. Exact application routes can own `/sitemap.xml` or `/robots.txt`
+  without being shadowed in production, and both Rust and standalone servers return the correct
+  UTF-8 XML/plain-text content types.
 - **Fixed `/robots.txt` and `/sitemap.xml` being answered with an HTML page.** Those exact paths now
   return 404 when no file backs them, rather than letting a bare dynamic route such as `/[lang]`
   capture them. `dev`, `start`, and the serverless handler apply the same rule.

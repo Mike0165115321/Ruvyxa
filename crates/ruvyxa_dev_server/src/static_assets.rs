@@ -342,6 +342,11 @@ pub(crate) fn content_type_for(path: &Path) -> &'static str {
         Some("js" | "mjs") => "text/javascript; charset=utf-8",
         Some("json") => "application/json; charset=utf-8",
         Some("webmanifest") => "application/manifest+json; charset=utf-8",
+        // RFC 9309 requires robots.txt to use text/plain. Sitemap XML is
+        // likewise served as XML instead of the binary fallback, while the
+        // explicit UTF-8 charset matches the generated declarations.
+        Some("txt") => "text/plain; charset=utf-8",
+        Some("xml") => "application/xml; charset=utf-8",
         Some("svg") => "image/svg+xml",
         Some("png") => "image/png",
         Some("jpg" | "jpeg") => "image/jpeg",

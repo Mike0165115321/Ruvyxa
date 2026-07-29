@@ -1692,7 +1692,8 @@ async fn build_with_output(args: BuildArgs, show_summary: bool) -> anyhow::Resul
     // so a file the project ships still wins.
     let prerendered_paths: Vec<String> =
         prerendered.iter().map(|route| route.path.clone()).collect();
-    let site_url = resolve_site_url(config.site.url.as_deref(), |name| std::env::var(name).ok());
+    let site_url = resolve_site_url(config.site.url.as_deref(), |name| std::env::var(name).ok())
+        .map_err(anyhow::Error::msg)?;
     let discovery = write_discovery_files(
         &manifest,
         &prerendered_paths,
@@ -1708,7 +1709,7 @@ async fn build_with_output(args: BuildArgs, show_summary: bool) -> anyhow::Resul
     })?;
     if discovery.sitemap_needs_site_url {
         warn!(
-            "no site URL is configured, so sitemap.xml was not generated. Set `site.url` in ruvyxa.config.ts or the RUVYXA_SITE_URL environment variable."
+            "no production site URL is configured, so sitemap.xml was not generated. Set `site.url`, RUVYXA_SITE_URL, or a supported production host URL environment variable."
         );
     }
 

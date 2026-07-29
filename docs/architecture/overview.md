@@ -115,6 +115,7 @@ Two enforcement levels: graph-level (source scan in `ruvyxa_graph::validate_app`
 - [Compilation Pipeline](bundler.md) — `ruvyxa_bundler` resolver, compiler, linker, minifier
 - [Dev Server](dev-server.md) — `ruvyxa_dev_server` Axum server, router, render cache, HMR, styles
 - [CLI & Build Pipeline](cli.md) — `ruvyxa_cli` commands, config, build orchestration
+- [Crawler Discovery](site-discovery.md) — sitemap/robots ownership, generation, and serving
 - [Middleware](middleware.md) — built-in Tower stack and plugin bridge
 - [Plugins](../guides/en/plugin.md) — current socket registry, lifecycle, ordering, and host
   boundaries

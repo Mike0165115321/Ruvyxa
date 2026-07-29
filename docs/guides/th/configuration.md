@@ -149,27 +149,49 @@ alias และจะใช้ Node รัน JavaScript สำหรับง�
 
 ข้อมูลตัวตนของเว็บ ใช้สร้างไฟล์ที่ crawler ขอก่อนอย่างอื่น
 
-| Field     | Default | คำอธิบาย                                           |
-| --------- | ------- | -------------------------------------------------- |
-| `url`     | —       | origin เต็ม เช่น `https://ruvyxa.dev`              |
-| `sitemap` | `true`  | สร้าง `sitemap.xml` (ต้องมี `url` ที่ resolve ได้) |
-| `robots`  | `true`  | สร้าง `robots.txt`                                 |
+| Field     | Default | คำอธิบาย                                                      |
+| --------- | ------- | ------------------------------------------------------------- |
+| `url`     | —       | origin เต็ม เช่น `https://ruvyxa.dev`                         |
+| `sitemap` | `true`  | boolean หรือ object สำหรับสร้างและปรับ `sitemap.xml`          |
+| `robots`  | `true`  | boolean หรือ object สำหรับสร้าง `robots.txt` และกฎของ crawler |
 
-`ruvyxa build` เขียน `robots.txt` และ `sitemap.xml` จาก route manifest ลงรายการเฉพาะ page route แบบ
-static — pattern อย่าง `/blog/[slug]` ไม่ใช่ URL และ API route ไม่ใช่หน้า
+`ruvyxa build` เขียน `robots.txt` และ `sitemap.xml` จาก route manifest รวม path จริงที่ prerender
+ได้ โดยไม่ใส่ API route และ pattern ที่ยังไม่ resolve เช่น `/blog/[slug]` ไฟล์ sitemap ใช้ UTF-8,
+absolute URL ที่ escape ถูกต้อง และแยกเป็น sitemap index กับไฟล์ย่อยอัตโนมัติก่อนชนเพดาน 50,000 URL
+หรือ 50 MB
 
-ไฟล์ชื่อเดียวกันใน `public/` ชนะเสมอ ถ้าต้องการเนื้อหาที่ generator เขียนให้ไม่ได้ก็วางไฟล์เอง
+ไฟล์ชื่อเดียวกันใน `public/` จะปิด core generator ของ path นั้น เช่นเดียวกับ route แบบเจาะจง
+`app/sitemap.xml/route.ts` หรือ `app/robots.txt/route.ts` จึงสร้างผลลัพธ์แบบ programmatic ได้ ส่วน
+first-party plugin ที่ตั้งใจใช้จะทำงานภายหลังและสามารถแทน asset ที่ plugin นั้นเป็นเจ้าของได้
 
-ถ้าไม่ตั้ง `url` Ruvyxa อ่าน environment variable `RUVYXA_SITE_URL` — ตัวเดียวที่ framework
-เป็นเจ้าของ deploy pipeline export ครั้งเดียวจบ framework ไม่ต้องตามว่าแต่ละ host เรียก URL
-ตัวเองว่าอะไร ใส่แค่ hostname ได้ ระบบเติม scheme `https` ให้ sitemap ต้องใช้ URL เต็ม
-ถ้าหาไม่เจอทั้งสองทาง build จะเตือนแล้วเขียนแค่ `robots.txt`
+ถ้าไม่ตั้ง `url` ระบบลอง `RUVYXA_SITE_URL` แล้วตามด้วย production URL ของ Vercel และ Netlify
+โดยไม่ใช้ Vercel preview URL เป็น canonical ใส่แค่ hostname ได้ ระบบเติม `https` ให้ แต่จะปฏิเสธ
+credentials, path, query และ fragment ถ้าหา production origin ไม่เจอ build จะเตือนแล้วเขียนแค่
+`robots.txt`
 
 ```ts
 export default config({
-  site: { url: 'https://ruvyxa.dev' },
+  site: {
+    url: 'https://ruvyxa.dev',
+    sitemap: {
+      exclude: ['/admin/*', '/drafts/*'],
+      additionalPaths: ['/products/limited-release'],
+    },
+    robots: {
+      rules: [
+        { userAgent: '*', allow: '/', disallow: ['/admin/', '/api/'] },
+        { userAgent: 'GPTBot', disallow: '/' },
+      ],
+      host: 'https://ruvyxa.dev',
+    },
+  },
 })
 ```
+
+`exclude` รองรับ path ตรงตัวหรือ prefix ที่ลงท้าย `*` ส่วน `additionalPaths` ต้องเป็น concrete path
+ที่ขึ้นต้นด้วย `/` ฟิลด์ `userAgent`, `allow` และ `disallow` รับ string หรือ string array และมี
+`crawlDelay` ได้ ส่วน `sitemap` ใน robots รับ absolute URL เดียวหรือหลายค่า `meta.noindex` ของแต่ละ
+route แยกจากตัว generator ดังนั้นให้ใส่ route นั้นใน `exclude` ด้วยเมื่อไม่ต้องการให้ติด sitemap
 
 ### debug
 

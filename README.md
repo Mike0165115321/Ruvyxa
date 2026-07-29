@@ -148,7 +148,8 @@
   `fetchPriority`) and `<Picture>` for art-direction with multi-source support.
 - **SEO, GEO, and AEO primitives** — `<Seo>` with typed canonical, robots, Open Graph, Twitter Card,
   Article/Breadcrumb JSON-LD, plus a visible `<Answer>` primitive with citations and Question/Answer
-  microdata.
+  microdata. Production builds also emit standards-compliant, automatically sharded `sitemap.xml`
+  and configurable `robots.txt`, while public files or exact routes can take ownership.
 - **Client loader hook** — `useRuvyxaLoader` loads client-side data and returns
   `{ data, loading, error, refetch }` with built-in race-condition handling and mount-safety checks.
   See the [client loader guide](docs/guides/en/data-loading-and-cache.md#client-side-data-loading).

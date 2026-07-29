@@ -79,22 +79,49 @@ export interface RuvyxaConfig {
  * Site identity used by the crawler discovery files the build emits.
  *
  * `robots.txt` and `sitemap.xml` are generated from the route manifest during
- * `ruvyxa build`. A file of the same name in `public/` always wins, so shipping
- * your own is still the way to say something the generator cannot.
+ * `ruvyxa build`. A file of the same name in `public/`, or an exact application
+ * route, suppresses the core generator for that path.
  */
 export interface SiteConfig {
   /**
    * Absolute origin of the deployed site, e.g. `https://ruvyxa.dev`.
    *
-   * Falls back to `RUVYXA_SITE_URL`, then to the URL the host exports
-   * (`VERCEL_PROJECT_PRODUCTION_URL`, `VERCEL_URL`, Netlify's `URL`). A sitemap
-   * needs absolute URLs, so it is skipped when none of these resolves.
+   * Falls back to `RUVYXA_SITE_URL`, then to the production URL exported by
+   * Vercel or Netlify. Preview-only deployment URLs are never selected as a
+   * canonical origin. A bare hostname is normalized to `https`.
    */
   url?: string
-  /** Emit `sitemap.xml`. Requires a resolvable `url`. @default true */
-  sitemap?: boolean
-  /** Emit `robots.txt`. @default true */
-  robots?: boolean
+  /** Emit the route-derived sitemap or customize its path set. @default true */
+  sitemap?: boolean | SiteSitemapConfig
+  /** Emit `robots.txt` or provide a crawler policy. @default true */
+  robots?: boolean | SiteRobotsConfig
+}
+
+/** Production controls for Ruvyxa's route-derived sitemap. */
+export interface SiteSitemapConfig {
+  /** Exact paths or trailing-`*` prefixes omitted from the sitemap. */
+  exclude?: string[]
+  /** Concrete dynamic URLs that route discovery or prerendering cannot infer. */
+  additionalPaths?: string[]
+}
+
+/** One robots.txt rule group. String arrays follow Next.js metadata semantics. */
+export interface SiteRobotsRule {
+  /** Crawler product token or tokens. @default "*" */
+  userAgent?: string | string[]
+  allow?: string | string[]
+  disallow?: string | string[]
+  crawlDelay?: number
+}
+
+/** RFC 9309 crawler rules plus widely supported sitemap and host records. */
+export interface SiteRobotsConfig {
+  /** One rule or multiple rule groups. Defaults to allowing all crawlers. */
+  rules?: SiteRobotsRule | SiteRobotsRule[]
+  /** Absolute sitemap URL or URLs. Defaults to the generated root sitemap. */
+  sitemap?: string | string[]
+  /** Preferred absolute site origin written as a `Host:` record. */
+  host?: string
 }
 
 export interface ImageConfig {

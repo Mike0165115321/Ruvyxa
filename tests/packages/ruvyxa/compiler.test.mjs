@@ -1668,6 +1668,53 @@ export const marker = 'reached'
     })
   })
 
+  it('serializes structured production sitemap and robots options', async () => {
+    await withFixture(async ({ root }) => {
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `export default {
+          site: {
+            url: 'https://ruvyxa.dev',
+            sitemap: {
+              exclude: ['/admin/*', '/drafts/*'],
+              additionalPaths: ['/products/ชาไทย'],
+            },
+            robots: {
+              rules: [
+                { userAgent: ['Googlebot', 'Bingbot'], allow: '/', disallow: ['/admin/'], crawlDelay: 5 },
+                { userAgent: 'GPTBot', disallow: '/' },
+              ],
+              sitemap: ['https://ruvyxa.dev/sitemap.xml', 'https://ruvyxa.dev/news.xml'],
+              host: 'https://ruvyxa.dev',
+            },
+          },
+        }`,
+      )
+
+      const config = await runJson(configRenderer, [root], {})
+      assert.deepEqual(config.config.site, {
+        url: 'https://ruvyxa.dev',
+        sitemap: {
+          exclude: ['/admin/*', '/drafts/*'],
+          additionalPaths: ['/products/ชาไทย'],
+        },
+        robots: {
+          rules: [
+            {
+              userAgent: ['Googlebot', 'Bingbot'],
+              allow: '/',
+              disallow: ['/admin/'],
+              crawlDelay: 5,
+            },
+            { userAgent: 'GPTBot', disallow: '/' },
+          ],
+          sitemap: ['https://ruvyxa.dev/sitemap.xml', 'https://ruvyxa.dev/news.xml'],
+          host: 'https://ruvyxa.dev',
+        },
+      })
+    })
+  })
+
   it('rejects an unknown key inside the site block', async () => {
     await withFixture(async ({ root }) => {
       await writeFile(
@@ -1679,6 +1726,34 @@ export const marker = 'reached'
       assert.equal(failed.exitCode, 1)
       assert.equal(failed.parsed.ok, false)
       assert.match(failed.parsed.message, /unknown config\.site field: siteUrl/)
+    })
+  })
+
+  it('rejects invalid nested crawler discovery configuration', async () => {
+    await withFixture(async ({ root }) => {
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `export default { site: { sitemap: { excludes: ['/private'] } } }`,
+      )
+      const unknown = await runJsonResult(configRenderer, [root], {})
+      assert.equal(unknown.exitCode, 1)
+      assert.match(unknown.parsed.message, /unknown config\.site\.sitemap field: excludes/)
+
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `export default { site: { robots: { rules: { userAgent: '*', crawlDelay: -1 } } } }`,
+      )
+      const invalidDelay = await runJsonResult(configRenderer, [root], {})
+      assert.equal(invalidDelay.exitCode, 1)
+      assert.match(invalidDelay.parsed.message, /crawlDelay must be a non-negative safe integer/)
+
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `export default { site: { robots: { sitemap: [42] } } }`,
+      )
+      const invalidSitemap = await runJsonResult(configRenderer, [root], {})
+      assert.equal(invalidSitemap.exitCode, 1)
+      assert.match(invalidSitemap.parsed.message, /robots\.sitemap must be string or string\[\]/)
     })
   })
 

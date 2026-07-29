@@ -478,7 +478,15 @@ struct PrerenderArtifactCache {
 Cache validation: version==1, dependency_hash match, render_context_hash match, all file
 fingerprints match. On hit → hardlink cached HTML to output. On miss → render + write to cache.
 
-### Phase 10: Build metadata
+### Phase 10: Crawler discovery files
+
+After prerendering, the build combines static page routes, concrete prerendered paths, and
+configured `site.sitemap.additionalPaths`. It validates the production origin, applies exclusions,
+escapes URLs, and writes protocol-limited sitemap shards plus `robots.txt` into staged assets.
+Project-owned public files and exact application routes suppress core generation for their path. See
+[Crawler Discovery](site-discovery.md) for ownership and serving contracts.
+
+### Phase 11: Build metadata
 
 ```rust
 let build_info = BuildInfo {
@@ -496,7 +504,7 @@ let build_info = BuildInfo {
 write_json(staging.join("build.json"), &build_info);
 ```
 
-### Phase 11: Atomic commit
+### Phase 12: Atomic commit
 
 ```rust
 commit_staged_build_outputs(&staging, &out_dir)?;
@@ -506,7 +514,7 @@ commit_staged_build_outputs(&staging, &out_dir)?;
 // 3. Remove old (failure → restore from old)
 ```
 
-### Phase 12: Print report
+### Phase 13: Print report
 
 ```rust
 print_build_report(&build_info, &styles, elapsed);

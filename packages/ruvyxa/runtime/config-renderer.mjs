@@ -124,6 +124,16 @@ async function sanitizeConfig(config) {
   ])
   assertKnownKeys(config.cache, 'config.cache', ['routes', 'css', 'dir'])
   assertKnownKeys(config.site, 'config.site', ['url', 'sitemap', 'robots'])
+  assertKnownKeys(config.site?.sitemap, 'config.site.sitemap', ['exclude', 'additionalPaths'])
+  assertKnownKeys(config.site?.robots, 'config.site.robots', ['rules', 'sitemap', 'host'])
+  for (const [index, rule] of siteRobotsRules(config.site?.robots?.rules).entries()) {
+    assertKnownKeys(rule, `config.site.robots.rules[${index}]`, [
+      'userAgent',
+      'allow',
+      'disallow',
+      'crawlDelay',
+    ])
+  }
   assertKnownKeys(config.render, 'config.render', ['strategy', 'revalidate'])
   assertKnownKeys(config.middleware, 'config.middleware', ['builtin', 'workers', 'timeoutMs'])
   assertKnownKeys(config.middleware?.builtin, 'config.middleware.builtin', [
@@ -205,11 +215,7 @@ async function sanitizeConfig(config) {
       css: booleanValue(config.cache?.css),
       dir: stringValue(config.cache?.dir),
     }),
-    site: objectValue(config.site, {
-      url: stringValue(config.site?.url),
-      sitemap: booleanValue(config.site?.sitemap),
-      robots: booleanValue(config.site?.robots),
-    }),
+    site: siteValue(config.site),
     middleware: safeJsonValue(config.middleware),
     adapter: await adapterOutput(config.adapter, projectRoot, config.outDir),
     adapterOptions: safeJsonValue(config.adapterOptions),
@@ -239,7 +245,6 @@ function assertConfigValueShape(config) {
       prerenderCache: 'boolean',
     },
     render: { strategy: 'string', revalidate: 'number' },
-    site: { url: 'string', sitemap: 'boolean', robots: 'boolean' },
     debug: { overlay: 'boolean', traces: 'boolean' },
     image: {
       optimize: 'boolean',
@@ -265,6 +270,95 @@ function assertConfigValueShape(config) {
     adapterOptions: 'object',
     plugins: 'array',
   })
+  assertSiteShape(config.site)
+}
+
+function assertSiteShape(site) {
+  if (site === undefined) return
+  if (!isObject(site)) throw new Error('RUV1602 config.site must be an object.')
+  if (site.url !== undefined && typeof site.url !== 'string') {
+    throw new Error('RUV1602 config.site.url must be string.')
+  }
+  if (site.sitemap !== undefined) {
+    if (typeof site.sitemap !== 'boolean' && !isObject(site.sitemap)) {
+      throw new Error('RUV1602 config.site.sitemap must be boolean or object.')
+    }
+    if (isObject(site.sitemap)) {
+      assertStringArray(site.sitemap.exclude, 'config.site.sitemap.exclude')
+      assertStringArray(site.sitemap.additionalPaths, 'config.site.sitemap.additionalPaths')
+    }
+  }
+  if (site.robots !== undefined) {
+    if (typeof site.robots !== 'boolean' && !isObject(site.robots)) {
+      throw new Error('RUV1602 config.site.robots must be boolean or object.')
+    }
+    if (isObject(site.robots)) {
+      assertStringOrArray(site.robots.sitemap, 'config.site.robots.sitemap')
+      if (site.robots.host !== undefined && typeof site.robots.host !== 'string') {
+        throw new Error('RUV1602 config.site.robots.host must be string.')
+      }
+      const rules = siteRobotsRules(site.robots.rules)
+      if (
+        site.robots.rules !== undefined &&
+        !isObject(site.robots.rules) &&
+        !Array.isArray(site.robots.rules)
+      ) {
+        throw new Error('RUV1602 config.site.robots.rules must be object or array.')
+      }
+      for (const [index, rule] of rules.entries()) {
+        if (!isObject(rule)) {
+          throw new Error(`RUV1602 config.site.robots.rules[${index}] must be an object.`)
+        }
+        assertStringOrArray(rule.userAgent, `config.site.robots.rules[${index}].userAgent`)
+        assertStringOrArray(rule.allow, `config.site.robots.rules[${index}].allow`)
+        assertStringOrArray(rule.disallow, `config.site.robots.rules[${index}].disallow`)
+        if (
+          rule.crawlDelay !== undefined &&
+          (!Number.isSafeInteger(rule.crawlDelay) || rule.crawlDelay < 0)
+        ) {
+          throw new Error(
+            `RUV1602 config.site.robots.rules[${index}].crawlDelay must be a non-negative safe integer.`,
+          )
+        }
+      }
+    }
+  }
+}
+
+function assertStringArray(value, field) {
+  if (value === undefined) return
+  if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) {
+    throw new Error(`RUV1602 ${field} must be string[].`)
+  }
+}
+
+function assertStringOrArray(value, field) {
+  if (value === undefined) return
+  if (
+    typeof value !== 'string' &&
+    (!Array.isArray(value) || !value.every((item) => typeof item === 'string'))
+  ) {
+    throw new Error(`RUV1602 ${field} must be string or string[].`)
+  }
+}
+
+function siteRobotsRules(value) {
+  if (value === undefined) return []
+  return Array.isArray(value) ? value : [value]
+}
+
+function siteValue(site) {
+  if (!isObject(site)) return undefined
+  return objectValue(site, {
+    url: stringValue(site.url),
+    sitemap: siteSettingValue(site.sitemap),
+    robots: siteSettingValue(site.robots),
+  })
+}
+
+function siteSettingValue(value) {
+  if (typeof value === 'boolean') return value
+  return isObject(value) ? safeJsonValue(value) : undefined
 }
 
 function assertShape(value, field, shape) {

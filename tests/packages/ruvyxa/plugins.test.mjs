@@ -384,6 +384,30 @@ describe('sitemap()', () => {
     assert.match(robotsBody, /Sitemap: https:\/\/example\.com\/sitemap\.xml/)
   })
 
+  it('encodes URLs, includes additional paths, and shards at the protocol URL limit', async () => {
+    const routes = Array.from({ length: 50_001 }, (_, index) => ({
+      path: `/catalog/${index}`,
+      kind: 'page',
+    }))
+    routes.push({ path: '/ชาไทย & coffee', kind: 'page' })
+    const plugin = sitemap({
+      siteUrl: 'https://example.com',
+      additionalPaths: ['/limited edition'],
+    })
+    const { buildComplete } = register(plugin)
+    const context = tempBuildContext({ routes })
+    await buildComplete[0](context)
+
+    const index = readFileSync(path.join(context.outDir, 'assets', 'sitemap.xml'), 'utf8')
+    const first = readFileSync(path.join(context.outDir, 'assets', 'sitemap-0.xml'), 'utf8')
+    const second = readFileSync(path.join(context.outDir, 'assets', 'sitemap-1.xml'), 'utf8')
+    assert.match(index, /<sitemapindex/)
+    assert.equal(first.match(/<url>/g)?.length, 50_000)
+    assert.equal(second.match(/<url>/g)?.length, 3)
+    assert.match(second, /%E0%B8%8A%E0%B8%B2%E0%B9%84%E0%B8%97%E0%B8%A2%20%26%20coffee/)
+    assert.match(second, /limited%20edition/)
+  })
+
   it('falls back to the committed route manifest when the build summary has no route list', async () => {
     const { buildComplete } = register(sitemap({ siteUrl: 'https://example.com' }))
     const context = tempBuildContext({ routes: 17 })
@@ -414,6 +438,32 @@ describe('robots()', () => {
     assert.match(body, /Allow: \//)
     assert.match(body, /Disallow: \/admin/)
     assert.match(body, /Sitemap: https:\/\/example\.com\/sitemap\.xml/)
+  })
+
+  it('supports Next-style scalar or array fields and rejects record injection', async () => {
+    const { buildComplete } = register(
+      robots({
+        rules: {
+          userAgent: ['Googlebot', 'Bingbot'],
+          allow: '/',
+          disallow: ['/private/', '/drafts/'],
+          crawlDelay: 5,
+        },
+        sitemap: ['https://example.com/sitemap.xml', 'https://example.com/news-sitemap.xml'],
+        host: 'https://example.com',
+      }),
+    )
+    const context = tempBuildContext({ routes: [] })
+    await buildComplete[0](context)
+    const body = readFileSync(path.join(context.outDir, 'assets', 'robots.txt'), 'utf8')
+    assert.match(body, /User-agent: Googlebot/)
+    assert.match(body, /User-agent: Bingbot/)
+    assert.match(body, /Crawl-delay: 5/)
+    assert.equal(body.match(/Sitemap:/g)?.length, 2)
+    assert.match(body, /Host: https:\/\/example\.com/)
+
+    const invalid = register(robots({ rules: { userAgent: 'Bot\nDisallow', disallow: '/' } }))
+    assert.throws(() => invalid.buildComplete[0](tempBuildContext({ routes: [] })), TypeError)
   })
 
   it('allows everything by default', async () => {

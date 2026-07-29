@@ -166,28 +166,51 @@ exits before responding is restarted and retried once.
 
 Identity for the crawler discovery files the build emits into the output assets.
 
-| Field     | Type      | Default | Description                                   |
-| --------- | --------- | ------- | --------------------------------------------- |
-| `url`     | `string`  | —       | Absolute origin, e.g. `https://ruvyxa.dev`    |
-| `sitemap` | `boolean` | `true`  | Emit `sitemap.xml` (needs a resolvable `url`) |
-| `robots`  | `boolean` | `true`  | Emit `robots.txt`                             |
+| Field     | Type                           | Default | Description                                   |
+| --------- | ------------------------------ | ------- | --------------------------------------------- |
+| `url`     | `string`                       | —       | Absolute origin, e.g. `https://ruvyxa.dev`    |
+| `sitemap` | `boolean \| SiteSitemapConfig` | `true`  | Emit `sitemap.xml` (needs a resolvable `url`) |
+| `robots`  | `boolean \| SiteRobotsConfig`  | `true`  | Emit `robots.txt` or declare crawler rules    |
 
-`ruvyxa build` writes `robots.txt` and `sitemap.xml` from the route manifest. Only static page
-routes are listed: a pattern such as `/blog/[slug]` is not a URL, and API routes are not pages.
+`ruvyxa build` writes `robots.txt` and `sitemap.xml` from the route manifest and concrete paths
+produced by prerendering. API routes and unresolved patterns such as `/blog/[slug]` are not pages.
+Sitemaps are UTF-8, use absolute escaped URLs, and are automatically split into an index plus
+numbered files before either the 50,000 URL or 50 MB protocol limit is crossed.
 
-A file of the same name in `public/` always wins, so shipping your own is still how you say
-something the generator cannot.
+A file of the same name in `public/` suppresses core generation. An exact `app/sitemap.xml/route.ts`
+or `app/robots.txt/route.ts` route also suppresses it, allowing fully programmatic output. Explicit
+first-party plugins run after core generation and may intentionally replace the staged asset they
+own.
 
-When `url` is absent, Ruvyxa reads the `RUVYXA_SITE_URL` environment variable — one variable the
-framework owns, so a deploy pipeline exports it once and the framework does not have to track what
-each host calls its own URL. A bare hostname is accepted and given an `https` scheme. A sitemap
-needs absolute URLs, so without either the build warns and writes only `robots.txt`.
+When `url` is absent, resolution tries `RUVYXA_SITE_URL`, Vercel's production project URL, and then
+Netlify's production `URL`. A Vercel preview URL is never selected as canonical. A bare hostname is
+given an `https` scheme; credentials, paths, queries, and fragments are rejected. Without a
+production origin, the build warns and writes only `robots.txt`.
 
 ```ts
 export default config({
-  site: { url: 'https://ruvyxa.dev' },
+  site: {
+    url: 'https://ruvyxa.dev',
+    sitemap: {
+      exclude: ['/admin/*', '/drafts/*'],
+      additionalPaths: ['/products/limited-release'],
+    },
+    robots: {
+      rules: [
+        { userAgent: '*', allow: '/', disallow: ['/admin/', '/api/'] },
+        { userAgent: 'GPTBot', disallow: '/' },
+      ],
+      host: 'https://ruvyxa.dev',
+    },
+  },
 })
 ```
+
+`exclude` accepts exact paths or a trailing `*` prefix. `additionalPaths` must contain concrete
+root-relative paths. Robots rules accept a string or string array for `userAgent`, `allow`, and
+`disallow`, plus `crawlDelay`; `sitemap` can override the default with one or more absolute URLs.
+Route-level `meta.noindex` is intentionally independent, so also exclude a page when it must not
+appear in the generated sitemap.
 
 ### `debug`
 

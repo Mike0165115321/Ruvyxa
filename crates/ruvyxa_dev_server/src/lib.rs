@@ -2583,6 +2583,18 @@ mod tests {
     }
 
     #[test]
+    fn serves_crawler_discovery_files_with_protocol_content_types() {
+        assert_eq!(
+            static_assets::content_type_for(Path::new("robots.txt")),
+            "text/plain; charset=utf-8"
+        );
+        assert_eq!(
+            static_assets::content_type_for(Path::new("sitemap.xml")),
+            "application/xml; charset=utf-8"
+        );
+    }
+
+    #[test]
     fn rejects_public_assets_outside_the_configured_root() {
         let temp = tempfile::tempdir().unwrap();
         let public = temp.path().join("public");
