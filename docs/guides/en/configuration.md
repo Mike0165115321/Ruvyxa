@@ -168,7 +168,7 @@ Identity for the crawler discovery files the build emits into the output assets.
 
 | Field     | Type                           | Default | Description                                   |
 | --------- | ------------------------------ | ------- | --------------------------------------------- |
-| `url`     | `string`                       | —       | Absolute origin, e.g. `https://ruvyxa.dev`    |
+| `url`     | `string`                       | —       | Actual absolute production origin             |
 | `sitemap` | `boolean \| SiteSitemapConfig` | `true`  | Emit `sitemap.xml` (needs a resolvable `url`) |
 | `robots`  | `boolean \| SiteRobotsConfig`  | `true`  | Emit `robots.txt` or declare crawler rules    |
 
@@ -188,29 +188,59 @@ given an `https` scheme; credentials, paths, queries, and fragments are rejected
 production origin, the build warns and writes only `robots.txt`.
 
 ```ts
+const siteUrl = process.env.RUVYXA_SITE_URL
+if (!siteUrl) throw new Error('RUVYXA_SITE_URL must be set to the deployed application origin')
+
+const absoluteUrl = (pathname: string) => new URL(pathname, siteUrl).href
+
 export default config({
   site: {
-    url: 'https://ruvyxa.dev',
+    url: siteUrl,
     sitemap: {
       exclude: ['/admin/*', '/drafts/*'],
-      additionalPaths: ['/products/limited-release'],
+      defaults: {
+        changeFrequency: 'weekly',
+        priority: 0.7,
+      },
+      entries: [
+        {
+          url: '/',
+          lastModified: new Date('2026-07-29'),
+          changeFrequency: 'daily',
+          priority: 1,
+          images: [absoluteUrl('/ruvyxa.png')],
+        },
+        { url: '/about', changeFrequency: 'monthly', priority: 0.6 },
+      ],
     },
     robots: {
       rules: [
         { userAgent: '*', allow: '/', disallow: ['/admin/', '/api/'] },
         { userAgent: 'GPTBot', disallow: '/' },
       ],
-      host: 'https://ruvyxa.dev',
+      host: siteUrl,
     },
   },
 })
 ```
 
 `exclude` accepts exact paths or a trailing `*` prefix. `additionalPaths` must contain concrete
-root-relative paths. Robots rules accept a string or string array for `userAgent`, `allow`, and
-`disallow`, plus `crawlDelay`; `sitemap` can override the default with one or more absolute URLs.
-Route-level `meta.noindex` is intentionally independent, so also exclude a page when it must not
-appear in the generated sitemap.
+root-relative paths. `defaults` applies `lastModified`, `changeFrequency`, and `priority` to every
+discovered URL; a matching object in `entries` overrides those fields and can add language
+alternates, image URLs, and video metadata. Entry URLs may be root-relative or absolute on the
+configured origin. Dates accept `Date`, `YYYY-MM-DD`, or an RFC 3339 timestamp. Use the real content
+modification time rather than changing it on every build. Namespaces are emitted only when needed,
+and invalid dates, priorities, cross-origin entries, media URLs, and video fields fail the build.
+
+Every root-relative entry is joined to the resolved production origin. Never commit a guessed
+domain: inject the real deployment origin through `RUVYXA_SITE_URL` (as above), or omit `url` and
+let a supported host provide its production URL. Absolute media and alternate URLs must point to
+routes or assets that actually exist on the deployed site.
+
+Robots rules accept a string or string array for `userAgent`, `allow`, and `disallow`, plus
+`crawlDelay`; `sitemap` can override the default with one or more absolute URLs. Route-level
+`meta.noindex` is intentionally independent, so also exclude a page when it must not appear in the
+generated sitemap.
 
 ### `debug`
 

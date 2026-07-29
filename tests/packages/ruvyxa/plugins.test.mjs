@@ -408,6 +408,79 @@ describe('sitemap()', () => {
     assert.match(second, /limited%20edition/)
   })
 
+  it('renders Next-style metadata entries with extension namespaces', async () => {
+    const plugin = sitemap({
+      siteUrl: 'https://example.com',
+      defaults: {
+        lastModified: new Date('2026-07-29T04:30:00.000Z'),
+        changeFrequency: 'weekly',
+        priority: 0.5,
+      },
+      entries: [
+        {
+          url: '/about',
+          changeFrequency: 'monthly',
+          priority: 0.8,
+          alternates: { languages: { th: 'https://example.com/th/about' } },
+          images: ['https://cdn.example.com/about.jpg'],
+          videos: [
+            {
+              title: 'About & production',
+              thumbnail_loc: 'https://cdn.example.com/thumb.jpg',
+              description: 'A <rich> sitemap',
+              duration: 120,
+              family_friendly: 'yes',
+              tag: ['framework', 'sitemap'],
+            },
+          ],
+        },
+      ],
+    })
+    const { buildComplete } = register(plugin)
+    const context = tempBuildContext(manifest)
+    await buildComplete[0](context)
+
+    const xml = readFileSync(path.join(context.outDir, 'assets', 'sitemap.xml'), 'utf8')
+    assert.match(xml, /xmlns:xhtml="http:\/\/www\.w3\.org\/1999\/xhtml"/)
+    assert.match(xml, /xmlns:image="http:\/\/www\.google\.com\/schemas\/sitemap-image\/1\.1"/)
+    assert.match(xml, /xmlns:video="http:\/\/www\.google\.com\/schemas\/sitemap-video\/1\.1"/)
+    assert.match(xml, /<lastmod>2026-07-29T04:30:00\.000Z<\/lastmod>/)
+    assert.match(xml, /<changefreq>monthly<\/changefreq>/)
+    assert.match(xml, /<priority>0\.8<\/priority>/)
+    assert.match(xml, /<video:title>About &amp; production<\/video:title>/)
+    assert.match(xml, /<video:description>A &lt;rich&gt; sitemap<\/video:description>/)
+    assert.match(xml, /  <url>\n    <loc>https:\/\/example\.com\/about<\/loc>/)
+  })
+
+  it('rejects invalid rich sitemap metadata before writing an asset', async () => {
+    const invalidOptions = [
+      { entries: [{ url: '/about', lastModified: 'yesterday' }] },
+      { entries: [{ url: 'https://other.example/about' }] },
+      { entries: [{ url: '/about', priority: 1.1 }] },
+      { entries: [{ url: '/about', images: ['https://cdn.example.com/image.jpg#fragment'] }] },
+      {
+        entries: [
+          {
+            url: '/about',
+            videos: [
+              {
+                title: 'Invalid video',
+                thumbnail_loc: 'https://cdn.example.com/thumb.jpg',
+                description: 'Invalid duration',
+                duration: 0,
+              },
+            ],
+          },
+        ],
+      },
+    ]
+
+    for (const options of invalidOptions) {
+      const { buildComplete } = register(sitemap({ siteUrl: 'https://example.com', ...options }))
+      await assert.rejects(async () => buildComplete[0](tempBuildContext(manifest)), TypeError)
+    }
+  })
+
   it('falls back to the committed route manifest when the build summary has no route list', async () => {
     const { buildComplete } = register(sitemap({ siteUrl: 'https://example.com' }))
     const context = tempBuildContext({ routes: 17 })

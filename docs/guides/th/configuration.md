@@ -151,7 +151,7 @@ alias และจะใช้ Node รัน JavaScript สำหรับง�
 
 | Field     | Default | คำอธิบาย                                                      |
 | --------- | ------- | ------------------------------------------------------------- |
-| `url`     | —       | origin เต็ม เช่น `https://ruvyxa.dev`                         |
+| `url`     | —       | absolute origin จริงของ production                            |
 | `sitemap` | `true`  | boolean หรือ object สำหรับสร้างและปรับ `sitemap.xml`          |
 | `robots`  | `true`  | boolean หรือ object สำหรับสร้าง `robots.txt` และกฎของ crawler |
 
@@ -170,28 +170,58 @@ credentials, path, query และ fragment ถ้าหา production origin �
 `robots.txt`
 
 ```ts
+const siteUrl = process.env.RUVYXA_SITE_URL
+if (!siteUrl) throw new Error('RUVYXA_SITE_URL ต้องเป็น origin จริงของแอปที่ deploy แล้ว')
+
+const absoluteUrl = (pathname: string) => new URL(pathname, siteUrl).href
+
 export default config({
   site: {
-    url: 'https://ruvyxa.dev',
+    url: siteUrl,
     sitemap: {
       exclude: ['/admin/*', '/drafts/*'],
-      additionalPaths: ['/products/limited-release'],
+      defaults: {
+        changeFrequency: 'weekly',
+        priority: 0.7,
+      },
+      entries: [
+        {
+          url: '/',
+          lastModified: new Date('2026-07-29'),
+          changeFrequency: 'daily',
+          priority: 1,
+          images: [absoluteUrl('/ruvyxa.png')],
+        },
+        { url: '/about', changeFrequency: 'monthly', priority: 0.6 },
+      ],
     },
     robots: {
       rules: [
         { userAgent: '*', allow: '/', disallow: ['/admin/', '/api/'] },
         { userAgent: 'GPTBot', disallow: '/' },
       ],
-      host: 'https://ruvyxa.dev',
+      host: siteUrl,
     },
   },
 })
 ```
 
 `exclude` รองรับ path ตรงตัวหรือ prefix ที่ลงท้าย `*` ส่วน `additionalPaths` ต้องเป็น concrete path
-ที่ขึ้นต้นด้วย `/` ฟิลด์ `userAgent`, `allow` และ `disallow` รับ string หรือ string array และมี
-`crawlDelay` ได้ ส่วน `sitemap` ใน robots รับ absolute URL เดียวหรือหลายค่า `meta.noindex` ของแต่ละ
-route แยกจากตัว generator ดังนั้นให้ใส่ route นั้นใน `exclude` ด้วยเมื่อไม่ต้องการให้ติด sitemap
+ที่ขึ้นต้นด้วย `/` `defaults` ใช้ `lastModified`, `changeFrequency` และ `priority` ร่วมกับทุก URL
+ที่ค้นพบ แล้วให้ object ใน `entries` ซึ่ง URL ตรงกัน override ค่าเหล่านั้น พร้อมเพิ่ม alternate
+language, image URL และ video metadata ได้ URL ของ entry เป็น root-relative หรือ absolute URL ภายใต้
+origin ที่ตั้งไว้ก็ได้ วันที่รับ `Date`, `YYYY-MM-DD` หรือ RFC 3339 timestamp ควรใช้เวลาแก้ไข
+เนื้อหาจริง ไม่ควรเปลี่ยนเป็นเวลาปัจจุบันทุกครั้งที่ build ระบบใส่ XML namespace เฉพาะเมื่อจำเป็น
+และหยุด build เมื่อพบวันที่, priority, origin, media URL หรือ video field ที่ไม่ถูกต้อง
+
+ระบบนำ entry แบบ root-relative ไปต่อกับ production origin ที่ resolve ได้ ห้าม commit domain ที่
+เดาเอง ให้ inject origin จริงผ่าน `RUVYXA_SITE_URL` ตามตัวอย่าง หรือไม่กำหนด `url` แล้วให้ host ที่
+รองรับส่ง production URL มาให้ ส่วน absolute media URL และ alternate URL ต้องชี้ route หรือ asset
+ที่มีอยู่จริงบนเว็บที่ deploy แล้ว
+
+ฟิลด์ `userAgent`, `allow` และ `disallow` รับ string หรือ string array และมี `crawlDelay` ได้ ส่วน
+`sitemap` ใน robots รับ absolute URL เดียวหรือหลายค่า `meta.noindex` ของแต่ละ route แยกจากตัว
+generator ดังนั้นให้ใส่ route นั้นใน `exclude` ด้วยเมื่อไม่ต้องการให้ติด sitemap
 
 ### debug
 

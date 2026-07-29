@@ -18,6 +18,15 @@ if (!projectRootArg) {
 
 const projectRoot = path.resolve(projectRootArg)
 const runtimeDir = path.dirname(fileURLToPath(import.meta.url))
+const SITEMAP_CHANGE_FREQUENCIES = new Set([
+  'always',
+  'hourly',
+  'daily',
+  'weekly',
+  'monthly',
+  'yearly',
+  'never',
+])
 
 try {
   const configFile = findConfig(projectRoot)
@@ -124,7 +133,55 @@ async function sanitizeConfig(config) {
   ])
   assertKnownKeys(config.cache, 'config.cache', ['routes', 'css', 'dir'])
   assertKnownKeys(config.site, 'config.site', ['url', 'sitemap', 'robots'])
-  assertKnownKeys(config.site?.sitemap, 'config.site.sitemap', ['exclude', 'additionalPaths'])
+  assertKnownKeys(config.site?.sitemap, 'config.site.sitemap', [
+    'exclude',
+    'additionalPaths',
+    'defaults',
+    'entries',
+  ])
+  assertKnownKeys(config.site?.sitemap?.defaults, 'config.site.sitemap.defaults', [
+    'lastModified',
+    'changeFrequency',
+    'priority',
+  ])
+  for (const [index, entry] of sitemapEntries(config.site?.sitemap?.entries).entries()) {
+    const field = `config.site.sitemap.entries[${index}]`
+    assertKnownKeys(entry, field, [
+      'url',
+      'lastModified',
+      'changeFrequency',
+      'priority',
+      'alternates',
+      'images',
+      'videos',
+    ])
+    assertKnownKeys(entry?.alternates, `${field}.alternates`, ['languages'])
+    for (const [videoIndex, video] of sitemapVideos(entry?.videos).entries()) {
+      const videoField = `${field}.videos[${videoIndex}]`
+      assertKnownKeys(video, videoField, [
+        'title',
+        'thumbnail_loc',
+        'description',
+        'content_loc',
+        'player_loc',
+        'duration',
+        'view_count',
+        'rating',
+        'expiration_date',
+        'publication_date',
+        'family_friendly',
+        'requires_subscription',
+        'live',
+        'restriction',
+        'platform',
+        'uploader',
+        'tag',
+      ])
+      assertKnownKeys(video?.restriction, `${videoField}.restriction`, ['relationship', 'content'])
+      assertKnownKeys(video?.platform, `${videoField}.platform`, ['relationship', 'content'])
+      assertKnownKeys(video?.uploader, `${videoField}.uploader`, ['content', 'info'])
+    }
+  }
   assertKnownKeys(config.site?.robots, 'config.site.robots', ['rules', 'sitemap', 'host'])
   for (const [index, rule] of siteRobotsRules(config.site?.robots?.rules).entries()) {
     assertKnownKeys(rule, `config.site.robots.rules[${index}]`, [
@@ -286,6 +343,18 @@ function assertSiteShape(site) {
     if (isObject(site.sitemap)) {
       assertStringArray(site.sitemap.exclude, 'config.site.sitemap.exclude')
       assertStringArray(site.sitemap.additionalPaths, 'config.site.sitemap.additionalPaths')
+      if (site.sitemap.defaults !== undefined && !isObject(site.sitemap.defaults)) {
+        throw new Error('RUV1602 config.site.sitemap.defaults must be an object.')
+      }
+      if (isObject(site.sitemap.defaults)) {
+        assertSitemapEntryMetadata(site.sitemap.defaults, 'config.site.sitemap.defaults')
+      }
+      if (site.sitemap.entries !== undefined && !Array.isArray(site.sitemap.entries)) {
+        throw new Error('RUV1602 config.site.sitemap.entries must be an array.')
+      }
+      for (const [index, entry] of sitemapEntries(site.sitemap.entries).entries()) {
+        assertSitemapEntry(entry, `config.site.sitemap.entries[${index}]`)
+      }
     }
   }
   if (site.robots !== undefined) {
@@ -345,6 +414,118 @@ function assertStringOrArray(value, field) {
 function siteRobotsRules(value) {
   if (value === undefined) return []
   return Array.isArray(value) ? value : [value]
+}
+
+function sitemapEntries(value) {
+  return Array.isArray(value) ? value : []
+}
+
+function sitemapVideos(value) {
+  return Array.isArray(value) ? value : []
+}
+
+function assertSitemapEntry(entry, field) {
+  if (!isObject(entry)) throw new Error(`RUV1602 ${field} must be an object.`)
+  if (typeof entry.url !== 'string' || entry.url === '') {
+    throw new Error(`RUV1602 ${field}.url must be a non-empty string.`)
+  }
+  assertSitemapEntryMetadata(entry, field)
+  if (entry.alternates !== undefined && !isObject(entry.alternates)) {
+    throw new Error(`RUV1602 ${field}.alternates must be an object.`)
+  }
+  if (entry.alternates?.languages !== undefined) {
+    if (
+      !isObject(entry.alternates.languages) ||
+      !Object.values(entry.alternates.languages).every((value) => typeof value === 'string')
+    ) {
+      throw new Error(`RUV1602 ${field}.alternates.languages must be a string record.`)
+    }
+  }
+  assertStringArray(entry.images, `${field}.images`)
+  if (entry.videos !== undefined && !Array.isArray(entry.videos)) {
+    throw new Error(`RUV1602 ${field}.videos must be an array.`)
+  }
+  for (const [index, video] of sitemapVideos(entry.videos).entries()) {
+    assertSitemapVideo(video, `${field}.videos[${index}]`)
+  }
+}
+
+function assertSitemapEntryMetadata(value, field) {
+  assertDateValue(value.lastModified, `${field}.lastModified`)
+  if (
+    value.changeFrequency !== undefined &&
+    !SITEMAP_CHANGE_FREQUENCIES.has(value.changeFrequency)
+  ) {
+    throw new Error(`RUV1602 ${field}.changeFrequency must be a supported sitemap frequency.`)
+  }
+  if (
+    value.priority !== undefined &&
+    (!Number.isFinite(value.priority) || value.priority < 0 || value.priority > 1)
+  ) {
+    throw new Error(`RUV1602 ${field}.priority must be between 0 and 1.`)
+  }
+}
+
+function assertSitemapVideo(video, field) {
+  if (!isObject(video)) throw new Error(`RUV1602 ${field} must be an object.`)
+  for (const key of ['title', 'thumbnail_loc', 'description']) {
+    if (typeof video[key] !== 'string' || video[key] === '') {
+      throw new Error(`RUV1602 ${field}.${key} must be a non-empty string.`)
+    }
+  }
+  for (const key of ['content_loc', 'player_loc']) {
+    if (video[key] !== undefined && typeof video[key] !== 'string') {
+      throw new Error(`RUV1602 ${field}.${key} must be a string.`)
+    }
+  }
+  for (const key of ['duration', 'view_count', 'rating']) {
+    if (video[key] !== undefined && !Number.isFinite(video[key])) {
+      throw new Error(`RUV1602 ${field}.${key} must be a finite number.`)
+    }
+  }
+  assertDateValue(video.expiration_date, `${field}.expiration_date`)
+  assertDateValue(video.publication_date, `${field}.publication_date`)
+  for (const key of ['family_friendly', 'requires_subscription', 'live']) {
+    if (video[key] !== undefined && video[key] !== 'yes' && video[key] !== 'no') {
+      throw new Error(`RUV1602 ${field}.${key} must be "yes" or "no".`)
+    }
+  }
+  for (const key of ['restriction', 'platform']) {
+    const relationship = video[key]
+    if (relationship === undefined) continue
+    if (
+      !isObject(relationship) ||
+      (relationship.relationship !== 'allow' && relationship.relationship !== 'deny') ||
+      typeof relationship.content !== 'string' ||
+      relationship.content === ''
+    ) {
+      throw new Error(
+        `RUV1602 ${field}.${key} must contain relationship "allow" or "deny" and string content.`,
+      )
+    }
+  }
+  if (video.uploader !== undefined) {
+    if (
+      !isObject(video.uploader) ||
+      typeof video.uploader.content !== 'string' ||
+      video.uploader.content === '' ||
+      (video.uploader.info !== undefined && typeof video.uploader.info !== 'string')
+    ) {
+      throw new Error(`RUV1602 ${field}.uploader must contain string content and optional info.`)
+    }
+  }
+  assertStringOrArray(video.tag, `${field}.tag`)
+}
+
+function assertDateValue(value, field) {
+  if (value === undefined) return
+  if (value instanceof Date) {
+    if (!Number.isFinite(value.getTime())) throw new Error(`RUV1602 ${field} must be a valid Date.`)
+    return
+  }
+  if (typeof value !== 'string') {
+    throw new Error(`RUV1602 ${field} must be a string or Date.`)
+  }
 }
 
 function siteValue(site) {

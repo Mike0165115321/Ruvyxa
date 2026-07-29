@@ -6,7 +6,7 @@
 //! miss in hand-written output: absolute URLs, UTF-8 XML escaping, deterministic
 //! ordering, and sitemap sharding at the protocol limits.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Error, ErrorKind};
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -21,7 +21,7 @@ const NETLIFY_URL_ENV_VAR: &str = "URL";
 const SITEMAP_MAX_URLS: usize = 50_000;
 const SITEMAP_MAX_BYTES: usize = 52_428_800;
 const SITEMAP_MAX_LOCATION_CHARS: usize = 2_048;
-const SITEMAP_HEADER: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n";
+const SITEMAP_XML_DECLARATION: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
 const SITEMAP_FOOTER: &str = "</urlset>\n";
 
 /// `site` block of `ruvyxa.config.ts`.
@@ -74,6 +74,154 @@ pub struct SitemapGenerationOptions {
     /// Concrete paths that cannot be inferred from the route manifest.
     #[serde(default)]
     additional_paths: Vec<String>,
+    /// Metadata applied to every automatically discovered or explicit entry.
+    #[serde(default)]
+    defaults: SitemapEntryMetadata,
+    /// Next-style entries that enrich discovered URLs or add new URLs.
+    #[serde(default)]
+    entries: Vec<SitemapEntryOptions>,
+}
+
+#[derive(Debug, Default, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SitemapEntryMetadata {
+    last_modified: Option<String>,
+    change_frequency: Option<SitemapChangeFrequency>,
+    priority: Option<f64>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SitemapEntryOptions {
+    url: String,
+    last_modified: Option<String>,
+    change_frequency: Option<SitemapChangeFrequency>,
+    priority: Option<f64>,
+    #[serde(default)]
+    alternates: SitemapAlternates,
+    #[serde(default)]
+    images: Vec<String>,
+    #[serde(default)]
+    videos: Vec<SitemapVideo>,
+}
+
+#[derive(Debug, Default, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SitemapAlternates {
+    #[serde(default)]
+    languages: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct SitemapVideo {
+    title: String,
+    thumbnail_loc: String,
+    description: String,
+    content_loc: Option<String>,
+    player_loc: Option<String>,
+    duration: Option<u32>,
+    view_count: Option<u64>,
+    rating: Option<f64>,
+    expiration_date: Option<String>,
+    publication_date: Option<String>,
+    family_friendly: Option<YesNo>,
+    requires_subscription: Option<YesNo>,
+    live: Option<YesNo>,
+    restriction: Option<SitemapVideoRelationship>,
+    platform: Option<SitemapVideoRelationship>,
+    uploader: Option<SitemapVideoUploader>,
+    tag: Option<OneOrManyStrings>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum YesNo {
+    Yes,
+    No,
+}
+
+impl YesNo {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Yes => "yes",
+            Self::No => "no",
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SitemapVideoRelationship {
+    relationship: SitemapRelationship,
+    content: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum SitemapRelationship {
+    Allow,
+    Deny,
+}
+
+impl SitemapRelationship {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Deny => "deny",
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SitemapVideoUploader {
+    content: String,
+    info: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum SitemapChangeFrequency {
+    Always,
+    Hourly,
+    Daily,
+    Weekly,
+    Monthly,
+    Yearly,
+    Never,
+}
+
+impl SitemapChangeFrequency {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Always => "always",
+            Self::Hourly => "hourly",
+            Self::Daily => "daily",
+            Self::Weekly => "weekly",
+            Self::Monthly => "monthly",
+            Self::Yearly => "yearly",
+            Self::Never => "never",
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+struct SitemapEntry {
+    location: String,
+    last_modified: Option<String>,
+    change_frequency: Option<SitemapChangeFrequency>,
+    priority: Option<f64>,
+    alternates: BTreeMap<String, String>,
+    images: Vec<String>,
+    videos: Vec<SitemapVideo>,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct SitemapFeatures {
+    alternates: bool,
+    images: bool,
+    videos: bool,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -221,9 +369,9 @@ pub fn write_discovery_files(
     if options.sitemap.enabled() && !sitemap_path.exists() && !sitemap_route_exists {
         match site_url {
             Some(url) => {
-                let paths =
-                    indexable_paths(manifest, prerendered_paths, options.sitemap.options())?;
-                let documents = sitemap_documents(&paths, url)?;
+                let entries =
+                    sitemap_entries(manifest, prerendered_paths, url, options.sitemap.options())?;
+                let documents = sitemap_documents(&entries)?;
                 fs::create_dir_all(assets_dir)?;
                 if documents.len() == 1 {
                     fs::write(&sitemap_path, &documents[0])?;
@@ -267,11 +415,12 @@ pub fn write_discovery_files(
     Ok(report)
 }
 
-fn indexable_paths(
+fn sitemap_entries(
     manifest: &RouteManifest,
     prerendered_paths: &[String],
+    site_url: &str,
     options: Option<&SitemapGenerationOptions>,
-) -> std::io::Result<Vec<String>> {
+) -> std::io::Result<Vec<SitemapEntry>> {
     let exclusions = options.map_or(&[][..], |options| options.exclude.as_slice());
     for pattern in exclusions {
         validate_exclusion_pattern(pattern)?;
@@ -288,7 +437,7 @@ fn indexable_paths(
                 .filter(|path| !path.contains('['))
                 .cloned(),
         )
-        .collect::<BTreeSet<_>>();
+        .collect::<std::collections::BTreeSet<_>>();
 
     if let Some(options) = options {
         for path in &options.additional_paths {
@@ -302,41 +451,94 @@ fn indexable_paths(
             .iter()
             .any(|pattern| exclusion_matches(pattern, path))
     });
-    Ok(paths.into_iter().collect())
+    let defaults = options.map_or_else(SitemapEntryMetadata::default, |options| {
+        options.defaults.clone()
+    });
+    validate_entry_metadata(&defaults, "site.sitemap.defaults")?;
+    let mut entries = BTreeMap::new();
+    for path in paths {
+        let location = format!("{site_url}{}", percent_encode_path(&path));
+        validate_sitemap_location(&location, "sitemap route")?;
+        entries.insert(
+            location.clone(),
+            SitemapEntry {
+                location,
+                last_modified: defaults.last_modified.clone(),
+                change_frequency: defaults.change_frequency.clone(),
+                priority: defaults.priority,
+                ..SitemapEntry::default()
+            },
+        );
+    }
+
+    if let Some(options) = options {
+        for (index, configured) in options.entries.iter().enumerate() {
+            let field = format!("site.sitemap.entries[{index}]");
+            let location = normalize_sitemap_entry_url(&configured.url, site_url, &field)?;
+            let mut entry = entries.remove(&location).unwrap_or_else(|| SitemapEntry {
+                location: location.clone(),
+                last_modified: defaults.last_modified.clone(),
+                change_frequency: defaults.change_frequency.clone(),
+                priority: defaults.priority,
+                ..SitemapEntry::default()
+            });
+            if let Some(last_modified) = &configured.last_modified {
+                validate_last_modified(last_modified, &format!("{field}.lastModified"))?;
+                entry.last_modified = Some(last_modified.clone());
+            }
+            if let Some(change_frequency) = &configured.change_frequency {
+                entry.change_frequency = Some(change_frequency.clone());
+            }
+            if let Some(priority) = configured.priority {
+                validate_priority(priority, &format!("{field}.priority"))?;
+                entry.priority = Some(priority);
+            }
+            entry.alternates = normalize_alternates(&configured.alternates, &field)?;
+            entry.images = configured
+                .images
+                .iter()
+                .enumerate()
+                .map(|(image_index, value)| {
+                    normalize_absolute_http_url(value, &format!("{field}.images[{image_index}]"))
+                })
+                .collect::<std::io::Result<Vec<_>>>()?;
+            entry.videos = configured.videos.clone();
+            for (video_index, video) in entry.videos.iter_mut().enumerate() {
+                normalize_video(video, &format!("{field}.videos[{video_index}]"))?;
+            }
+            entries.insert(location, entry);
+        }
+    }
+
+    Ok(entries.into_values().collect())
 }
 
-fn sitemap_documents(paths: &[String], site_url: &str) -> std::io::Result<Vec<String>> {
-    sitemap_documents_with_limits(paths, site_url, SITEMAP_MAX_URLS, SITEMAP_MAX_BYTES)
+fn sitemap_documents(entries: &[SitemapEntry]) -> std::io::Result<Vec<String>> {
+    sitemap_documents_with_limits(entries, SITEMAP_MAX_URLS, SITEMAP_MAX_BYTES)
 }
 
 fn sitemap_documents_with_limits(
-    paths: &[String],
-    site_url: &str,
+    entries: &[SitemapEntry],
     max_urls: usize,
     max_bytes: usize,
 ) -> std::io::Result<Vec<String>> {
-    if max_urls == 0 || max_bytes <= SITEMAP_HEADER.len() + SITEMAP_FOOTER.len() {
+    let features = sitemap_features(entries);
+    let header = sitemap_header(features);
+    if max_urls == 0 || max_bytes <= header.len() + SITEMAP_FOOTER.len() {
         return Err(invalid_input("sitemap limits must allow at least one URL"));
     }
 
     let mut documents = Vec::new();
-    let mut document = String::from(SITEMAP_HEADER);
+    let mut document = header.clone();
     let mut url_count = 0usize;
 
-    for path in paths {
-        validate_application_path(path, "sitemap route")?;
-        let location = format!("{site_url}{}", percent_encode_path(path));
-        if location.chars().count() > SITEMAP_MAX_LOCATION_CHARS {
-            return Err(invalid_input(format!(
-                "sitemap URL exceeds {SITEMAP_MAX_LOCATION_CHARS} characters: {location}"
-            )));
-        }
-        let entry = format!("  <url><loc>{}</loc></url>\n", escape_xml(&location));
+    for sitemap_entry in entries {
+        let entry = sitemap_entry_xml(sitemap_entry);
         let exceeds_bytes = document.len() + entry.len() + SITEMAP_FOOTER.len() > max_bytes;
         if url_count > 0 && (url_count == max_urls || exceeds_bytes) {
             document.push_str(SITEMAP_FOOTER);
             documents.push(document);
-            document = String::from(SITEMAP_HEADER);
+            document = header.clone();
             url_count = 0;
         }
         if document.len() + entry.len() + SITEMAP_FOOTER.len() > max_bytes {
@@ -351,6 +553,334 @@ fn sitemap_documents_with_limits(
     document.push_str(SITEMAP_FOOTER);
     documents.push(document);
     Ok(documents)
+}
+
+fn sitemap_features(entries: &[SitemapEntry]) -> SitemapFeatures {
+    SitemapFeatures {
+        alternates: entries.iter().any(|entry| !entry.alternates.is_empty()),
+        images: entries.iter().any(|entry| !entry.images.is_empty()),
+        videos: entries.iter().any(|entry| !entry.videos.is_empty()),
+    }
+}
+
+fn sitemap_header(features: SitemapFeatures) -> String {
+    let mut header = String::from(SITEMAP_XML_DECLARATION);
+    header.push_str("<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\"");
+    if features.alternates {
+        header.push_str(" xmlns:xhtml=\"http://www.w3.org/1999/xhtml\"");
+    }
+    if features.images {
+        header.push_str(" xmlns:image=\"http://www.google.com/schemas/sitemap-image/1.1\"");
+    }
+    if features.videos {
+        header.push_str(" xmlns:video=\"http://www.google.com/schemas/sitemap-video/1.1\"");
+    }
+    header.push_str(">\n");
+    header
+}
+
+fn sitemap_entry_xml(entry: &SitemapEntry) -> String {
+    let mut xml = String::from("  <url>\n");
+    push_xml_element(&mut xml, 4, "loc", &entry.location);
+    for (language, href) in &entry.alternates {
+        xml.push_str(&format!(
+            "    <xhtml:link rel=\"alternate\" hreflang=\"{}\" href=\"{}\" />\n",
+            escape_xml(language),
+            escape_xml(href)
+        ));
+    }
+    for image in &entry.images {
+        xml.push_str("    <image:image>\n");
+        push_xml_element(&mut xml, 6, "image:loc", image);
+        xml.push_str("    </image:image>\n");
+    }
+    for video in &entry.videos {
+        xml.push_str("    <video:video>\n");
+        push_xml_element(&mut xml, 6, "video:title", &video.title);
+        push_xml_element(&mut xml, 6, "video:thumbnail_loc", &video.thumbnail_loc);
+        push_xml_element(&mut xml, 6, "video:description", &video.description);
+        push_optional_xml_element(
+            &mut xml,
+            6,
+            "video:content_loc",
+            video.content_loc.as_deref(),
+        );
+        push_optional_xml_element(&mut xml, 6, "video:player_loc", video.player_loc.as_deref());
+        push_optional_xml_element(
+            &mut xml,
+            6,
+            "video:duration",
+            video.duration.map(|value| value.to_string()).as_deref(),
+        );
+        push_optional_xml_element(
+            &mut xml,
+            6,
+            "video:view_count",
+            video.view_count.map(|value| value.to_string()).as_deref(),
+        );
+        push_optional_xml_element(
+            &mut xml,
+            6,
+            "video:rating",
+            video.rating.map(format_number).as_deref(),
+        );
+        push_optional_xml_element(
+            &mut xml,
+            6,
+            "video:expiration_date",
+            video.expiration_date.as_deref(),
+        );
+        push_optional_xml_element(
+            &mut xml,
+            6,
+            "video:publication_date",
+            video.publication_date.as_deref(),
+        );
+        push_optional_xml_element(
+            &mut xml,
+            6,
+            "video:family_friendly",
+            video.family_friendly.as_ref().map(YesNo::as_str),
+        );
+        push_optional_xml_element(
+            &mut xml,
+            6,
+            "video:requires_subscription",
+            video.requires_subscription.as_ref().map(YesNo::as_str),
+        );
+        push_optional_xml_element(
+            &mut xml,
+            6,
+            "video:live",
+            video.live.as_ref().map(YesNo::as_str),
+        );
+        push_video_relationship(&mut xml, "restriction", video.restriction.as_ref());
+        push_video_relationship(&mut xml, "platform", video.platform.as_ref());
+        if let Some(uploader) = &video.uploader {
+            let info = uploader.info.as_ref().map_or_else(String::new, |value| {
+                format!(" info=\"{}\"", escape_xml(value))
+            });
+            xml.push_str(&format!(
+                "      <video:uploader{info}>{}</video:uploader>\n",
+                escape_xml(&uploader.content)
+            ));
+        }
+        for tag in video
+            .tag
+            .as_ref()
+            .map(OneOrManyStrings::values)
+            .unwrap_or_default()
+        {
+            push_xml_element(&mut xml, 6, "video:tag", tag);
+        }
+        xml.push_str("    </video:video>\n");
+    }
+    push_optional_xml_element(&mut xml, 4, "lastmod", entry.last_modified.as_deref());
+    push_optional_xml_element(
+        &mut xml,
+        4,
+        "changefreq",
+        entry
+            .change_frequency
+            .as_ref()
+            .map(SitemapChangeFrequency::as_str),
+    );
+    push_optional_xml_element(
+        &mut xml,
+        4,
+        "priority",
+        entry.priority.map(format_number).as_deref(),
+    );
+    xml.push_str("  </url>\n");
+    xml
+}
+
+fn push_xml_element(xml: &mut String, spaces: usize, name: &str, value: &str) {
+    xml.push_str(&format!(
+        "{}{name_open}{}{name_close}\n",
+        " ".repeat(spaces),
+        escape_xml(value),
+        name_open = format_args!("<{name}>"),
+        name_close = format_args!("</{name}>")
+    ));
+}
+
+fn push_optional_xml_element(xml: &mut String, spaces: usize, name: &str, value: Option<&str>) {
+    if let Some(value) = value {
+        push_xml_element(xml, spaces, name, value);
+    }
+}
+
+fn push_video_relationship(xml: &mut String, name: &str, value: Option<&SitemapVideoRelationship>) {
+    if let Some(value) = value {
+        xml.push_str(&format!(
+            "      <video:{name} relationship=\"{}\">{}</video:{name}>\n",
+            value.relationship.as_str(),
+            escape_xml(&value.content)
+        ));
+    }
+}
+
+fn format_number(value: f64) -> String {
+    value.to_string()
+}
+
+fn validate_entry_metadata(value: &SitemapEntryMetadata, field: &str) -> std::io::Result<()> {
+    if let Some(last_modified) = &value.last_modified {
+        validate_last_modified(last_modified, &format!("{field}.lastModified"))?;
+    }
+    if let Some(priority) = value.priority {
+        validate_priority(priority, &format!("{field}.priority"))?;
+    }
+    Ok(())
+}
+
+fn validate_last_modified(value: &str, field: &str) -> std::io::Result<()> {
+    let valid = chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok()
+        || chrono::DateTime::parse_from_rfc3339(value).is_ok();
+    if valid {
+        Ok(())
+    } else {
+        Err(invalid_input(format!(
+            "{field} must be an ISO 8601 date or RFC 3339 timestamp"
+        )))
+    }
+}
+
+fn validate_priority(value: f64, field: &str) -> std::io::Result<()> {
+    if value.is_finite() && (0.0..=1.0).contains(&value) {
+        Ok(())
+    } else {
+        Err(invalid_input(format!("{field} must be between 0 and 1")))
+    }
+}
+
+fn validate_sitemap_location(value: &str, field: &str) -> std::io::Result<()> {
+    if value.chars().count() > SITEMAP_MAX_LOCATION_CHARS {
+        return Err(invalid_input(format!(
+            "{field} URL exceeds {SITEMAP_MAX_LOCATION_CHARS} characters: {value}"
+        )));
+    }
+    Ok(())
+}
+
+fn normalize_sitemap_entry_url(
+    value: &str,
+    site_url: &str,
+    field: &str,
+) -> std::io::Result<String> {
+    let location = if value.starts_with('/') {
+        validate_application_path(value, &format!("{field}.url"))?;
+        format!("{site_url}{}", percent_encode_path(value))
+    } else {
+        let normalized = normalize_absolute_http_url(value, &format!("{field}.url"))?;
+        if normalized == site_url {
+            format!("{site_url}/")
+        } else if normalized.starts_with(&format!("{site_url}/"))
+            || normalized.starts_with(&format!("{site_url}?"))
+        {
+            normalized
+        } else {
+            return Err(invalid_input(format!(
+                "{field}.url must use the configured sitemap origin {site_url}"
+            )));
+        }
+    };
+    validate_sitemap_location(&location, field)?;
+    Ok(location)
+}
+
+fn normalize_alternates(
+    alternates: &SitemapAlternates,
+    field: &str,
+) -> std::io::Result<BTreeMap<String, String>> {
+    alternates
+        .languages
+        .iter()
+        .map(|(language, href)| {
+            if language.is_empty()
+                || !language
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            {
+                return Err(invalid_input(format!(
+                    "{field}.alternates.languages contains invalid language tag {language}"
+                )));
+            }
+            Ok((
+                language.clone(),
+                normalize_absolute_http_url(
+                    href,
+                    &format!("{field}.alternates.languages.{language}"),
+                )?,
+            ))
+        })
+        .collect()
+}
+
+fn normalize_video(video: &mut SitemapVideo, field: &str) -> std::io::Result<()> {
+    validate_non_empty_text(&video.title, &format!("{field}.title"))?;
+    validate_non_empty_text(&video.description, &format!("{field}.description"))?;
+    video.thumbnail_loc =
+        normalize_absolute_http_url(&video.thumbnail_loc, &format!("{field}.thumbnail_loc"))?;
+    if let Some(value) = video.content_loc.as_mut() {
+        *value = normalize_absolute_http_url(value, &format!("{field}.content_loc"))?;
+    }
+    if let Some(value) = video.player_loc.as_mut() {
+        *value = normalize_absolute_http_url(value, &format!("{field}.player_loc"))?;
+    }
+    if let Some(duration) = video.duration
+        && !(1..=28_800).contains(&duration)
+    {
+        return Err(invalid_input(format!(
+            "{field}.duration must be between 1 and 28800 seconds"
+        )));
+    }
+    if let Some(rating) = video.rating
+        && (!rating.is_finite() || !(0.0..=5.0).contains(&rating))
+    {
+        return Err(invalid_input(format!(
+            "{field}.rating must be between 0 and 5"
+        )));
+    }
+    for (name, value) in [
+        ("expiration_date", video.expiration_date.as_deref()),
+        ("publication_date", video.publication_date.as_deref()),
+    ] {
+        if let Some(value) = value {
+            validate_last_modified(value, &format!("{field}.{name}"))?;
+        }
+    }
+    for (name, relationship) in [
+        ("restriction", video.restriction.as_ref()),
+        ("platform", video.platform.as_ref()),
+    ] {
+        if let Some(relationship) = relationship {
+            validate_non_empty_text(&relationship.content, &format!("{field}.{name}.content"))?;
+        }
+    }
+    if let Some(uploader) = &mut video.uploader {
+        validate_non_empty_text(&uploader.content, &format!("{field}.uploader.content"))?;
+        if let Some(info) = &mut uploader.info {
+            *info = normalize_absolute_http_url(info, &format!("{field}.uploader.info"))?;
+        }
+    }
+    for tag in video
+        .tag
+        .as_ref()
+        .map(OneOrManyStrings::values)
+        .unwrap_or_default()
+    {
+        validate_non_empty_text(tag, &format!("{field}.tag"))?;
+    }
+    Ok(())
+}
+
+fn validate_non_empty_text(value: &str, field: &str) -> std::io::Result<()> {
+    if value.trim().is_empty() {
+        return Err(invalid_input(format!("{field} must not be empty")));
+    }
+    validate_single_line(value, field)
 }
 
 fn sitemap_index_xml(site_url: &str, shard_count: usize) -> std::io::Result<String> {
@@ -763,14 +1293,16 @@ mod tests {
         let setting = SitemapGenerationOptions {
             exclude: vec!["/drafts/*".to_string()],
             additional_paths: vec!["/products/ชาไทย".to_string()],
+            ..SitemapGenerationOptions::default()
         };
-        let paths = indexable_paths(
+        let entries = sitemap_entries(
             &manifest,
             &["/en/docs/routing & metadata".to_string(), "/".to_string()],
+            "https://ruvyxa.dev",
             Some(&setting),
         )
         .unwrap();
-        let xml = &sitemap_documents(&paths, "https://ruvyxa.dev").unwrap()[0];
+        let xml = &sitemap_documents(&entries).unwrap()[0];
 
         assert_eq!(xml.matches("<loc>").count(), 4, "{xml}");
         assert!(
@@ -790,8 +1322,8 @@ mod tests {
             ("/blog/[slug]", RouteKind::Page),
             ("/api/health", RouteKind::Api),
         ]);
-        let paths = indexable_paths(&manifest, &[], None).unwrap();
-        let xml = &sitemap_documents(&paths, "https://ruvyxa.dev").unwrap()[0];
+        let entries = sitemap_entries(&manifest, &[], "https://ruvyxa.dev", None).unwrap();
+        let xml = &sitemap_documents(&entries).unwrap()[0];
         assert!(xml.contains("<loc>https://ruvyxa.dev/</loc>"), "{xml}");
         assert!(xml.contains("<loc>https://ruvyxa.dev/blog</loc>"), "{xml}");
         assert!(!xml.contains("[slug]"), "{xml}");
@@ -800,15 +1332,109 @@ mod tests {
 
     #[test]
     fn sitemap_shards_by_protocol_limits_and_writes_an_index() {
-        let paths = vec!["/a".to_string(), "/b".to_string(), "/c".to_string()];
-        let documents =
-            sitemap_documents_with_limits(&paths, "https://ruvyxa.dev", 2, 10_000).unwrap();
+        let entries = ["/a", "/b", "/c"]
+            .into_iter()
+            .map(|path| SitemapEntry {
+                location: format!("https://ruvyxa.dev{path}"),
+                ..SitemapEntry::default()
+            })
+            .collect::<Vec<_>>();
+        let documents = sitemap_documents_with_limits(&entries, 2, 10_000).unwrap();
         assert_eq!(documents.len(), 2);
         assert_eq!(documents[0].matches("<url>").count(), 2);
         assert_eq!(documents[1].matches("<url>").count(), 1);
         let index = sitemap_index_xml("https://ruvyxa.dev", documents.len()).unwrap();
         assert!(index.contains("https://ruvyxa.dev/sitemap-0.xml"));
         assert!(index.contains("https://ruvyxa.dev/sitemap-1.xml"));
+    }
+
+    #[test]
+    fn sitemap_renders_next_style_metadata_and_extension_namespaces() {
+        let options: SitemapGenerationOptions = serde_json::from_value(serde_json::json!({
+            "defaults": {
+                "lastModified": "2026-07-29",
+                "changeFrequency": "weekly",
+                "priority": 0.5
+            },
+            "entries": [{
+                "url": "/about",
+                "lastModified": "2026-07-29T04:30:00.000Z",
+                "changeFrequency": "monthly",
+                "priority": 0.8,
+                "alternates": {
+                    "languages": {
+                        "de": "https://ruvyxa.dev/de/about",
+                        "th": "https://ruvyxa.dev/th/about"
+                    }
+                },
+                "images": ["https://cdn.ruvyxa.dev/about.jpg"],
+                "videos": [{
+                    "title": "Ruvyxa & Next-style XML",
+                    "thumbnail_loc": "https://cdn.ruvyxa.dev/thumb.jpg",
+                    "description": "A <production> sitemap example",
+                    "content_loc": "https://cdn.ruvyxa.dev/video.mp4",
+                    "duration": 120,
+                    "rating": 4.5,
+                    "family_friendly": "yes",
+                    "restriction": { "relationship": "allow", "content": "TH US" },
+                    "tag": ["framework", "sitemap"]
+                }]
+            }]
+        }))
+        .unwrap();
+        let entries = sitemap_entries(
+            &manifest(&[("/", RouteKind::Page), ("/about", RouteKind::Page)]),
+            &[],
+            "https://ruvyxa.dev",
+            Some(&options),
+        )
+        .unwrap();
+        let xml = &sitemap_documents(&entries).unwrap()[0];
+
+        assert!(xml.contains("xmlns:xhtml=\"http://www.w3.org/1999/xhtml\""));
+        assert!(xml.contains("xmlns:image=\"http://www.google.com/schemas/sitemap-image/1.1\""));
+        assert!(xml.contains("xmlns:video=\"http://www.google.com/schemas/sitemap-video/1.1\""));
+        assert!(xml.contains("  <url>\n    <loc>https://ruvyxa.dev/about</loc>"));
+        assert!(xml.contains("<lastmod>2026-07-29T04:30:00.000Z</lastmod>"));
+        assert!(xml.contains("<changefreq>monthly</changefreq>"));
+        assert!(xml.contains("<priority>0.8</priority>"));
+        assert!(xml.contains("hreflang=\"th\" href=\"https://ruvyxa.dev/th/about\""));
+        assert!(xml.contains("<image:loc>https://cdn.ruvyxa.dev/about.jpg</image:loc>"));
+        assert!(xml.contains("<video:title>Ruvyxa &amp; Next-style XML</video:title>"));
+        assert!(xml.contains(
+            "<video:description>A &lt;production&gt; sitemap example</video:description>"
+        ));
+        assert_eq!(xml.matches("<url>").count(), 2);
+    }
+
+    #[test]
+    fn sitemap_rejects_invalid_rich_entry_values() {
+        for value in [
+            serde_json::json!({ "entries": [{ "url": "https://evil.example/about" }] }),
+            serde_json::json!({ "entries": [{ "url": "/about", "priority": 1.1 }] }),
+            serde_json::json!({ "entries": [{ "url": "/about", "lastModified": "yesterday" }] }),
+            serde_json::json!({
+                "entries": [{
+                    "url": "/about",
+                    "videos": [{
+                        "title": "video",
+                        "thumbnail_loc": "javascript:alert(1)",
+                        "description": "bad URL"
+                    }]
+                }]
+            }),
+        ] {
+            let options: SitemapGenerationOptions = serde_json::from_value(value).unwrap();
+            assert!(
+                sitemap_entries(
+                    &manifest(&[("/about", RouteKind::Page)]),
+                    &[],
+                    "https://ruvyxa.dev",
+                    Some(&options)
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]

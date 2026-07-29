@@ -11,9 +11,25 @@ const settings: RuvyxaConfig = {
     port: 3000,
   },
 
-  // robots.txt and sitemap.xml are generated from the route manifest at build.
+  // Set RUVYXA_SITE_URL to the real deployment origin. Without one, the build intentionally emits
+  // robots.txt only instead of publishing a sitemap with fabricated URLs.
   site: {
-    url: 'https://demo.ruvyxa.dev',
+    sitemap: {
+      defaults: {
+        lastModified: new Date('2026-07-29'),
+        changeFrequency: 'weekly',
+        priority: 0.7,
+      },
+      entries: [
+        {
+          url: '/',
+          changeFrequency: 'daily',
+          priority: 1,
+        },
+        { url: '/blog', changeFrequency: 'daily', priority: 0.9 },
+        { url: '/about', changeFrequency: 'monthly', priority: 0.6 },
+      ],
+    },
   },
 
   build: {

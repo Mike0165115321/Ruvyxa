@@ -482,8 +482,10 @@ fingerprints match. On hit → hardlink cached HTML to output. On miss → rende
 
 After prerendering, the build combines static page routes, concrete prerendered paths, and
 configured `site.sitemap.additionalPaths`. It validates the production origin, applies exclusions,
-escapes URLs, and writes protocol-limited sitemap shards plus `robots.txt` into staged assets.
-Project-owned public files and exact application routes suppress core generation for their path. See
+merges defaults and per-URL metadata, escapes URLs, and writes protocol-limited sitemap shards plus
+`robots.txt` into staged assets. Rich entries support modification dates, change frequencies,
+priorities, language alternates, images, and videos with conditional XML namespaces. Project-owned
+public files and exact application routes suppress core generation for their path. See
 [Crawler Discovery](site-discovery.md) for ownership and serving contracts.
 
 ### Phase 11: Build metadata

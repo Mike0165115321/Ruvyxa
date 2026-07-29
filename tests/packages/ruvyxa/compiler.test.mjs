@@ -1678,6 +1678,28 @@ export const marker = 'reached'
             sitemap: {
               exclude: ['/admin/*', '/drafts/*'],
               additionalPaths: ['/products/ชาไทย'],
+              defaults: {
+                lastModified: new Date('2026-07-29T04:30:00.000Z'),
+                changeFrequency: 'weekly',
+                priority: 0.5,
+              },
+              entries: [{
+                url: '/about',
+                lastModified: '2026-07-28',
+                changeFrequency: 'monthly',
+                priority: 0.8,
+                alternates: { languages: { th: 'https://ruvyxa.dev/th/about' } },
+                images: ['https://cdn.ruvyxa.dev/about.jpg'],
+                videos: [{
+                  title: 'About Ruvyxa',
+                  thumbnail_loc: 'https://cdn.ruvyxa.dev/thumb.jpg',
+                  description: 'Framework overview',
+                  duration: 120,
+                  family_friendly: 'yes',
+                  restriction: { relationship: 'allow', content: 'TH US' },
+                  tag: ['framework', 'rust'],
+                }],
+              }],
             },
             robots: {
               rules: [
@@ -1697,6 +1719,32 @@ export const marker = 'reached'
         sitemap: {
           exclude: ['/admin/*', '/drafts/*'],
           additionalPaths: ['/products/ชาไทย'],
+          defaults: {
+            lastModified: '2026-07-29T04:30:00.000Z',
+            changeFrequency: 'weekly',
+            priority: 0.5,
+          },
+          entries: [
+            {
+              url: '/about',
+              lastModified: '2026-07-28',
+              changeFrequency: 'monthly',
+              priority: 0.8,
+              alternates: { languages: { th: 'https://ruvyxa.dev/th/about' } },
+              images: ['https://cdn.ruvyxa.dev/about.jpg'],
+              videos: [
+                {
+                  title: 'About Ruvyxa',
+                  thumbnail_loc: 'https://cdn.ruvyxa.dev/thumb.jpg',
+                  description: 'Framework overview',
+                  duration: 120,
+                  family_friendly: 'yes',
+                  restriction: { relationship: 'allow', content: 'TH US' },
+                  tag: ['framework', 'rust'],
+                },
+              ],
+            },
+          ],
         },
         robots: {
           rules: [
@@ -1754,6 +1802,22 @@ export const marker = 'reached'
       const invalidSitemap = await runJsonResult(configRenderer, [root], {})
       assert.equal(invalidSitemap.exitCode, 1)
       assert.match(invalidSitemap.parsed.message, /robots\.sitemap must be string or string\[\]/)
+
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `export default { site: { sitemap: { entries: [{ url: '/about', priority: 2 }] } } }`,
+      )
+      const invalidPriority = await runJsonResult(configRenderer, [root], {})
+      assert.equal(invalidPriority.exitCode, 1)
+      assert.match(invalidPriority.parsed.message, /priority must be between 0 and 1/)
+
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `export default { site: { sitemap: { entries: [{ url: '/about', videos: [{}] }] } } }`,
+      )
+      const invalidVideo = await runJsonResult(configRenderer, [root], {})
+      assert.equal(invalidVideo.exitCode, 1)
+      assert.match(invalidVideo.parsed.message, /videos\[0\]\.title must be a non-empty string/)
     })
   })
 

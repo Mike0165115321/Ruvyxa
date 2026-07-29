@@ -43,6 +43,12 @@ after build. Unrelated dynamic routes never capture missing `/sitemap.xml` or `/
   hosts, and invalid ports. Bare hosts normalize to HTTPS.
 - Static page routes, concrete prerendered paths, and `additionalPaths` are sorted and deduplicated.
   APIs and unresolved route patterns are excluded.
+- `defaults` can apply `lastModified`, `changeFrequency`, and `priority` across discovered URLs.
+  Matching `entries` override those values and may add language alternates, images, and videos.
+- Entry metadata follows the Next.js sitemap value model. Dates, priorities, same-origin entry URLs,
+  absolute media URLs, and constrained video fields are validated before any asset is committed.
+- XML uses readable multi-line `<url>` records and adds XHTML, image, or video namespaces only when
+  at least one entry needs them.
 - Paths are percent-encoded, XML text is escaped, and every `<loc>` is absolute.
 - Each sitemap stays within 50,000 URLs and 50 MB. Larger sets produce `sitemap.xml` as an index
   that references `sitemap-0.xml`, `sitemap-1.xml`, and so on.
@@ -65,6 +71,6 @@ content-addressed client bundles are immutable.
 
 The boolean `site.sitemap` and `site.robots` settings remain supported. Ruvyxa provides functional
 production parity with static and programmatic metadata ownership, but does not copy Next.js's
-source file names: programmatic output is an ordinary exact Ruvyxa route. Rich sitemap extensions
-such as image, video, news, alternate-language, priority, and per-entry modification time remain the
-responsibility of that route or an explicit plugin.
+source file names: programmatic output is an ordinary exact Ruvyxa route. The structured config and
+first-party sitemap plugin share the same rich entry model. News sitemap extensions remain the
+responsibility of an explicit route.

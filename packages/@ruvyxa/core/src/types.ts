@@ -84,7 +84,7 @@ export interface RuvyxaConfig {
  */
 export interface SiteConfig {
   /**
-   * Absolute origin of the deployed site, e.g. `https://ruvyxa.dev`.
+   * Actual absolute origin of the deployed site.
    *
    * Falls back to `RUVYXA_SITE_URL`, then to the production URL exported by
    * Vercel or Netlify. Preview-only deployment URLs are never selected as a
@@ -103,6 +103,62 @@ export interface SiteSitemapConfig {
   exclude?: string[]
   /** Concrete dynamic URLs that route discovery or prerendering cannot infer. */
   additionalPaths?: string[]
+  /** Metadata inherited by every automatically discovered and explicit entry. */
+  defaults?: SiteSitemapEntryDefaults
+  /** Next-style entries that enrich discovered URLs or add new URLs. */
+  entries?: SiteSitemapEntry[]
+}
+
+export type SiteSitemapChangeFrequency =
+  'always' | 'hourly' | 'daily' | 'weekly' | 'monthly' | 'yearly' | 'never'
+
+/** Metadata hints that may be shared across sitemap entries. */
+export interface SiteSitemapEntryDefaults {
+  lastModified?: string | Date
+  changeFrequency?: SiteSitemapChangeFrequency
+  /** Search priority from 0 to 1. */
+  priority?: number
+}
+
+/** One Next-style sitemap URL entry. Root-relative URLs resolve against `site.url`. */
+export interface SiteSitemapEntry extends SiteSitemapEntryDefaults {
+  url: string
+  alternates?: {
+    languages?: Record<string, string>
+  }
+  images?: string[]
+  videos?: SiteSitemapVideo[]
+}
+
+export interface SiteSitemapVideoRelationship {
+  relationship: 'allow' | 'deny'
+  content: string
+}
+
+export interface SiteSitemapVideoUploader {
+  content: string
+  info?: string
+}
+
+/** Video sitemap fields supported by Next.js metadata routes. */
+export interface SiteSitemapVideo {
+  title: string
+  thumbnail_loc: string
+  description: string
+  content_loc?: string
+  player_loc?: string
+  duration?: number
+  view_count?: number
+  rating?: number
+  expiration_date?: string | Date
+  publication_date?: string | Date
+  family_friendly?: 'yes' | 'no'
+  requires_subscription?: 'yes' | 'no'
+  live?: 'yes' | 'no'
+  restriction?: SiteSitemapVideoRelationship
+  platform?: SiteSitemapVideoRelationship
+  uploader?: SiteSitemapVideoUploader
+  tag?: string | string[]
 }
 
 /** One robots.txt rule group. String arrays follow Next.js metadata semantics. */

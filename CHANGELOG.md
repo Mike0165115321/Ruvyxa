@@ -30,6 +30,10 @@
   50,000 URL or 50 MB limits. Exact application routes can own `/sitemap.xml` or `/robots.txt`
   without being shadowed in production, and both Rust and standalone servers return the correct
   UTF-8 XML/plain-text content types.
+- Added Next-style rich sitemap entries through `site.sitemap.defaults` and `site.sitemap.entries`:
+  modification dates, change frequencies, priorities, language alternates, images, and videos. Core
+  and first-party plugin output use readable multi-line XML, conditional namespaces, strict
+  URL/date/value validation, and the same sharding limits.
 - **Fixed `/robots.txt` and `/sitemap.xml` being answered with an HTML page.** Those exact paths now
   return 404 when no file backs them, rather than letting a bare dynamic route such as `/[lang]`
   capture them. `dev`, `start`, and the serverless handler apply the same rule.
