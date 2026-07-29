@@ -30,30 +30,6 @@ impl BundleContext {
         }
     }
 
-    /// Create a context from explicit caches.
-    pub fn with_caches(compile_cache: CompileCache, graph_cache: ResolveGraphCache) -> Self {
-        Self {
-            compile_cache,
-            graph_cache,
-            incremental: IncrementalGraphCache::disabled(),
-            build_hooks: BuildHookPipeline::empty(),
-        }
-    }
-
-    /// Create a context with full cache control.
-    pub fn with_all_caches(
-        compile_cache: CompileCache,
-        graph_cache: ResolveGraphCache,
-        incremental: IncrementalGraphCache,
-    ) -> Self {
-        Self {
-            compile_cache,
-            graph_cache,
-            incremental,
-            build_hooks: BuildHookPipeline::empty(),
-        }
-    }
-
     /// Create a production context whose compile and dependency-graph caches
     /// share an explicit root and configuration namespace.
     pub fn for_build(

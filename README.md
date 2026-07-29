@@ -152,7 +152,7 @@
   and configurable `robots.txt`, while public files or exact routes can take ownership.
 - **Client loader hook** — `useRuvyxaLoader` loads client-side data and returns
   `{ data, loading, error, refetch }` with built-in race-condition handling and mount-safety checks.
-  See the [client loader guide](docs/guides/en/data-loading-and-cache.md#client-side-data-loading).
+  See the [client loader guide](docs/guides/en/05-data-loading-cache.md#client-side-loading).
 
 ### Security
 
@@ -532,7 +532,7 @@ export default config({
 Dynamic routes can export a `staticParams` array for known values or use `getStaticParams(context)`
 for asynchronous discovery. `getStaticParams` may return `{ params, cache: '10m' }` to persist the
 result until its TTL expires; changes to the route or imported dependencies invalidate it early. See
-the [rendering guide](docs/guides/en/rendering-strategies.md) for scalar shorthand, context, and
+the [rendering guide](docs/guides/en/04-rendering-strategies.md) for scalar shorthand, context, and
 cache examples.
 
 ---

@@ -52,15 +52,14 @@ fn worker_request_headers(headers: &HeaderMap) -> Vec<(String, String)> {
 
 /// Project-wide state for the synchronous render path, built once and reused.
 ///
-/// [`render_request`] takes only a [`ServerConfig`], so every call had to
-/// rediscover the route graph, recompile the radix router, and re-collect every
-/// stylesheet from disk. That is invisible for a single render, but the one
-/// caller that renders more than one path — the dev/prod parity sweep in
-/// `ruvyxa check` — repeated the whole project scan twice per route.
+/// Rendering from a [`ServerConfig`] alone would make every call rediscover the
+/// route graph, recompile the radix router, and re-collect every stylesheet
+/// from disk. That is invisible for a single render, but the one caller that
+/// renders more than one path — the dev/prod parity sweep in `ruvyxa check` —
+/// would repeat the whole project scan twice per route.
 ///
 /// Holding that state in a context makes the work per project instead of per
-/// request without changing what a lone `render_request` call does: it still
-/// builds a context of its own.
+/// request.
 pub struct RenderContext {
     manifest: RouteManifest,
     router: RadixRouter,
@@ -90,11 +89,6 @@ impl RenderContext {
         // collection of the same sources, so whichever lands first stands.
         Ok(self.styles.get_or_init(|| css))
     }
-}
-
-pub fn render_request(config: &ServerConfig, request_path: &str, method: &str) -> Result<Response> {
-    let context = RenderContext::new(config)?;
-    render_request_with_context(config, &context, request_path, method)
 }
 
 /// Render one request against an already-built [`RenderContext`].

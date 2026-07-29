@@ -177,38 +177,6 @@ impl IncrementalGraphCache {
         }
     }
 
-    /// Check freshness using only file metadata (no source content needed).
-    ///
-    /// This is the fastest check — only a stat call. Returns `Stale` if
-    /// mtime or size differ from the cached values.
-    pub fn check_freshness_fast(&self, path: &Path) -> FreshnessStatus {
-        if !self.enabled {
-            return FreshnessStatus::Stale;
-        }
-
-        let Some(cached) = self.previous.modules.get(path) else {
-            return FreshnessStatus::Stale;
-        };
-
-        let Ok(metadata) = fs::metadata(path) else {
-            return FreshnessStatus::Stale;
-        };
-
-        let current_size = metadata.len();
-        let current_mtime = metadata
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-
-        if current_size == cached.size && current_mtime == cached.mtime_secs {
-            FreshnessStatus::Fresh
-        } else {
-            FreshnessStatus::Stale
-        }
-    }
-
     /// Get the cached dependency edges for a module (if fresh).
     ///
     /// Returns `None` if the module is not in the cache or is stale.

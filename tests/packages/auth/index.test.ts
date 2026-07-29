@@ -492,4 +492,40 @@ describe('@ruvyxa/auth', () => {
 
     assert.equal(plugin.name, 'ruvyxa:auth')
   })
+
+  it('keeps token keys bound to their own secret across runtimes', async () => {
+    // Derived HMAC keys are memoized per secret. If that cache ever collapsed
+    // two secrets onto one key, a session minted by one deployment would
+    // resolve in another — so assert the isolation directly rather than
+    // trusting the cache key.
+    const shared = memoryAuthStore({ development: true })
+    const first = runtime({ store: shared })
+    const second = runtime({
+      store: shared,
+      secret: 'a-completely-different-secret-of-sufficient-length',
+    })
+
+    const login = async (auth: ReturnType<typeof runtime>) =>
+      (
+        await auth.handle(
+          new Request(`${origin}/__ruvyxa/auth/login/email`, {
+            method: 'POST',
+            headers: { origin, 'content-type': 'application/json' },
+            body: JSON.stringify({ email: 'ada@example.com', password: 'correct' }),
+          }),
+        )
+      )?.headers
+        .get('set-cookie')
+        ?.split(';')[0]
+
+    const cookie = await login(first)
+    assert.ok(cookie, 'login must issue a session cookie')
+
+    const request = () => new Request(`${origin}/dashboard`, { headers: { cookie } })
+    // Same secret, repeated derivations: the memoized key must stay usable.
+    assert.equal((await first.getSession(request()))?.user.email, 'ada@example.com')
+    assert.equal((await first.getSession(request()))?.user.email, 'ada@example.com')
+    // Different secret over the same store: must not resolve.
+    assert.equal(await second.getSession(request()), null)
+  })
 })

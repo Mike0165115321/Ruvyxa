@@ -646,17 +646,46 @@ function readCookie(header: string | null, name: string): string | null {
   return null
 }
 
+/**
+ * Derived HMAC keys, one per secret.
+ *
+ * `tokenKey` runs on every session lookup, every rate-limit check, and twice
+ * more per issued session, and the secret is fixed for the life of a runtime —
+ * so re-importing the key each time was pure repeated work on the hot path.
+ *
+ * The promise itself is cached so concurrent first calls share one import
+ * rather than racing to perform several. Keys stay `extractable: false`, so
+ * holding one adds no exposure the previous code did not already have, and the
+ * signature bytes are unchanged.
+ */
+const hmacKeys = new Map<string, Promise<CryptoKey>>()
+
+function hmacKey(secret: string): Promise<CryptoKey> {
+  let key = hmacKeys.get(secret)
+  if (!key) {
+    key = crypto.subtle
+      .importKey(
+        'raw',
+        new TextEncoder().encode(secret),
+        { name: 'HMAC', hash: 'SHA-256' },
+        false,
+        ['sign'],
+      )
+      .catch((error: unknown) => {
+        // Never cache a rejected import: a transient failure must not turn
+        // into a permanently broken runtime.
+        hmacKeys.delete(secret)
+        throw error
+      })
+    hmacKeys.set(secret, key)
+  }
+  return key
+}
+
 async function tokenKey(kind: string, token: string, secret: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  )
   const signature = await crypto.subtle.sign(
     'HMAC',
-    key,
+    await hmacKey(secret),
     new TextEncoder().encode(`${kind}:${token}`),
   )
   return `${kind}:${base64Url(new Uint8Array(signature))}`

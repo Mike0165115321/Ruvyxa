@@ -95,9 +95,7 @@ mod worker_pool;
 pub use worker_pool::{NodeWorkerPool, StaticParamSegment, StaticParamsRoute};
 
 mod render_pipeline;
-pub use render_pipeline::{
-    RenderContext, find_runtime_script, render_request, render_request_with_context,
-};
+pub use render_pipeline::{RenderContext, find_runtime_script, render_request_with_context};
 #[cfg(test)]
 use render_pipeline::{decode_realtime_event, page_has_default_export, serve_prerendered_html};
 use render_pipeline::{

@@ -747,6 +747,28 @@ impl Worker {
         }
     }
 
+    /// Queue a bundle-cache invalidation without awaiting the worker's reply.
+    ///
+    /// Callable from a non-Tokio thread: the bounded `try_send` never blocks
+    /// and never panics outside a runtime, so the file watcher can drive it
+    /// directly. Errors describe this worker alone, letting the pool keep
+    /// invalidating its siblings.
+    fn try_queue_invalidation(&self, paths: &[String]) -> std::result::Result<(), String> {
+        let request = WorkerRequest::Invalidate {
+            id: next_request_id(),
+            paths: paths.to_vec(),
+        };
+        let line = serde_json::to_string(&request)
+            .map_err(|error| format!("invalidation serialization failed: {error}"))?;
+        self.stdin_tx
+            .lock()
+            .map_err(|_| "stdin lock poisoned".to_string())?
+            .as_ref()
+            .ok_or_else(|| "worker is shutting down".to_string())?
+            .try_send(format!("{line}\n"))
+            .map_err(|error| format!("invalidation queue rejected the update: {error}"))
+    }
+
     async fn open_response(&self, request: &WorkerRequest) -> Result<ResponseChannel> {
         if !self.alive.load(Ordering::Acquire) {
             return Err(RuvyxaError::Message(
@@ -847,15 +869,6 @@ impl NodeWorkerPool {
     ///
     /// Build-time prerendering uses this to avoid starting idle Node processes
     /// beyond its already configured render concurrency.
-    pub async fn start_with_size(
-        root: &Path,
-        env: BTreeMap<String, String>,
-        worker_count: Option<usize>,
-    ) -> Result<Self> {
-        Self::start_with_size_and_runtime(root, env, worker_count, JavaScriptRuntime::detect())
-            .await
-    }
-
     pub async fn start_with_size_and_runtime(
         root: &Path,
         mut env: BTreeMap<String, String>,
@@ -1113,6 +1126,12 @@ impl NodeWorkerPool {
     /// `notify` invokes callbacks on its own OS thread, where no Tokio runtime
     /// is installed. `try_send` keeps the callback runtime-independent and
     /// avoids panicking while the async writer tasks flush the messages.
+    ///
+    /// Every worker is attempted even when an earlier one fails. Node's ESM
+    /// cache is process-local, so each worker holds its own compiled bundles:
+    /// stopping at the first failure would leave the remaining workers serving
+    /// stale code that a browser reload cannot clear. Failures are collected
+    /// and reported together so the caller still learns the update was partial.
     pub fn invalidate_from_watcher(
         &self,
         paths: Vec<String>,
@@ -1122,26 +1141,23 @@ impl NodeWorkerPool {
             .read()
             .map_err(|_| "worker pool lock poisoned".to_string())?;
         let mut queued = 0;
+        let mut failures = Vec::new();
         for (worker_index, worker) in workers.iter().enumerate() {
-            let request = WorkerRequest::Invalidate {
-                id: next_request_id(),
-                paths: paths.clone(),
-            };
-            let line = serde_json::to_string(&request)
-                .map_err(|error| format!("worker invalidation serialization failed: {error}"))?;
-            worker
-                .stdin_tx
-                .lock()
-                .map_err(|_| format!("worker {worker_index} stdin lock poisoned"))?
-                .as_ref()
-                .ok_or_else(|| format!("worker {worker_index} is shutting down"))?
-                .try_send(format!("{line}\n"))
-                .map_err(|error| {
-                    format!("worker {worker_index} invalidation queue rejected the update: {error}")
-                })?;
-            queued += 1;
+            match worker.try_queue_invalidation(&paths) {
+                Ok(()) => queued += 1,
+                Err(error) => failures.push(format!("worker {worker_index}: {error}")),
+            }
         }
-        Ok(queued)
+
+        if failures.is_empty() {
+            Ok(queued)
+        } else {
+            Err(format!(
+                "invalidated {queued}/{} workers ({})",
+                workers.len(),
+                failures.join("; ")
+            ))
+        }
     }
 
     /// Pre-warm module caches in a worker by importing route bundles during idle time.
@@ -1422,6 +1438,91 @@ fn find_worker_script(root: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build a worker backed by a plain channel instead of a real process, so
+    /// queueing behavior can be asserted without spawning Node.
+    fn stub_worker(stdin_tx: Option<mpsc::Sender<String>>) -> Arc<Worker> {
+        Arc::new(Worker {
+            stdin_tx: StdMutex::new(stdin_tx),
+            pending: Arc::new(PendingResponseSet::default()),
+            child: Mutex::new(None),
+            alive: Arc::new(AtomicBool::new(true)),
+        })
+    }
+
+    fn stub_pool(workers: Vec<Arc<Worker>>) -> NodeWorkerPool {
+        NodeWorkerPool {
+            workers: StdRwLock::new(workers),
+            worker_script: PathBuf::from("worker-pool.mjs"),
+            env: BTreeMap::new(),
+            runtime: JavaScriptRuntime::Node,
+            next_worker: AtomicU64::new(0),
+            response_timeout: std::time::Duration::from_millis(DEFAULT_WORKER_TIMEOUT_MS),
+        }
+    }
+
+    #[tokio::test]
+    async fn watcher_invalidation_reaches_every_healthy_worker_after_one_fails() {
+        // Node's ESM cache is process-local, so a worker skipped here keeps
+        // serving the stale bundle no matter how often the browser reloads.
+        let (healthy_tx, mut healthy_rx) = mpsc::channel::<String>(4);
+        let pool = stub_pool(vec![
+            stub_worker(None), // shutting down: its stdin sender is gone
+            stub_worker(Some(healthy_tx)),
+        ]);
+
+        let result = pool.invalidate_from_watcher(vec!["/project/app/page.tsx".to_string()]);
+
+        let error = result.expect_err("a failed worker must still surface an error");
+        assert!(
+            error.contains("1/2"),
+            "error should report partial progress, got: {error}"
+        );
+        assert!(error.contains("worker 0"), "error should name the failure");
+
+        let queued = healthy_rx
+            .try_recv()
+            .expect("worker after the failing one must still be invalidated");
+        assert!(queued.contains("invalidate"));
+        assert!(queued.contains("/project/app/page.tsx"));
+        assert!(
+            queued.ends_with('\n'),
+            "protocol frames are newline-delimited"
+        );
+    }
+
+    #[tokio::test]
+    async fn watcher_invalidation_reports_the_queued_count_when_all_workers_accept() {
+        let (first_tx, mut first_rx) = mpsc::channel::<String>(4);
+        let (second_tx, mut second_rx) = mpsc::channel::<String>(4);
+        let pool = stub_pool(vec![
+            stub_worker(Some(first_tx)),
+            stub_worker(Some(second_tx)),
+        ]);
+
+        let queued = pool
+            .invalidate_from_watcher(vec!["/project/app/page.tsx".to_string()])
+            .expect("healthy workers must not report an error");
+
+        assert_eq!(queued, 2);
+        // Each worker needs its own request id, or a worker could mistake a
+        // sibling's reply for its own.
+        let first = first_rx.try_recv().expect("first worker was skipped");
+        let second = second_rx.try_recv().expect("second worker was skipped");
+        assert_ne!(
+            request_id_of(&first),
+            request_id_of(&second),
+            "each worker must receive a unique request id"
+        );
+    }
+
+    fn request_id_of(frame: &str) -> String {
+        serde_json::from_str::<serde_json::Value>(frame.trim())
+            .expect("worker frames must be valid JSON")["id"]
+            .as_str()
+            .expect("invalidate frames carry a string id")
+            .to_string()
+    }
 
     #[test]
     fn worker_timeout_normalizes_valid_project_configuration() {

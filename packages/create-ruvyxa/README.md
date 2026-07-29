@@ -38,8 +38,8 @@ tsconfig.json
 
 The minimal starter stays intentionally small. Focused starters add a blog with static parameters, a
 CRUD flow with an API and validated action, or an API-only backend while keeping the same public
-framework conventions. Read the repository [User Guide](../../docs/guides/index.md) for the
-end-to-end app workflow and [Developer Guide](../../docs/developer-guide.md) for contributor checks.
+framework conventions. Read the repository [User Guide](../../docs/index.md) for the end-to-end app
+workflow and [Developer Guide](../../docs/developer-guide.md) for contributor checks.
 
 ## Project Names
 
