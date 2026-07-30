@@ -7,6 +7,10 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+# Route validation reuses the bundler's comment- and string-aware source scanner
+# so "does this page export a default?" has one answer in the workspace instead
+# of a second text scan that disagrees with the compiler.
+ruvyxa_bundler = { path = "../ruvyxa_bundler" }
 ruvyxa_diagnostics = { path = "../ruvyxa_diagnostics" }
 serde.workspace = true
 serde_json.workspace = true

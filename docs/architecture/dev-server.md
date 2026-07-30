@@ -39,7 +39,7 @@ and realtime event broadcasting.
 | `action_rate_limit_window`         | `Duration`               | `60s`                            | `60s`                             |
 | `same_origin_actions`              | `bool`                   | `true`                           | `true`                            |
 | `fetch_metadata_actions`           | `bool`                   | `true`                           | `true`                            |
-| `trusted_proxy_ips`                | `Vec<IpAddr>`            | `Vec::new()`                     | `Vec::new()`                      |
+| `trusted_proxies`                  | `TrustedProxies`         | `TrustedProxies::default()`      | `TrustedProxies::default()`       |
 | `security_headers`                 | `bool`                   | `true`                           | `true`                            |
 | `middleware`                       | `MiddlewareConfig`       | `default()`                      | `default()`                       |
 | `plugins_enabled`                  | `bool`                   | `false`                          | `false`                           |
@@ -153,7 +153,7 @@ Unknown untracked file → `FullReload`.
 ### NodeWorkerPool (`worker_pool.rs`)
 
 ```rust
-pub struct NodeWorkerPool { workers, worker_script, env, runtime, next_worker, response_timeout }
+pub struct NodeWorkerPool { workers, worker_script, env, runtime, next_worker, response_timeout, isolated_renders_per_worker }
 impl NodeWorkerPool {
     pub async fn start(root, env) -> Result<Self>;
     pub async fn start_with_runtime(root, env, runtime) -> Result<Self>;
@@ -171,6 +171,38 @@ impl NodeWorkerPool {
 Persistent Node/Bun processes communicating via NDJSON over stdin/stdout. Pool size: 2-8 (default
 CPU count clamped). Least-loaded worker selection with rotating start offset. Failed workers
 replaced automatically; idempotent requests retried once.
+
+**Worker recycling during builds.** Production prerendering asks for an isolated module import per
+path (`render_ssg_isolated`) so page-module state cannot leak between paths. That isolation works by
+importing the bundle under a fresh module URL, and Node's ESM registry never releases a URL — so
+each isolated import permanently retains one more module graph, and no cache eviction inside the
+worker can reclaim it. Replacing the process is the only operation that frees them.
+
+The build pool therefore retires a worker once it has served `RUVYXA_PRERENDER_RECYCLE_AFTER`
+isolated renders (default 32; `0` disables recycling). Retirement only happens when the worker is
+idle, because `shutdown` clears pending requests and would otherwise fail sibling renders that were
+progressing normally. The dev server passes `None` — it never requests isolated imports, so it
+retains nothing to reclaim and pays nothing for the bound.
+
+**Per-worker concurrency.** Inside each worker, `worker-pool.mjs` admits at most
+`RUVYXA_WORKER_MAX_CONCURRENCY` requests at a time (default: core count clamped to 2–8). Renders are
+CPU-bound and each one holds a React tree, a compiled bundle, and its response buffer, so admitting
+a whole burst at once exhausts the heap or thrashes the CPU into timeouts that look like hangs.
+Excess requests queue and run as slots free up; `invalidate` and `ping` bypass the queue, since
+delaying a cache invalidation would leave the worker serving stale bundles exactly when it is
+busiest. `ping` reports `activeRequests`, `queuedRequests`, and `maxConcurrentRequests`.
+
+### Worker environment variables
+
+| Variable                         | Default              | Effect                                                     |
+| -------------------------------- | -------------------- | ---------------------------------------------------------- |
+| `RUVYXA_WORKER_POOL_SIZE`        | CPU count (2–8)      | Worker processes in the dev/prod pool                      |
+| `RUVYXA_WORKER_MAX_CONCURRENCY`  | CPU count (2–8)      | Requests one worker executes at once                       |
+| `RUVYXA_WORKER_TIMEOUT_MS`       | 30000 / 300000 build | Per-request deadline, shared by Rust and the Node watchdog |
+| `RUVYXA_PRERENDER_RECYCLE_AFTER` | 32 (`0` disables)    | Isolated prerenders before a build worker is retired       |
+| `RUVYXA_CACHE_MAX_ENTRIES`       | 256                  | Bundle and module cache entries per worker                 |
+| `RUVYXA_MEMORY_LIMIT_MB`         | 512                  | Heap threshold that triggers in-worker cache eviction      |
+| `RUVYXA_RENDER_CACHE_SIZE`       | 1024 dev / 512 prod  | Render cache entries (capped at 16384)                     |
 
 ### StyleCollection (`style.rs`)
 

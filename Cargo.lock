@@ -2117,6 +2117,7 @@ dependencies = [
 name = "ruvyxa_graph"
 version = "1.0.25"
 dependencies = [
+ "ruvyxa_bundler",
  "ruvyxa_diagnostics",
  "serde",
  "serde_json",

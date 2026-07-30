@@ -20,6 +20,14 @@ export const ROUTE_CONTEXT_GLOBAL = '__RUVYXA_ROUTE_CONTEXT__'
 /** Global registry of route pattern to tree factory, read by the client router. */
 export const ROUTE_REGISTRY_GLOBAL = '__RUVYXA_ROUTES__'
 
+/**
+ * Global carrying the route pattern this document was served from.
+ *
+ * The registry above is keyed by pattern (`/blog/[slug]`), not by URL, so the
+ * client router needs the pattern to look up its own initial route.
+ */
+export const ROUTE_PATTERN_GLOBAL = '__RUVYXA_ROUTE_PATTERN__'
+
 /** Local name the emitted prelude binds the shared routing context to. */
 export const ROUTE_CONTEXT_LOCAL = '__ruvyxaRouteContext'
 
@@ -355,7 +363,16 @@ export function routeRecoveryFunction({ layoutNames, routePath, notFoundName }) 
  * again on a return visit. The router re-renders from this registry instead.
  */
 export function routeRegistration({ name, routePath }) {
-  return `;(globalThis.${ROUTE_REGISTRY_GLOBAL} ||= {})[${JSON.stringify(routePath)}] = ${name}`
+  // `__RUVYXA_ROUTE_PATTERN__` tells the client router which registry key the
+  // document was served from. Without it the router had to seed its snapshot
+  // from `__RUVYXA_REQUEST_PATH__` — a concrete URL — and then failed to find
+  // `__RUVYXA_ROUTES__["/blog/hello"]`, so `router.refresh()` silently rendered
+  // nothing on any dynamic route until the first client navigation replaced the
+  // snapshot. Emitted here so both entry generators publish it from the same
+  // place they register the tree; `output.rs` mirrors this line and
+  // `client_entry_matches_node_runtime_contract` keeps the two in lockstep.
+  return `;(globalThis.${ROUTE_REGISTRY_GLOBAL} ||= {})[${JSON.stringify(routePath)}] = ${name}
+globalThis.${ROUTE_PATTERN_GLOBAL} = ${JSON.stringify(routePath)}`
 }
 
 /**

@@ -80,7 +80,10 @@ pub fn build_entry_source(input: &BundleInput) -> (String, String) {
         String::new()
     };
 
-    let request_path = js_string(&input.request_path);
+    // On the client path `input.request_path` carries the route *pattern*: one
+    // bundle serves every concrete URL of a dynamic route, so there is no single
+    // request path to embed. The binding is named for what it holds.
+    let route_pattern = js_string(&input.request_path);
 
     // Route metadata is read from namespace re-imports of the same modules: a
     // default import cannot see a sibling `export const meta`. Ordered root
@@ -103,11 +106,10 @@ pub fn build_entry_source(input: &BundleInput) -> (String, String) {
         .collect::<Vec<_>>()
         .join(", ");
 
-    // Client bundles are keyed by route pattern, which is what `request_path`
-    // carries on this path — one bundle serves every concrete URL of a dynamic
-    // route.
+    // Client bundles are keyed by route pattern — one bundle serves every
+    // concrete URL of a dynamic route.
     let route_tree = route_tree_function(
-        &request_path,
+        &route_pattern,
         &layout_wrappers,
         error_name.as_deref(),
         loading_name.as_deref(),
@@ -126,10 +128,15 @@ import Page from {page_path};
 {META_PRELUDE}
 
 {route_tree}
-;(globalThis.__RUVYXA_ROUTES__ ||= {{}})[{request_path}] = __ruvyxaTree;
+;(globalThis.__RUVYXA_ROUTES__ ||= {{}})[{route_pattern}] = __ruvyxaTree;
+globalThis.__RUVYXA_ROUTE_PATTERN__ = {route_pattern};
 
 const __ruvyxaCtx = {{
-  path: globalThis.__RUVYXA_REQUEST_PATH__ ?? {request_path},
+  // The registry is keyed by route pattern, so this bundle has no concrete
+  // request path of its own to fall back to. Reading the browser's location is
+  // correct for every URL the pattern matches; falling back to the pattern
+  // itself used to report `/blog/[slug]` as the pathname.
+  path: globalThis.__RUVYXA_REQUEST_PATH__ ?? (typeof location === "undefined" ? "/" : location.pathname),
   params: globalThis.__RUVYXA_ROUTE_PARAMS__ ?? {{}},
 }};
 const __ruvyxaTreeElement = __ruvyxaTree(__ruvyxaCtx);
@@ -428,14 +435,16 @@ mod tests {
             "{source}"
         );
         assert!(!source.contains("globalThis.pwned=1;\"\n"), "{source}");
-        assert!(
-            source.contains(r#"?? "/a\";globalThis.pwned=1;\"","#),
-            "{source}"
-        );
-        // The route pattern reaches two more interpolation sites now — the
-        // registry key and the routing context — and both must stay escaped.
+        // The route pattern reaches three interpolation sites — the registry
+        // key, the pattern global the client router reads, and the routing
+        // context — and every one must stay escaped.
         assert!(
             source.contains(r#"["/a\";globalThis.pwned=1;\""] = __ruvyxaTree;"#),
+            "{source}"
+        );
+        assert!(
+            source
+                .contains(r#"globalThis.__RUVYXA_ROUTE_PATTERN__ = "/a\";globalThis.pwned=1;\"";"#),
             "{source}"
         );
         assert!(
@@ -454,7 +463,28 @@ mod tests {
 
         assert_eq!(label, "ruvyxa:bundle-entry.tsx");
         assert!(source.contains(r#"import Page from "/project/app/blog/[slug]/page.tsx";"#));
-        assert!(source.contains(r#"?? "/blog/[slug]","#));
+    }
+
+    /// One client bundle serves every URL of a dynamic route, so it has no
+    /// concrete request path to fall back to. Falling back to the route pattern
+    /// made `usePathname()` return `/blog/[slug]` whenever the server did not
+    /// inject `__RUVYXA_REQUEST_PATH__`, which is never a real pathname.
+    #[test]
+    fn client_entry_falls_back_to_the_browser_location_not_the_route_pattern() {
+        let (source, _) = build_entry_source(&input(
+            "/project/app/blog/[slug]/page.tsx",
+            Vec::new(),
+            "/blog/[slug]",
+        ));
+
+        assert!(
+            source.contains(r#"globalThis.__RUVYXA_REQUEST_PATH__ ?? (typeof location ==="#),
+            "{source}"
+        );
+        assert!(
+            !source.contains(r#"__RUVYXA_REQUEST_PATH__ ?? "/blog/[slug]""#),
+            "the pattern must never be used as a pathname: {source}"
+        );
     }
 
     #[test]
@@ -472,6 +502,14 @@ mod tests {
             source.contains(
                 r#"(globalThis.__RUVYXA_ROUTES__ ||= {})["/blog/[slug]"] = __ruvyxaTree;"#
             ),
+            "{source}"
+        );
+        // The registry is keyed by pattern, so the client router needs the
+        // pattern published alongside it to address its own initial route.
+        // `packages/ruvyxa/runtime/entry-templates.mjs` emits the same line from
+        // `routeRegistration`; the two must stay in lockstep.
+        assert!(
+            source.contains(r#"globalThis.__RUVYXA_ROUTE_PATTERN__ = "/blog/[slug]";"#),
             "{source}"
         );
         assert!(source.contains("__ruvyxaRouteContext.Provider"), "{source}");

@@ -228,37 +228,19 @@ impl RenderCache {
         Self::new(capacity, 1800)
     }
 
-    /// Try to get a cached value. Returns None on miss or expired entry.
+    /// Try to get a cached value as an owned `String`.
     ///
     /// A successful read promotes the entry to most recently used.
+    ///
+    /// Prefer [`RenderCache::get_arc`] on request paths: this variant copies the
+    /// whole document on every cache hit, which for a large page at high request
+    /// rates is the dominant allocation in an otherwise trivial response.
+    #[cfg(test)]
     pub async fn get(&self, key: &str) -> Option<String> {
-        let cached = {
-            let entries = self.entries.read().await;
-            if let Some(entry) = entries.get(key) {
-                if entry.created_at.elapsed() <= self.ttl {
-                    Some(entry.value.to_string())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        };
-
-        if let Some(value) = cached {
-            self.hits.fetch_add(1, Ordering::Relaxed);
-            self.promote(key).await;
-            return Some(value);
-        }
-
-        if self.entries.read().await.contains_key(key) {
-            self.remove_if_expired(key).await;
-        }
-        self.misses.fetch_add(1, Ordering::Relaxed);
-        None
+        self.get_arc(key).await.map(|value| value.to_string())
     }
 
-    /// Get a cached value as an `Arc<str>` (zero-copy for callers that can use it).
+    /// Get a cached value as an `Arc<str>`, sharing the stored allocation.
     pub async fn get_arc(&self, key: &str) -> Option<Arc<str>> {
         let cached = {
             let entries = self.entries.read().await;
@@ -289,11 +271,11 @@ impl RenderCache {
     /// Return a cached value and its age without applying the cache TTL.
     /// ISR deliberately serves stale output while it regenerates in the
     /// background, so it cannot use the normal freshness-enforcing getters.
-    pub async fn get_stale_with_age(&self, key: &str) -> Option<(String, Duration)> {
+    pub async fn get_stale_with_age(&self, key: &str) -> Option<(Arc<str>, Duration)> {
         let cached = {
             let entries = self.entries.read().await;
             let entry = entries.get(key)?;
-            (entry.value.to_string(), entry.created_at.elapsed())
+            (Arc::clone(&entry.value), entry.created_at.elapsed())
         };
         self.hits.fetch_add(1, Ordering::Relaxed);
         self.promote(key).await;
@@ -301,11 +283,20 @@ impl RenderCache {
     }
 
     /// Insert a value into the cache, evicting the oldest entry if at capacity.
-    pub async fn put(&self, key: String, value: String) {
+    ///
+    /// Returns the stored [`Arc<str>`] so the caller can serve the same
+    /// allocation it just cached. Callers used to pass `value.clone()` and keep
+    /// the original, which made a second full copy of every rendered page on top
+    /// of the one this method has to make to build the `Arc`.
+    pub async fn put(&self, key: String, value: String) -> Arc<str> {
+        let stored: Arc<str> = Arc::from(value);
+
         // A zero-sized cache is explicitly disabled. Without this guard, the
         // capacity check cannot evict an item and the cache would grow forever.
+        // The value is still returned so a disabled cache changes only caching,
+        // never what the caller serves.
         if self.capacity == 0 {
-            return;
+            return stored;
         }
 
         let key: Arc<str> = Arc::from(key);
@@ -330,12 +321,13 @@ impl RenderCache {
         entries.insert(
             Arc::clone(&key),
             CacheEntry {
-                value: Arc::from(value.as_str()),
+                value: Arc::clone(&stored),
                 created_at: Instant::now(),
             },
         );
         order.push_back(key);
         debug_assert_eq!(entries.len(), order.len());
+        stored
     }
 
     /// Invalidate all entries (called on file change).
@@ -519,6 +511,53 @@ mod tests {
             .collect()
     }
 
+    /// `put` hands back the very allocation it stored, and `get_arc` hands back
+    /// that same one. Callers used to pass `value.clone()` and read with `get`,
+    /// making one full copy of every rendered page on write and another on every
+    /// cache hit.
+    #[tokio::test]
+    async fn put_and_get_arc_share_one_allocation() {
+        let cache = RenderCache::new(4, 60);
+        let stored = cache.put("ssr:/".into(), "<p>page</p>".into()).await;
+        let read = cache.get_arc("ssr:/").await.expect("just stored");
+
+        assert!(
+            Arc::ptr_eq(&stored, &read),
+            "a cache hit must share the stored allocation, not copy it"
+        );
+
+        let read_again = cache.get_arc("ssr:/").await.expect("still cached");
+        assert!(Arc::ptr_eq(&read, &read_again));
+        assert_eq!(&*read, "<p>page</p>");
+    }
+
+    /// A disabled cache must still return what the caller asked it to store, or
+    /// setting `RUVYXA_RENDER_CACHE_SIZE=0` would blank out every page.
+    #[tokio::test]
+    async fn a_disabled_cache_still_returns_the_value_it_was_given() {
+        let cache = RenderCache::new(0, 60);
+        let stored = cache.put("ssr:/".into(), "<p>page</p>".into()).await;
+
+        assert_eq!(&*stored, "<p>page</p>");
+        assert!(cache.get_arc("ssr:/").await.is_none());
+        assert!(cache.entries.read().await.is_empty());
+    }
+
+    /// ISR reads stale entries; it must share the allocation too.
+    #[tokio::test]
+    async fn stale_reads_share_the_stored_allocation() {
+        let cache = RenderCache::new(4, 0);
+        let stored = cache.put("isr:/".into(), "<p>stale</p>".into()).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        let (read, age) = cache
+            .get_stale_with_age("isr:/")
+            .await
+            .expect("stale reads ignore the TTL");
+        assert!(Arc::ptr_eq(&stored, &read));
+        assert!(age >= Duration::from_millis(10));
+    }
+
     #[tokio::test]
     async fn test_put_and_get() {
         let cache = RenderCache::new(4, 60);
@@ -591,7 +630,7 @@ mod tests {
             cache
                 .get_stale_with_age("isr:/")
                 .await
-                .map(|(value, _)| value),
+                .map(|(value, _)| value.to_string()),
             Some("stale".to_string())
         );
         assert_eq!(cache.get("isr:/").await, None);

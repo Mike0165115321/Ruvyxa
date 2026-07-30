@@ -919,17 +919,25 @@ security: {
 
 ```ts
 security: {
-  trustedProxyIps: ["10.0.0.1", "10.0.0.2"],
+  // Exact addresses, CIDR ranges, or a mix of both.
+  trustedProxyIps: ["10.0.0.1", "172.16.0.0/12", "2001:db8::/32"],
 }
 ```
 
-| Property   | Value                                                                          |
-| ---------- | ------------------------------------------------------------------------------ |
-| TS type    | `string[]`                                                                     |
-| Rust field | `trusted_proxy_ips: Vec<String>`                                               |
-| Default    | `[]` (empty)                                                                   |
-| Validation | Each entry must be a valid IPv4 or IPv6 address                                |
-| Error      | `RUV1602: config field 'security.trustedProxyIps' contains invalid IP address` |
+| Property   | Value                                                                                |
+| ---------- | ------------------------------------------------------------------------------------ |
+| TS type    | `string[]`                                                                           |
+| Rust field | `trusted_proxy_ips: Vec<String>`                                                     |
+| Default    | `[]` (empty)                                                                         |
+| Validation | Each entry is an IPv4/IPv6 address or a CIDR range                                   |
+| Error      | `RUV1602: config field 'security.trustedProxyIps' contains invalid IP or CIDR range` |
+
+An entry without a `/` is treated as a host route (`/32` for IPv4, `/128` for IPv6). Host bits below
+the prefix are masked, so `10.1.2.3/8` and `10.0.0.0/8` describe the same range. An IPv4 range also
+matches an IPv4-mapped peer (`::ffff:10.0.0.9`), which is how a dual-stack listener reports IPv4
+clients.
+
+Loopback is always trusted and does not need to be listed.
 
 ### security.headers
 
@@ -1120,7 +1128,7 @@ fn validate_paths(&self) -> anyhow::Result<()> {
 | `security.pluginLimit`            | > 0, max 268435456                     | RUV1601/1602       | `security.pluginLimit must not exceed 268435456`                   |
 | `security.actionRateLimit.max`    | > 0                                    | RUV1601            | `security.actionRateLimit.max must be greater than zero`           |
 | `security.actionRateLimit.window` | > 0                                    | RUV1601            | `security.actionRateLimit.window must be greater than zero`        |
-| `security.trustedProxyIps`        | Valid IPv4/IPv6                        | RUV1602            | `RUV1602: trustedProxyIps contains invalid IP`                     |
+| `security.trustedProxyIps`        | IPv4/IPv6 address or CIDR range        | RUV1602            | `RUV1602: trustedProxyIps contains invalid IP or CIDR range`       |
 | `middleware.workers`              | 1-MAX                                  | RUV1602            | `middleware.workers must be between 1 and <max>`                   |
 | `middleware.timeoutMs`            | 1-MAX                                  | RUV1602            | `middleware.timeoutMs must be between 1 and <max>`                 |
 | Unknown field                     | Not in struct                          | RUV1200            | `unknown config field "unknownField"`                              |

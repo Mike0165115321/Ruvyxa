@@ -187,6 +187,62 @@ describe('@ruvyxa/auth', () => {
     assert.equal((await auth.handle(request('agent-a', '203.0.113.8')))?.status, 401)
   })
 
+  it('caps how many identities one client may attempt, not just attempts per identity', async () => {
+    // The bucket key contains the email, so a per-identity limit alone let one
+    // source try `max` passwords against an unlimited number of accounts —
+    // exactly the shape of credential stuffing and account enumeration. A
+    // second bucket keyed only by the client caps the total.
+    const auth = runtime({
+      rateLimit: { max: 1, windowSeconds: 60 },
+      clientIp: (request: Request) => request.headers.get('x-test-ip'),
+    })
+    const attempt = (email: string, ip: string) =>
+      auth.handle(
+        new Request(`${origin}/__ruvyxa/auth/login/email`, {
+          method: 'POST',
+          headers: { origin, 'x-test-ip': ip },
+          body: JSON.stringify({ email, password: 'wrong' }),
+        }),
+      )
+
+    // max = 1, client multiplier = 5, so the client budget is 5 attempts total
+    // however many distinct identities they are spread across.
+    const statuses: number[] = []
+    for (let index = 0; index < 7; index += 1) {
+      statuses.push((await attempt(`victim-${index}@example.com`, '203.0.113.9'))!.status)
+    }
+
+    assert.deepEqual(
+      statuses,
+      [401, 401, 401, 401, 401, 429, 429],
+      'the client-only bucket must stop the sweep once its budget is spent',
+    )
+
+    // A different client is unaffected — the cap is per client, not global.
+    assert.equal((await attempt('victim-0@example.com', '203.0.113.10'))!.status, 401)
+  })
+
+  it('still limits a single identity before the client budget is reached', async () => {
+    // The per-identity bucket must keep working: hammering one account has to
+    // stop at `max`, well before the larger client budget.
+    const auth = runtime({
+      rateLimit: { max: 2, windowSeconds: 60 },
+      clientIp: (request: Request) => request.headers.get('x-test-ip'),
+    })
+    const attempt = () =>
+      auth.handle(
+        new Request(`${origin}/__ruvyxa/auth/login/email`, {
+          method: 'POST',
+          headers: { origin, 'x-test-ip': '203.0.113.11' },
+          body: JSON.stringify({ email: 'ada@example.com', password: 'wrong' }),
+        }),
+      )
+
+    assert.equal((await attempt())!.status, 401)
+    assert.equal((await attempt())!.status, 401)
+    assert.equal((await attempt())!.status, 429)
+  })
+
   it('expires logout cookies and deletes the stored session', async () => {
     const auth = runtime()
     const result = await auth.login('email', { email: 'ada@example.com', password: 'correct' })

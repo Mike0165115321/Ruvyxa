@@ -19,6 +19,7 @@
  *   - Graceful shutdown with SIGTERM/SIGINT handling
  *   - Memory pressure monitoring with automatic cache eviction
  */
+import { availableParallelism } from 'node:os'
 import { createHash } from 'node:crypto'
 import { once } from 'node:events'
 import { existsSync } from 'node:fs'
@@ -49,6 +50,25 @@ const WORKER_REQUEST_TIMEOUT_MS = positiveIntegerEnv(
 )
 const MEMORY_PRESSURE_THRESHOLD_MB = positiveIntegerEnv('RUVYXA_MEMORY_LIMIT_MB', 512)
 const API_STREAM_CHUNK_BYTES = 64 * 1024
+
+/**
+ * Requests this worker will execute at once.
+ *
+ * `activeRequests` was counted but never used to gate admission, so a burst on
+ * one worker started every render concurrently: each one holds a React tree, a
+ * compiled bundle, and its response buffer, and enough of them together exhaust
+ * the heap or thrash the CPU into timeouts that look like hangs. Queueing beyond
+ * this point costs a little latency and keeps the ones already running fast.
+ *
+ * Renders are CPU-bound, so the useful width is the core count rather than a
+ * large fixed number. The Rust pool bounds its stdin channel but has no view of
+ * how much work is in flight inside a worker, which is why the limit belongs
+ * here.
+ */
+const MAX_CONCURRENT_REQUESTS = positiveIntegerEnv(
+  'RUVYXA_WORKER_MAX_CONCURRENCY',
+  Math.max(2, Math.min(8, availableParallelism())),
+)
 const runtimeDir = path.dirname(fileURLToPath(import.meta.url))
 
 // --- LRU Cache ---
@@ -141,10 +161,47 @@ let activeRequests = 0
 let isShuttingDown = false
 let moduleImportVersion = 0
 
+// Requests admitted but waiting for a concurrency slot. Each entry is the
+// `resolve` of the promise its handler is parked on.
+const admissionQueue = []
+
+/**
+ * Wait for a concurrency slot, then mark this request active.
+ *
+ * Resolves immediately while the worker is below its limit, so the common case
+ * adds no latency and no extra microtask hop beyond the `await`.
+ */
+function acquireRequestSlot() {
+  if (activeRequests < MAX_CONCURRENT_REQUESTS) {
+    activeRequests++
+    return undefined
+  }
+  return new Promise((resolve) => {
+    admissionQueue.push(() => {
+      activeRequests++
+      resolve()
+    })
+  })
+}
+
+/** Release this request's slot and start the longest-waiting queued one. */
+function releaseRequestSlot() {
+  activeRequests--
+  const next = admissionQueue.shift()
+  if (next) next()
+}
+
 // --- Graceful Shutdown ---
-function shutdown() {
+function shutdown(reason = 'unknown') {
   if (isShuttingDown) return
   isShuttingDown = true
+  // The reason was previously discarded — `shutdown` took no parameter while
+  // every caller passed one — which made a signal indistinguishable from a
+  // closed stdin in the logs.
+  process.stderr.write(`ruvyxa worker shutting down (${reason})\n`)
+  // Queued requests will never run: nothing new is admitted once shutting down,
+  // and their callers are already accounted for by the Rust side's timeout.
+  admissionQueue.length = 0
   if (activeRequests === 0) process.exit(0)
   setTimeout(() => process.exit(0), 5000).unref()
 }
@@ -185,7 +242,18 @@ rl.on('line', async (line) => {
   const { id } = request
   if (!id) return
 
-  activeRequests++
+  // Cheap requests must not queue behind renders: an invalidation or ping is
+  // bookkeeping, and delaying it would leave workers serving stale bundles
+  // precisely when the pool is busy.
+  const needsSlot = request.type !== 'invalidate' && request.type !== 'ping'
+  if (needsSlot) {
+    await acquireRequestSlot()
+    // The worker may have started shutting down while this request waited.
+    if (isShuttingDown) {
+      releaseRequestSlot()
+      return
+    }
+  }
 
   try {
     const result = await withTimeout(
@@ -202,10 +270,10 @@ rl.on('line', async (line) => {
     try {
       await writeWorkerMessage({ id, ...workerError(error) })
     } catch {
-      shutdown()
+      shutdown('stdout-write-failed')
     }
   } finally {
-    activeRequests--
+    if (needsSlot) releaseRequestSlot()
     if (isShuttingDown && activeRequests === 0) process.exit(0)
   }
 })
@@ -239,6 +307,10 @@ async function dispatchRequest(request) {
         // Module graphs retained by Node's ESM registry for this process.
         retainedModuleUrls: registeredModuleUrls.size,
         activeRequests,
+        // Requests admitted but parked waiting for a concurrency slot. A
+        // persistently non-zero queue means the pool is the bottleneck.
+        queuedRequests: admissionQueue.length,
+        maxConcurrentRequests: MAX_CONCURRENT_REQUESTS,
         coalesceMapSize: renderCoalesceMap.size,
         workerRequestTimeoutMs: WORKER_REQUEST_TIMEOUT_MS,
         memoryPressureThresholdMb: MEMORY_PRESSURE_THRESHOLD_MB,

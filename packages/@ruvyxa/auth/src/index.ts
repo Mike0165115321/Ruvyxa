@@ -390,6 +390,20 @@ async function readCallbackToken(request: Request): Promise<string | null> {
   return typeof token === 'string' && MAGIC_LINK_TOKEN_PATTERN.test(token) ? token : null
 }
 
+/**
+ * Requests one client may make across every identity in a window, as a multiple
+ * of `rateLimitMax`.
+ *
+ * The per-identity bucket alone let one source try `rateLimitMax` passwords
+ * against each of an unlimited number of accounts, because the bucket key
+ * contains the email. Credential stuffing and account enumeration need exactly
+ * that shape, so a second bucket keyed only by the client caps the total. The
+ * multiple keeps shared egress (offices, mobile carriers, CGNAT) working: a
+ * legitimate client rarely signs in for many distinct identities, while an
+ * attacker needs orders of magnitude more.
+ */
+const CLIENT_RATE_LIMIT_MULTIPLIER = 5
+
 async function consumeRateLimit(
   request: Request,
   scope: string,
@@ -404,12 +418,25 @@ async function consumeRateLimit(
   const clientIp = resolveClientIp(request, settings)
   const clientKey =
     clientIp ?? `ua:${request.headers.get('user-agent')?.slice(0, 128) ?? 'unknown'}`
-  const key = await tokenKey('rate', `${scope}:${clientKey}`, settings.secret)
-  const decision = await settings.rateLimitStore.consume(
-    key,
+
+  // Two independent buckets. The per-identity one keeps a single account from
+  // being hammered; the client-only one caps how much one source can attempt in
+  // total, across every identity it tries. Neither dimension is limited by the
+  // other, which is what the combined key used to get wrong.
+  await consumeBucket(
+    await tokenKey('rate', `${scope}:${clientKey}`, settings.secret),
     settings.rateLimitMax,
-    settings.rateLimitWindowSeconds,
+    settings,
   )
+  await consumeBucket(
+    await tokenKey('rate-client', clientKey, settings.secret),
+    settings.rateLimitMax * CLIENT_RATE_LIMIT_MULTIPLIER,
+    settings,
+  )
+}
+
+async function consumeBucket(key: string, max: number, settings: NormalizedOptions): Promise<void> {
+  const decision = await settings.rateLimitStore.consume(key, max, settings.rateLimitWindowSeconds)
   if (!decision.allowed) {
     throw new AuthError(
       'RUV3102',

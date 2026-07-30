@@ -4,8 +4,8 @@ use std::collections::{BTreeSet, HashSet};
 #[cfg(test)]
 use std::fs;
 use std::future::IntoFuture;
+use std::net::SocketAddr;
 use std::net::ToSocketAddrs;
-use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -45,6 +45,7 @@ use action_security::{
     ActionRateLimiter, action_rate_limit_key, hmr_origin_is_cross_site, validate_action_payload,
     validate_action_request,
 };
+pub use action_security::{IpPrefix, TrustedProxies};
 #[cfg(test)]
 use action_security::{
     action_content_type_is_supported, action_fetch_site_is_cross_site, action_origin_is_cross_site,
@@ -88,6 +89,7 @@ use plugin_bridge::{
 mod plugin_head;
 pub use plugin_head::{PluginHeadEntry, render_plugin_head};
 mod static_assets;
+use static_assets::public_asset_links;
 #[cfg(test)]
 use static_assets::{is_safe_relative_path, resolve_public_asset};
 
@@ -97,7 +99,7 @@ pub use worker_pool::{NodeWorkerPool, StaticParamSegment, StaticParamsRoute};
 mod render_pipeline;
 pub use render_pipeline::{RenderContext, find_runtime_script, render_request_with_context};
 #[cfg(test)]
-use render_pipeline::{decode_realtime_event, page_has_default_export, serve_prerendered_html};
+use render_pipeline::{decode_realtime_event, serve_prerendered_html};
 use render_pipeline::{
     render_client_bundle_pooled, render_request_pooled, render_server_action_pooled, runtime_env,
     runtime_trace_cached,
@@ -256,8 +258,9 @@ pub struct ServerConfig {
     pub same_origin_actions: bool,
     /// Reject action requests initiated from a cross-site browser context.
     pub fetch_metadata_actions: bool,
-    /// Non-loopback reverse-proxy IPs allowed to supply forwarded client and protocol headers.
-    pub trusted_proxy_ips: Vec<IpAddr>,
+    /// Non-loopback reverse proxies allowed to supply forwarded client and
+    /// protocol headers, as exact addresses or CIDR ranges.
+    pub trusted_proxies: TrustedProxies,
     /// Apply Ruvyxa's default security response headers.
     pub security_headers: bool,
     pub middleware: MiddlewareConfig,
@@ -333,7 +336,7 @@ impl ServerConfig {
             action_rate_limit_window: ACTION_RATE_LIMIT_WINDOW,
             same_origin_actions: true,
             fetch_metadata_actions: true,
-            trusted_proxy_ips: Vec::new(),
+            trusted_proxies: TrustedProxies::default(),
             security_headers: true,
             middleware: MiddlewareConfig::default(),
             plugins_enabled: false,
@@ -369,7 +372,7 @@ impl ServerConfig {
             action_rate_limit_window: ACTION_RATE_LIMIT_WINDOW,
             same_origin_actions: true,
             fetch_metadata_actions: true,
-            trusted_proxy_ips: Vec::new(),
+            trusted_proxies: TrustedProxies::default(),
             security_headers: true,
             middleware: MiddlewareConfig::default(),
             plugins_enabled: false,
@@ -416,6 +419,13 @@ struct RuntimeCache {
     manifest: tokio::sync::RwLock<Option<Arc<RouteManifest>>>,
     styles: tokio::sync::RwLock<Option<StyleCacheEntry>>,
     router: tokio::sync::RwLock<Option<Arc<RadixRouter>>>,
+    /// `<link>` tags derived from the public directory's contents.
+    ///
+    /// Resolved once and reused. `public_asset_links` stats the public directory
+    /// to decide which tags to emit, and every page render called it — a
+    /// blocking filesystem syscall on a Tokio worker thread, per request, for an
+    /// answer that only changes when the watcher invalidates this cache.
+    asset_links: tokio::sync::RwLock<Option<Arc<str>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -431,7 +441,31 @@ impl RuntimeCache {
             manifest: tokio::sync::RwLock::new(Some(Arc::new(manifest))),
             styles: tokio::sync::RwLock::new(None),
             router: tokio::sync::RwLock::new(Some(Arc::new(router))),
+            asset_links: tokio::sync::RwLock::new(None),
         }
+    }
+
+    /// Public-directory `<link>` tags, resolved on first use.
+    async fn asset_links(&self, config: &ServerConfig) -> Arc<str> {
+        {
+            let cached = self.asset_links.read().await;
+            if let Some(links) = cached.as_ref() {
+                return Arc::clone(links);
+            }
+        }
+
+        // The directory scan touches the filesystem, so keep it off the async
+        // worker thread like every other blocking read on this path.
+        let public_dir = config.public_dir.clone();
+        let links: Arc<str> = tokio::task::spawn_blocking(move || public_asset_links(&public_dir))
+            .await
+            .map(Arc::from)
+            .unwrap_or_else(|_| Arc::from(""));
+
+        let mut cached = self.asset_links.write().await;
+        // A concurrent caller may have won the race; both scanned the same
+        // directory, so either value stands.
+        Arc::clone(cached.get_or_insert(links))
     }
 
     async fn manifest(&self, config: &ServerConfig) -> Result<Arc<RouteManifest>> {
@@ -533,6 +567,7 @@ impl RuntimeCache {
         *self.manifest.blocking_write() = None;
         *self.styles.blocking_write() = None;
         *self.router.blocking_write() = None;
+        *self.asset_links.blocking_write() = None;
     }
 
     #[cfg(test)]
@@ -540,6 +575,7 @@ impl RuntimeCache {
         *self.manifest.write().await = None;
         *self.styles.write().await = None;
         *self.router.write().await = None;
+        *self.asset_links.write().await = None;
     }
 }
 
@@ -1293,7 +1329,9 @@ async fn client_bundle(
 ) -> Response {
     let response = match render_client_bundle_pooled(&state, &query.path).await {
         Ok(script) => {
-            let mut response = script.into_response();
+            // The client bundle is cached behind an `Arc<str>`; serve that
+            // allocation instead of copying the whole script per request.
+            let mut response = shared_text_body(script).into_response();
             response.headers_mut().insert(
                 header::CONTENT_TYPE,
                 HeaderValue::from_static("text/javascript; charset=utf-8"),
@@ -1632,6 +1670,33 @@ fn status_text(status: StatusCode) -> String {
 }
 
 fn html_response(status: StatusCode, body: String) -> Response {
+    html_response_from_body(status, Body::from(body))
+}
+
+/// Serve an HTML document that is already stored behind an [`Arc<str>`].
+///
+/// The render cache hands out shared allocations, so a cache hit can build the
+/// response body without copying the document. Building it from a `String`
+/// instead meant one full copy of every cached page on every hit.
+pub(crate) fn shared_html_response(status: StatusCode, body: Arc<str>) -> Response {
+    html_response_from_body(status, shared_text_body(body))
+}
+
+/// Lets `Bytes` borrow an `Arc<str>` as its backing storage.
+struct SharedText(Arc<str>);
+
+impl AsRef<[u8]> for SharedText {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+
+/// Build a response body from a shared string without copying it.
+pub(crate) fn shared_text_body(text: Arc<str>) -> Body {
+    Body::from(Bytes::from_owner(SharedText(text)))
+}
+
+fn html_response_from_body(status: StatusCode, body: Body) -> Response {
     let mut response = (status, Html(body)).into_response();
     if status.is_client_error() || status.is_server_error() {
         response.headers_mut().insert(
@@ -1987,14 +2052,6 @@ mod tests {
             classify_hmr_event(&[PathBuf::from("app/docs/page.mdx")]),
             "component-update"
         );
-        assert!(page_has_default_export(
-            Path::new("app/docs/page.mdx"),
-            "# Content"
-        ));
-        assert!(!page_has_default_export(
-            Path::new("app/docs/page.tsx"),
-            "export const title = 'Missing'"
-        ));
     }
 
     #[test]
@@ -2089,8 +2146,17 @@ mod tests {
         );
     }
 
+    /// The scheme is only compared when a trusted proxy actually reported it.
+    ///
+    /// This test previously asserted the opposite — that a `https` Origin with a
+    /// matching Host is cross-site whenever no trusted proxy sent
+    /// `X-Forwarded-Proto`. That encoded a false rejection: Ruvyxa never
+    /// terminates TLS, so it cannot observe the browser's scheme on its own, and
+    /// treating the missing evidence as proof of `http` returned 403 for every
+    /// server action behind a TLS-terminating proxy that is not loopback and not
+    /// listed in `security.trustedProxyIps`.
     #[test]
-    fn blocks_cross_scheme_action_requests_without_trusted_proxy_protocol() {
+    fn compares_the_origin_scheme_only_when_a_trusted_proxy_reported_it() {
         let mut headers = HeaderMap::new();
         headers.insert(header::HOST, HeaderValue::from_static("localhost:3000"));
         headers.insert(
@@ -2098,23 +2164,125 @@ mod tests {
             HeaderValue::from_static("https://localhost:3000"),
         );
 
-        let config = ServerConfig::dev(".", "localhost", 3000);
-        assert!(action_origin_is_cross_site(
+        let mut config = ServerConfig::dev(".", "localhost", 3000);
+
+        // No trusted proxy vouched for a scheme: the matching host is the
+        // same-origin evidence, and the request is accepted.
+        assert!(!action_origin_is_cross_site(
             &headers,
             &config,
             "127.0.0.1".parse().unwrap(),
         ));
+        assert!(!action_origin_is_cross_site(
+            &headers,
+            &config,
+            "10.0.0.9".parse().unwrap(),
+        ));
+
+        // A trusted proxy reporting the same scheme keeps the request valid.
         headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
         assert!(!action_origin_is_cross_site(
             &headers,
             &config,
             "127.0.0.1".parse().unwrap(),
         ));
+
+        // A trusted proxy reporting a different scheme is a real mismatch.
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("http"));
+        assert!(action_origin_is_cross_site(
+            &headers,
+            &config,
+            "127.0.0.1".parse().unwrap(),
+        ));
+
+        // The same header from an untrusted peer carries no weight, so the
+        // request falls back to the host comparison and is accepted.
+        assert!(!action_origin_is_cross_site(
+            &headers,
+            &config,
+            "10.0.0.9".parse().unwrap(),
+        ));
+
+        // Once that peer is trusted, its report is honored again.
+        config.trusted_proxies = TrustedProxies::parse_all(["10.0.0.0/8"]).unwrap();
         assert!(action_origin_is_cross_site(
             &headers,
             &config,
             "10.0.0.9".parse().unwrap(),
         ));
+    }
+
+    /// A mismatched host stays cross-site no matter what the scheme says: this
+    /// is the check that actually stops CSRF.
+    #[test]
+    fn blocks_cross_host_action_requests_regardless_of_scheme_evidence() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("app.example.com"));
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://evil.example.net"),
+        );
+        let mut config = ServerConfig::dev(".", "localhost", 3000);
+        config.trusted_proxies = TrustedProxies::parse_all(["10.0.0.0/8"]).unwrap();
+
+        assert!(action_origin_is_cross_site(
+            &headers,
+            &config,
+            "10.0.0.9".parse().unwrap(),
+        ));
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
+        assert!(action_origin_is_cross_site(
+            &headers,
+            &config,
+            "10.0.0.9".parse().unwrap(),
+        ));
+    }
+
+    /// The deployment shape the old scheme assertion broke: a container-network
+    /// proxy terminating TLS, reachable through a configured CIDR range.
+    #[test]
+    fn accepts_actions_behind_a_container_network_tls_proxy() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("app.example.com"));
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://app.example.com"),
+        );
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
+
+        let mut config = ServerConfig::production(".", "0.0.0.0", 3000);
+        assert!(config.same_origin_actions, "default must stay fail-closed");
+
+        // Unconfigured: accepted on the host match alone.
+        assert!(!action_origin_is_cross_site(
+            &headers,
+            &config,
+            "172.18.0.4".parse().unwrap(),
+        ));
+
+        // Configured as a CIDR range, which is what a container network needs.
+        config.trusted_proxies = TrustedProxies::parse_all(["172.16.0.0/12"]).unwrap();
+        assert!(!action_origin_is_cross_site(
+            &headers,
+            &config,
+            "172.18.0.4".parse().unwrap(),
+        ));
+        assert_eq!(
+            action_rate_limit_key(
+                "172.18.0.4:5000".parse().unwrap(),
+                &HeaderMap::from_iter([(
+                    axum::http::HeaderName::from_static("x-forwarded-for"),
+                    HeaderValue::from_static("203.0.113.8"),
+                )]),
+                &ActionQuery {
+                    path: "/todos".to_string(),
+                    name: "create".to_string(),
+                },
+                &config,
+            ),
+            "203.0.113.8:/todos:create",
+            "a proxy trusted by range must also be trusted for forwarded identity"
+        );
     }
 
     #[test]
@@ -2133,7 +2301,7 @@ mod tests {
             "10.0.0.9:/todos:create"
         );
 
-        config.trusted_proxy_ips.push("10.0.0.9".parse().unwrap());
+        config.trusted_proxies = TrustedProxies::parse_all(["10.0.0.9"]).unwrap();
         assert_eq!(
             action_rate_limit_key(peer, &headers, &query, &config),
             "203.0.113.8:/todos:create"
@@ -2156,7 +2324,7 @@ mod tests {
         };
         let peer: SocketAddr = "10.0.0.9:5000".parse().unwrap();
         let mut config = ServerConfig::dev(".", "localhost", 3000);
-        config.trusted_proxy_ips.push("10.0.0.9".parse().unwrap());
+        config.trusted_proxies = TrustedProxies::parse_all(["10.0.0.9"]).unwrap();
 
         assert_eq!(
             action_rate_limit_key(peer, &headers, &query, &config),
@@ -2210,25 +2378,76 @@ mod tests {
     }
 
     #[test]
-    fn action_rate_limiter_bounds_tracked_keys() {
-        let mut limiter = ActionRateLimiter::new(1, Duration::from_secs(60));
-        limiter.max_keys = 2;
-        assert!(limiter.allow("first"));
-        assert!(limiter.allow("second"));
-        assert!(!limiter.allow("third"));
-        assert!(limiter.retry_after_seconds("first") >= 59);
+    fn action_rate_limiter_limits_each_key_within_its_window() {
+        let mut limiter = ActionRateLimiter::new(2, Duration::from_secs(60));
+        assert!(limiter.allow("client:/todos:create"));
+        assert!(limiter.allow("client:/todos:create"));
+        assert!(!limiter.allow("client:/todos:create"));
+        assert!(limiter.retry_after_seconds("client:/todos:create") >= 59);
+        // A different key keeps its own budget.
+        assert!(limiter.allow("other:/todos:create"));
     }
 
     #[test]
-    fn action_rate_limiter_reclaims_expired_keys_when_capacity_is_full() {
-        let mut limiter = ActionRateLimiter::new(1, Duration::from_millis(1));
-        limiter.max_keys = 1;
+    fn action_rate_limiter_releases_a_key_after_its_window_passes() {
+        let mut limiter = ActionRateLimiter::new(1, Duration::from_millis(20));
+        assert!(limiter.allow("client:/todos:create"));
+        assert!(!limiter.allow("client:/todos:create"));
+        // Two windows clears both counters, so the client starts over.
+        std::thread::sleep(Duration::from_millis(60));
+        assert!(limiter.allow("client:/todos:create"));
+    }
 
-        assert!(limiter.allow("first"));
-        std::thread::sleep(Duration::from_millis(10));
-        assert!(limiter.allow("second"));
-        assert_eq!(limiter.hits.len(), 1);
-        assert!(limiter.hits.contains_key("second"));
+    /// The reason the key-set design was replaced: a client flooding the limiter
+    /// with distinct keys must never cause an unrelated client's first request
+    /// to be rejected. The old limiter denied every new key once its 10,000-key
+    /// map filled, turning address rotation into a lockout for bystanders.
+    #[test]
+    fn action_rate_limiter_never_denies_a_bystander_because_of_a_key_flood() {
+        let mut limiter = ActionRateLimiter::new(ACTION_RATE_LIMIT_MAX, ACTION_RATE_LIMIT_WINDOW);
+
+        // Far more distinct keys than the old 10,000-key cap allowed.
+        for index in 0..50_000u32 {
+            limiter.allow(&format!("attacker-{index}:/todos:create"));
+        }
+
+        assert!(
+            limiter.allow("victim:/todos:create"),
+            "a first-time client must still be admitted after a key flood"
+        );
+    }
+
+    /// Memory must not scale with the number of clients seen.
+    #[test]
+    fn action_rate_limiter_memory_is_independent_of_client_count() {
+        let mut limiter = ActionRateLimiter::new(ACTION_RATE_LIMIT_MAX, ACTION_RATE_LIMIT_WINDOW);
+        for index in 0..50_000u32 {
+            limiter.allow(&format!("client-{index}:/todos:create"));
+        }
+        assert!(
+            limiter.occupied_slots() <= 8192,
+            "slot count must stay bounded, got {}",
+            limiter.occupied_slots()
+        );
+    }
+
+    /// Slot sharing may limit a client early, but must never hand one a larger
+    /// budget than configured.
+    #[test]
+    fn action_rate_limiter_collisions_never_grant_extra_budget() {
+        let mut limiter = ActionRateLimiter::new(4, Duration::from_secs(60));
+        let mut allowed = 0;
+        for index in 0..20_000u32 {
+            if limiter.allow(&format!("client-{index}:/todos:create")) {
+                allowed += 1;
+            }
+        }
+        // 8192 slots x 4 hits is the absolute ceiling; exceeding it would mean a
+        // slot handed out more than `max_hits`.
+        assert!(
+            allowed <= 8192 * 4,
+            "no slot may exceed its budget, allowed {allowed}"
+        );
     }
 
     #[test]
@@ -2954,6 +3173,37 @@ mod tests {
         assert_eq!(cache.manifest(&config).await.unwrap().routes.len(), 1);
         cache.invalidate_async().await;
         assert_eq!(cache.manifest(&config).await.unwrap().routes.len(), 2);
+    }
+
+    /// The favicon link is derived from a filesystem stat, and every page render
+    /// used to redo it. Caching it means the answer is computed once and only
+    /// recomputed when the watcher invalidates the runtime cache.
+    #[tokio::test]
+    async fn runtime_cache_resolves_public_asset_links_once_until_invalidated() {
+        let temp = tempfile::tempdir().unwrap();
+        let public = temp.path().join("public");
+        std::fs::create_dir_all(&public).unwrap();
+
+        let config = ServerConfig::dev(temp.path(), "localhost", 3000);
+        let cache = RuntimeCache::default();
+
+        assert_eq!(&*cache.asset_links(&config).await, "");
+
+        // Adding the icon after the first resolution must not change the cached
+        // answer, which is what proves the stat is not repeated per render.
+        std::fs::write(public.join("ruvyxa.png"), [0u8; 4]).unwrap();
+        assert_eq!(&*cache.asset_links(&config).await, "");
+
+        cache.invalidate_async().await;
+        assert!(
+            cache.asset_links(&config).await.contains("/ruvyxa.png"),
+            "invalidation must pick up the new asset"
+        );
+
+        // Repeat reads share the cached allocation.
+        let first = cache.asset_links(&config).await;
+        let second = cache.asset_links(&config).await;
+        assert!(Arc::ptr_eq(&first, &second));
     }
 
     #[tokio::test]

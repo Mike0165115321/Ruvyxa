@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, BufReader, IsTerminal, Write};
-use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command as ProcessCommand, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -17,8 +16,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 use ruvyxa_dev_server::{
     JavaScriptRuntime, MAX_ACTION_BODY_LIMIT_BYTES, MAX_ACTION_RATE_LIMIT_REQUESTS,
     MAX_ACTION_RATE_LIMIT_WINDOW_SECS, MAX_API_BODY_LIMIT_BYTES,
-    MAX_PLUGIN_RESPONSE_BODY_LIMIT_BYTES, RenderContext, ServerConfig, find_runtime_script,
-    render_request_with_context, serve,
+    MAX_PLUGIN_RESPONSE_BODY_LIMIT_BYTES, RenderContext, ServerConfig, TrustedProxies,
+    find_runtime_script, render_request_with_context, serve,
 };
 use ruvyxa_diagnostics::{Diagnostic, diagnostics_to_sarif};
 use ruvyxa_graph::{
@@ -623,14 +622,22 @@ fn validate_plugin_response_limit(value: Option<usize>) -> anyhow::Result<()> {
 }
 
 fn validate_trusted_proxy_ips(values: &[String]) -> anyhow::Result<()> {
-    for value in values {
-        value.parse::<IpAddr>().map_err(|_| {
-            anyhow::anyhow!(
-                "RUV1602 config field `security.trustedProxyIps` contains invalid IP address `{value}`"
-            )
-        })?;
-    }
-    Ok(())
+    parse_trusted_proxies(values).map(|_| ())
+}
+
+/// Parse `security.trustedProxyIps` into matchable prefixes.
+///
+/// Accepts a CIDR range or a bare address, which is what the field has always
+/// been documented to take. Parsing only exact `IpAddr` values rejected every
+/// documented example (`10.0.0.0/8`) at startup with `RUV1602`, and left users
+/// on container networks and managed platform edges — where the proxy address
+/// is not stable enough to enumerate — with no way to declare their proxy at
+/// all. Both server builders share this function so validation and the value
+/// the server actually uses can never disagree.
+fn parse_trusted_proxies(values: &[String]) -> anyhow::Result<TrustedProxies> {
+    TrustedProxies::parse_all(values.iter().map(String::as_str)).map_err(|error| {
+        anyhow::anyhow!("RUV1602 config field `security.trustedProxyIps` contains {error}")
+    })
 }
 
 fn discover_project_routes(root: &Path, config: &ProjectConfig) -> anyhow::Result<RouteManifest> {
@@ -1009,12 +1016,7 @@ fn dev_server_config(args: &ServerArgs, config: &ProjectConfig) -> anyhow::Resul
         .security
         .fetch_metadata_actions
         .unwrap_or(server.fetch_metadata_actions);
-    server.trusted_proxy_ips = config
-        .security
-        .trusted_proxy_ips
-        .iter()
-        .filter_map(|value| value.parse().ok())
-        .collect();
+    server.trusted_proxies = parse_trusted_proxies(&config.security.trusted_proxy_ips)?;
     server.security_headers = config
         .security
         .security_headers
@@ -1077,12 +1079,7 @@ fn production_server_config(
         .security
         .fetch_metadata_actions
         .unwrap_or(server.fetch_metadata_actions);
-    server.trusted_proxy_ips = config
-        .security
-        .trusted_proxy_ips
-        .iter()
-        .filter_map(|value| value.parse().ok())
-        .collect();
+    server.trusted_proxies = parse_trusted_proxies(&config.security.trusted_proxy_ips)?;
     server.security_headers = config
         .security
         .security_headers
@@ -6663,7 +6660,7 @@ export default {
                 "actionRateLimit": { "max": 240, "window": 30 },
                 "sameOrigin": false,
                 "fetchMeta": false,
-                "trustedProxyIps": ["10.0.0.2", "2001:db8::2"],
+                "trustedProxyIps": ["10.0.0.2", "2001:db8::2", "172.16.0.0/12"],
                 "headers": false
             }
         }))
@@ -6681,11 +6678,9 @@ export default {
             assert!(!server.same_origin_actions);
             assert!(!server.fetch_metadata_actions);
             assert_eq!(
-                server.trusted_proxy_ips,
-                vec![
-                    "10.0.0.2".parse::<IpAddr>().unwrap(),
-                    "2001:db8::2".parse::<IpAddr>().unwrap()
-                ]
+                server.trusted_proxies,
+                TrustedProxies::parse_all(["10.0.0.2", "2001:db8::2", "172.16.0.0/12"]).unwrap(),
+                "exact addresses and CIDR ranges must both reach the server"
             );
             assert!(!server.security_headers);
             assert!(matches!(
@@ -6747,13 +6742,34 @@ export default {
 
     #[test]
     fn rejects_invalid_trusted_proxy_ips() {
+        for value in ["not-an-ip", "10.0.0.0/33", "10.0.0.0/"] {
+            let config: ProjectConfig = serde_json::from_value(json!({
+                "security": { "trustedProxyIps": [value] }
+            }))
+            .unwrap();
+
+            let error = config.validate_paths().unwrap_err();
+            assert!(
+                error.to_string().contains("security.trustedProxyIps"),
+                "{value} should be rejected by name, got: {error}"
+            );
+            assert!(error.to_string().contains(value), "{error}");
+        }
+    }
+
+    /// The exact configuration the server-actions guide documents. It used to
+    /// fail `validate_paths` with `RUV1602`, so following the documentation
+    /// prevented the CLI from starting at all.
+    #[test]
+    fn accepts_documented_cidr_trusted_proxy_ranges() {
         let config: ProjectConfig = serde_json::from_value(json!({
-            "security": { "trustedProxyIps": ["not-an-ip"] }
+            "security": { "trustedProxyIps": ["10.0.0.0/8", "172.16.0.0/12"] }
         }))
         .unwrap();
 
-        let error = config.validate_paths().unwrap_err();
-        assert!(error.to_string().contains("security.trustedProxyIps"));
+        config
+            .validate_paths()
+            .expect("documented CIDR ranges must be accepted");
     }
 
     #[test]

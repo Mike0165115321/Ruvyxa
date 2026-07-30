@@ -79,6 +79,12 @@ interface RouterGlobals {
   __RUVYXA_ROOT__?: { render(tree: unknown): void }
   __RUVYXA_ROUTE_PARAMS__?: RouteParams
   __RUVYXA_REQUEST_PATH__?: string
+  /**
+   * Route pattern the served document was built for, published by the generated
+   * entry next to its registry registration. The registry is keyed by pattern,
+   * so this is what makes the initial route addressable.
+   */
+  __RUVYXA_ROUTE_PATTERN__?: string
   __RUVYXA_ROUTE_MANIFEST__?: { routes?: RouteManifestEntry[] }
   __RUVYXA_ROUTER_INSTANCE__?: RouterInstance
 }
@@ -135,6 +141,10 @@ function loadManifestRoutes(): RouteManifestEntry[] {
   return Array.isArray(inline) ? inline : []
 }
 
+function fallbackPathname(): string {
+  return typeof window === 'undefined' ? '/' : window.location.pathname
+}
+
 function createRouter(): RouterInstance {
   const listeners = new Set<() => void>()
   let routes = loadManifestRoutes()
@@ -146,12 +156,19 @@ function createRouter(): RouterInstance {
   // Guards against a slow first navigation overwriting a faster later one.
   let navigationId = 0
 
-  const initialPathname = typeof window === 'undefined' ? '/' : window.location.pathname
+  const initialPathname = globals.__RUVYXA_REQUEST_PATH__ ?? fallbackPathname()
 
   let snapshot: RouteContextValue = {
-    pathname: globals.__RUVYXA_REQUEST_PATH__ ?? initialPathname,
+    pathname: initialPathname,
     params: globals.__RUVYXA_ROUTE_PARAMS__ ?? {},
-    route: globals.__RUVYXA_REQUEST_PATH__ ?? initialPathname,
+    // The route is the *pattern*, never the URL. Seeding it from the request
+    // path made `__RUVYXA_ROUTES__[snapshot.route]` a guaranteed miss on every
+    // dynamic route, which silently turned `refresh()` into a no-op until the
+    // first client navigation replaced the snapshot. Prefer the pattern the
+    // entry published; fall back to matching the manifest, then to the URL so a
+    // page served by an older bundle still reports something usable.
+    route:
+      globals.__RUVYXA_ROUTE_PATTERN__ ?? match(initialPathname)?.route.path ?? initialPathname,
   }
   // Cached so `getSnapshot` for `useSyncExternalStore` returns a stable string
   // between navigations; reading `location.search` per call is stable too, but
@@ -192,6 +209,7 @@ function createRouter(): RouterInstance {
     if (!factory || !root) return false
     globals.__RUVYXA_ROUTE_PARAMS__ = context.params
     globals.__RUVYXA_REQUEST_PATH__ = context.pathname
+    globals.__RUVYXA_ROUTE_PATTERN__ = context.route
     root.render(factory(context))
     return true
   }
@@ -326,8 +344,21 @@ function createRouter(): RouterInstance {
     })
   }
 
+  /**
+   * Re-render the current route from its already-loaded bundle.
+   *
+   * A registry miss is reported rather than swallowed. This call used to discard
+   * `renderRoute`'s result and emit anyway, so a refresh that rendered nothing
+   * looked exactly like one that worked.
+   */
   function refresh(): void {
-    renderRoute(snapshot)
+    if (!renderRoute(snapshot)) {
+      emit()
+      throw new Error(
+        `Ruvyxa router cannot refresh "${snapshot.route}": its bundle is not registered. ` +
+          'Navigate to the route before refreshing it.',
+      )
+    }
     emit()
   }
 

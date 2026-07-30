@@ -56,8 +56,14 @@ export interface RuvyxaConfig {
     sameOrigin?: boolean
     fetchMeta?: boolean
     /**
-     * Exact non-loopback reverse-proxy IPs allowed to supply X-Forwarded-For,
-     * X-Real-IP, and X-Forwarded-Proto. Loopback proxies are trusted by default.
+     * Non-loopback reverse proxies allowed to supply X-Forwarded-For,
+     * X-Real-IP, and X-Forwarded-Proto. Loopback proxies are trusted by
+     * default.
+     *
+     * Each entry is either an exact address (`10.0.0.9`, `2001:db8::2`) or a
+     * CIDR range (`10.0.0.0/8`, `2001:db8::/32`). Ranges are what container
+     * networks and managed platform edges need, because their proxy address is
+     * not stable enough to enumerate.
      */
     trustedProxyIps?: string[]
     headers?: boolean

@@ -129,6 +129,81 @@ test('rejects numeric environment values with trailing units', async (t) => {
   assert.equal(response.memoryPressureThresholdMb, 512)
 })
 
+test('bounds concurrent requests and keeps bookkeeping requests unqueued', async (t) => {
+  // One slot, so two overlapping renders must serialize instead of both
+  // starting. `activeRequests` used to be counted but never enforced, letting a
+  // burst start every render at once and exhaust the heap.
+  const worker = spawn(process.execPath, [workerScript], {
+    cwd: repoRoot,
+    env: { ...process.env, RUVYXA_WORKER_MAX_CONCURRENCY: '1' },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+  const lines = createInterface({ input: worker.stdout })
+
+  t.after(async () => {
+    lines.close()
+    worker.stdin.end()
+    await Promise.race([
+      new Promise((resolve) => worker.once('exit', resolve)),
+      new Promise((resolve) => setTimeout(resolve, 2_000)),
+    ])
+    if (worker.exitCode === null) worker.kill()
+  })
+
+  const pending = new Map()
+  lines.on('line', (line) => {
+    const message = JSON.parse(line)
+    pending.get(message.id)?.(message)
+    pending.delete(message.id)
+  })
+  const send = (id, payload) => {
+    const settled = new Promise((resolve) => pending.set(id, resolve))
+    worker.stdin.write(`${JSON.stringify({ id, ...payload })}\n`)
+    return settled
+  }
+
+  const configuration = await send('configuration', { type: 'ping' })
+  assert.equal(configuration.maxConcurrentRequests, 1)
+
+  // Two SSR requests against a nonexistent project: both fail, but only after
+  // being admitted, so the second has to wait for the first slot to free.
+  const first = send('render-1', {
+    type: 'ssr',
+    projectRoot: repoRoot,
+    appDir: path.join(repoRoot, 'missing-app'),
+    pageFile: path.join(repoRoot, 'missing-app/page.tsx'),
+    requestPath: '/',
+    routePath: '/',
+    params: {},
+  })
+  const second = send('render-2', {
+    type: 'ssr',
+    projectRoot: repoRoot,
+    appDir: path.join(repoRoot, 'missing-app'),
+    pageFile: path.join(repoRoot, 'missing-app/page.tsx'),
+    requestPath: '/other',
+    routePath: '/other',
+    params: {},
+  })
+
+  // A ping bypasses the queue, so it answers even while a slot is held.
+  const duringLoad = await send('during-load', { type: 'ping' })
+  assert.equal(duringLoad.pong, true)
+  assert.ok(
+    duringLoad.activeRequests <= 1,
+    `never more than the configured slots may be active, got ${duringLoad.activeRequests}`,
+  )
+
+  // Both requests still complete — the gate queues work, it does not drop it.
+  for (const settled of [await first, await second]) {
+    assert.equal(settled.ok, false)
+  }
+
+  const afterDrain = await send('after-drain', { type: 'ping' })
+  assert.equal(afterDrain.activeRequests, 0, 'every slot must be released')
+  assert.equal(afterDrain.queuedRequests, 0, 'the queue must drain')
+})
+
 test('invalidates a cached route bundle when an imported utility changes', async (t) => {
   const projectRoot = await mkdtemp(path.join(fixtureWorkspace, 'cache-test-'))
   const appDir = path.join(projectRoot, 'app/api/value')

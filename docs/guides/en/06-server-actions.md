@@ -313,7 +313,7 @@ Ruvyxa applies security measures automatically on every action request:
 | Content-Type enforcement | JSON or URL-encoded | 415 for unsupported types                                           |
 | Same-origin              | Enforced            | CSRF protection via **Origin** header vs **Host** header comparison |
 | Fetch metadata           | Enforced            | `Sec-Fetch-Site` must equal `same-origin`                           |
-| Rate limiting            | 600 req / 60s       | Token-bucket algorithm, per-IP and per-action                       |
+| Rate limiting            | 600 req / 60s       | Sliding-window counter, per-IP and per-action                       |
 
 ### Same-Origin Check — Exact Algorithm
 
@@ -326,13 +326,28 @@ fn action_origin_is_cross_site(headers, config, peer) → bool:
     (origin_scheme, origin_host) = split_once(ORIGIN, "://")
     host = headers.HOST
 
-    if config has trusted proxies AND peer is trusted:
-        expected_scheme = headers.X-Forwarded-Proto (or "http")
-    else:
-        expected_scheme = "http"  // dev server is HTTP
+    // The host comparison is the check that stops CSRF: a browser sets Origin
+    // itself, so a cross-site page cannot forge a matching host.
+    if origin_host != host:
+        return true
 
-    return !(origin_host == host AND origin_scheme == expected_scheme)
+    // The scheme is only compared when something trustworthy stated it.
+    // Ruvyxa never terminates TLS, so the sole evidence of the browser's
+    // scheme is X-Forwarded-Proto from a trusted peer (loopback, or an entry
+    // in security.trustedProxyIps). With no such evidence the scheme is
+    // unknown and is not asserted.
+    if peer is trusted AND headers.X-Forwarded-Proto in ("http", "https"):
+        return origin_scheme != headers.X-Forwarded-Proto
+
+    return false
 ```
+
+> Earlier releases assumed `http` whenever no trusted proxy reported a scheme. That rejected every
+> deployment whose TLS-terminating proxy is neither loopback nor listed in
+> `security.trustedProxyIps` — the usual Docker Compose, Kubernetes, and managed-platform-edge
+> shapes — with `403 Cross-origin action request blocked` on every action. Configuring
+> `trustedProxyIps` is still recommended: it is what enables forwarded client-IP detection for the
+> rate limiter and restores the strict scheme comparison.
 
 ### Fetch Metadata Check
 
@@ -341,31 +356,49 @@ fn action_fetch_site_is_cross_site(headers) → bool:
     return headers.Sec-Fetch-Site == "cross-site"
 ```
 
-### Rate Limiter — Token Bucket Detail
+### Rate Limiter — Sliding Window Counter Detail
+
+Each key hashes into one of a fixed number of counter slots, so the limiter's memory does not depend
+on how many distinct clients it has seen.
 
 ```rust
+const ACTION_RATE_LIMIT_SLOTS: usize = 8192;
+
+struct RateSlot {
+    window_start: Instant,
+    current: u32,   // requests in the window that started at window_start
+    previous: u32,  // requests in the window before it
+}
+
 struct ActionRateLimiter {
-    hits: HashMap<String, Vec<Instant>>,  // rate_key → timestamps
-    max_hits: usize,                       // default: 600
-    window: Duration,                      // default: 60s
-    max_keys: usize,                       // capped at 10,000
+    slots: Vec<Option<RateSlot>>,  // ACTION_RATE_LIMIT_SLOTS entries
+    hasher: RandomState,           // seeded per process
+    max_hits: usize,               // default: 600
+    window: Duration,              // default: 60s
 }
 
 fn allow(&mut self, key) → bool:
-    now = Instant.now()
-    if key in hits:
-        retain timestamps where now - timestamp <= window
-        if hits.len >= max_hits:
-            → false  // rate limited
-        push(now)
-        → true      // allowed
-    else:
-        remove expired keys if at capacity
-        if still at capacity:
-            → false  // too many distinct keys
-        insert(key, [now])
-        → true       // allowed
+    slot = slots[hash(key) % ACTION_RATE_LIMIT_SLOTS]
+    roll slot forward so window_start is within one window of now
+    // Two adjacent windows approximate a sliding one: weight the previous
+    // window by how much of it still falls inside the trailing window.
+    overlap   = 1 - (now - slot.window_start) / window
+    estimated = slot.previous * overlap + slot.current
+    if estimated >= max_hits:
+        → false  // rate limited
+    slot.current += 1
+    → true       // allowed
 ```
+
+Two properties matter here:
+
+- **A client is never denied on another client's behalf.** Admission is never refused for lack of
+  room. Earlier releases tracked a key map capped at 10,000 entries and rejected any key they could
+  not admit, so an attacker rotating source addresses — trivial with an IPv6 `/64` — could fill the
+  map and lock out every first-time client for the rest of the window.
+- **A slot collision can only limit a client early, never grant extra budget.** Two clients sharing
+  a slot share one budget. The slot array is seeded per process, so keys cannot be crafted to
+  collide with a chosen victim.
 
 **Rate limit key format**: `{client_ip}:{action_path}:{action_name}` where `client_ip` is either the
 direct peer IP or the rightmost untrusted IP from `X-Forwarded-For` (if a trusted proxy is
@@ -434,7 +467,7 @@ fn forwarded_client_ip(config, headers) → Option<IpAddr>:
 **Trusted proxy logic**:
 
 - Loopback (`127.0.0.1`, `::1`) is always trusted
-- Additional ranges via `trustedProxyIps` config
+- Additional addresses or CIDR ranges via `trustedProxyIps` config
 - Without trusted proxies: direct peer IP is used for rate limiting
 
 ---
