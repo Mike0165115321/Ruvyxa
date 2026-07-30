@@ -718,6 +718,26 @@ interface AuthEvents {
 }
 ```
 
+### Rate Limiting — RUV3102
+
+ทุกครั้งที่มีการพยายามยืนยันตัวตน ระบบจะหักโควตาจาก **สอง bucket ที่แยกกัน** ถ้า bucket ใด bucket
+หนึ่งหมด จะได้ `RUV3102 Too many authentication attempts` พร้อม header `Retry-After` (หน่วยวินาที)
+
+| Bucket       | Key                       | โควตา               | กันอะไร                      |
+| ------------ | ------------------------- | ------------------- | ---------------------------- |
+| ต่อ identity | scope + identity + client | `rateLimit.max`     | ถล่มบัญชีเดียวซ้ำๆ           |
+| ต่อ client   | client เท่านั้น           | `rateLimit.max` × 5 | client เดียวไล่กวาดหลายบัญชี |
+
+key ของ bucket แรกมี email อยู่ด้วย ลำพัง bucket นี้จึงยอมให้ client เดียวลองรหัสผ่านได้ `max` ครั้ง
+**ต่อบัญชี โดยไม่จำกัดจำนวนบัญชี** ซึ่งเป็นรูปแบบของ credential stuffing
+และการกวาดหาบัญชีที่มีอยู่จริง bucket ที่สองจึงมาปิดยอดรวมนั้น โควตาของมันถูกตั้งให้สูงกว่าเพื่อให้
+egress ที่แชร์กัน (ออฟฟิศ, mobile carrier, CGNAT) ยังใช้งานได้ เพราะ client
+ปกติแทบไม่ล็อกอินด้วยหลาย identity ติดกัน
+
+ทั้งสอง bucket ใช้ client key เดียวกัน ซึ่งเป็น client IP ที่ resolve ได้เมื่อตั้ง `clientIp` ไว้
+และถ้าไม่ได้ตั้ง จะ fallback ไปใช้ user-agent ที่ตัดความยาวแล้ว **ควรตั้ง `clientIp` ใน production**
+เพราะ user-agent เป็นค่าที่ client กำหนดเองได้ จึงหมุนเปลี่ยนเพื่อหลบ rate limit ได้
+
 ---
 
 ## @ruvyxa/database

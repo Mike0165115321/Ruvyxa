@@ -6,6 +6,10 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Ruvyxa Bundler TypeScript/JSX compiler"
+# Shipped inside the npm-distributed `ruvyxa` binary, never as a crates.io crate.
+# Marking it explicitly keeps the Rust surface internal, so a signature change
+# here is not a semver break for anyone.
+publish = false
 
 [dependencies]
 ruvyxa_diagnostics = { path = "../ruvyxa_diagnostics" }

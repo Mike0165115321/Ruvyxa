@@ -326,7 +326,7 @@ Config validation fires these errors:
 | `RUV1601` | Invalid target                | `build.esTarget must be es2018, es2019, es2020, es2022, or esnext, got 'other'`    |
 | `RUV1601` | Invalid split                 | `build.splitStrategy must be 'single', 'route', or 'manual', got 'other'`          |
 | `RUV1602` | Field exceeds maximum         | `config field 'security.pluginLimit' must not exceed 268435456 bytes`              |
-| `RUV1602` | Invalid IP                    | `config field 'security.trustedProxyIps' contains invalid IP address 'xyz'`        |
+| `RUV1602` | Invalid IP or CIDR range      | `config field 'security.trustedProxyIps' contains invalid IP or CIDR range 'xyz'`  |
 | `RUV1602` | Workers range                 | `config field 'middleware.workers' must be between 1 and 8`                        |
 | `RUV1602` | Timeout range                 | `config field 'middleware.timeoutMs' must be between 1 and 300000`                 |
 

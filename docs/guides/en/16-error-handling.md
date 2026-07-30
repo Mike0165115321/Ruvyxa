@@ -133,6 +133,11 @@ RUV1004: Page is missing a default export
   Fix: Add `export default function Page() { ... }`
 ```
 
+Any form of default export satisfies the check, including a re-export —
+`export { Page as default }`, `export { default } from './page-impl'`, and
+`export * as default from './page-impl'` all count. A `export type { X as default }` does not: a
+type export erases at compile time, so nothing is left to render.
+
 **Source**: `crates/ruvyxa_graph/src/lib.rs:300`
 
 #### RUV1007 — Server-only module imported into client bundle
@@ -918,7 +923,7 @@ RUV2200: Adapter build hook failed
 | ------- | ---------------------- | ---------------------------- | ------------------------ |
 | RUV3100 | Auth service error     | Magic link delivery failed   | Check email provider     |
 | RUV3101 | Auth request invalid   | Cross-origin, body too large | Fix request, reduce body |
-| RUV3102 | WebAuthn error         | Platform authenticator issue | Check browser            |
+| RUV3102 | Too many attempts      | Rate limit bucket exhausted  | Wait for `Retry-After`   |
 | RUV3103 | OAuth state invalid    | State mismatch or expired    | Re-authenticate          |
 | RUV3104 | OAuth provider error   | Token/profile request failed | Check provider           |
 | RUV3105 | Production store error | Non-durable store            | Use persistent store     |

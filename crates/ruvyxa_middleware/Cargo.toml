@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Tower middleware and TypeScript plugin bridge for Ruvyxa"
+publish = false
 
 [dependencies]
 axum.workspace = true

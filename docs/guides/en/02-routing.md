@@ -1021,6 +1021,7 @@ The router reads/writes these globals:
 | `__RUVYXA_ROOT__`            | `{ render(tree): void }`           | Ruvyxa root renderer (hydrate or re-render)          |
 | `__RUVYXA_ROUTE_PARAMS__`    | `RouteParams`                      | Current route parameters                             |
 | `__RUVYXA_REQUEST_PATH__`    | `string`                           | Current request path                                 |
+| `__RUVYXA_ROUTE_PATTERN__`   | `string`                           | Route pattern the current bundle registered under    |
 | `__RUVYXA_ROUTE_MANIFEST__`  | `{ routes: RouteManifestEntry[] }` | Inline client route table                            |
 | `__RUVYXA_ROUTER_INSTANCE__` | `RouterInstance`                   | Singleton router instance                            |
 

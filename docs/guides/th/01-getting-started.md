@@ -392,7 +392,7 @@ export default config(settings)
 | `build.splitStrategy`             | `single`, `route`, หรือ `manual`          | RUV1601    |
 | `middleware.workers`              | 1 - 8                                     | RUV1602    |
 | `middleware.timeoutMs`            | 1 - 300,000                               | RUV1602    |
-| `security.trustedProxyIps`        | ต้องเป็น valid IP addresses               | RUV1602    |
+| `security.trustedProxyIps`        | ต้องเป็น IP address หรือ CIDR range       | RUV1602    |
 | `appDir`                          | ต้องเป็น relative path ภายใน project root | RUV1601    |
 
 ---

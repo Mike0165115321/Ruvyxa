@@ -624,7 +624,7 @@ interface SecurityConfig {
 | `actionRateLimit.key`    | `'ip' \| 'user' \| 'route'` | `RateLimitKey` | `'ip'`       | -            |
 | `sameOrigin`             | `boolean`                   | `bool`         | `true`       | -            |
 | `fetchMeta`              | `boolean`                   | `bool`         | `false`      | -            |
-| `trustedProxyIps`        | `string[]`                  | `Vec<String>`  | `[]`         | valid IPs    |
+| `trustedProxyIps`        | `string[]`                  | `Vec<String>`  | `[]`         | IP หรือ CIDR |
 | `headers`                | `boolean`                   | `bool`         | `true`       | -            |
 | `csrf`                   | `boolean`                   | `bool`         | `true`       | -            |
 | `xssProtection`          | `boolean`                   | `bool`         | `true`       | -            |
@@ -643,9 +643,9 @@ security: {
   sameOrigin: true,                  // action ต้องมาจาก origin เดียวกัน
   fetchMeta: true,                   // ตรวจ Sec-Fetch-* headers
   trustedProxyIps: [
-    '10.0.0.1',
-    '10.0.0.2',
-    '172.16.0.0/12',                 // CIDR notation
+    '10.0.0.1',                      // address ตรงตัว
+    '172.16.0.0/12',                 // CIDR range
+    '2001:db8::/32',                 // IPv6 ก็ได้
   ],
   headers: true,                     // เพิ่ม security headers อัตโนมัติ
   csrf: true,                        // ป้องกัน CSRF
@@ -653,6 +653,18 @@ security: {
   maxBodySize: 20_971_520,           // 20MB max body
 }
 ```
+
+**`trustedProxyIps` — รูปแบบที่รับได้:**
+
+รายการที่ไม่มี `/` ถือเป็น host route (`/32` สำหรับ IPv4, `/128` สำหรับ IPv6) bit ที่ต่ำกว่า prefix
+จะถูก mask ทิ้ง ดังนั้น `10.1.2.3/8` กับ `10.0.0.0/8` หมายถึง range เดียวกัน range แบบ IPv4 จะ match
+peer แบบ IPv4-mapped (`::ffff:10.0.0.9`) ด้วย ซึ่งเป็นรูปแบบที่ dual-stack listener รายงาน client
+IPv4
+
+loopback เชื่อถือได้เสมอ ไม่จำเป็นต้องใส่ในรายการ
+
+ค่าที่ผิดรูปจะได้ error:
+`RUV1602 config field 'security.trustedProxyIps' contains invalid IP or CIDR range 'xyz'`
 
 **Security Headers ที่ Ruvyxa เพิ่มอัตโนมัติ:**
 
@@ -678,7 +690,7 @@ security: {
 | `pluginLimit` > 52_428_800 (50MB)      | RUV1602    |
 | `actionRateLimit.max` < 1 (ถ้าตั้ง)    | RUV1601    |
 | `actionRateLimit.window` < 1 (ถ้าตั้ง) | RUV1601    |
-| `trustedProxyIps[]` IP ไม่ถูกต้อง      | RUV1602    |
+| `trustedProxyIps[]` ไม่ใช่ IP/CIDR     | RUV1602    |
 | `maxBodySize` < 1                      | RUV1601    |
 | `maxBodySize` > 104_857_600 (100MB)    | RUV1602    |
 

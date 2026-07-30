@@ -110,10 +110,9 @@ impl RenderCache {
     pub fn new(capacity: usize, ttl_secs: u64) -> Self;
     pub fn default_dev() -> Self;        // 1024 entries, 300s TTL
     pub fn default_production() -> Self; // 512 entries, 1800s TTL
-    pub async fn get(&self, key: &str) -> Option<String>;
     pub async fn get_arc(&self, key: &str) -> Option<Arc<str>>;
-    pub async fn get_stale_with_age(&self, key: &str) -> Option<(String, Duration)>;
-    pub async fn put(&self, key: String, value: String);
+    pub async fn get_stale_with_age(&self, key: &str) -> Option<(Arc<str>, Duration)>;
+    pub async fn put(&self, key: String, value: String) -> Arc<str>;
     pub async fn invalidate_all(&self) -> usize;
     pub async fn invalidate_prefix(&self, prefix: &str) -> usize;
     pub async fn invalidate_route(&self, route_path: &str) -> usize;
@@ -126,6 +125,11 @@ impl RenderCache {
 Thread-safe LRU with O(1) get/put/eviction via hash-indexed doubly-linked recency list. Entries
 TTL-expired on read. ISR uses `get_stale_with_age` to serve stale while revalidating. `blocking_*`
 methods for file-watcher sync context.
+
+Entries are stored as `Arc<str>` and every read hands back the stored handle, so serving a cache hit
+does not copy the document. `put` returns the same handle it stored — including when the cache is
+disabled (`capacity == 0`), so the caller always gets its value back and never needs a second copy
+for the response.
 
 ### HmrTracker (`hmr_tracker.rs`)
 
@@ -220,12 +224,25 @@ compiles Tailwind via `@tailwindcss/cli`. Minifies in production mode. Escapes `
 ```rust
 pub(crate) fn validate_action_request(headers, body_len, config, peer) -> Option<Response>;
 pub(crate) fn validate_action_payload(headers, body) -> Result<(&str, String), Box<Response>>;
-pub(crate) struct ActionRateLimiter { /* per-key sliding window */ }
+pub(crate) struct ActionRateLimiter { /* fixed slot array of sliding-window counters */ }
+pub struct IpPrefix { /* network address + prefix length */ }
+pub struct TrustedProxies { /* matchable prefixes from security.trustedProxyIps */ }
 ```
 
 Validates: body size ≤ configured limit, Content-Type (JSON or form), same-origin (Origin == Host),
 Fetch Metadata, rate limit. Rate-limit key includes client IP (forwarded from trusted proxies),
 action path, and action name.
+
+The limiter hashes each key into one of `ACTION_RATE_LIMIT_SLOTS` (8192) counter slots, so its
+memory is fixed and admission is never refused for lack of room. A slot holds the current and
+previous window counts; the previous count is weighted by the fraction of it still inside the
+trailing window. A slot collision shares one budget between two keys, which can only limit a client
+early — never grant it extra. The hasher is seeded per process, so keys cannot be crafted to collide
+with a chosen victim.
+
+`TrustedProxies` matches a peer against exact addresses and CIDR ranges, unmapping IPv4-mapped IPv6
+peers first so an IPv4 range matches a dual-stack listener's `::ffff:a.b.c.d` form. Loopback is
+trusted independently of the configured list.
 
 ### PortBinding (`port_binding.rs`)
 

@@ -174,12 +174,19 @@ idle worker before queueing (avoids head-of-line blocking on long hooks).
 
 ### Failure Recovery
 
-| Scenario                        | Behavior                                         |
-| ------------------------------- | ------------------------------------------------ |
-| Hook returns error              | Error propagated to caller; worker left alive    |
-| Worker exits / pipe breaks      | Worker restarted once; hook retried              |
-| JSON protocol corrupted         | Worker declared poisoned; replaced without retry |
-| Hook times out (> `timeout_ms`) | Worker poisoned; replaced without retry          |
+| Scenario                         | Behavior                                                |
+| -------------------------------- | ------------------------------------------------------- |
+| Hook returns error               | Error propagated to caller; worker left alive           |
+| Request never reached the worker | Worker restarted once; hook retried                     |
+| Worker exits after the request   | Worker restarted; hook retried only if it is idempotent |
+| JSON protocol corrupted          | Worker declared poisoned; replaced without retry        |
+| Hook times out (> `timeout_ms`)  | Worker poisoned; replaced without retry                 |
+
+A retry is safe only when the worker cannot have acted on the first attempt. Write and flush
+failures are reported as _not delivered_ and are always retried. A failure while reading the
+response means the request did reach the worker, so it is retried only for hooks with no observable
+effect — currently `describe`. Retrying a delivered `request`/`response` hook would run its side
+effects twice.
 
 ### Realtime Capability
 
