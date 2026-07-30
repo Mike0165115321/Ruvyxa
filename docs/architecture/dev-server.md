@@ -39,7 +39,7 @@ and realtime event broadcasting.
 | `action_rate_limit_window`         | `Duration`               | `60s`                            | `60s`                             |
 | `same_origin_actions`              | `bool`                   | `true`                           | `true`                            |
 | `fetch_metadata_actions`           | `bool`                   | `true`                           | `true`                            |
-| `trusted_proxy_ips`                | `Vec<IpAddr>`            | `Vec::new()`                     | `Vec::new()`                      |
+| `trusted_proxies`                  | `TrustedProxies`         | `TrustedProxies::default()`      | `TrustedProxies::default()`       |
 | `security_headers`                 | `bool`                   | `true`                           | `true`                            |
 | `middleware`                       | `MiddlewareConfig`       | `default()`                      | `default()`                       |
 | `plugins_enabled`                  | `bool`                   | `false`                          | `false`                           |
@@ -110,10 +110,9 @@ impl RenderCache {
     pub fn new(capacity: usize, ttl_secs: u64) -> Self;
     pub fn default_dev() -> Self;        // 1024 entries, 300s TTL
     pub fn default_production() -> Self; // 512 entries, 1800s TTL
-    pub async fn get(&self, key: &str) -> Option<String>;
     pub async fn get_arc(&self, key: &str) -> Option<Arc<str>>;
-    pub async fn get_stale_with_age(&self, key: &str) -> Option<(String, Duration)>;
-    pub async fn put(&self, key: String, value: String);
+    pub async fn get_stale_with_age(&self, key: &str) -> Option<(Arc<str>, Duration)>;
+    pub async fn put(&self, key: String, value: String) -> Arc<str>;
     pub async fn invalidate_all(&self) -> usize;
     pub async fn invalidate_prefix(&self, prefix: &str) -> usize;
     pub async fn invalidate_route(&self, route_path: &str) -> usize;
@@ -126,6 +125,11 @@ impl RenderCache {
 Thread-safe LRU with O(1) get/put/eviction via hash-indexed doubly-linked recency list. Entries
 TTL-expired on read. ISR uses `get_stale_with_age` to serve stale while revalidating. `blocking_*`
 methods for file-watcher sync context.
+
+Entries are stored as `Arc<str>` and every read hands back the stored handle, so serving a cache hit
+does not copy the document. `put` returns the same handle it stored — including when the cache is
+disabled (`capacity == 0`), so the caller always gets its value back and never needs a second copy
+for the response.
 
 ### HmrTracker (`hmr_tracker.rs`)
 
@@ -153,7 +157,7 @@ Unknown untracked file → `FullReload`.
 ### NodeWorkerPool (`worker_pool.rs`)
 
 ```rust
-pub struct NodeWorkerPool { workers, worker_script, env, runtime, next_worker, response_timeout }
+pub struct NodeWorkerPool { workers, worker_script, env, runtime, next_worker, response_timeout, isolated_renders_per_worker }
 impl NodeWorkerPool {
     pub async fn start(root, env) -> Result<Self>;
     pub async fn start_with_runtime(root, env, runtime) -> Result<Self>;
@@ -172,6 +176,38 @@ Persistent Node/Bun processes communicating via NDJSON over stdin/stdout. Pool s
 CPU count clamped). Least-loaded worker selection with rotating start offset. Failed workers
 replaced automatically; idempotent requests retried once.
 
+**Worker recycling during builds.** Production prerendering asks for an isolated module import per
+path (`render_ssg_isolated`) so page-module state cannot leak between paths. That isolation works by
+importing the bundle under a fresh module URL, and Node's ESM registry never releases a URL — so
+each isolated import permanently retains one more module graph, and no cache eviction inside the
+worker can reclaim it. Replacing the process is the only operation that frees them.
+
+The build pool therefore retires a worker once it has served `RUVYXA_PRERENDER_RECYCLE_AFTER`
+isolated renders (default 32; `0` disables recycling). Retirement only happens when the worker is
+idle, because `shutdown` clears pending requests and would otherwise fail sibling renders that were
+progressing normally. The dev server passes `None` — it never requests isolated imports, so it
+retains nothing to reclaim and pays nothing for the bound.
+
+**Per-worker concurrency.** Inside each worker, `worker-pool.mjs` admits at most
+`RUVYXA_WORKER_MAX_CONCURRENCY` requests at a time (default: core count clamped to 2–8). Renders are
+CPU-bound and each one holds a React tree, a compiled bundle, and its response buffer, so admitting
+a whole burst at once exhausts the heap or thrashes the CPU into timeouts that look like hangs.
+Excess requests queue and run as slots free up; `invalidate` and `ping` bypass the queue, since
+delaying a cache invalidation would leave the worker serving stale bundles exactly when it is
+busiest. `ping` reports `activeRequests`, `queuedRequests`, and `maxConcurrentRequests`.
+
+### Worker environment variables
+
+| Variable                         | Default              | Effect                                                     |
+| -------------------------------- | -------------------- | ---------------------------------------------------------- |
+| `RUVYXA_WORKER_POOL_SIZE`        | CPU count (2–8)      | Worker processes in the dev/prod pool                      |
+| `RUVYXA_WORKER_MAX_CONCURRENCY`  | CPU count (2–8)      | Requests one worker executes at once                       |
+| `RUVYXA_WORKER_TIMEOUT_MS`       | 30000 / 300000 build | Per-request deadline, shared by Rust and the Node watchdog |
+| `RUVYXA_PRERENDER_RECYCLE_AFTER` | 32 (`0` disables)    | Isolated prerenders before a build worker is retired       |
+| `RUVYXA_CACHE_MAX_ENTRIES`       | 256                  | Bundle and module cache entries per worker                 |
+| `RUVYXA_MEMORY_LIMIT_MB`         | 512                  | Heap threshold that triggers in-worker cache eviction      |
+| `RUVYXA_RENDER_CACHE_SIZE`       | 1024 dev / 512 prod  | Render cache entries (capped at 16384)                     |
+
 ### StyleCollection (`style.rs`)
 
 ```rust
@@ -188,12 +224,25 @@ compiles Tailwind via `@tailwindcss/cli`. Minifies in production mode. Escapes `
 ```rust
 pub(crate) fn validate_action_request(headers, body_len, config, peer) -> Option<Response>;
 pub(crate) fn validate_action_payload(headers, body) -> Result<(&str, String), Box<Response>>;
-pub(crate) struct ActionRateLimiter { /* per-key sliding window */ }
+pub(crate) struct ActionRateLimiter { /* fixed slot array of sliding-window counters */ }
+pub struct IpPrefix { /* network address + prefix length */ }
+pub struct TrustedProxies { /* matchable prefixes from security.trustedProxyIps */ }
 ```
 
 Validates: body size ≤ configured limit, Content-Type (JSON or form), same-origin (Origin == Host),
 Fetch Metadata, rate limit. Rate-limit key includes client IP (forwarded from trusted proxies),
 action path, and action name.
+
+The limiter hashes each key into one of `ACTION_RATE_LIMIT_SLOTS` (8192) counter slots, so its
+memory is fixed and admission is never refused for lack of room. A slot holds the current and
+previous window counts; the previous count is weighted by the fraction of it still inside the
+trailing window. A slot collision shares one budget between two keys, which can only limit a client
+early — never grant it extra. The hasher is seeded per process, so keys cannot be crafted to collide
+with a chosen victim.
+
+`TrustedProxies` matches a peer against exact addresses and CIDR ranges, unmapping IPv4-mapped IPv6
+peers first so an IPv4 range matches a dual-stack listener's `::ffff:a.b.c.d` form. Loopback is
+trusted independently of the configured list.
 
 ### PortBinding (`port_binding.rs`)
 

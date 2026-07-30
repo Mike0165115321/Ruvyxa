@@ -688,7 +688,7 @@ await authClient.signIn('credentials', { email, password })
 | ------- | ---------------------- | ------------------------------------------ | ---------------------------------------------------- | ------------------------------------ |
 | RUV3100 | Auth service error     | `src/index.ts:315,708`                     | Magic link delivery failed, invalid user             | Check email service, provider config |
 | RUV3101 | Auth request invalid   | `src/index.ts:299,524,531,562,740,853,857` | Cross-origin, body too large, bad JSON, bad provider | Fix request, reduce body, valid JSON |
-| RUV3102 | WebAuthn failed        | `src/index.ts:415`                         | Platform authenticator error                         | Check browser support                |
+| RUV3102 | Too many attempts      | `src/index.ts:450`                         | Rate limit exceeded (per-identity or per-client)     | Wait for `Retry-After`               |
 | RUV3103 | OAuth state invalid    | `src/index.ts:241,243,246,249,366,368`     | State mismatch, expired, missing code                | Re-authenticate                      |
 | RUV3104 | OAuth provider error   | `src/index.ts:263,266,281,870`             | Token/profile fetch failed                           | Check provider credentials           |
 | RUV3105 | Production store error | `src/index.ts:42`                          | Non-durable store in production                      | Use persistent store                 |
@@ -700,8 +700,24 @@ function or SMTP), provider returned invalid user (check `profile` mapper return
 authentication blocked (set `origin` in config or use `allowInsecure` for dev), body exceeds 32 KiB
 (trim request), body must be valid JSON, provider name invalid or not configured.
 
-**RUV3102** — `WebAuthn error` (line 415): Browser does not support WebAuthn, platform authenticator
-unavailable, user cancelled registration/authentication.
+**RUV3102** — `Too many authentication attempts` (line 450): a rate-limit bucket was exhausted. The
+response carries `Retry-After` in seconds.
+
+Two independent buckets are consumed per attempt:
+
+| Bucket       | Key                       | Budget              | Stops                             |
+| ------------ | ------------------------- | ------------------- | --------------------------------- |
+| Per-identity | scope + identity + client | `rateLimit.max`     | Hammering one account             |
+| Per-client   | client only               | `rateLimit.max` × 5 | One source sweeping many accounts |
+
+The per-identity key contains the email, so on its own it allowed one source to try `max` passwords
+against an unlimited number of accounts — the shape of credential stuffing and account enumeration.
+The client-only bucket caps that total. Its larger budget keeps shared egress (offices, mobile
+carriers, CGNAT) working, since a legitimate client rarely signs in for many distinct identities.
+
+Both buckets use the same client key, which is the resolved client IP when
+[`clientIp`](#authoptions) is configured and a truncated user-agent otherwise. **Configure
+`clientIp` in production** — the user-agent fallback is client-controlled and therefore rotatable.
 
 **RUV3103** — `OAuth state invalid` (line 241-249, 366-368): OAuth callback missing `code` or
 `state` parameters, state does not match initiating browser (possible CSRF attempt), state expired

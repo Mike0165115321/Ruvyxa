@@ -109,6 +109,11 @@ export default function AboutPage() {
 }
 ```
 
+default export ทุกรูปแบบผ่านการตรวจนี้ รวมถึงการ re-export — `export { Page as default }`,
+`export { default } from './page-impl'` และ `export * as default from './page-impl'` นับทั้งหมด
+ยกเว้น `export type { X as default }` ที่ไม่นับ เพราะ type export ถูกลบตอน compile
+จึงไม่เหลืออะไรให้ render
+
 ### RUV1007: โมดูล server-only ถูก import ใน client graph
 
 **Title**: Server-only module imported in client bundle
@@ -934,7 +939,7 @@ RUV2102: Ruvyxa plugin "my-plugin" http.onRequest must be a function.
 | ----------- | ---------------------- | ---------------------------- | ------------------------ |
 | **RUV3100** | Auth service error     | Magic link delivery failed   | Check email provider     |
 | **RUV3101** | Auth request invalid   | Cross-origin, body too large | Fix request, reduce body |
-| **RUV3102** | WebAuthn error         | Platform authenticator issue | Check browser            |
+| **RUV3102** | Too many attempts      | Rate limit bucket หมดโควตา   | รอตาม `Retry-After`      |
 | **RUV3103** | OAuth state invalid    | State mismatch or expired    | Re-authenticate          |
 | **RUV3104** | OAuth provider error   | Token/profile request failed | Check provider           |
 | **RUV3105** | Production store error | Non-durable store            | Use persistent store     |
@@ -1473,7 +1478,7 @@ ruvyxa trace             # build trace — timing, dependencies
 | **RUV3003** | Database connection failed          | Official Packages | Error    |
 | **RUV3100** | Auth service error                  | Official Packages | Error    |
 | **RUV3101** | Auth request invalid                | Official Packages | Error    |
-| **RUV3102** | WebAuthn error                      | Official Packages | Error    |
+| **RUV3102** | Too many authentication attempts    | Official Packages | Error    |
 | **RUV3103** | OAuth state invalid                 | Official Packages | Error    |
 | **RUV3104** | OAuth provider error                | Official Packages | Error    |
 | **RUV3105** | Production store error              | Official Packages | Error    |

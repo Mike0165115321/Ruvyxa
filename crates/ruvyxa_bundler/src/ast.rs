@@ -218,6 +218,119 @@ fn quoted_value_at(source: &str, start: usize) -> Option<String> {
     None
 }
 
+/// Whether `source` declares a runtime default export.
+///
+/// Route validation needs this to tell a real page from a module that only
+/// exports helpers. A plain `source.contains("export default")` answered the
+/// question wrongly in both directions: it rejected `export { Page as default }`
+/// and `export * as default from './page'`, which are valid default exports, and
+/// it accepted a commented-out or quoted occurrence.
+///
+/// Reusing this module's comment- and string-skipping scanner means the answer
+/// comes from the same view of the source the resolver and transformer already
+/// share, rather than a third ad hoc text scan.
+pub fn has_default_export(source: &str) -> bool {
+    let bytes = source.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if is_comment_start(bytes, index) {
+            index = skip_comment(bytes, index);
+            continue;
+        }
+        if is_quote(bytes[index]) {
+            index = skip_string(bytes, index);
+            continue;
+        }
+        if !is_ident_start_byte(bytes[index]) {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        index = skip_identifier(bytes, index);
+        if &source[start..index] == "export" && export_declares_default(source, index) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether the export clause starting after `export` produces a default binding.
+fn export_declares_default(source: &str, after_keyword: usize) -> bool {
+    let bytes = source.as_bytes();
+    let index = skip_whitespace_and_comments(bytes, after_keyword);
+
+    // `export type { Page as default }` and `export type default` are erased at
+    // compile time and leave no runtime binding behind.
+    if word_at(source, index) == Some("type") {
+        return false;
+    }
+
+    match word_at(source, index) {
+        // `export default …`
+        Some("default") => true,
+        Some(_) => false,
+        None => match bytes.get(index) {
+            // `export * as default from "./page"`
+            Some(b'*') => {
+                let index = skip_whitespace_and_comments(bytes, index + 1);
+                if word_at(source, index) != Some("as") {
+                    return false;
+                }
+                let index = skip_whitespace_and_comments(bytes, index + "as".len());
+                word_at(source, index) == Some("default")
+            }
+            // `export { Page as default }`, `export { default } from "./page"`
+            Some(b'{') => named_clause_exports_default(source, index),
+            _ => false,
+        },
+    }
+}
+
+/// Whether a `{ … }` export clause binds something to the name `default`.
+///
+/// The exported name is the last identifier of each comma-separated specifier,
+/// so `{ Page as default }` and `{ default }` both qualify while
+/// `{ default as Page }` re-exports another module's default under a new name
+/// and deliberately does not.
+fn named_clause_exports_default(source: &str, brace: usize) -> bool {
+    let bytes = source.as_bytes();
+    let mut index = brace + 1;
+    let mut last_word: Option<&str> = None;
+    while index < bytes.len() {
+        if is_comment_start(bytes, index) {
+            index = skip_comment(bytes, index);
+            continue;
+        }
+        if is_quote(bytes[index]) {
+            // `export { "a-b" as default }` uses a string specifier name.
+            index = skip_string(bytes, index);
+            last_word = None;
+            continue;
+        }
+        match bytes[index] {
+            b'}' => return last_word == Some("default"),
+            b',' => {
+                if last_word == Some("default") {
+                    return true;
+                }
+                last_word = None;
+                index += 1;
+            }
+            byte if is_ident_start_byte(byte) => {
+                let start = index;
+                index = skip_identifier(bytes, index);
+                let word = &source[start..index];
+                // `as` is the separator, never the exported name.
+                if word != "as" {
+                    last_word = Some(word);
+                }
+            }
+            _ => index += 1,
+        }
+    }
+    false
+}
+
 fn export_name(source: &str, after_keyword: usize) -> Option<String> {
     let bytes = source.as_bytes();
     let mut index = skip_whitespace_and_comments(bytes, after_keyword);
@@ -398,5 +511,58 @@ import { createElement } from "react";
         );
 
         assert_eq!(ast.import_specifiers(), vec!["react"]);
+    }
+
+    #[test]
+    fn recognizes_every_runtime_default_export_form() {
+        for source in [
+            "export default function Page() { return <main /> }",
+            "export default class Page {}",
+            "export default () => <main />",
+            "const Page = () => <main />;\nexport default Page",
+            "function Page() {}\nexport { Page as default }",
+            "function Page() {}\nexport { Page as default, Page as Other }",
+            "export { default } from \"./page\"",
+            "export * as default from \"./page\"",
+            "export {\n  // the page component\n  Page as default,\n}",
+            "export { Page as Other, Page as default }",
+        ] {
+            assert!(
+                has_default_export(source),
+                "should detect a default export in: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_sources_without_a_runtime_default_export() {
+        for source in [
+            "export const title = 'Missing'",
+            "export function Page() {}",
+            "// export default function Page() {}",
+            "/* export default function Page() {} */",
+            "const help = \"export default function Page() {}\"",
+            "export const defaultTitle = 'Missing'",
+            "export { Page }",
+            // Re-exporting another module's default under a new name does not
+            // give this module a default export.
+            "export { default as Page } from \"./page\"",
+            // Type-only exports leave no runtime binding.
+            "export type { Page as default } from \"./page\"",
+            "export * from \"./page\"",
+        ] {
+            assert!(
+                !has_default_export(source),
+                "should not detect a default export in: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn default_export_detection_survives_unterminated_clauses() {
+        // Malformed input must return an answer rather than scan out of bounds.
+        for source in ["export {", "export { Page as", "export *", "export"] {
+            assert!(!has_default_export(source), "{source}");
+        }
     }
 }

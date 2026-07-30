@@ -47,6 +47,118 @@ function stubPreloadDocument() {
   }
 }
 
+/** Install a minimal browser-ish global environment and restore it after. */
+function withGlobals(values, run) {
+  const keys = [
+    'window',
+    'document',
+    'CSS',
+    '__RUVYXA_ROUTES__',
+    '__RUVYXA_ROOT__',
+    '__RUVYXA_ROUTE_MANIFEST__',
+    '__RUVYXA_ROUTE_PARAMS__',
+    '__RUVYXA_REQUEST_PATH__',
+    '__RUVYXA_ROUTE_PATTERN__',
+    '__RUVYXA_ROUTER_INSTANCE__',
+  ]
+  const previous = new Map(
+    keys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
+  )
+  for (const key of keys) delete globalThis[key]
+  Object.assign(globalThis, values)
+  try {
+    return run()
+  } finally {
+    for (const key of keys) delete globalThis[key]
+    for (const [key, descriptor] of previous) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor)
+    }
+  }
+}
+
+function browserWindow(pathname) {
+  return {
+    location: {
+      href: `https://example.test${pathname}`,
+      origin: 'https://example.test',
+      pathname,
+      search: '',
+      assign() {},
+      replace() {},
+    },
+    history: { pushState() {}, replaceState() {}, back() {}, forward() {} },
+    addEventListener() {},
+    scrollTo() {},
+  }
+}
+
+describe('client router initial route', () => {
+  it('seeds the route from the published pattern so refresh works on a dynamic route', () => {
+    // Regression: the snapshot's `route` used to come from
+    // `__RUVYXA_REQUEST_PATH__` (a concrete URL), so looking the route up in
+    // `__RUVYXA_ROUTES__` — which is keyed by pattern — always missed, and
+    // `refresh()` rendered nothing without reporting anything.
+    const rendered = []
+    withGlobals(
+      {
+        window: browserWindow('/blog/hello'),
+        __RUVYXA_REQUEST_PATH__: '/blog/hello',
+        __RUVYXA_ROUTE_PATTERN__: '/blog/[slug]',
+        __RUVYXA_ROUTE_PARAMS__: { slug: 'hello' },
+        __RUVYXA_ROUTES__: {
+          '/blog/[slug]': (context) => ({ tree: context.route }),
+        },
+        __RUVYXA_ROOT__: {
+          render(tree) {
+            rendered.push(tree)
+          },
+        },
+      },
+      () => {
+        const router = getRouterInstance()
+
+        assert.equal(router.getSnapshot().route, '/blog/[slug]')
+        assert.equal(router.getSnapshot().pathname, '/blog/hello')
+        assert.deepEqual(router.getSnapshot().params, { slug: 'hello' })
+
+        router.refresh()
+        assert.deepEqual(rendered, [{ tree: '/blog/[slug]' }])
+      },
+    )
+  })
+
+  it('falls back to matching the manifest when no pattern global is present', () => {
+    // Keeps a document built by an older bundle working.
+    withGlobals(
+      {
+        window: browserWindow('/blog/hello'),
+        __RUVYXA_REQUEST_PATH__: '/blog/hello',
+        __RUVYXA_ROUTE_MANIFEST__: {
+          routes: [{ path: '/blog/[slug]', src: '/chunks/blog.js' }],
+        },
+      },
+      () => {
+        assert.equal(getRouterInstance().getSnapshot().route, '/blog/[slug]')
+      },
+    )
+  })
+
+  it('reports a refresh that cannot find its bundle instead of doing nothing', () => {
+    withGlobals(
+      {
+        window: browserWindow('/blog/hello'),
+        __RUVYXA_REQUEST_PATH__: '/blog/hello',
+        __RUVYXA_ROUTE_PATTERN__: '/blog/[slug]',
+        __RUVYXA_ROUTES__: {},
+        __RUVYXA_ROOT__: { render() {} },
+      },
+      () => {
+        assert.throws(() => getRouterInstance().refresh(), /not registered/)
+      },
+    )
+  })
+})
+
 describe('client router prefetch hints', () => {
   it('emits one modulepreload per module when routes share a chunk', async () => {
     const keys = [

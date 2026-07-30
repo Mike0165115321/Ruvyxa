@@ -55,6 +55,26 @@ describe('entry-templates route composition', () => {
     assert.match(registration, /\["\/about"\] = __ruvyxaTree/)
   })
 
+  it('publishes the route pattern next to the registry entry', () => {
+    // The registry is keyed by pattern, so the client router needs the pattern
+    // to look up the route the document was served from. Without it the router
+    // seeded its snapshot from the concrete URL and `router.refresh()` silently
+    // rendered nothing on every dynamic route.
+    const registration = routeRegistration({
+      name: '__ruvyxaTree',
+      routePath: '/blog/[slug]',
+    })
+    assert.match(registration, /globalThis\.__RUVYXA_ROUTE_PATTERN__ = "\/blog\/\[slug\]"/)
+  })
+
+  it('escapes the route pattern in the published global', () => {
+    const registration = routeRegistration({
+      name: '__ruvyxaTree',
+      routePath: '/a";globalThis.pwned=1;"',
+    })
+    assert.match(registration, /__RUVYXA_ROUTE_PATTERN__ = "\/a\\";globalThis\.pwned=1;\\""/)
+  })
+
   it('client entry hydrates into an existing root or creates one', () => {
     const source = clientEntrySource({
       imports: ['import Page from "./page.js"'],

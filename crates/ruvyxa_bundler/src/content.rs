@@ -26,7 +26,11 @@ struct ContentModuleCache {
 static CONTENT_MODULE_CACHE: OnceLock<Mutex<ContentModuleCache>> = OnceLock::new();
 
 /// Compile a `.md` or `.mdx` document into a React ESM page module.
-pub fn compile_content_module(source: &str, path: &Path) -> Result<String, String> {
+///
+/// Returns the shared `Arc<str>` the cache holds. Returning a `String` copied the
+/// whole compiled module on every cache hit, which is the common case for a
+/// content-heavy site during a build.
+pub fn compile_content_module_shared(source: &str, path: &Path) -> Result<Arc<str>, String> {
     let extension = path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -39,7 +43,7 @@ pub fn compile_content_module(source: &str, path: &Path) -> Result<String, Strin
         .ok()
         .and_then(|cache| cache.entries.get(&cache_key).cloned())
     {
-        return Ok(cached.to_string());
+        return Ok(cached);
     }
 
     let (frontmatter, body) = split_frontmatter(source)?;
@@ -53,8 +57,15 @@ pub fn compile_content_module(source: &str, path: &Path) -> Result<String, Strin
             path.display()
         )),
     }?;
-    store_content_module(cache_key, &compiled);
-    Ok(compiled)
+    Ok(store_content_module(cache_key, compiled))
+}
+
+/// Compile a content document, returning an owned `String`.
+///
+/// Kept for callers that need ownership of the text; prefer
+/// [`compile_content_module_shared`] where a shared reference will do.
+pub fn compile_content_module(source: &str, path: &Path) -> Result<String, String> {
+    compile_content_module_shared(source, path).map(|module| module.to_string())
 }
 
 fn content_cache_key(extension: &str, source: &str) -> String {
@@ -65,15 +76,21 @@ fn content_cache_key(extension: &str, source: &str) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
-fn store_content_module(key: String, compiled: &str) {
+/// Store the compiled module and hand back the shared allocation.
+///
+/// Returning the `Arc` means the caller serves exactly what was cached, so a
+/// miss costs one allocation rather than one for the cache plus a copy for the
+/// caller. A poisoned lock skips caching but still returns the module.
+fn store_content_module(key: String, compiled: String) -> Arc<str> {
+    let stored: Arc<str> = Arc::from(compiled);
     let Ok(mut cache) = CONTENT_MODULE_CACHE
         .get_or_init(|| Mutex::new(ContentModuleCache::default()))
         .lock()
     else {
-        return;
+        return stored;
     };
-    if cache.entries.contains_key(&key) {
-        return;
+    if let Some(existing) = cache.entries.get(&key) {
+        return Arc::clone(existing);
     }
     while cache.entries.len() >= CONTENT_CACHE_LIMIT {
         let Some(oldest) = cache.insertion_order.pop_front() else {
@@ -82,7 +99,8 @@ fn store_content_module(key: String, compiled: &str) {
         cache.entries.remove(&oldest);
     }
     cache.insertion_order.push_back(key.clone());
-    cache.entries.insert(key, Arc::from(compiled));
+    cache.entries.insert(key, Arc::clone(&stored));
+    stored
 }
 
 fn compile_markdown(body: &str, frontmatter: &Value) -> Result<String, String> {

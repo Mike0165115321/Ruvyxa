@@ -366,19 +366,33 @@ impl PluginHost {
         {
             Ok(value) => Ok(value),
             Err(CallFailure::Hook(error)) => Err(error),
-            Err(CallFailure::WorkerGone(error)) => {
+            Err(failure @ (CallFailure::NotDelivered(_) | CallFailure::WorkerGone(_))) => {
+                // Either way the worker is unusable and must be replaced. What
+                // differs is whether the hook may already have run:
+                // `NotDelivered` proves it did not, while `WorkerGone` leaves it
+                // unknown — the worker can have executed the handler's side
+                // effects and died before answering. Replaying an unknown call
+                // applies those effects twice, which is why `worker_pool` gates
+                // its own retry on `WorkerRequest::is_idempotent`. This bridge
+                // now draws the same line instead of retrying blindly.
+                let delivered = matches!(failure, CallFailure::WorkerGone(_));
+                let error = failure.into_error();
+                let retryable = !delivered || hook_is_idempotent(hook);
                 warn!(
                     target: "ruvyxa::plugin",
-                    "TypeScript plugin host stopped responding ({error}); restarting it once"
+                    delivered,
+                    retryable,
+                    "TypeScript plugin host stopped responding ({error}); restarting it"
                 );
                 replace_worker(&mut worker, &self.spawn)?;
+                if !retryable {
+                    return Err(error);
+                }
                 match call_worker_with_timeout(&mut worker, hook, payload, self.call_timeout).await
                 {
                     Ok(value) => Ok(value),
                     Err(CallFailure::Hook(error)) => Err(error),
-                    Err(
-                        failure @ (CallFailure::WorkerGone(_) | CallFailure::WorkerPoisoned(_)),
-                    ) => {
+                    Err(failure) => {
                         let error = failure.into_error();
                         replace_worker(&mut worker, &self.spawn)?;
                         Err(error)
@@ -395,6 +409,17 @@ impl PluginHost {
             }
         }
     }
+}
+
+/// Whether replaying `hook` after a worker death is free of duplicate effects.
+///
+/// Only `describe` qualifies: it reports the registry's shape and runs no
+/// user-supplied handler. Every other hook invokes plugin code that may write to
+/// a database, emit a message, or increment a counter, and a worker that died
+/// after running the handler but before answering is indistinguishable from one
+/// that died before running it.
+fn hook_is_idempotent(hook: &str) -> bool {
+    matches!(hook, "describe")
 }
 
 fn replace_worker(worker: &mut PluginWorker, spawn: &PluginSpawnConfig) -> Result<()> {
@@ -441,7 +466,12 @@ fn spawn_worker(spawn: &PluginSpawnConfig) -> Result<PluginWorker> {
 enum CallFailure {
     /// The worker is alive; the hook itself failed. Never retried.
     Hook(RuvyxaError),
-    /// The worker exited or its pipes broke. Eligible for one restart.
+    /// Writing the request failed, so the worker never received it. The hook
+    /// cannot have run, so replaying it on a fresh worker is always safe.
+    NotDelivered(RuvyxaError),
+    /// The request was written but no response came back — the worker exited or
+    /// its output pipe broke. The hook may have run to completion first, so only
+    /// a side-effect-free hook may be replayed.
     WorkerGone(RuvyxaError),
     /// The worker may still be alive, but its request/response stream can no
     /// longer be correlated safely. Replaced without retrying the hook.
@@ -451,7 +481,10 @@ enum CallFailure {
 impl CallFailure {
     fn into_error(self) -> RuvyxaError {
         match self {
-            Self::Hook(error) | Self::WorkerGone(error) | Self::WorkerPoisoned(error) => error,
+            Self::Hook(error)
+            | Self::NotDelivered(error)
+            | Self::WorkerGone(error)
+            | Self::WorkerPoisoned(error) => error,
         }
     }
 }
@@ -495,13 +528,15 @@ async fn call_worker(
         )))
     })?;
     encoded.push(b'\n');
+    // A broken pipe here means the request never reached the worker, so the
+    // hook definitely did not run and the call is safe to replay.
     worker.stdin.write_all(&encoded).await.map_err(|error| {
-        CallFailure::WorkerGone(RuvyxaError::Message(format!(
+        CallFailure::NotDelivered(RuvyxaError::Message(format!(
             "Failed to write to TypeScript plugin host: {error}"
         )))
     })?;
     worker.stdin.flush().await.map_err(|error| {
-        CallFailure::WorkerGone(RuvyxaError::Message(format!(
+        CallFailure::NotDelivered(RuvyxaError::Message(format!(
             "Failed to flush TypeScript plugin request: {error}"
         )))
     })?;
@@ -627,6 +662,44 @@ mod tests {
             }
             _ => panic!("a timed-out call must poison its protocol stream"),
         }
+    }
+
+    /// A hook that runs user-supplied plugin code must not be replayed once the
+    /// request reached the worker: the handler may already have written to a
+    /// database or sent a message before the process went away.
+    #[test]
+    fn only_side_effect_free_hooks_are_retried_after_a_delivered_request_is_lost() {
+        assert!(hook_is_idempotent("describe"));
+        for hook in ["http.request", "http.response", "dev.fileChange"] {
+            assert!(
+                !hook_is_idempotent(hook),
+                "{hook} runs plugin code and must not be replayed"
+            );
+        }
+    }
+
+    /// A write that never reached the worker cannot have run the hook, so that
+    /// case stays retryable for every hook — this is the common
+    /// "worker crashed earlier, reconnect and continue" path, and losing it
+    /// would turn a recoverable crash into a failed request.
+    #[test]
+    fn undelivered_requests_stay_retryable_for_every_hook() {
+        // `retryable` mirrors the decision in `call_locked`.
+        let retryable = |delivered: bool, hook: &str| !delivered || hook_is_idempotent(hook);
+
+        for hook in [
+            "http.request",
+            "http.response",
+            "dev.fileChange",
+            "describe",
+        ] {
+            assert!(
+                retryable(false, hook),
+                "{hook} must be retried when the request was never delivered"
+            );
+        }
+        assert!(!retryable(true, "http.request"));
+        assert!(retryable(true, "describe"));
     }
 
     #[test]

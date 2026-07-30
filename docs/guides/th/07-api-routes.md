@@ -706,12 +706,18 @@ Request → /api/products
 
 ### Worker Pool Timeouts
 
-| Context    | Default Timeout    | Environment Variable    |
-| ---------- | ------------------ | ----------------------- |
-| Dev server | 30,000 ms (30s)    | `RUVYXA_WORKER_TIMEOUT` |
-| Build      | 120,000 ms (2 min) | `RUVYXA_WORKER_TIMEOUT` |
+| Context    | Default Timeout     | Environment Variable       |
+| ---------- | ------------------- | -------------------------- |
+| Dev server | 30,000 ms (30s)     | `RUVYXA_WORKER_TIMEOUT_MS` |
+| Build      | 300,000 ms (5 นาที) | `RUVYXA_WORKER_TIMEOUT_MS` |
 
 Timeout ที่ 0 หรือ invalid จะถูกรีเซ็ตเป็นค่า default
+
+**Concurrency ต่อ worker:** worker หนึ่งตัวรับ request พร้อมกันได้ไม่เกิน
+`RUVYXA_WORKER_MAX_CONCURRENCY` (default: จำนวน core จำกัดที่ 2–8) การ render กิน CPU
+และแต่ละครั้งถือ React tree, bundle ที่ compile แล้ว และ buffer ของ response ไว้ ถ้ารับทั้ง burst
+เข้ามาพร้อมกันจะทำให้ heap หมดหรือ CPU thrash จนเกิด timeout ที่ดูเหมือน hang request
+ที่เกินจะเข้าคิวและทยอยทำงานเมื่อมี slot ว่าง
 
 ---
 
@@ -774,7 +780,7 @@ action.ts)
 | 400 Bad Request            | JSON parse error                     | เช็ค JSON format ใน request body             |
 | CORS error                 | cross-origin request ไม่มี headers   | ตั้ง CORS headers หรือ export OPTIONS        |
 | streaming ไม่มา            | ลืม `controller.close()`             | ปิด stream เมื่อเสร็จ                        |
-| streaming ตัดกลางคัน       | worker timeout                       | เพิ่ม RUVYXA_WORKER_TIMEOUT                  |
+| streaming ตัดกลางคัน       | worker timeout                       | เพิ่ม RUVYXA_WORKER_TIMEOUT_MS               |
 | 500 Internal Server Error  | handler throw error                  | ใช้ try-catch, return status code ที่เหมาะสม |
 | `RUV1200` API route failed | route execution error                | ดู diagnostic message ใน dev overlay         |
 

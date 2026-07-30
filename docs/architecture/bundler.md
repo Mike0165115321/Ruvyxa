@@ -237,6 +237,22 @@ pub fn check_boundary(
 The check traverses the compiled module graph (BFS) and flags any prohibited import.
 `NodeModulesExternal` option can whitelist known packages.
 
+### `has_default_export()`
+
+```rust
+pub fn has_default_export(source: &str) -> bool
+```
+
+Reports whether a module exports a default binding, without a full parse. It reuses the same string
+and comment skipping as the rest of `ast.rs`, so `"export default"` inside a string literal or a
+comment is not counted. It recognises every valid form — `export default <expr>`,
+`export default function`/`class`, `export { X as default }`, `export { default } from`, and
+`export * as default from` — and rejects `export type { X as default }`, which erases at compile
+time.
+
+`ruvyxa_graph::validate_app` uses it for RUV1004 so a page whose default export is re-exported is
+not reported as missing one.
+
 ---
 
 ## Linking Strategy

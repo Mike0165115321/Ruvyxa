@@ -295,11 +295,11 @@ pub fn validate_app(root: &Path, manifest: &RouteManifest) -> Result<ValidationR
                         .and_then(|extension| extension.to_str()),
                     Some("md" | "mdx")
                 );
-                if !is_content_page && !source.contains("export default") {
+                if !is_content_page && !ruvyxa_bundler::ast::has_default_export(&source) {
                     diagnostics.push(
                         Diagnostic::new("RUV1004", "Page is missing a default export")
                             .explain(
-                                "Every TypeScript/JavaScript page must export a default component.",
+                                "Every TypeScript/JavaScript page must export a default component. Markdown and MDX pages receive one from the content compiler.",
                             )
                             .at_file(&route.file)
                             .suggest("Add `export default function Page() { return <main /> }`."),
@@ -1965,6 +1965,62 @@ mod tests {
         assert!(codes.contains(&"RUV1007"));
         assert!(codes.contains(&"RUV1008"));
         assert!(codes.contains(&"RUV1010"));
+    }
+
+    /// Route validation used to test for the literal text `export default`, so
+    /// every other valid default-export form was reported as RUV1004 and a
+    /// commented-out one silently passed. It now shares the bundler's
+    /// comment-aware scanner.
+    #[test]
+    fn accepts_every_valid_default_export_form_and_still_catches_a_missing_one() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = temp.path().join("app");
+        fs::create_dir_all(app.join("aliased")).unwrap();
+        fs::create_dir_all(app.join("reexported")).unwrap();
+        fs::create_dir_all(app.join("commented")).unwrap();
+
+        fs::write(
+            app.join("page.tsx"),
+            "export default function Home() { return <main /> }",
+        )
+        .unwrap();
+        // Valid: a named binding aliased to `default`.
+        fs::write(
+            app.join("aliased/page.tsx"),
+            "function Page() { return <main /> }\nexport { Page as default }",
+        )
+        .unwrap();
+        // Valid: a namespace re-exported as `default`.
+        fs::write(
+            app.join("reexported/page.tsx"),
+            "export * as default from \"../page\"",
+        )
+        .unwrap();
+        // Invalid: the only occurrence is inside a comment.
+        fs::write(
+            app.join("commented/page.tsx"),
+            "// export default function Page() {}\nexport const title = 'Missing'",
+        )
+        .unwrap();
+
+        let manifest = discover_routes(DiscoverOptions::new(&app)).unwrap();
+        let report = validate_app(temp.path(), &manifest).unwrap();
+        let missing_default = report
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "RUV1004")
+            .count();
+
+        assert_eq!(
+            missing_default,
+            1,
+            "only the commented-out page lacks a default export, got: {:#?}",
+            report
+                .diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.code, &diagnostic.title))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

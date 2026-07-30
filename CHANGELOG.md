@@ -54,7 +54,60 @@
 - `definePlugin` validation errors now carry the `RUV2102` diagnostic code instead of raising bare
   `TypeError` messages.
 
+### Security
+
+- **Fixed every server action being rejected with `403 Cross-origin action request blocked` behind a
+  TLS-terminating proxy.** The same-origin check compared the request's scheme against a hardcoded
+  `http` whenever no trusted proxy reported one, so an `https` origin never matched — and the
+  comparison was inverted relative to its intent, admitting a plain-`http` origin while blocking the
+  secure one. The host comparison, which is the check that actually stops CSRF, now stands on its
+  own; the scheme is compared only when a trusted peer states it through `X-Forwarded-Proto`.
+  Deployments whose proxy is neither loopback nor listed in `security.trustedProxyIps` — the
+  ordinary Docker Compose, Kubernetes, and managed-platform-edge shapes — work without
+  configuration. Setting `trustedProxyIps` remains recommended: it is what enables forwarded
+  client-IP detection and restores the strict scheme comparison.
+- **`security.trustedProxyIps` accepts CIDR ranges.** Entries are matched as prefixes (`10.0.0.0/8`,
+  `2001:db8::/32`), a bare address means a host route, and an IPv4 range also matches the
+  IPv4-mapped form (`::ffff:10.0.0.9`) a dual-stack listener reports. Previously only exact
+  addresses worked, which made trusting a proxy pool impractical. An unparseable entry now fails
+  startup with `RUV1602` instead of being silently discarded, so a typo can no longer leave a proxy
+  untrusted and every client sharing one rate-limit bucket.
+- **Fixed the action rate limiter being usable to lock out every other client.** It tracked a map of
+  live keys capped at 10,000 entries and denied any key it could not admit, so filling the map —
+  trivial by rotating source addresses within an IPv6 `/64` — denied service to every first-time
+  client until the window elapsed. Counters now live in a fixed 8,192-slot array with per-process
+  hash seeding: memory no longer depends on how many clients have been seen, admission is never
+  refused for lack of room, and a slot collision can only limit a client early, never grant it extra
+  budget.
+- **`@ruvyxa/auth` now rate-limits per client in addition to per identity.** The existing bucket
+  keys on the email, so one source could try `rateLimit.max` passwords against an unlimited number
+  of accounts — the shape of credential stuffing and account enumeration. A second bucket keyed on
+  the client alone, with five times the budget, caps that total. The larger budget keeps shared
+  egress (offices, mobile carriers, CGNAT) working. **This can return `RUV3102` where a request
+  previously succeeded**, for traffic that authenticates many distinct identities from one client
+  key. Configure `clientIp` in production — the user-agent fallback is client-controlled and
+  therefore rotatable.
+- **A plugin hook that reached the worker is no longer retried automatically.** Any delivery failure
+  was treated as "worker gone" and retried, so a `request` or `response` hook whose worker died
+  after receiving the request could run its side effects twice. Write and flush failures — where the
+  worker provably never saw the request — are still retried; a failure while reading the response is
+  retried only for hooks with no observable effect.
+
 ### Correctness
+
+- **Fixed a page whose default export is re-exported being reported as missing one.** Route
+  validation tested for the literal text `export default`, so `export { Page as default }`,
+  `export { default } from './impl'`, and `export * as default from './impl'` all failed `RUV1004`,
+  while the same text inside a string or comment passed. Detection now shares the bundler's scanner
+  (`ruvyxa_bundler::ast::has_default_export`), which skips strings and comments and recognises every
+  valid form. `export type { X as default }` is correctly rejected, since a type export erases.
+- **`ctx.path` in a client bundle is the actual pathname again.** It fell back to the route pattern,
+  so a page rendered at `/blog/hello` saw `/blog/[slug]` whenever the request path global was
+  absent. The pattern is now published separately as `__RUVYXA_ROUTE_PATTERN__` and `ctx.path` falls
+  back to `location.pathname`. The router seeds its initial snapshot from the same global, so the
+  first `useRoute()` reports the pattern the server rendered rather than a re-derived guess.
+- `router.refresh()` on a route whose bundle is not registered now throws a message naming the route
+  and what to do, instead of failing inside the renderer with no context.
 
 - **Fixed the Node compiler mis-linking any module containing a regular expression with a quote.**
   The source scanner had no regex-literal handling, so a pattern such as `/("[^"]*")/` opened a
@@ -63,6 +116,33 @@
   `SyntaxError: Unexpected token 'export'` at runtime.
 
 ### Performance
+
+- **Removed a file read and a full scan of the page source from every rendered request.** Each
+  render re-read `page.tsx` from disk and scanned it for a default export purely to produce a
+  friendlier error. Route validation already covers that case at build time, and a genuinely missing
+  export is now recognised from the loader's own message, so the check no longer costs an I/O round
+  trip and a scan per request.
+- **Cached HTML is no longer copied on the way out.** Render-cache entries are stored as `Arc<str>`
+  and served by handing back the stored allocation, so a cache hit no longer duplicates the whole
+  document per request. Compiled content modules share their allocation the same way.
+- **`public/` asset links are resolved once per invalidation instead of once per render.** Every
+  SSG/ISR/CSR/PPR render walked the public directory to rebuild the same `<link>` list; the result
+  is now memoized alongside the other runtime caches and recomputed when they are invalidated.
+- **Bounded the module graphs a build worker retains.** Production prerendering imports each path
+  under a fresh module URL so page state cannot leak between paths, and Node's ESM registry never
+  releases a URL — so every isolated import permanently added one more module graph, and no
+  in-worker cache eviction could reclaim it. A build worker is now retired after
+  `RUVYXA_PRERENDER_RECYCLE_AFTER` isolated renders (default 32, `0` disables), and only while idle
+  so sibling renders are never dropped. The dev server never requests isolated imports and is
+  unaffected.
+- **Bounded per-worker concurrency.** A worker now admits at most `RUVYXA_WORKER_MAX_CONCURRENCY`
+  requests at once (default: core count clamped to 2–8) and queues the rest. Renders are CPU-bound
+  and each holds a React tree, a compiled bundle, and a response buffer, so admitting a whole burst
+  exhausted the heap or thrashed the CPU into timeouts that presented as hangs. `invalidate` and
+  `ping` bypass the queue, since delaying an invalidation would serve stale bundles exactly when the
+  worker is busiest. `ping` now also reports `queuedRequests` and `maxConcurrentRequests`.
+- A worker shutdown now writes its reason to stderr, so a pool that disappears during a build is
+  diagnosable instead of silent.
 
 - **Added a build diagnostic for images that bypass the image pipeline.** A raw `<img>` pointing at
   a public PNG/JPEG the optimizer already converted is reported with its file, line, and the bytes
@@ -78,6 +158,10 @@
   the name the crawler still reads.
 - Site URL resolution reads one framework-owned `RUVYXA_SITE_URL` variable rather than a list of
   host-specific environment variable names.
+- `ServerConfig.trusted_proxy_ips: Vec<IpAddr>` is now `trusted_proxies: TrustedProxies`, since the
+  field has to hold prefixes rather than addresses. The `security.trustedProxyIps` configuration key
+  and its accepted values are unchanged; only the internal Rust field, which is not published to
+  crates.io, is affected. The workspace crates are now marked `publish = false` to keep that so.
 
 ### Documentation
 
@@ -85,6 +169,14 @@
   configuration guides, and `head` plus `createPluginHarness` coverage to both plugin guides,
   including a first-party plugin list that calls out `fonts()`.
 - Documented the `RUV2102` plugin-definition diagnostic.
+- Documented the same-origin algorithm, the sliding-window rate limiter, CIDR support in
+  `trustedProxyIps`, the two `@ruvyxa/auth` rate-limit buckets, and the worker environment variables
+  in both the English and Thai guides, and corrected `RUV3102`, which was documented as a WebAuthn
+  failure rather than a rate-limit rejection.
+- Corrected `RUVYXA_WORKER_TIMEOUT` to `RUVYXA_WORKER_TIMEOUT_MS` and the build default from 2 to 5
+  minutes in the Thai API-routes guide, and rewrote the worker-pool architecture reference, which
+  described an in-process Rust thread pool that no longer exists, to document the Node/Bun pool that
+  does.
 
 ### Benchmarks
 

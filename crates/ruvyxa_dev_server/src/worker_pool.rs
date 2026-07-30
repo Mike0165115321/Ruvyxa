@@ -52,6 +52,21 @@ const MAX_NODE_TIMEOUT_MS: u64 = 2_147_483_647;
 /// Maximum time a worker receives to exit after its stdin closes before it is killed.
 const WORKER_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// Isolated prerenders one worker performs before it is retired and replaced.
+///
+/// A build asks for import isolation per path so page-module state cannot leak
+/// between paths, and that isolation is implemented by importing the bundle
+/// under a fresh module URL. Node's ESM registry never releases a URL, so each
+/// isolated import permanently retains one more module graph — the worker's
+/// memory grows linearly with the number of prerendered paths, and no cache
+/// eviction inside the worker can reclaim it. Replacing the process is the only
+/// operation that frees those graphs, so the pool retires a worker once it has
+/// accumulated this many of them. Isolation is unchanged; only the retention is
+/// bounded.
+const DEFAULT_ISOLATED_RENDERS_PER_WORKER: usize = 32;
+
+const ISOLATED_RENDER_RECYCLE_ENV: &str = "RUVYXA_PRERENDER_RECYCLE_AFTER";
+
 /// Maximum number of decoded response frames waiting for one HTTP consumer.
 /// At 64 KiB per frame this bounds queued raw body data to roughly 1 MiB.
 /// The bounded channel applies backpressure to the Node worker instead of
@@ -219,6 +234,13 @@ impl WorkerRequest {
             | Self::Ssg { id, .. }
             | Self::StaticParams { id, .. } => id,
         }
+    }
+
+    /// Whether serving this request makes the worker import a bundle under a
+    /// fresh module URL, permanently adding one module graph to its ESM
+    /// registry.
+    fn retains_an_isolated_module_graph(&self) -> bool {
+        matches!(self, Self::Ssg { fresh: true, .. })
     }
 
     /// Returns `true` if this request type is safe to retry without risk of
@@ -510,6 +532,9 @@ struct Worker {
     pending: PendingResponses,
     child: Mutex<Option<Child>>,
     alive: Arc<AtomicBool>,
+    /// Isolated prerenders this process has served, i.e. the number of module
+    /// graphs its ESM registry is holding and can never release.
+    isolated_renders: AtomicUsize,
 }
 
 impl Worker {
@@ -636,6 +661,7 @@ impl Worker {
             pending,
             child: Mutex::new(Some(child)),
             alive,
+            isolated_renders: AtomicUsize::new(0),
         })
     }
 
@@ -829,6 +855,10 @@ pub struct NodeWorkerPool {
     runtime: JavaScriptRuntime,
     next_worker: AtomicU64,
     response_timeout: std::time::Duration,
+    /// Isolated prerenders a worker may serve before it is retired. `None`
+    /// disables recycling, which is correct for the dev server: it never asks
+    /// for isolated imports, so its workers accumulate nothing to reclaim.
+    isolated_renders_per_worker: Option<usize>,
 }
 
 pub(crate) struct RenderApiRequest<'a> {
@@ -862,13 +892,17 @@ impl NodeWorkerPool {
         runtime: JavaScriptRuntime,
     ) -> Result<Self> {
         let response_timeout = configure_worker_timeout(&mut env, DEFAULT_WORKER_TIMEOUT_MS);
-        Self::start_with_timeout(root, env, runtime, None, response_timeout).await
+        // A long-lived server never requests isolated imports, so it retains
+        // nothing that recycling could reclaim.
+        Self::start_with_timeout(root, env, runtime, None, response_timeout, None).await
     }
 
     /// Start a pool with an optional bounded worker count.
     ///
     /// Build-time prerendering uses this to avoid starting idle Node processes
-    /// beyond its already configured render concurrency.
+    /// beyond its already configured render concurrency. This is also the only
+    /// caller that asks for isolated imports, so it is the pool that needs the
+    /// worker-recycling bound.
     pub async fn start_with_size_and_runtime(
         root: &Path,
         mut env: BTreeMap<String, String>,
@@ -876,7 +910,16 @@ impl NodeWorkerPool {
         runtime: JavaScriptRuntime,
     ) -> Result<Self> {
         let response_timeout = configure_worker_timeout(&mut env, BUILD_WORKER_TIMEOUT_MS);
-        Self::start_with_timeout(root, env, runtime, worker_count, response_timeout).await
+        let recycle_after = isolated_renders_per_worker();
+        Self::start_with_timeout(
+            root,
+            env,
+            runtime,
+            worker_count,
+            response_timeout,
+            recycle_after,
+        )
+        .await
     }
 
     async fn start_with_timeout(
@@ -885,6 +928,7 @@ impl NodeWorkerPool {
         runtime: JavaScriptRuntime,
         worker_count: Option<usize>,
         response_timeout: std::time::Duration,
+        isolated_renders_per_worker: Option<usize>,
     ) -> Result<Self> {
         let worker_script = find_worker_script(root).ok_or_else(|| {
             Diagnostic::new("RUV1702", "Worker pool script was not found")
@@ -966,6 +1010,7 @@ impl NodeWorkerPool {
             runtime,
             next_worker: AtomicU64::new(0),
             response_timeout,
+            isolated_renders_per_worker,
         })
     }
 
@@ -983,6 +1028,7 @@ impl NodeWorkerPool {
     /// Send a request to the least-loaded worker.
     pub async fn send(&self, request: WorkerRequest) -> Result<WorkerResponse> {
         let (index, worker) = self.select_worker().await?;
+        let isolated = request.retains_an_isolated_module_graph();
         let response = worker.send(&request, self.response_timeout).await;
 
         if response.is_err()
@@ -996,7 +1042,42 @@ impl NodeWorkerPool {
             return replacement.send(&request, self.response_timeout).await;
         }
 
+        if isolated && response.is_ok() {
+            self.retire_worker_if_saturated(index, &worker).await;
+        }
+
         response
+    }
+
+    /// Replace a worker that has retained its budgeted number of module graphs.
+    ///
+    /// Only an idle worker is retired. A worker still serving sibling renders
+    /// would have its child killed and its pending requests cleared by
+    /// `shutdown`, failing renders that were progressing fine; deferring to the
+    /// next completion costs nothing because the counter stays over budget.
+    async fn retire_worker_if_saturated(&self, index: usize, worker: &Arc<Worker>) {
+        let Some(budget) = self.isolated_renders_per_worker else {
+            return;
+        };
+        let retained = worker.isolated_renders.fetch_add(1, Ordering::AcqRel) + 1;
+        if retained < budget || worker.in_flight() > 0 {
+            return;
+        }
+
+        debug!(
+            worker = index,
+            retained, budget, "retiring prerender worker to release retained module graphs"
+        );
+        if self.replace_failed_worker(index, worker).await.is_none() {
+            // The replacement could not start. Keeping the saturated worker is
+            // strictly better than losing pool capacity mid-build, so reset the
+            // counter and let it try again after another full budget.
+            worker.isolated_renders.store(0, Ordering::Release);
+            warn!(
+                worker = index,
+                "could not replace a saturated prerender worker; continuing with it"
+            );
+        }
     }
 
     /// Pick the worker with the fewest in-flight requests.
@@ -1421,6 +1502,21 @@ fn configure_worker_timeout(
     std::time::Duration::from_millis(timeout_ms)
 }
 
+/// How many isolated prerenders a build worker may serve before retirement.
+///
+/// `0` disables recycling for builds that would rather trade memory for the
+/// absence of process churn.
+fn isolated_renders_per_worker() -> Option<usize> {
+    let configured = std::env::var(ISOLATED_RENDER_RECYCLE_ENV)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok());
+    match configured {
+        Some(0) => None,
+        Some(budget) => Some(budget),
+        None => Some(DEFAULT_ISOLATED_RENDERS_PER_WORKER),
+    }
+}
+
 fn positive_worker_timeout_ms(value: &str) -> Option<u64> {
     value
         .trim()
@@ -1447,6 +1543,7 @@ mod tests {
             pending: Arc::new(PendingResponseSet::default()),
             child: Mutex::new(None),
             alive: Arc::new(AtomicBool::new(true)),
+            isolated_renders: AtomicUsize::new(0),
         })
     }
 
@@ -1458,7 +1555,123 @@ mod tests {
             runtime: JavaScriptRuntime::Node,
             next_worker: AtomicU64::new(0),
             response_timeout: std::time::Duration::from_millis(DEFAULT_WORKER_TIMEOUT_MS),
+            isolated_renders_per_worker: None,
         }
+    }
+
+    fn ssg_request(fresh: bool) -> WorkerRequest {
+        WorkerRequest::Ssg {
+            id: next_request_id(),
+            project_root: "/project".to_string(),
+            app_dir: "/project/app".to_string(),
+            page_file: "/project/app/blog/[slug]/page.tsx".to_string(),
+            request_path: "/blog/hello".to_string(),
+            route_path: "/blog/[slug]".to_string(),
+            params: BTreeMap::new(),
+            mode: "full".to_string(),
+            fresh,
+        }
+    }
+
+    /// Only the isolated form mints a new module URL, so only it should count
+    /// against a worker's retention budget.
+    #[test]
+    fn only_isolated_prerenders_count_against_the_retention_budget() {
+        assert!(ssg_request(true).retains_an_isolated_module_graph());
+        assert!(!ssg_request(false).retains_an_isolated_module_graph());
+        assert!(
+            !WorkerRequest::Ping {
+                id: next_request_id()
+            }
+            .retains_an_isolated_module_graph()
+        );
+    }
+
+    /// `0` disables recycling; anything else is a real bound. Without a bound a
+    /// large static site keeps accumulating module graphs until the worker runs
+    /// out of heap.
+    #[test]
+    fn recycle_budget_treats_zero_as_disabled() {
+        // `isolated_renders_per_worker` reads a process-wide environment
+        // variable, so assert the mapping it applies rather than mutating the
+        // environment underneath other tests.
+        let interpret = |configured: Option<usize>| match configured {
+            Some(0) => None,
+            Some(budget) => Some(budget),
+            None => Some(DEFAULT_ISOLATED_RENDERS_PER_WORKER),
+        };
+
+        assert_eq!(interpret(Some(0)), None, "0 must disable recycling");
+        assert_eq!(interpret(Some(4)), Some(4));
+        assert_eq!(
+            interpret(None),
+            Some(DEFAULT_ISOLATED_RENDERS_PER_WORKER),
+            "an unset variable must fall back to the documented default"
+        );
+        assert_eq!(isolated_renders_per_worker().is_none(), {
+            let configured = std::env::var(ISOLATED_RENDER_RECYCLE_ENV)
+                .ok()
+                .and_then(|value| value.trim().parse::<usize>().ok());
+            configured == Some(0)
+        });
+    }
+
+    /// A saturated worker must not be torn down while it is still serving other
+    /// renders: `shutdown` clears pending requests, which would fail renders
+    /// that were progressing normally.
+    #[tokio::test]
+    async fn a_saturated_worker_is_not_retired_while_it_is_still_busy() {
+        let (tx, _rx) = mpsc::channel::<String>(4);
+        let worker = stub_worker(Some(tx));
+        let mut pool = stub_pool(vec![Arc::clone(&worker)]);
+        pool.isolated_renders_per_worker = Some(2);
+
+        // Register an in-flight sibling request on the same worker.
+        let (sender, _receiver) = mpsc::channel(1);
+        worker
+            .pending
+            .insert(
+                "sibling".to_string(),
+                PendingResponse {
+                    sender,
+                    streaming: Arc::new(AtomicBool::new(false)),
+                },
+            )
+            .await;
+        assert_eq!(worker.in_flight(), 1);
+
+        for _ in 0..4 {
+            pool.retire_worker_if_saturated(0, &worker).await;
+        }
+
+        // `worker_script` does not exist, so any attempted replacement would
+        // fail and reset the counter. A busy worker must not even try.
+        assert_eq!(
+            worker.isolated_renders.load(Ordering::Acquire),
+            4,
+            "a busy worker keeps counting instead of being retired"
+        );
+        assert!(
+            Arc::ptr_eq(&pool.workers.read().unwrap()[0], &worker),
+            "the busy worker must stay in the pool"
+        );
+    }
+
+    /// With recycling disabled the counter must not advance at all, so the dev
+    /// server pays nothing for a bound it does not need.
+    #[tokio::test]
+    async fn recycling_disabled_never_counts_or_replaces() {
+        let (tx, _rx) = mpsc::channel::<String>(4);
+        let worker = stub_worker(Some(tx));
+        let pool = stub_pool(vec![Arc::clone(&worker)]);
+        assert!(pool.isolated_renders_per_worker.is_none());
+
+        for _ in 0..8 {
+            pool.retire_worker_if_saturated(0, &worker).await;
+        }
+
+        assert_eq!(worker.isolated_renders.load(Ordering::Acquire), 0);
+        assert!(Arc::ptr_eq(&pool.workers.read().unwrap()[0], &worker));
     }
 
     #[tokio::test]
@@ -1863,6 +2076,7 @@ mod tests {
             runtime: JavaScriptRuntime::Node,
             next_worker: AtomicU64::new(0),
             response_timeout: std::time::Duration::from_millis(DEFAULT_WORKER_TIMEOUT_MS),
+            isolated_renders_per_worker: None,
         };
 
         pool.shutdown().await;
@@ -1876,6 +2090,83 @@ mod tests {
                 .expect("worker stdin mutex poisoned")
                 .is_none()
         );
+    }
+
+    /// Retiring the process is the only operation that releases the module
+    /// graphs an isolated import pins, so the test asserts on the OS process
+    /// identity rather than on the counter: a reset counter without a new
+    /// process would free nothing.
+    #[tokio::test]
+    async fn isolated_prerenders_retire_the_worker_process_once_the_budget_is_reached() {
+        let temp = tempfile::tempdir().unwrap();
+        let worker_script = temp.path().join("worker.mjs");
+        // Answers every request with its own pid so the test can see whether a
+        // different process served the next render.
+        std::fs::write(
+            &worker_script,
+            r#"
+import { createInterface } from 'node:readline'
+createInterface({ input: process.stdin }).on('line', (line) => {
+  const { id } = JSON.parse(line)
+  process.stdout.write(JSON.stringify({ id, ok: true, html: String(process.pid) }) + '\n')
+})
+process.stdin.resume()
+"#,
+        )
+        .unwrap();
+
+        let worker = Worker::spawn(&worker_script, &BTreeMap::new(), JavaScriptRuntime::Node)
+            .await
+            .unwrap();
+        let pool = NodeWorkerPool {
+            workers: StdRwLock::new(vec![Arc::new(worker)]),
+            worker_script,
+            env: BTreeMap::new(),
+            runtime: JavaScriptRuntime::Node,
+            next_worker: AtomicU64::new(0),
+            response_timeout: std::time::Duration::from_millis(DEFAULT_WORKER_TIMEOUT_MS),
+            isolated_renders_per_worker: Some(3),
+        };
+
+        let mut pids = Vec::new();
+        for _ in 0..6 {
+            let response = pool
+                .send(ssg_request(true))
+                .await
+                .expect("the stub worker always answers");
+            pids.push(response.html.expect("the stub reports its pid"));
+        }
+
+        // Budget of 3: the first three renders share one process, then it is
+        // retired and the next three share its replacement.
+        assert_eq!(pids[0], pids[1], "{pids:?}");
+        assert_eq!(pids[1], pids[2], "{pids:?}");
+        assert_ne!(
+            pids[2], pids[3],
+            "the saturated worker must be replaced by a new process: {pids:?}"
+        );
+        assert_eq!(pids[3], pids[4], "{pids:?}");
+        assert_eq!(pids[4], pids[5], "{pids:?}");
+
+        // A cached (non-isolated) prerender adds no retention, so it must not
+        // advance the budget or trigger another retirement.
+        let before = pool
+            .send(ssg_request(false))
+            .await
+            .unwrap()
+            .html
+            .expect("pid");
+        for _ in 0..5 {
+            let pid = pool
+                .send(ssg_request(false))
+                .await
+                .unwrap()
+                .html
+                .expect("pid");
+            assert_eq!(pid, before, "cached prerenders must not retire a worker");
+        }
+
+        pool.shutdown().await;
     }
 
     #[tokio::test]
@@ -1936,6 +2227,7 @@ mod tests {
             runtime: JavaScriptRuntime::Node,
             next_worker: AtomicU64::new(0),
             response_timeout: std::time::Duration::from_millis(DEFAULT_WORKER_TIMEOUT_MS),
+            isolated_renders_per_worker: None,
         };
 
         let mut child = failed_worker.child.lock().await;
@@ -2005,6 +2297,7 @@ mod tests {
             runtime: JavaScriptRuntime::Node,
             next_worker: AtomicU64::new(0),
             response_timeout: std::time::Duration::from_millis(DEFAULT_WORKER_TIMEOUT_MS),
+            isolated_renders_per_worker: None,
         };
 
         // Every selection must land on the idle worker regardless of the
@@ -2045,6 +2338,7 @@ mod tests {
             runtime: JavaScriptRuntime::Node,
             next_worker: AtomicU64::new(0),
             response_timeout: std::time::Duration::from_millis(DEFAULT_WORKER_TIMEOUT_MS),
+            isolated_renders_per_worker: None,
         };
 
         // Request completion also needs this mutex. Routing new work must not
@@ -2112,6 +2406,7 @@ mod tests {
             runtime: JavaScriptRuntime::Node,
             next_worker: AtomicU64::new(0),
             response_timeout: std::time::Duration::from_millis(DEFAULT_WORKER_TIMEOUT_MS),
+            isolated_renders_per_worker: None,
         };
 
         // With every worker idle the rotating offset spreads work round-robin.

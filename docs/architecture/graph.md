@@ -217,7 +217,7 @@ Diagnostics emitted:
 | RUV1001 | App directory not found                       | Missing `app/`                       |
 | RUV1002 | Invalid dynamic route segment                 | Bad `[name]` syntax                  |
 | RUV1003 | Conflicting route paths                       | Two routes with same URL match shape |
-| RUV1004 | Page is missing default export                | No `export default` in TSX/JSX page  |
+| RUV1004 | Page is missing default export                | No default export in TSX/JSX page    |
 | RUV1007 | Server-only module imported into client graph | `server-only` reachable from client  |
 | RUV1008 | Private env var in client graph               | `process.env.SECRET` in client code  |
 | RUV1009 | Client-only module in server graph            | `client-only` in SSR bundle          |

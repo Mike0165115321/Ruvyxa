@@ -327,15 +327,15 @@ fetch('/__ruvyxa/action?path=/products&name=create', {
 
 Ruvyxa มีระบบรักษาความปลอดภัยหลายชั้นสำหรับ action:
 
-| มาตรการ               | ค่าเริ่มต้น             | รายละเอียด                                |
-| --------------------- | ----------------------- | ----------------------------------------- |
-| **Body size limit**   | 1,048,576 bytes (1 MiB) | request body เกิน → 413 Payload Too Large |
-| **Same-origin**       | `true`                  | ตรวจสอบ `Origin` header ตรงกับ `Host`     |
-| **Fetch Metadata**    | `true`                  | ตรวจสอบ `Sec-Fetch-Site` header           |
-| **Rate limit**        | 600 requests / 60s      | ต่อ client+action, เกิน → 429             |
-| **Method**            | POST เท่านั้น           | actions ไม่รับ GET/DELETE/etc.            |
-| **Content-Type**      | JSON / urlencoded       | 415 สำหรับ type อื่น                      |
-| **Trusted proxy IPs** | loopback เท่านั้น       | X-Forwarded-For เชื่อถือได้จาก localhost  |
+| มาตรการ               | ค่าเริ่มต้น             | รายละเอียด                                           |
+| --------------------- | ----------------------- | ---------------------------------------------------- |
+| **Body size limit**   | 1,048,576 bytes (1 MiB) | request body เกิน → 413 Payload Too Large            |
+| **Same-origin**       | `true`                  | ตรวจสอบ `Origin` header ตรงกับ `Host`                |
+| **Fetch Metadata**    | `true`                  | ตรวจสอบ `Sec-Fetch-Site` header                      |
+| **Rate limit**        | 600 requests / 60s      | sliding-window counter ต่อ client+action, เกิน → 429 |
+| **Method**            | POST เท่านั้น           | actions ไม่รับ GET/DELETE/etc.                       |
+| **Content-Type**      | JSON / urlencoded       | 415 สำหรับ type อื่น                                 |
+| **Trusted proxy IPs** | loopback เท่านั้น       | X-Forwarded-For เชื่อถือได้จาก localhost             |
 
 ### การตั้งค่าใน ruvyxa.config.ts
 
@@ -363,8 +363,8 @@ const settings: RuvyxaConfig = {
     // ปิดการตรวจสอบ fetch metadata (ไม่แนะนำ)
     fetchMeta: false,
 
-    // IP addresses ของ reverse proxy ที่เชื่อถือได้
-    trustedProxyIps: ['10.0.0.1', '172.16.0.0/12'],
+    // reverse proxy ที่เชื่อถือได้ — ระบุเป็น address ตรงตัว หรือ CIDR range ก็ได้
+    trustedProxyIps: ['10.0.0.1', '172.16.0.0/12', '2001:db8::/32'],
   },
 }
 
@@ -405,49 +405,95 @@ Request → /__ruvyxa/action
 ### Under the Hood: Same-Origin Validation
 
 ```rust
-fn action_origin_is_cross_site(headers, config, peer_ip) -> bool {
+fn action_origin_is_cross_site(headers, config, peer) -> bool {
     let origin = headers.get("Origin");
     let host = headers.get("Host");
 
     // ถ้าไม่มี Origin → ใช้ Sec-Fetch-Site แทน
     // ถ้าไม่มีทั้งสอง → fail closed (block)
 
-    // ถ้า Origin ต่างจาก Host → cross-site
+    // การเทียบ host คือด่านที่หยุด CSRF ได้จริง เพราะ browser เป็นผู้ตั้ง
+    // Origin เอง หน้าเว็บจาก origin อื่นจึงปลอม host ให้ตรงไม่ได้
+    if origin_host != host {
+        return true;
+    }
 
-    // ถ้ามี trusted proxy → ใช้ X-Forwarded-Proto แทน scheme
-    // เพื่อรองรับ HTTPS ผ่าน reverse proxy
+    // scheme จะถูกเทียบเฉพาะเมื่อมีแหล่งที่เชื่อถือได้ระบุมา — Ruvyxa
+    // ไม่ terminate TLS เอง หลักฐานเดียวของ scheme ฝั่ง browser คือ
+    // X-Forwarded-Proto จาก peer ที่เชื่อถือได้ (loopback หรือรายการใน
+    // security.trustedProxyIps) ถ้าไม่มีหลักฐาน จะถือว่า scheme ไม่ทราบค่า
+    // และไม่นำมาตัดสิน
+    if peer_is_trusted && forwarded_proto in ("http", "https") {
+        return origin_scheme != forwarded_proto;
+    }
+
+    return false;
 }
 ```
+
+> รุ่นก่อนหน้าจะสมมติว่าเป็น `http` เสมอเมื่อไม่มี trusted proxy รายงาน scheme มา ผลคือ deployment
+> ใดที่ proxy ผู้ terminate TLS ไม่ใช่ loopback และไม่ได้อยู่ใน `security.trustedProxyIps` —
+> ซึ่งเป็นรูปแบบปกติของ Docker Compose, Kubernetes และ edge ของ managed platform — จะถูกตอบ
+> `403 Cross-origin action request blocked` ทุก action ยังคงแนะนำให้ตั้ง `trustedProxyIps`
+> เพราะเป็นตัวเปิด การอ่าน client IP จาก header สำหรับ rate limiter และทำให้การเทียบ scheme
+> แบบเข้มงวดกลับมาทำงาน
 
 ### Under the Hood: Rate Limiter Algorithm
 
-Rate limiter ใช้ sliding window เก็บ `Vec<Instant>` สำหรับแต่ละ key:
+Rate limiter ใช้ sliding window counter โดย hash แต่ละ key ลงใน slot ที่มีจำนวนคงที่
+หน่วยความจำที่ใช้จึงไม่ขึ้นกับจำนวน client ที่เคยเข้ามา:
 
 ```rust
+const ACTION_RATE_LIMIT_SLOTS: usize = 8192;
+
+struct RateSlot {
+    window_start: Instant,
+    current: u32,   // จำนวน request ใน window ที่เริ่มที่ window_start
+    previous: u32,  // จำนวน request ใน window ก่อนหน้า
+}
+
 struct ActionRateLimiter {
-    hits: HashMap<String, Vec<Instant>>,
-    max_hits: usize,        // default 600
-    window: Duration,        // default 60s
-    max_keys: usize,        // 10,000 keys สูงสุด
+    slots: Vec<Option<RateSlot>>,  // ACTION_RATE_LIMIT_SLOTS ช่อง
+    hasher: RandomState,           // seed ใหม่ทุก process
+    max_hits: usize,               // default 600
+    window: Duration,              // default 60s
 }
 
 fn allow(key: &str) -> bool {
-    let now = Instant::now();
+    let slot = slots[hash(key) % ACTION_RATE_LIMIT_SLOTS];
 
-    // 1. prune expired hits
-    hits.retain(|hit| now - hit <= window)
+    // 1. เลื่อน window ไปข้างหน้าให้ window_start อยู่ห่างจาก now ไม่เกินหนึ่ง window
+    // 2. ประมาณค่าแบบ sliding: ถ่วงน้ำหนัก window ก่อนหน้าด้วยสัดส่วนที่ยังอยู่ในช่วงย้อนหลัง
+    let overlap = 1.0 - (now - slot.window_start) / window;
+    let estimated = slot.previous * overlap + slot.current;
 
-    // 2. ถ้า hits >= max_hits → deny
-    // 3. ถ้า hits ว่าง → remove key bucket
-    // 4. ถ้าจำนวน keys เกิน max_keys → prune expired keys
-    // 5. insert key → allow
+    // 3. ถ้า estimated >= max_hits → deny
+    // 4. slot.current += 1 → allow
 }
 ```
+
+สองคุณสมบัติที่สำคัญ:
+
+- **client จะไม่ถูกปฏิเสธเพราะโควตาของ client อื่น** ระบบไม่เคยปฏิเสธเพราะ "ไม่มีที่ว่าง"
+  รุ่นก่อนหน้าเก็บ key map ที่จำกัดไว้ 10,000 รายการ และปฏิเสธ key ที่รับเพิ่มไม่ได้
+  ผู้โจมตีที่หมุนเวียน source address — ทำได้ง่ายมากด้วย IPv6 `/64` — จึงถมเต็ม map แล้วล็อก client
+  ที่เข้ามาครั้งแรกออกทั้งหมดจนจบ window
+- **การชน slot ทำให้ถูกจำกัดเร็วขึ้นได้ แต่ไม่เคยได้โควตาเพิ่ม** สอง client ที่ชน slot
+  กันจะใช้โควตาร่วมกัน และเพราะ hasher ถูก seed ใหม่ทุก process จึงสร้าง key
+  ให้ชนกับเป้าหมายที่เจาะจงไม่ได้
 
 **Key format:** `"{clientIP}:{path}:{name}"` — ทำให้ rate limit แยกกันสำหรับแต่ละ client และ action
 
 **Forwarded Client IP:** ถ้า peer IP เป็น trusted proxy, ระบบจะตรวจสอบ `X-Forwarded-For` header
 (จากขวาไปซ้าย) เพื่อหา IP จริงของ client โดยข้าม proxy IPs ที่ trust แล้ว
+
+**Trusted proxy:**
+
+- loopback (`127.0.0.1`, `::1`) เชื่อถือได้เสมอ ไม่ต้องระบุใน config
+- เพิ่ม address ตรงตัวหรือ CIDR range ได้ผ่าน `trustedProxyIps`
+- range แบบ IPv4 จะ match peer แบบ IPv4-mapped (`::ffff:10.0.0.9`) ด้วย ซึ่งเป็นรูปแบบที่ dual-stack
+  listener รายงาน client IPv4
+- ถ้าไม่ตั้ง trusted proxy ไว้เลย จะใช้ peer IP ตรงๆ เป็น key ของ rate limiter
 
 ---
 
@@ -720,14 +766,14 @@ pub(crate) fn action_file_for(route: &RouteEntry) -> Option<PathBuf> {
 
 ฟิลด์สำคัญใน `ServerConfig` ที่ควบคุมพฤติกรรมของ action:
 
-| ฟิลด์                      | Type          | ค่าเริ่มต้น       | ขีดจำกัดสูงสุด |
-| -------------------------- | ------------- | ----------------- | -------------- |
-| `action_body_limit_bytes`  | usize         | 1,048,576 (1 MiB) | 100 MiB        |
-| `action_rate_limit_max`    | usize         | 600               | 100,000        |
-| `action_rate_limit_window` | Duration      | 60s               | 3,600s         |
-| `same_origin_actions`      | bool          | true              | —              |
-| `fetch_metadata_actions`   | bool          | true              | —              |
-| `trusted_proxy_ips`        | Vec\<IpAddr\> | []                | —              |
+| ฟิลด์                      | Type           | ค่าเริ่มต้น       | ขีดจำกัดสูงสุด |
+| -------------------------- | -------------- | ----------------- | -------------- |
+| `action_body_limit_bytes`  | usize          | 1,048,576 (1 MiB) | 100 MiB        |
+| `action_rate_limit_max`    | usize          | 600               | 100,000        |
+| `action_rate_limit_window` | Duration       | 60s               | 3,600s         |
+| `same_origin_actions`      | bool           | true              | —              |
+| `fetch_metadata_actions`   | bool           | true              | —              |
+| `trusted_proxies`          | TrustedProxies | ว่าง              | —              |
 
 ---
 

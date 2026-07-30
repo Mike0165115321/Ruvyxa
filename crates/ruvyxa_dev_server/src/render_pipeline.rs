@@ -34,7 +34,7 @@ use crate::static_assets::{
 use crate::worker_pool::{RenderActionRequest, RenderApiRequest, WorkerApiResponse};
 use crate::{
     AppState, RuntimeCache, RuntimeTrace, ServerConfig, TraceAssets, html_response, project_env,
-    with_security_headers,
+    shared_html_response, with_security_headers,
 };
 use crate::{render_cache, style::collect_styles};
 
@@ -225,7 +225,7 @@ pub(crate) async fn render_request_pooled(
                 &styles,
             )
             .await?;
-            Ok(html_response(StatusCode::OK, html))
+            Ok(shared_html_response(StatusCode::OK, html))
         }
         RouteKind::Api => {
             let headers = worker_request_headers(request_headers);
@@ -244,13 +244,17 @@ pub(crate) async fn render_request_pooled(
 }
 
 /// Dispatch page rendering based on the route's declared rendering strategy.
+///
+/// Returns the document as an `Arc<str>` so a cache hit — the common case in
+/// production — shares the stored allocation instead of copying the whole page
+/// on its way into the response body.
 async fn render_page_by_strategy(
     state: &AppState,
     route: &RouteEntry,
     request_path: &str,
     params: &RouteParams,
     styles: &str,
-) -> Result<String> {
+) -> Result<Arc<str>> {
     match route.render.strategy {
         RenderStrategy::Ssr => render_page_pooled(state, route, request_path, params, styles).await,
         RenderStrategy::Ssg => {
@@ -271,9 +275,9 @@ async fn render_page_ssg(
     request_path: &str,
     params: &RouteParams,
     styles: &str,
-) -> Result<String> {
+) -> Result<Arc<str>> {
     let cache_key = format!("ssg:{}", render_cache::ssr_cache_key(request_path, params));
-    if let Some(cached) = state.render_cache.get(&cache_key).await {
+    if let Some(cached) = state.render_cache.get_arc(&cache_key).await {
         return Ok(cached);
     }
 
@@ -321,7 +325,7 @@ async fn render_page_ssg(
         .html
         .ok_or_else(|| RuvyxaError::Message("SSG render produced no HTML".to_string()))?;
 
-    let asset_links = public_asset_links(&state.config.public_dir);
+    let asset_links = state.runtime_cache.asset_links(&state.config).await;
     let hmr = if state.config.watch {
         hmr_client_script()
     } else {
@@ -333,8 +337,7 @@ async fn render_page_ssg(
         format!(r#"{asset_links}{plugin_head}<style data-ruvyxa-css>{styles}</style>"#);
     let html = compose_document(&rendered, &head_content, &format!("{client_script}{hmr}"));
 
-    state.render_cache.put(cache_key, html.clone()).await;
-    Ok(html)
+    Ok(state.render_cache.put(cache_key, html).await)
 }
 
 /// ISR: serve from cache if available (stale-while-revalidate), trigger
@@ -346,7 +349,7 @@ async fn render_page_isr(
     request_path: &str,
     params: &RouteParams,
     styles: &str,
-) -> Result<String> {
+) -> Result<Arc<str>> {
     let cache_key = format!("isr:{}", render_cache::ssr_cache_key(request_path, params));
 
     let revalidate_after = Duration::from_secs(route.render.revalidate.unwrap_or(60));
@@ -377,8 +380,7 @@ async fn render_page_isr(
 
     // No cached version — render synchronously (blocking fallback)
     let html = render_isr_background(state, route, request_path, params, styles).await?;
-    state.render_cache.put(cache_key, html.clone()).await;
-    Ok(html)
+    Ok(state.render_cache.put(cache_key, html).await)
 }
 
 /// ISR background render (used both for first render and revalidation).
@@ -413,7 +415,7 @@ async fn render_isr_background(
         .html
         .ok_or_else(|| RuvyxaError::Message("ISR render produced no HTML".to_string()))?;
 
-    let asset_links = public_asset_links(&state.config.public_dir);
+    let asset_links = state.runtime_cache.asset_links(&state.config).await;
     let hmr = if state.config.watch {
         hmr_client_script()
     } else {
@@ -567,10 +569,9 @@ async fn store_prerendered_html(
     prerender_dir: &Path,
     request_path: &str,
     cache_key: &str,
-) -> Option<String> {
+) -> Option<Arc<str>> {
     let html = read_prerendered_html(prerender_dir, request_path).await?;
-    render_cache.put(cache_key.to_string(), html.clone()).await;
-    Some(html)
+    Some(render_cache.put(cache_key.to_string(), html).await)
 }
 
 /// CSR: emit a minimal HTML shell with no server-rendered content.
@@ -582,13 +583,13 @@ async fn render_page_csr(
     request_path: &str,
     params: &RouteParams,
     styles: &str,
-) -> Result<String> {
+) -> Result<Arc<str>> {
     // In production, serve the pre-rendered CSR shell. The disk read is cached
     // like every other prerendered strategy: without it each request re-opens
     // and re-reads the same shell file for the life of the process.
     if !state.config.watch {
         let cache_key = format!("csr:{}", render_cache::ssr_cache_key(request_path, params));
-        if let Some(cached) = state.render_cache.get(&cache_key).await {
+        if let Some(cached) = state.render_cache.get_arc(&cache_key).await {
             return Ok(cached);
         }
         if let Some(html) = store_prerendered_html(
@@ -603,7 +604,7 @@ async fn render_page_csr(
         }
     }
 
-    let asset_links = public_asset_links(&state.config.public_dir);
+    let asset_links = state.runtime_cache.asset_links(&state.config).await;
     let hmr = if state.config.watch {
         hmr_client_script()
     } else {
@@ -635,7 +636,7 @@ async fn render_page_csr(
 </html>"#
     );
 
-    Ok(shell)
+    Ok(Arc::from(shell))
 }
 
 /// PPR: render the static shell (Suspense fallbacks) and stream dynamic slots.
@@ -648,9 +649,9 @@ async fn render_page_ppr(
     request_path: &str,
     params: &RouteParams,
     styles: &str,
-) -> Result<String> {
+) -> Result<Arc<str>> {
     let cache_key = format!("ppr:{}", render_cache::ssr_cache_key(request_path, params));
-    if let Some(cached) = state.render_cache.get(&cache_key).await {
+    if let Some(cached) = state.render_cache.get_arc(&cache_key).await {
         return Ok(cached);
     }
 
@@ -698,7 +699,7 @@ async fn render_page_ppr(
         .html
         .ok_or_else(|| RuvyxaError::Message("PPR render produced no HTML".to_string()))?;
 
-    let asset_links = public_asset_links(&state.config.public_dir);
+    let asset_links = state.runtime_cache.asset_links(&state.config).await;
     let hmr = if state.config.watch {
         hmr_client_script()
     } else {
@@ -710,8 +711,7 @@ async fn render_page_ppr(
         format!(r#"{asset_links}{plugin_head}<style data-ruvyxa-css>{styles}</style>"#);
     let html = compose_document(&rendered, &head_content, &format!("{client_script}{hmr}"));
 
-    state.render_cache.put(cache_key, html.clone()).await;
-    Ok(html)
+    Ok(state.render_cache.put(cache_key, html).await)
 }
 
 pub(crate) async fn render_page_pooled(
@@ -720,37 +720,20 @@ pub(crate) async fn render_page_pooled(
     request_path: &str,
     params: &RouteParams,
     styles: &str,
-) -> Result<String> {
+) -> Result<Arc<str>> {
     // Check render cache first
     let cache_key = render_cache::ssr_cache_key(request_path, params);
-    if let Some(cached) = state.render_cache.get(&cache_key).await {
+    if let Some(cached) = state.render_cache.get_arc(&cache_key).await {
         return Ok(cached);
     }
 
-    let source_fut = {
-        let file = route.file.clone();
-        tokio::task::spawn_blocking(move || {
-            fs::read_to_string(&file).map_err(|source| RuvyxaError::Io {
-                message: format!("Failed to read page module {}", file.display()),
-                source,
-            })
-        })
-    };
-
-    let source = source_fut
-        .await
-        .map_err(|e| RuvyxaError::Message(format!("Page read task panicked: {e}")))??;
-
-    if !page_has_default_export(&route.file, &source) {
-        return Err(
-            Diagnostic::new("RUV1004", "Page is missing a default export")
-                .explain("Every TypeScript/JavaScript page must export a default component. Markdown and MDX pages receive one from the content compiler.")
-                .at_file(&route.file)
-                .suggest("Add `export default function Page() { return <main /> }`.")
-                .into(),
-        );
-    }
-
+    // The page source is deliberately not read here. Confirming the default
+    // export is route validation's job (`ruvyxa check`, and `validate_app` on
+    // every build), and doing it again per request meant a full
+    // `read_to_string` of the page module — through a `spawn_blocking` hop — on
+    // every cache miss in production, to answer a question the worker's own
+    // module load already answers. `missing_default_export_diagnostic` below
+    // keeps the actionable RUV1004 message without the read.
     let response = state
         .worker_pool
         .render_ssr(
@@ -768,6 +751,9 @@ pub(crate) async fn render_page_pooled(
         let message = response
             .message
             .unwrap_or_else(|| "React SSR failed without an error message".to_string());
+        if let Some(diagnostic) = missing_default_export_diagnostic(&route.file, &message) {
+            return Err(diagnostic.into());
+        }
         let explanation = if let Some(stack) = response.stack {
             format!("{message}\n\n{stack}")
         } else {
@@ -784,7 +770,7 @@ pub(crate) async fn render_page_pooled(
         .html
         .ok_or_else(|| RuvyxaError::Message("React SSR completed without HTML".to_string()))?;
 
-    let asset_links = public_asset_links(&state.config.public_dir);
+    let asset_links = state.runtime_cache.asset_links(&state.config).await;
     let hmr = if state.config.watch {
         hmr_client_script()
     } else {
@@ -797,10 +783,9 @@ pub(crate) async fn render_page_pooled(
 
     let html = compose_document(&rendered, &head_content, &format!("{client_script}{hmr}"));
 
-    // Cache the fully rendered page for subsequent requests
-    state.render_cache.put(cache_key, html.clone()).await;
-
-    Ok(html)
+    // Cache the fully rendered page for subsequent requests, and serve the very
+    // allocation that was stored.
+    Ok(state.render_cache.put(cache_key, html).await)
 }
 pub(crate) async fn render_api_pooled(
     state: &AppState,
@@ -874,7 +859,7 @@ pub(crate) async fn render_api_pooled(
 pub(crate) async fn render_client_bundle_pooled(
     state: &AppState,
     request_path: &str,
-) -> Result<String> {
+) -> Result<Arc<str>> {
     let (manifest, router) = state.runtime_cache.router(&state.config).await?;
     let Some(route_match) = router.find(&manifest, request_path) else {
         return Err(Diagnostic::new("RUV1303", "Client route was not found")
@@ -895,7 +880,7 @@ pub(crate) async fn render_client_bundle_pooled(
 
     // Check render cache for client bundles
     let cache_key = render_cache::client_cache_key(request_path, &route_match.params);
-    if let Some(cached) = state.render_cache.get(&cache_key).await {
+    if let Some(cached) = state.render_cache.get_arc(&cache_key).await {
         return Ok(cached);
     }
 
@@ -936,7 +921,7 @@ pub(crate) async fn render_client_bundle_pooled(
     })?;
 
     // Cache the bundled client script
-    state.render_cache.put(cache_key, script.clone()).await;
+    let script = state.render_cache.put(cache_key, script).await;
 
     Ok(script)
 }
@@ -1125,21 +1110,9 @@ fn render_page(
     params: &RouteParams,
     styles: &str,
 ) -> Result<String> {
-    let source = fs::read_to_string(&route.file).map_err(|source| RuvyxaError::Io {
-        message: format!("Failed to read page module {}", route.file.display()),
-        source,
-    })?;
-
-    if !page_has_default_export(&route.file, &source) {
-        return Err(
-            Diagnostic::new("RUV1004", "Page is missing a default export")
-                .explain("Every TypeScript/JavaScript page must export a default component. Markdown and MDX pages receive one from the content compiler.")
-                .at_file(&route.file)
-                .suggest("Add `export default function Page() { return <main /> }`.")
-                .into(),
-        );
-    }
-
+    // No source read here either: the one-shot renderer surfaces a missing
+    // default export the same way the worker pool does, and route validation
+    // catches it before a render is ever attempted.
     let rendered = render_react_page(config, route, request_path, params)?;
     let asset_links = public_asset_links(&config.public_dir);
     let hmr = if config.watch {
@@ -1159,11 +1132,33 @@ fn render_page(
     ))
 }
 
-pub(crate) fn page_has_default_export(file: &Path, source: &str) -> bool {
-    matches!(
-        file.extension().and_then(|extension| extension.to_str()),
-        Some("md" | "mdx")
-    ) || source.contains("export default")
+/// Recover the actionable RUV1004 diagnostic from a worker module-load failure.
+///
+/// The generated SSR entry does `import Page from "<page module>"`, so a page
+/// with no default export fails when the worker links that module. The runtime
+/// used to pre-empt that by reading and scanning the page source on every render;
+/// recognizing the loader's own message instead keeps the useful diagnostic and
+/// leaves the source on disk.
+fn missing_default_export_diagnostic(file: &Path, message: &str) -> Option<Diagnostic> {
+    // Node phrases it as `... does not provide an export named 'default'`;
+    // bundlers and Bun use `No matching export ... for "default"`. Match on the
+    // stable parts of both rather than a single engine's exact wording.
+    let lowered = message.to_ascii_lowercase();
+    let mentions_default = lowered.contains("'default'")
+        || lowered.contains("\"default\"")
+        || lowered.contains("named default");
+    let is_missing_export = lowered.contains("does not provide an export")
+        || lowered.contains("no matching export")
+        || lowered.contains("has no exported member");
+    if !(mentions_default && is_missing_export) {
+        return None;
+    }
+    Some(
+        Diagnostic::new("RUV1004", "Page is missing a default export")
+            .explain("Every TypeScript/JavaScript page must export a default component. Markdown and MDX pages receive one from the content compiler.")
+            .at_file(file)
+            .suggest("Add `export default function Page() { return <main /> }`."),
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -1236,6 +1231,9 @@ fn render_react_page(
     let message = result
         .message
         .unwrap_or_else(|| "React SSR failed without an error message".to_string());
+    if let Some(diagnostic) = missing_default_export_diagnostic(&route.file, &message) {
+        return Err(diagnostic.into());
+    }
     let explanation = if let Some(stack) = result.stack {
         format!("{message}\n\n{stack}")
     } else {
@@ -1430,6 +1428,41 @@ pub(crate) fn action_file_for(route: &RouteEntry) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The runtime no longer reads the page source to detect a missing default
+    /// export, so the actionable RUV1004 has to be recovered from the module
+    /// loader's own failure message instead.
+    #[test]
+    fn recovers_the_missing_default_export_diagnostic_from_loader_messages() {
+        let page = Path::new("app/docs/page.tsx");
+        for message in [
+            "The requested module './page.tsx' does not provide an export named 'default'",
+            "No matching export in \"app/docs/page.tsx\" for import \"default\"",
+            "Module '\"./page\"' has no exported member 'default'",
+        ] {
+            let diagnostic = missing_default_export_diagnostic(page, message)
+                .unwrap_or_else(|| panic!("should map: {message}"));
+            assert_eq!(diagnostic.code, "RUV1004");
+        }
+    }
+
+    /// Unrelated render failures must keep their own diagnostic. Mapping them to
+    /// RUV1004 would send every SSR crash to the wrong fix.
+    #[test]
+    fn leaves_unrelated_render_failures_unmapped() {
+        let page = Path::new("app/docs/page.tsx");
+        for message in [
+            "ReferenceError: window is not defined",
+            "The requested module './db' does not provide an export named 'query'",
+            "Cannot find module 'react-dom/server'",
+            "default is not a function",
+        ] {
+            assert!(
+                missing_default_export_diagnostic(page, message).is_none(),
+                "should not map: {message}"
+            );
+        }
+    }
 
     /// The context must own the route graph and the compiled router, not
     /// re-derive them per request: deleting the app directory after the context
