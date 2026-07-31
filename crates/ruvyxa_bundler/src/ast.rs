@@ -125,12 +125,12 @@ fn scan_code(source: &str, start: usize, end: usize, ast: &mut ModuleAst) {
         let word = &source[start..index];
         match word {
             "import" => {
-                if let Some(edge) = import_edge(source, index) {
+                if let Some(edge) = import_edge(source, index, end) {
                     ast.imports.push(edge);
                 }
             }
             "require" if previous_non_whitespace(bytes, start) != Some(b'.') => {
-                if let Some(specifier) = call_specifier(source, index) {
+                if let Some(specifier) = call_specifier(source, index, end) {
                     ast.imports.push(ImportEdge {
                         specifier,
                         kind: ImportKind::Require,
@@ -138,10 +138,10 @@ fn scan_code(source: &str, start: usize, end: usize, ast: &mut ModuleAst) {
                 }
             }
             "export" => {
-                if let Some(edge) = export_edge(source, index) {
+                if let Some(edge) = export_edge(source, index, end) {
                     ast.imports.push(edge);
                 }
-                if let Some(name) = export_name(source, index) {
+                if let Some(name) = export_name(source, index, end) {
                     ast.exports.push(name);
                 }
             }
@@ -161,60 +161,60 @@ fn scan_code(source: &str, start: usize, end: usize, ast: &mut ModuleAst) {
     }
 }
 
-fn import_edge(source: &str, after_keyword: usize) -> Option<ImportEdge> {
-    let bytes = source.as_bytes();
+fn import_edge(source: &str, after_keyword: usize, end: usize) -> Option<ImportEdge> {
+    let bytes = &source.as_bytes()[..end];
     let index = skip_whitespace_and_comments(bytes, after_keyword);
     if index >= bytes.len() || bytes[index] == b'.' {
         return None;
     }
     if bytes[index] == b'(' {
-        return call_specifier(source, index).map(|specifier| ImportEdge {
+        return call_specifier(source, index, end).map(|specifier| ImportEdge {
             specifier,
             kind: ImportKind::Dynamic,
         });
     }
     if is_quote(bytes[index]) {
-        return quoted_value_at(source, index).map(|specifier| ImportEdge {
+        return quoted_value_at(source, index, end).map(|specifier| ImportEdge {
             specifier,
             kind: ImportKind::SideEffect,
         });
     }
-    if word_at(source, index) == Some("type") {
+    if word_at(source, index, end) == Some("type") {
         return None;
     }
     let declaration_start = index;
-    find_from_specifier(source, declaration_start).map(|specifier| ImportEdge {
+    find_from_specifier(source, declaration_start, end).map(|specifier| ImportEdge {
         specifier,
         kind: ImportKind::Static,
     })
 }
 
-fn export_edge(source: &str, after_keyword: usize) -> Option<ImportEdge> {
-    let bytes = source.as_bytes();
+fn export_edge(source: &str, after_keyword: usize, end: usize) -> Option<ImportEdge> {
+    let bytes = &source.as_bytes()[..end];
     let index = skip_whitespace_and_comments(bytes, after_keyword);
-    if word_at(source, index) == Some("type")
+    if word_at(source, index, end) == Some("type")
         || !matches!(bytes.get(index), Some(b'{') | Some(b'*'))
     {
         return None;
     }
-    find_from_specifier(source, index).map(|specifier| ImportEdge {
+    find_from_specifier(source, index, end).map(|specifier| ImportEdge {
         specifier,
         kind: ImportKind::ReExport,
     })
 }
 
-fn call_specifier(source: &str, after_keyword: usize) -> Option<String> {
-    let bytes = source.as_bytes();
+fn call_specifier(source: &str, after_keyword: usize, end: usize) -> Option<String> {
+    let bytes = &source.as_bytes()[..end];
     let mut index = skip_whitespace_and_comments(bytes, after_keyword);
     if bytes.get(index) != Some(&b'(') {
         return None;
     }
     index = skip_whitespace_and_comments(bytes, index + 1);
-    quoted_value_at(source, index)
+    quoted_value_at(source, index, end)
 }
 
-fn find_from_specifier(source: &str, mut index: usize) -> Option<String> {
-    let bytes = source.as_bytes();
+fn find_from_specifier(source: &str, mut index: usize, end: usize) -> Option<String> {
+    let bytes = &source.as_bytes()[..end];
     while index < bytes.len() {
         index = skip_whitespace_and_comments(bytes, index);
         if index >= bytes.len() || bytes[index] == b';' {
@@ -224,17 +224,17 @@ fn find_from_specifier(source: &str, mut index: usize) -> Option<String> {
             index = skip_string(bytes, index);
             continue;
         }
-        if word_at(source, index) == Some("from") {
+        if word_at(source, index, end) == Some("from") {
             let value = skip_whitespace_and_comments(bytes, index + 4);
-            return quoted_value_at(source, value);
+            return quoted_value_at(source, value, end);
         }
         index += 1;
     }
     None
 }
 
-fn quoted_value_at(source: &str, start: usize) -> Option<String> {
-    let bytes = source.as_bytes();
+fn quoted_value_at(source: &str, start: usize, end: usize) -> Option<String> {
+    let bytes = &source.as_bytes()[..end];
     let quote = *bytes.get(start)?;
     if !is_quote(quote) || quote == b'`' {
         return None;
@@ -304,7 +304,8 @@ pub fn has_default_export(source: &str) -> bool {
         let start = index;
         index = skip_identifier(bytes, index);
         previous_significant = Some(index - 1);
-        if &source[start..index] == "export" && export_declares_default(source, index) {
+        if &source[start..index] == "export" && export_declares_default(source, index, bytes.len())
+        {
             return true;
         }
     }
@@ -312,17 +313,17 @@ pub fn has_default_export(source: &str) -> bool {
 }
 
 /// Whether the export clause starting after `export` produces a default binding.
-fn export_declares_default(source: &str, after_keyword: usize) -> bool {
-    let bytes = source.as_bytes();
+fn export_declares_default(source: &str, after_keyword: usize, end: usize) -> bool {
+    let bytes = &source.as_bytes()[..end];
     let index = skip_whitespace_and_comments(bytes, after_keyword);
 
     // `export type { Page as default }` and `export type default` are erased at
     // compile time and leave no runtime binding behind.
-    if word_at(source, index) == Some("type") {
+    if word_at(source, index, end) == Some("type") {
         return false;
     }
 
-    match word_at(source, index) {
+    match word_at(source, index, end) {
         // `export default …`
         Some("default") => true,
         Some(_) => false,
@@ -330,14 +331,14 @@ fn export_declares_default(source: &str, after_keyword: usize) -> bool {
             // `export * as default from "./page"`
             Some(b'*') => {
                 let index = skip_whitespace_and_comments(bytes, index + 1);
-                if word_at(source, index) != Some("as") {
+                if word_at(source, index, end) != Some("as") {
                     return false;
                 }
                 let index = skip_whitespace_and_comments(bytes, index + "as".len());
-                word_at(source, index) == Some("default")
+                word_at(source, index, end) == Some("default")
             }
             // `export { Page as default }`, `export { default } from "./page"`
-            Some(b'{') => named_clause_exports_default(source, index),
+            Some(b'{') => named_clause_exports_default(source, index, end),
             _ => false,
         },
     }
@@ -349,8 +350,8 @@ fn export_declares_default(source: &str, after_keyword: usize) -> bool {
 /// so `{ Page as default }` and `{ default }` both qualify while
 /// `{ default as Page }` re-exports another module's default under a new name
 /// and deliberately does not.
-fn named_clause_exports_default(source: &str, brace: usize) -> bool {
-    let bytes = source.as_bytes();
+fn named_clause_exports_default(source: &str, brace: usize, end: usize) -> bool {
+    let bytes = &source.as_bytes()[..end];
     let mut index = brace + 1;
     let mut last_word: Option<&str> = None;
     while index < bytes.len() {
@@ -388,15 +389,15 @@ fn named_clause_exports_default(source: &str, brace: usize) -> bool {
     false
 }
 
-fn export_name(source: &str, after_keyword: usize) -> Option<String> {
-    let bytes = source.as_bytes();
+fn export_name(source: &str, after_keyword: usize, end: usize) -> Option<String> {
+    let bytes = &source.as_bytes()[..end];
     let mut index = skip_whitespace_and_comments(bytes, after_keyword);
     for optional in ["default", "async"] {
-        if word_at(source, index) == Some(optional) {
+        if word_at(source, index, end) == Some(optional) {
             index = skip_whitespace_and_comments(bytes, index + optional.len());
         }
     }
-    let kind = word_at(source, index)?;
+    let kind = word_at(source, index, end)?;
     if !matches!(kind, "function" | "class" | "const" | "let" | "var") {
         return None;
     }
@@ -408,8 +409,8 @@ fn export_name(source: &str, after_keyword: usize) -> Option<String> {
     (end > index).then(|| source[index..end].to_string())
 }
 
-fn word_at(source: &str, start: usize) -> Option<&str> {
-    let bytes = source.as_bytes();
+fn word_at(source: &str, start: usize, end: usize) -> Option<&str> {
+    let bytes = &source.as_bytes()[..end];
     if start >= bytes.len() || !is_ident_start_byte(bytes[start]) {
         return None;
     }
@@ -823,6 +824,30 @@ const text = `import "not-an-import" and require("not-either")`
             !specifiers.contains(&"not-either".to_string()),
             "literal template text is not code: {specifiers:?}"
         );
+    }
+
+    /// Every helper reached from an interpolation is bounded to that
+    /// interpolation. Reading from the unbounded source let a keyword at the end
+    /// of `${…}` pull its specifier out of the surrounding template text, which
+    /// is literal text and not an import at all.
+    #[test]
+    fn interpolation_scans_do_not_read_past_their_own_range() {
+        let ast = parse_module(r#"const trap = `${import}` from "./not-an-import"`"#);
+        assert!(
+            ast.import_specifiers().is_empty(),
+            "text after an interpolation is not its specifier: {:?}",
+            ast.import_specifiers()
+        );
+
+        let ast = parse_module(r#"const trap = `${require} ("./nope")`"#);
+        assert!(ast.import_specifiers().is_empty(), "{:?}", ast.imports);
+
+        let ast = parse_module(r#"const trap = `${export} * from "./nope"`"#);
+        assert!(ast.import_specifiers().is_empty(), "{:?}", ast.imports);
+
+        // The bound must not cost a real interpolated import its specifier.
+        let ast = parse_module(r#"const real = `${import("./lazy")}`"#);
+        assert_eq!(ast.import_specifiers(), vec!["./lazy"]);
     }
 
     /// A brace inside a nested string must not end the interpolation early, or

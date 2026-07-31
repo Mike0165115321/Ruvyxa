@@ -32,6 +32,13 @@ export interface RealtimeClientOptions {
   maxReconnectMs?: number
   webSocket?: (url: string) => WebSocketLike
   random?: () => number
+  /**
+   * Schedules the deferred reconnect that collapses a burst of subscription
+   * changes into one connection. Defaults to `queueMicrotask`, so a component
+   * tree that subscribes several channels while mounting opens one socket
+   * rather than one per channel. Override to run it synchronously in a test.
+   */
+  scheduleRefresh?: (run: () => void) => void
 }
 
 export interface RealtimeClient {
@@ -55,6 +62,14 @@ export function createRealtimeClient(options: RealtimeClientOptions = {}): Realt
   let generation = 0
   let attempts = 0
   let stopped = false
+  let refreshQueued = false
+  // Injectable so tests drive the coalescing window deterministically instead
+  // of racing a real microtask.
+  const scheduleRefresh =
+    options.scheduleRefresh ??
+    ((run: () => void) => {
+      queueMicrotask(run)
+    })
 
   const connect = () => {
     if (stopped || listeners.size === 0) return
@@ -95,7 +110,9 @@ export function createRealtimeClient(options: RealtimeClientOptions = {}): Realt
     })
   }
 
-  const refresh = () => {
+  const applyRefresh = () => {
+    refreshQueued = false
+    if (stopped) return
     clearTimeout(reconnectTimer)
     if (listeners.size === 0) {
       generation++
@@ -104,6 +121,22 @@ export function createRealtimeClient(options: RealtimeClientOptions = {}): Realt
       return
     }
     connect()
+  }
+
+  /**
+   * Reconnect once for a burst of subscription changes.
+   *
+   * The socket URL carries the whole channel set, so every change needs a new
+   * connection. Acting on each one individually meant a component tree that
+   * subscribes N channels while mounting opened and immediately discarded N-1
+   * sockets — N handshakes to reach one useful connection, and the same churn
+   * again on unmount. Deferring to the end of the current task collapses that
+   * burst into a single connect with the final channel set.
+   */
+  const refresh = () => {
+    if (refreshQueued) return
+    refreshQueued = true
+    scheduleRefresh(applyRefresh)
   }
 
   const subscribe = (channel: string, listener: RealtimeListener) => {

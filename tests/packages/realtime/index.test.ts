@@ -83,6 +83,9 @@ describe('@ruvyxa/realtime', () => {
     const received: string[] = []
     const client = createRealtimeClient({
       url: 'wss://app.example.com/events',
+      // Reconnects are coalesced into a deferred task; run it inline so the
+      // assertions below observe the socket without awaiting a microtask.
+      scheduleRefresh: (run) => run(),
       webSocket(url) {
         const socket = new FakeSocket(url)
         sockets.push(socket)
@@ -116,12 +119,52 @@ describe('@ruvyxa/realtime', () => {
     assert.equal(sockets[0]!.closed, true)
   })
 
+  it('opens one socket for a burst of subscriptions instead of one per channel', async () => {
+    // The socket URL carries the whole channel set, so each change needs a new
+    // connection. Acting per change opened and discarded N-1 sockets while a
+    // component tree mounted — N handshakes to reach one useful connection.
+    const sockets: FakeSocket[] = []
+    const client = createRealtimeClient({
+      url: 'ws://localhost/events',
+      webSocket(url) {
+        const socket = new FakeSocket(url)
+        sockets.push(socket)
+        return socket
+      },
+    })
+
+    const listener = () => {}
+    const stops = [
+      client.subscribe('todos', listener),
+      client.subscribe('users', listener),
+      client.subscribeRoute('/todos', listener),
+    ]
+    assert.equal(sockets.length, 0, 'no socket opens before the burst settles')
+
+    await Promise.resolve()
+
+    assert.equal(sockets.length, 1, 'the whole burst produces one connection')
+    assert.equal(
+      new URL(sockets[0]!.url).searchParams.get('channels'),
+      'todos,users,route:/todos',
+      'the single connection carries the final channel set',
+    )
+
+    // Unsubscribing in a burst must collapse the same way.
+    for (const stop of stops) stop()
+    await Promise.resolve()
+    assert.equal(sockets.length, 1, 'tearing down opens no further sockets')
+    assert.equal(sockets[0]!.closed, true)
+    client.close()
+  })
+
   it('deduplicates resync notifications and validates route channels', () => {
     const sockets: FakeSocket[] = []
     let resyncs = 0
     const listener = () => resyncs++
     const client = createRealtimeClient({
       url: 'ws://localhost/events',
+      scheduleRefresh: (run) => run(),
       webSocket(url) {
         const socket = new FakeSocket(url)
         sockets.push(socket)

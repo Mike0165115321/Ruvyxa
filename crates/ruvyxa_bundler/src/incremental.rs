@@ -28,8 +28,16 @@ use std::time::SystemTime;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 
-/// Version stamp for the graph manifest format.
-const MANIFEST_VERSION: &str = "ruvyxa_graph_cache:v2";
+/// Permanent identity of the graph manifest. This string does not change.
+///
+/// A version counter here would have to be bumped by hand every time an entry
+/// gains a field, and forgetting the bump is silent: the build reuses entries
+/// that cannot describe what the new field needs. Compatibility is a property
+/// of the entry format instead — every field added after the fact is an
+/// `Option`, so "absent" is distinguishable from "empty" and a reader can
+/// decline to reuse an entry that predates it. See [`CachedModuleEntry::aliases`]
+/// for the pattern to follow when adding the next one.
+const MANIFEST_VERSION: &str = "ruvyxa_graph_cache";
 
 /// A persisted module entry in the graph cache.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,6 +50,22 @@ pub struct CachedModuleEntry {
     pub mtime_secs: u64,
     /// Resolved dependency paths (absolute).
     pub deps: Vec<PathBuf>,
+    /// Exact source-specifier to resolved-path bindings for those edges.
+    ///
+    /// Stored alongside the paths because the linker resolves a specifier
+    /// through this map first and only then falls back to matching by path
+    /// suffix. A tsconfig or plugin alias (`~/components/Button`) shares no
+    /// suffix with its target, so a reused entry without the map would hand the
+    /// linker a different resolution input than a cold build produced.
+    ///
+    /// `None` means an older build wrote this entry before aliases were
+    /// recorded — not that the module has no aliases. The two must stay
+    /// distinguishable, or a stale entry would silently claim "no aliases" and
+    /// reintroduce that divergence. A reader treats `None` as not reusable and
+    /// resolves the module fresh, which rewrites the entry complete. This is
+    /// what lets [`MANIFEST_VERSION`] stay constant instead of being bumped.
+    #[serde(default)]
+    pub aliases: Option<BTreeMap<String, PathBuf>>,
     /// Compile cache key for this module's output (links to CompileCache).
     pub compile_key: Option<String>,
 }
@@ -177,14 +201,33 @@ impl IncrementalGraphCache {
         }
     }
 
-    /// Get the cached dependency edges for a module (if fresh).
+    /// Get the cached dependency edges for a module.
     ///
-    /// Returns `None` if the module is not in the cache or is stale.
+    /// Returns `None` when the module is absent from the previous manifest.
+    /// Freshness is the caller's gate: reuse is only sound after
+    /// [`Self::check_freshness`] reports [`FreshnessStatus::Fresh`] for the same
+    /// path and source.
     pub fn cached_deps(&self, path: &Path) -> Option<&[PathBuf]> {
         if !self.enabled {
             return None;
         }
         self.previous.modules.get(path).map(|e| e.deps.as_slice())
+    }
+
+    /// Get the cached specifier-to-path alias map recorded with those edges.
+    ///
+    /// Paired with [`Self::cached_deps`]: reusing edges without their aliases
+    /// makes a warm build resolve alias specifiers differently from a cold one.
+    /// `None` means the entry is missing or predates alias recording, and in
+    /// both cases the caller must resolve the module fresh rather than reuse it.
+    pub fn cached_aliases(&self, path: &Path) -> Option<&BTreeMap<String, PathBuf>> {
+        if !self.enabled {
+            return None;
+        }
+        self.previous
+            .modules
+            .get(path)
+            .and_then(|entry| entry.aliases.as_ref())
     }
 
     /// Get the compile cache key for a module (if fresh).
@@ -204,6 +247,7 @@ impl IncrementalGraphCache {
         path: PathBuf,
         source: &str,
         deps: Vec<PathBuf>,
+        aliases: BTreeMap<String, PathBuf>,
         compile_key: Option<String>,
     ) {
         if !self.enabled {
@@ -225,6 +269,7 @@ impl IncrementalGraphCache {
                 size,
                 mtime_secs,
                 deps,
+                aliases: Some(aliases),
                 compile_key,
             },
         );
@@ -409,7 +454,13 @@ mod tests {
 
         // Build the first manifest.
         let cache = IncrementalGraphCache::new(tmp.path(), true);
-        cache.record_module(page.clone(), source, vec![], Some("key123".to_string()));
+        cache.record_module(
+            page.clone(),
+            source,
+            vec![],
+            BTreeMap::new(),
+            Some("key123".to_string()),
+        );
         cache.save().unwrap();
 
         // Reload — simulating a second build.
@@ -431,7 +482,7 @@ mod tests {
         fs::write(&page, source_v1).unwrap();
 
         let cache = IncrementalGraphCache::new(tmp.path(), true);
-        cache.record_module(page.clone(), source_v1, vec![], None);
+        cache.record_module(page.clone(), source_v1, vec![], BTreeMap::new(), None);
         cache.save().unwrap();
 
         // Change the file (same size to test content-hash path).
@@ -461,17 +512,25 @@ mod tests {
         fs::write(&page, "import Button from './Button';").unwrap();
 
         let cache = IncrementalGraphCache::new(tmp.path(), true);
-        cache.record_module(utils.clone(), "export function cn() {}", vec![], None);
+        cache.record_module(
+            utils.clone(),
+            "export function cn() {}",
+            vec![],
+            BTreeMap::new(),
+            None,
+        );
         cache.record_module(
             button.clone(),
             "import { cn } from './utils';",
             vec![utils.clone()],
+            BTreeMap::new(),
             None,
         );
         cache.record_module(
             page.clone(),
             "import Button from './Button';",
             vec![button.clone()],
+            BTreeMap::new(),
             None,
         );
         cache.save().unwrap();
@@ -509,18 +568,32 @@ mod tests {
         }
 
         let cache = IncrementalGraphCache::new(tmp.path(), true);
-        cache.record_module(utils.clone(), "export function cn() {}", vec![], None);
-        cache.record_module(helpers.clone(), "export function fmt() {}", vec![], None);
+        cache.record_module(
+            utils.clone(),
+            "export function cn() {}",
+            vec![],
+            BTreeMap::new(),
+            None,
+        );
+        cache.record_module(
+            helpers.clone(),
+            "export function fmt() {}",
+            vec![],
+            BTreeMap::new(),
+            None,
+        );
         cache.record_module(
             page_a.clone(),
             "import { cn } from './utils';",
             vec![utils.clone()],
+            BTreeMap::new(),
             None,
         );
         cache.record_module(
             page_b.clone(),
             "import { fmt } from './helpers';",
             vec![helpers.clone()],
+            BTreeMap::new(),
             None,
         );
         cache.save().unwrap();
@@ -548,11 +621,18 @@ mod tests {
         fs::write(&page, "import { x } from './utils';").unwrap();
 
         let cache = IncrementalGraphCache::new(tmp.path(), true);
-        cache.record_module(utils.clone(), "export const x = 1;", vec![], None);
+        cache.record_module(
+            utils.clone(),
+            "export const x = 1;",
+            vec![],
+            BTreeMap::new(),
+            None,
+        );
         cache.record_module(
             page.clone(),
             "import { x } from './utils';",
             vec![utils.clone()],
+            BTreeMap::new(),
             None,
         );
         cache.save().unwrap();
@@ -572,6 +652,116 @@ mod tests {
             FreshnessStatus::Stale,
         );
         assert!(cache.cached_deps(&fake).is_none());
+    }
+
+    /// The manifest identity is permanent. Adding a field must be absorbed by
+    /// the entry format, never by editing this string — a bump silently discards
+    /// every user's warm cache, and forgetting one silently reuses entries that
+    /// cannot answer what the new field needs.
+    #[test]
+    fn the_manifest_identity_carries_no_version_counter() {
+        assert_eq!(MANIFEST_VERSION, "ruvyxa_graph_cache");
+        // No `:v2`-style suffix: a trailing counter is the thing that has to be
+        // maintained by hand, and the entry format carries compatibility instead.
+        let suffix = MANIFEST_VERSION.rsplit(':').next().unwrap_or_default();
+        assert!(
+            !suffix
+                .strip_prefix('v')
+                .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit())),
+            "compatibility belongs in the entry format, not in a version suffix"
+        );
+    }
+
+    /// An entry written before aliases were recorded cannot say how its
+    /// specifiers resolved. Reading it as "no aliases" would let a warm build
+    /// resolve an aliased import differently from a cold one, so it must read as
+    /// "not reusable" and be resolved fresh.
+    #[test]
+    fn an_entry_without_recorded_aliases_is_not_reusable() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache_dir = temp.path().join(".ruvyxa").join("cache").join("graph");
+        fs::create_dir_all(&cache_dir).unwrap();
+        let page = temp.path().join("page.tsx");
+        let source = "import Button from '~/components/Button';";
+        fs::write(&page, source).unwrap();
+
+        // A manifest from a build that predates alias recording: same identity,
+        // real edges, no `aliases` key at all.
+        let legacy = serde_json::json!({
+            "version": MANIFEST_VERSION,
+            "namespace": "default",
+            "modules": {
+                page.to_string_lossy(): {
+                    "content_hash": content_hash(source),
+                    "size": source.len(),
+                    "mtime_secs": 0,
+                    "deps": [temp.path().join("components/Button.tsx").to_string_lossy()],
+                    "compile_key": null,
+                }
+            }
+        });
+        fs::write(
+            cache_dir.join("graph-manifest.json"),
+            serde_json::to_string(&legacy).unwrap(),
+        )
+        .unwrap();
+
+        let cache = IncrementalGraphCache::new(temp.path(), true);
+        // The old manifest still loads — the identity did not change.
+        assert_eq!(cache.previous_module_count(), 1);
+        assert_eq!(cache.check_freshness(&page, source), FreshnessStatus::Fresh);
+        assert!(cache.cached_deps(&page).is_some(), "edges still readable");
+        assert!(
+            cache.cached_aliases(&page).is_none(),
+            "an unrecorded alias map must not read as an empty one"
+        );
+    }
+
+    /// A recorded-but-genuinely-empty alias map is reusable, and must not be
+    /// confused with the unrecorded case above.
+    #[test]
+    fn an_entry_with_no_aliases_is_still_reusable() {
+        let temp = tempfile::tempdir().unwrap();
+        let page = temp.path().join("page.tsx");
+        let source = "export default function Page() {}";
+        fs::write(&page, source).unwrap();
+
+        let cache = IncrementalGraphCache::new(temp.path(), true);
+        cache.record_module(page.clone(), source, vec![], BTreeMap::new(), None);
+        cache.save().unwrap();
+
+        let reloaded = IncrementalGraphCache::new(temp.path(), true);
+        assert_eq!(
+            reloaded.cached_aliases(&page),
+            Some(&BTreeMap::new()),
+            "an empty map was recorded, so it is known and reusable"
+        );
+    }
+
+    /// Aliases survive the disk round-trip, which is the whole point: the warm
+    /// build must hand the linker the same map the cold build resolved.
+    #[test]
+    fn recorded_aliases_survive_a_reload() {
+        let temp = tempfile::tempdir().unwrap();
+        let page = temp.path().join("page.tsx");
+        let button = temp.path().join("components").join("Button.tsx");
+        let source = "import Button from '~/components/Button';";
+        fs::write(&page, source).unwrap();
+
+        let aliases = BTreeMap::from([("~/components/Button".to_string(), button.clone())]);
+        let cache = IncrementalGraphCache::new(temp.path(), true);
+        cache.record_module(
+            page.clone(),
+            source,
+            vec![button.clone()],
+            aliases.clone(),
+            None,
+        );
+        cache.save().unwrap();
+
+        let reloaded = IncrementalGraphCache::new(temp.path(), true);
+        assert_eq!(reloaded.cached_aliases(&page), Some(&aliases));
+        assert_eq!(reloaded.cached_deps(&page), Some([button].as_slice()));
     }
 
     #[test]
@@ -600,6 +790,7 @@ mod tests {
             source_file,
             "export default function Page() {}",
             Vec::new(),
+            BTreeMap::new(),
             None,
         );
         first.save().unwrap();
@@ -623,6 +814,7 @@ mod tests {
             page.clone(),
             source,
             vec![],
+            BTreeMap::new(),
             Some("compile_abc123".to_string()),
         );
         cache.save().unwrap();
@@ -645,6 +837,7 @@ mod tests {
             page.clone(),
             "export default function Page() {}",
             vec![],
+            BTreeMap::new(),
             None,
         );
         cache.save().unwrap();
@@ -652,6 +845,7 @@ mod tests {
             page,
             "export default function Page() { return null }",
             vec![],
+            BTreeMap::new(),
             None,
         );
         cache.save().unwrap();

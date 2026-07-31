@@ -1011,25 +1011,33 @@ pub(crate) fn resolve_graph_with_incremental(
                     raw_source.clone()
                 };
 
+                // Reuse a persisted resolution only when it is complete. Paths
+                // and aliases are one answer: the linker consults the alias map
+                // first and only then matches by path suffix, and an alias like
+                // `~/components/Button` shares no suffix with its target. Taking
+                // the paths while defaulting the aliases to empty would make a
+                // warm build resolve differently from a cold one, so an entry
+                // that never recorded aliases is resolved fresh instead.
+                let reusable_dependencies = if target == BundleTarget::Client
+                    && build_hooks.host_count() == 0
+                {
+                    incremental.and_then(|cache| {
+                        if cache.check_freshness(dep_path, &raw_source) != FreshnessStatus::Fresh {
+                            return None;
+                        }
+                        let paths = cache.cached_deps(dep_path)?.to_vec();
+                        let aliases = cache.cached_aliases(dep_path)?.clone();
+                        cache.record_edge_hit();
+                        Some(ResolvedDependencies { paths, aliases })
+                    })
+                } else {
+                    None
+                };
+
                 let dependencies = if is_external {
                     ResolvedDependencies::default()
-                } else if target == BundleTarget::Client
-                    && build_hooks.host_count() == 0
-                    && incremental.is_some_and(|cache| {
-                        cache.check_freshness(dep_path, &raw_source) == FreshnessStatus::Fresh
-                    })
-                {
-                    let cached = incremental
-                        .and_then(|cache| cache.cached_deps(dep_path))
-                        .unwrap_or_default()
-                        .to_vec();
-                    if let Some(incremental) = incremental {
-                        incremental.record_edge_hit();
-                    }
-                    ResolvedDependencies {
-                        paths: cached,
-                        aliases: BTreeMap::new(),
-                    }
+                } else if let Some(reused) = reusable_dependencies {
+                    reused
                 } else {
                     let resolve_base = dep_path.parent().unwrap_or(&project_root).to_path_buf();
                     let dependency_source = if matches!(
@@ -1063,6 +1071,7 @@ pub(crate) fn resolve_graph_with_incremental(
                         dep_path.clone(),
                         &raw_source,
                         dependencies.paths.clone(),
+                        dependencies.aliases.clone(),
                         None,
                     );
                 }
