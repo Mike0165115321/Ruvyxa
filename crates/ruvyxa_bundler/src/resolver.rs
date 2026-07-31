@@ -1072,7 +1072,6 @@ pub(crate) fn resolve_graph_with_incremental(
                         &raw_source,
                         dependencies.paths.clone(),
                         dependencies.aliases.clone(),
-                        None,
                     );
                 }
 

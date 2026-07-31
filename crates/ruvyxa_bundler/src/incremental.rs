@@ -6,7 +6,7 @@
 //! - Its canonical path
 //! - An authoritative blake3 content fingerprint plus mtime/size hints
 //! - Its resolved dependency edges (list of paths)
-//! - Its compiled output cache key
+//! - The specifier-to-path alias map those edges were resolved through
 //!
 //! On subsequent plugin-free client builds, the resolver reuses dependency
 //! edges whose source content is unchanged. Compilation remains independently
@@ -66,14 +66,13 @@ pub struct CachedModuleEntry {
     /// what lets [`MANIFEST_VERSION`] stay constant instead of being bumped.
     #[serde(default)]
     pub aliases: Option<BTreeMap<String, PathBuf>>,
-    /// Compile cache key for this module's output (links to CompileCache).
-    pub compile_key: Option<String>,
 }
 
 /// The full persisted graph manifest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphManifest {
-    /// Format version — auto-invalidates on incompatible changes.
+    /// Manifest identity. Constant by design — see [`MANIFEST_VERSION`]. A
+    /// mismatch means the file belongs to a different cache, not an older one.
     pub version: String,
     /// Build/config namespace used while resolving these dependency edges.
     #[serde(default)]
@@ -230,17 +229,6 @@ impl IncrementalGraphCache {
             .and_then(|entry| entry.aliases.as_ref())
     }
 
-    /// Get the compile cache key for a module (if fresh).
-    pub fn cached_compile_key(&self, path: &Path) -> Option<&str> {
-        if !self.enabled {
-            return None;
-        }
-        self.previous
-            .modules
-            .get(path)
-            .and_then(|e| e.compile_key.as_deref())
-    }
-
     /// Record a module in the current build's manifest.
     pub fn record_module(
         &self,
@@ -248,7 +236,6 @@ impl IncrementalGraphCache {
         source: &str,
         deps: Vec<PathBuf>,
         aliases: BTreeMap<String, PathBuf>,
-        compile_key: Option<String>,
     ) {
         if !self.enabled {
             return;
@@ -270,7 +257,6 @@ impl IncrementalGraphCache {
                 mtime_secs,
                 deps,
                 aliases: Some(aliases),
-                compile_key,
             },
         );
     }
@@ -454,13 +440,7 @@ mod tests {
 
         // Build the first manifest.
         let cache = IncrementalGraphCache::new(tmp.path(), true);
-        cache.record_module(
-            page.clone(),
-            source,
-            vec![],
-            BTreeMap::new(),
-            Some("key123".to_string()),
-        );
+        cache.record_module(page.clone(), source, vec![], BTreeMap::new());
         cache.save().unwrap();
 
         // Reload — simulating a second build.
@@ -482,7 +462,7 @@ mod tests {
         fs::write(&page, source_v1).unwrap();
 
         let cache = IncrementalGraphCache::new(tmp.path(), true);
-        cache.record_module(page.clone(), source_v1, vec![], BTreeMap::new(), None);
+        cache.record_module(page.clone(), source_v1, vec![], BTreeMap::new());
         cache.save().unwrap();
 
         // Change the file (same size to test content-hash path).
@@ -517,21 +497,18 @@ mod tests {
             "export function cn() {}",
             vec![],
             BTreeMap::new(),
-            None,
         );
         cache.record_module(
             button.clone(),
             "import { cn } from './utils';",
             vec![utils.clone()],
             BTreeMap::new(),
-            None,
         );
         cache.record_module(
             page.clone(),
             "import Button from './Button';",
             vec![button.clone()],
             BTreeMap::new(),
-            None,
         );
         cache.save().unwrap();
 
@@ -573,28 +550,24 @@ mod tests {
             "export function cn() {}",
             vec![],
             BTreeMap::new(),
-            None,
         );
         cache.record_module(
             helpers.clone(),
             "export function fmt() {}",
             vec![],
             BTreeMap::new(),
-            None,
         );
         cache.record_module(
             page_a.clone(),
             "import { cn } from './utils';",
             vec![utils.clone()],
             BTreeMap::new(),
-            None,
         );
         cache.record_module(
             page_b.clone(),
             "import { fmt } from './helpers';",
             vec![helpers.clone()],
             BTreeMap::new(),
-            None,
         );
         cache.save().unwrap();
 
@@ -626,14 +599,12 @@ mod tests {
             "export const x = 1;",
             vec![],
             BTreeMap::new(),
-            None,
         );
         cache.record_module(
             page.clone(),
             "import { x } from './utils';",
             vec![utils.clone()],
             BTreeMap::new(),
-            None,
         );
         cache.save().unwrap();
 
@@ -727,7 +698,7 @@ mod tests {
         fs::write(&page, source).unwrap();
 
         let cache = IncrementalGraphCache::new(temp.path(), true);
-        cache.record_module(page.clone(), source, vec![], BTreeMap::new(), None);
+        cache.record_module(page.clone(), source, vec![], BTreeMap::new());
         cache.save().unwrap();
 
         let reloaded = IncrementalGraphCache::new(temp.path(), true);
@@ -750,13 +721,7 @@ mod tests {
 
         let aliases = BTreeMap::from([("~/components/Button".to_string(), button.clone())]);
         let cache = IncrementalGraphCache::new(temp.path(), true);
-        cache.record_module(
-            page.clone(),
-            source,
-            vec![button.clone()],
-            aliases.clone(),
-            None,
-        );
+        cache.record_module(page.clone(), source, vec![button.clone()], aliases.clone());
         cache.save().unwrap();
 
         let reloaded = IncrementalGraphCache::new(temp.path(), true);
@@ -791,7 +756,6 @@ mod tests {
             "export default function Page() {}",
             Vec::new(),
             BTreeMap::new(),
-            None,
         );
         first.save().unwrap();
 
@@ -809,20 +773,21 @@ mod tests {
         let source = "export default function Page() {}";
         fs::write(&page, source).unwrap();
 
+        let dep = app.join("shared.ts");
+        let aliases = BTreeMap::from([("~/shared".to_string(), dep.clone())]);
         let cache = IncrementalGraphCache::new(tmp.path(), true);
-        cache.record_module(
-            page.clone(),
-            source,
-            vec![],
-            BTreeMap::new(),
-            Some("compile_abc123".to_string()),
-        );
+        cache.record_module(page.clone(), source, vec![dep.clone()], aliases.clone());
         cache.save().unwrap();
 
-        // Reload and verify.
+        // Reload and verify the whole entry survives, not just its edges.
         let loaded = IncrementalGraphCache::new(tmp.path(), true);
         assert_eq!(loaded.previous_module_count(), 1);
-        assert_eq!(loaded.cached_compile_key(&page), Some("compile_abc123"),);
+        assert_eq!(loaded.cached_deps(&page), Some([dep].as_slice()));
+        assert_eq!(loaded.cached_aliases(&page), Some(&aliases));
+        assert_eq!(
+            loaded.check_freshness(&page, source),
+            FreshnessStatus::Fresh
+        );
     }
 
     #[test]
@@ -838,7 +803,6 @@ mod tests {
             "export default function Page() {}",
             vec![],
             BTreeMap::new(),
-            None,
         );
         cache.save().unwrap();
         cache.record_module(
@@ -846,7 +810,6 @@ mod tests {
             "export default function Page() { return null }",
             vec![],
             BTreeMap::new(),
-            None,
         );
         cache.save().unwrap();
 

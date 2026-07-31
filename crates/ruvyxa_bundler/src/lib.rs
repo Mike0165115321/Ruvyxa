@@ -644,6 +644,155 @@ mod tests {
         assert!(second.incremental().edge_hits() >= 2);
     }
 
+    /// A reused dependency entry must reproduce the cold build exactly,
+    /// including how its specifiers resolved.
+    ///
+    /// The linker consults a module's alias map before matching by path suffix,
+    /// and `~/lib/label` shares no suffix with `<root>/lib/label.ts`. Reusing
+    /// cached edges while dropping the alias map therefore gave the linker a
+    /// resolution input the cold build never produced. The alias lives in a
+    /// *dependency* here on purpose: entry modules are always resolved fresh, so
+    /// only a dependency exercises the reuse path.
+    #[test]
+    fn reused_dependency_entries_resolve_aliases_like_a_cold_build() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = ruvyxa_diagnostics::normalized_canonical_path(temp.path());
+        let app = root.join("app");
+        let lib = root.join("lib");
+        fs::create_dir_all(&app).unwrap();
+        fs::create_dir_all(&lib).unwrap();
+        fs::write(
+            root.join("tsconfig.json"),
+            r#"{"compilerOptions":{"paths":{"~/*":["./*"]}}}"#,
+        )
+        .unwrap();
+        fs::write(lib.join("label.ts"), "export const label = 'aliased';").unwrap();
+        let shared = app.join("shared.ts");
+        fs::write(
+            &shared,
+            "import { label } from '~/lib/label';\nexport const shared = label;",
+        )
+        .unwrap();
+        let page = app.join("page.tsx");
+        fs::write(
+            &page,
+            "import { shared } from './shared';\nexport default function Page() { return <main>{shared}</main>; }",
+        )
+        .unwrap();
+
+        let cold_context = BundleContext::new(&root);
+        let cold = bundle_with_context(
+            client_input(&root, &app, page.clone(), Vec::new(), "/"),
+            &cold_context,
+        )
+        .unwrap();
+        cold_context.save_incremental().unwrap();
+        assert!(
+            cold.code.contains("aliased"),
+            "the cold build must link the aliased module"
+        );
+
+        let warm_context = BundleContext::new(&root);
+        let warm = bundle_with_context(
+            client_input(&root, &app, page, Vec::new(), "/"),
+            &warm_context,
+        )
+        .unwrap();
+
+        assert!(
+            warm_context.incremental().edge_hits() >= 1,
+            "the warm build must actually reuse a persisted entry, or this \
+             test would pass without exercising the path it guards"
+        );
+        assert_eq!(
+            warm.code, cold.code,
+            "a warm build must produce the cold build's output"
+        );
+    }
+
+    /// An entry persisted before aliases were recorded cannot describe how its
+    /// specifiers resolved. It must be resolved fresh rather than reused as
+    /// "no aliases", and the fresh resolve must rewrite it complete so the cost
+    /// is paid once instead of on every later build.
+    #[test]
+    fn an_entry_missing_aliases_is_resolved_fresh_and_then_repaired() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = ruvyxa_diagnostics::normalized_canonical_path(temp.path());
+        let app = root.join("app");
+        let lib = root.join("lib");
+        fs::create_dir_all(&app).unwrap();
+        fs::create_dir_all(&lib).unwrap();
+        fs::write(
+            root.join("tsconfig.json"),
+            r#"{"compilerOptions":{"paths":{"~/*":["./*"]}}}"#,
+        )
+        .unwrap();
+        fs::write(lib.join("label.ts"), "export const label = 'aliased';").unwrap();
+        let shared = app.join("shared.ts");
+        fs::write(
+            &shared,
+            "import { label } from '~/lib/label';\nexport const shared = label;",
+        )
+        .unwrap();
+        let page = app.join("page.tsx");
+        fs::write(
+            &page,
+            "import { shared } from './shared';\nexport default function Page() { return <main>{shared}</main>; }",
+        )
+        .unwrap();
+
+        let cold_context = BundleContext::new(&root);
+        let cold = bundle_with_context(
+            client_input(&root, &app, page.clone(), Vec::new(), "/"),
+            &cold_context,
+        )
+        .unwrap();
+        cold_context.save_incremental().unwrap();
+
+        // Rewrite the persisted manifest as an older build would have left it:
+        // real edges, no `aliases` key anywhere.
+        let manifest_path = root
+            .join(".ruvyxa")
+            .join("cache")
+            .join("graph")
+            .join("graph-manifest.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+        let modules = manifest["modules"].as_object_mut().unwrap();
+        assert!(!modules.is_empty(), "the cold build must persist entries");
+        for (_, entry) in modules.iter_mut() {
+            entry.as_object_mut().unwrap().remove("aliases");
+        }
+        fs::write(&manifest_path, serde_json::to_string(&manifest).unwrap()).unwrap();
+
+        let legacy_context = BundleContext::new(&root);
+        let repaired = bundle_with_context(
+            client_input(&root, &app, page, Vec::new(), "/"),
+            &legacy_context,
+        )
+        .unwrap();
+
+        assert_eq!(
+            legacy_context.incremental().edge_hits(),
+            0,
+            "an entry without recorded aliases must not be reused"
+        );
+        assert_eq!(
+            repaired.code, cold.code,
+            "resolving fresh must reproduce the cold build"
+        );
+
+        // The repair is persisted, so the next build reuses it normally.
+        legacy_context.save_incremental().unwrap();
+        let repaired_manifest: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+        let shared_entry = &repaired_manifest["modules"][shared.to_string_lossy().as_ref()];
+        assert!(
+            shared_entry["aliases"].is_object(),
+            "the fresh resolve must rewrite the entry complete: {shared_entry}"
+        );
+    }
+
     #[test]
     fn bundle_emits_chunk_manifest() {
         let temp = tempfile::tempdir().unwrap();
