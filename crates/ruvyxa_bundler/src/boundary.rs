@@ -184,6 +184,8 @@ fn scan_code_for_env_reads(
     // regular expression when no value precedes it; without this the scanner
     // treats `/["']/` as a division followed by an unterminated string and
     // silently skips the rest of the module, hiding every later env read.
+    // The decision itself lives in `ast` so every scanner in this crate shares
+    // one answer instead of each re-deriving it.
     let mut previous_significant: Option<usize> = None;
 
     while *index < source.len() {
@@ -201,8 +203,8 @@ fn scan_code_for_env_reads(
             b'/' if source.get(*index + 1) == Some(&b'*') => {
                 skip_block_comment_bytes(source, index)
             }
-            b'/' if regex_can_start(source, previous_significant) => {
-                skip_regex_literal(source, index);
+            b'/' if ast::regex_can_start(source, previous_significant) => {
+                *index = ast::skip_regex_literal(source, *index);
                 previous_significant = Some(start);
             }
             b'{' if template_expression_depth > 0 => {
@@ -235,79 +237,6 @@ fn scan_code_for_env_reads(
                 *index += 1;
             }
         }
-    }
-}
-
-/// Decide whether a `/` opens a regular expression rather than a division.
-///
-/// A regex may only appear where a value is expected. When the preceding token
-/// could end a value (identifier, number, string, closing bracket) the slash is
-/// division. Keywords such as `return` are values-expected positions.
-fn regex_can_start(source: &[u8], previous_significant: Option<usize>) -> bool {
-    let Some(index) = previous_significant else {
-        return true;
-    };
-    match source[index] {
-        b')' | b']' | b'}' | b'\'' | b'"' | b'`' => false,
-        byte if is_identifier_byte(byte) => previous_token_is_keyword(source, index),
-        _ => true,
-    }
-}
-
-fn previous_token_is_keyword(source: &[u8], end: usize) -> bool {
-    let mut start = end + 1;
-    while start > 0 && is_identifier_byte(source[start - 1]) {
-        start -= 1;
-    }
-    matches!(
-        std::str::from_utf8(&source[start..=end]).unwrap_or_default(),
-        "await"
-            | "case"
-            | "delete"
-            | "do"
-            | "else"
-            | "in"
-            | "instanceof"
-            | "new"
-            | "of"
-            | "return"
-            | "throw"
-            | "typeof"
-            | "void"
-            | "yield"
-    )
-}
-
-fn skip_regex_literal(source: &[u8], index: &mut usize) {
-    *index += 1;
-    let mut inside_character_class = false;
-    while *index < source.len() {
-        match source[*index] {
-            b'\\' => *index = (*index + 2).min(source.len()),
-            b'[' => {
-                inside_character_class = true;
-                *index += 1;
-            }
-            b']' if inside_character_class => {
-                inside_character_class = false;
-                *index += 1;
-            }
-            // An unterminated literal was a division after all. Stop here so the
-            // rest of the line is still scanned normally.
-            b'\n' => return,
-            b'/' if !inside_character_class => {
-                *index += 1;
-                break;
-            }
-            _ => *index += 1,
-        }
-    }
-
-    while source
-        .get(*index)
-        .is_some_and(|byte| is_identifier_byte(*byte))
-    {
-        *index += 1;
     }
 }
 

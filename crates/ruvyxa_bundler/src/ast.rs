@@ -56,21 +56,54 @@ impl ModuleAst {
 /// Parse source into the facts the bundler needs.
 pub fn parse_module(source: &str) -> ModuleAst {
     let mut ast = ModuleAst::default();
+    scan_code(source, 0, source.len(), &mut ast);
+    ast
+}
 
-    let bytes = source.as_bytes();
-    let mut index = 0;
+/// Scan `source[start..end]` as code, recording facts into `ast`.
+///
+/// Takes bounds rather than a substring so byte offsets stay absolute: the
+/// scanner looks backwards (`is_line_prefix_whitespace`, `previous_non_whitespace`)
+/// and a re-sliced string would make those reads consult the wrong bytes.
+fn scan_code(source: &str, start: usize, end: usize, ast: &mut ModuleAst) {
+    let bytes = &source.as_bytes()[..end];
+    let mut index = start;
+    // Last byte that can end a JavaScript token, so a `/` can be classified as
+    // a regular expression or a division. See [`regex_can_start`].
+    let mut previous_significant: Option<usize> = None;
     while index < bytes.len() {
         if is_comment_start(bytes, index) {
             index = skip_comment(bytes, index);
             continue;
         }
+        if bytes[index] == b'`' {
+            // A template literal's interpolations are code, not text. Skipping
+            // the whole literal would hide `${require("server-only")}` from the
+            // boundary check and drop real dependency edges.
+            let (after, interpolations) = template_literal(bytes, index);
+            for (code_start, code_end) in interpolations {
+                scan_code(source, code_start, code_end, ast);
+            }
+            previous_significant = Some(index);
+            index = after;
+            continue;
+        }
         if is_quote(bytes[index]) {
+            let start = index;
             index = skip_string(bytes, index);
+            previous_significant = Some(start);
+            continue;
+        }
+        if bytes[index] == b'/' && regex_can_start(bytes, previous_significant) {
+            let start = index;
+            index = skip_regex_literal(bytes, index);
+            previous_significant = Some(start);
             continue;
         }
 
         if bytes[index] == b'@' && is_line_prefix_whitespace(bytes, index) {
             ast.has_decorators = true;
+            previous_significant = Some(index);
             index += 1;
             continue;
         }
@@ -79,12 +112,16 @@ pub fn parse_module(source: &str) -> ModuleAst {
         }
 
         if !is_ident_start_byte(bytes[index]) {
+            if !bytes[index].is_ascii_whitespace() {
+                previous_significant = Some(index);
+            }
             index += 1;
             continue;
         }
 
         let start = index;
         index = skip_identifier(bytes, index);
+        previous_significant = Some(index - 1);
         let word = &source[start..index];
         match word {
             "import" => {
@@ -122,8 +159,6 @@ pub fn parse_module(source: &str) -> ModuleAst {
             _ => {}
         }
     }
-
-    ast
 }
 
 fn import_edge(source: &str, after_keyword: usize) -> Option<ImportEdge> {
@@ -232,21 +267,43 @@ fn quoted_value_at(source: &str, start: usize) -> Option<String> {
 pub fn has_default_export(source: &str) -> bool {
     let bytes = source.as_bytes();
     let mut index = 0;
+    let mut previous_significant: Option<usize> = None;
     while index < bytes.len() {
         if is_comment_start(bytes, index) {
             index = skip_comment(bytes, index);
             continue;
         }
+        if bytes[index] == b'`' {
+            // An `export` cannot appear inside an interpolation, but the
+            // literal's extent still has to be measured the same way the
+            // dependency scanner measures it, or the two disagree about where
+            // code resumes.
+            previous_significant = Some(index);
+            index = template_literal(bytes, index).0;
+            continue;
+        }
         if is_quote(bytes[index]) {
+            let start = index;
             index = skip_string(bytes, index);
+            previous_significant = Some(start);
+            continue;
+        }
+        if bytes[index] == b'/' && regex_can_start(bytes, previous_significant) {
+            let start = index;
+            index = skip_regex_literal(bytes, index);
+            previous_significant = Some(start);
             continue;
         }
         if !is_ident_start_byte(bytes[index]) {
+            if !bytes[index].is_ascii_whitespace() {
+                previous_significant = Some(index);
+            }
             index += 1;
             continue;
         }
         let start = index;
         index = skip_identifier(bytes, index);
+        previous_significant = Some(index - 1);
         if &source[start..index] == "export" && export_declares_default(source, index) {
             return true;
         }
@@ -389,6 +446,153 @@ fn skip_comment(bytes: &[u8], start: usize) -> usize {
             return index + 2;
         }
         index += 1;
+    }
+    bytes.len()
+}
+
+/// Decide whether a `/` opens a regular expression rather than a division.
+///
+/// Every byte scanner in this crate needs this decision, and getting it wrong is
+/// not a cosmetic error: without it `/["']/` reads as a division followed by an
+/// unterminated string, and the string skip then swallows the rest of the module.
+/// Imports after that point vanish from the dependency graph, `server-only`
+/// markers stop being seen by the boundary check, and a page's default export
+/// becomes invisible. Sharing one implementation is what keeps the scanners from
+/// drifting back into that failure one at a time.
+///
+/// A regex may only appear where a value is expected. When the preceding token
+/// could end a value (identifier, number, string, closing bracket) the slash is
+/// division. Keywords such as `return` are values-expected positions.
+///
+/// `previous_significant` is the index of the last byte that can end a token, or
+/// `None` at the start of the source.
+pub(crate) fn regex_can_start(bytes: &[u8], previous_significant: Option<usize>) -> bool {
+    let Some(index) = previous_significant else {
+        return true;
+    };
+    match bytes[index] {
+        b')' | b']' | b'}' | b'\'' | b'"' | b'`' => false,
+        byte if is_ident_continue_byte(byte) => previous_token_is_keyword(bytes, index),
+        _ => true,
+    }
+}
+
+fn previous_token_is_keyword(bytes: &[u8], end: usize) -> bool {
+    let mut start = end + 1;
+    while start > 0 && is_ident_continue_byte(bytes[start - 1]) {
+        start -= 1;
+    }
+    matches!(
+        std::str::from_utf8(&bytes[start..=end]).unwrap_or_default(),
+        "await"
+            | "case"
+            | "delete"
+            | "do"
+            | "else"
+            | "in"
+            | "instanceof"
+            | "new"
+            | "of"
+            | "return"
+            | "throw"
+            | "typeof"
+            | "void"
+            | "yield"
+    )
+}
+
+/// Skip past a regular expression literal, returning the index after it.
+///
+/// Quotes and slashes inside a character class (`/[/"']/`) are literal, so the
+/// class state has to be tracked or the literal ends in the wrong place.
+pub(crate) fn skip_regex_literal(bytes: &[u8], start: usize) -> usize {
+    let mut index = start + 1;
+    let mut inside_character_class = false;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index = (index + 2).min(bytes.len()),
+            b'[' => {
+                inside_character_class = true;
+                index += 1;
+            }
+            b']' if inside_character_class => {
+                inside_character_class = false;
+                index += 1;
+            }
+            // An unterminated literal was a division after all. Stop here so the
+            // rest of the line is still scanned normally.
+            b'\n' => return index,
+            b'/' if !inside_character_class => {
+                index += 1;
+                break;
+            }
+            _ => index += 1,
+        }
+    }
+
+    // Trailing flags (`/x/gi`) are part of the literal, not a new identifier.
+    while bytes
+        .get(index)
+        .is_some_and(|byte| is_ident_continue_byte(*byte))
+    {
+        index += 1;
+    }
+    index
+}
+
+/// Walk a template literal starting at its opening backtick.
+///
+/// Returns the index just past the closing backtick together with the code
+/// ranges of each `${ … }` interpolation, so callers can scan those as code
+/// instead of treating the whole literal as opaque text.
+fn template_literal(bytes: &[u8], start: usize) -> (usize, Vec<(usize, usize)>) {
+    let mut index = start + 1;
+    let mut interpolations = Vec::new();
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index = (index + 2).min(bytes.len()),
+            b'`' => return (index + 1, interpolations),
+            b'$' if bytes.get(index + 1) == Some(&b'{') => {
+                let code_start = index + 2;
+                let code_end = interpolation_end(bytes, code_start);
+                interpolations.push((code_start, code_end));
+                index = (code_end + 1).min(bytes.len());
+            }
+            _ => index += 1,
+        }
+    }
+    (bytes.len(), interpolations)
+}
+
+/// Index of the `}` closing an interpolation whose code begins at `start`.
+///
+/// Braces inside nested strings, templates, and comments do not count, or a
+/// literal such as `` `${obj["}"]}` `` would end the interpolation early and
+/// desynchronize the rest of the scan.
+fn interpolation_end(bytes: &[u8], start: usize) -> usize {
+    let mut index = start;
+    let mut depth = 1usize;
+    while index < bytes.len() {
+        if is_comment_start(bytes, index) {
+            index = skip_comment(bytes, index);
+            continue;
+        }
+        match bytes[index] {
+            b'`' => index = template_literal(bytes, index).0,
+            b'\'' | b'"' => index = skip_string(bytes, index),
+            b'{' => {
+                depth += 1;
+                index += 1;
+            }
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return index;
+                }
+                index += 1;
+            }
+            _ => index += 1,
+        }
     }
     bytes.len()
 }
@@ -556,6 +760,113 @@ import { createElement } from "react";
                 "should not detect a default export in: {source}"
             );
         }
+    }
+
+    /// A regex literal containing a quote used to start a string skip that ran
+    /// to end-of-file, so every import after it disappeared from the dependency
+    /// graph and the module was never bundled.
+    #[test]
+    fn regex_literals_do_not_hide_later_imports() {
+        let ast = parse_module(
+            r#"
+const QUOTED = /["']/g
+const CLASS_SLASH = /[/"]/
+import { helper } from "./helper"
+export { shared } from "./shared"
+const lazy = import("./lazy")
+"#,
+        );
+
+        assert_eq!(
+            ast.import_specifiers(),
+            vec!["./helper", "./shared", "./lazy"],
+            "a regex literal must not swallow the rest of the module"
+        );
+    }
+
+    /// The same swallowing made `check` reject a valid page with RUV1004.
+    #[test]
+    fn regex_literals_do_not_hide_a_later_default_export() {
+        for source in [
+            "const RE = /[\"']/;\nexport default function Page() { return <main /> }",
+            "const RE = /don't/;\nexport default function Page() {}",
+            "const RE = /[/\"]/g;\nfunction Page() {}\nexport { Page as default }",
+        ] {
+            assert!(has_default_export(source), "should detect: {source}");
+        }
+    }
+
+    /// Interpolations are code. Treating a template literal as opaque text hid
+    /// `${require("server-only")}` from the RUV1007 boundary check and dropped
+    /// real dependency edges from the graph.
+    #[test]
+    fn template_interpolations_are_scanned_as_code() {
+        let ast = parse_module(
+            r#"
+const loader = `${require("server-only")}`
+const nested = `outer ${cond ? `inner ${import("./lazy")}` : ""} tail`
+const text = `import "not-an-import" and require("not-either")`
+"#,
+        );
+
+        let specifiers = ast.import_specifiers();
+        assert!(
+            specifiers.contains(&"server-only".to_string()),
+            "{specifiers:?}"
+        );
+        assert!(specifiers.contains(&"./lazy".to_string()), "{specifiers:?}");
+        assert!(
+            !specifiers.contains(&"not-an-import".to_string()),
+            "literal template text is not code: {specifiers:?}"
+        );
+        assert!(
+            !specifiers.contains(&"not-either".to_string()),
+            "literal template text is not code: {specifiers:?}"
+        );
+    }
+
+    /// A brace inside a nested string must not end the interpolation early, or
+    /// the scan resumes at the wrong offset and loses everything after it.
+    #[test]
+    fn braces_inside_interpolated_strings_do_not_end_the_interpolation() {
+        let ast = parse_module(
+            r#"
+const label = `${obj["}"]} tail`
+import { helper } from "./helper"
+"#,
+        );
+
+        assert_eq!(ast.import_specifiers(), vec!["./helper"]);
+    }
+
+    /// A `/` after a value is division. Treating it as a regex would skip real
+    /// code instead — the opposite failure, and just as silent.
+    #[test]
+    fn division_is_not_mistaken_for_a_regex_literal() {
+        let ast = parse_module(
+            r#"
+const ratio = total / count
+const scaled = (a + b) / 2
+const indexed = list[0] / 2
+import { helper } from "./helper"
+"#,
+        );
+
+        assert_eq!(ast.import_specifiers(), vec!["./helper"]);
+    }
+
+    /// After a keyword a `/` really is a regex, even though the preceding byte
+    /// is an identifier byte.
+    #[test]
+    fn regex_after_a_keyword_is_still_a_regex() {
+        let ast = parse_module(
+            r#"
+function pattern() { return /["']/ }
+import { helper } from "./helper"
+"#,
+        );
+
+        assert_eq!(ast.import_specifiers(), vec!["./helper"]);
     }
 
     #[test]

@@ -283,6 +283,9 @@ pub fn validate_app(root: &Path, manifest: &RouteManifest) -> Result<ValidationR
     // Track which modules have already been validated to avoid duplicate reads.
     let mut validated_client: BTreeSet<PathBuf> = BTreeSet::new();
     let mut validated_server: BTreeSet<PathBuf> = BTreeSet::new();
+    // Shared across every route so a layout or component reached from many
+    // routes is read and scanned once, not once per route.
+    let mut module_edges = ModuleEdges::default();
 
     for route in &manifest.routes {
         match route.kind {
@@ -306,10 +309,10 @@ pub fn validate_app(root: &Path, manifest: &RouteManifest) -> Result<ValidationR
                     );
                 }
 
-                let mut graph = collect_relative_graph(&route.file);
+                let mut graph = collect_relative_graph(&route.file, &mut module_edges);
                 for layout in &route.layout_chain {
                     if let Some(layout) = resolve_layout_file(&manifest.app_dir, layout) {
-                        graph.extend(collect_relative_graph(&layout));
+                        graph.extend(collect_relative_graph(&layout, &mut module_edges));
                     }
                 }
                 for module in graph {
@@ -321,7 +324,7 @@ pub fn validate_app(root: &Path, manifest: &RouteManifest) -> Result<ValidationR
                 }
             }
             RouteKind::Api => {
-                let graph = collect_relative_graph(&route.file);
+                let graph = collect_relative_graph(&route.file, &mut module_edges);
                 for module in graph {
                     server_modules.insert(module.clone());
                     if validated_server.insert(module.clone()) {
@@ -333,7 +336,7 @@ pub fn validate_app(root: &Path, manifest: &RouteManifest) -> Result<ValidationR
 
         for module in &route.server_modules {
             let module = PathBuf::from(module);
-            let graph = collect_relative_graph(&module);
+            let graph = collect_relative_graph(&module, &mut module_edges);
             for module in graph {
                 server_modules.insert(module.clone());
                 if validated_server.insert(module.clone()) {
@@ -529,7 +532,40 @@ fn validate_server_module(file: &Path, diagnostics: &mut Vec<Diagnostic>) -> Res
     Ok(())
 }
 
-fn collect_relative_graph(entry: &Path) -> BTreeSet<PathBuf> {
+/// Resolved relative-import edges per module, reused across graph walks.
+///
+/// The reachable set is still computed per entry, so every caller gets exactly
+/// the set it got before. What is shared is the expensive part: reading and
+/// scanning a file to learn its edges. Without this, a layout and every
+/// component it pulls in are re-read once per route in the manifest, so the work
+/// grew as `routes × shared modules` while always producing the same answer.
+#[derive(Default)]
+struct ModuleEdges {
+    edges: BTreeMap<PathBuf, Vec<PathBuf>>,
+}
+
+impl ModuleEdges {
+    /// Relative imports declared by `file`, resolved to paths.
+    ///
+    /// An unreadable file caches an empty edge list, matching the previous
+    /// behavior of skipping it, and stops the retry on every later walk.
+    fn of(&mut self, file: &Path) -> &[PathBuf] {
+        if !self.edges.contains_key(file) {
+            let resolved = match fs::read_to_string(file) {
+                Ok(source) => import_specifiers(&source)
+                    .into_iter()
+                    .filter(|specifier| specifier.starts_with('.'))
+                    .filter_map(|specifier| resolve_relative_import(file, &specifier))
+                    .collect(),
+                Err(_) => Vec::new(),
+            };
+            self.edges.insert(file.to_path_buf(), resolved);
+        }
+        &self.edges[file]
+    }
+}
+
+fn collect_relative_graph(entry: &Path, edges: &mut ModuleEdges) -> BTreeSet<PathBuf> {
     let mut visited = BTreeSet::new();
     // Normalize the entry exactly like resolved imports so a cycle back to
     // the entry file compares equal instead of being visited twice.
@@ -540,112 +576,21 @@ fn collect_relative_graph(entry: &Path) -> BTreeSet<PathBuf> {
             continue;
         }
 
-        let Ok(source) = fs::read_to_string(&file) else {
-            continue;
-        };
-
-        for specifier in import_specifiers(&source) {
-            if !specifier.starts_with('.') {
-                continue;
-            }
-
-            if let Some(resolved) = resolve_relative_import(&file, &specifier) {
-                queue.push_back(resolved);
-            }
-        }
+        queue.extend(edges.of(&file).iter().cloned());
     }
 
     visited
 }
 
+/// Import specifiers declared by a module, as the bundler sees them.
+///
+/// Route validation must walk the same graph the bundler will actually build.
+/// This used to be a private line-oriented matcher fed by its own source-masking
+/// pass, so `check` and `build` could disagree about which modules a page
+/// reaches — a multi-line `from`/specifier split, for one, was invisible here but
+/// visible to the bundler. Delegating removes the second answer entirely.
 fn import_specifiers(source: &str) -> Vec<String> {
-    let source = code_for_import_specifiers(source);
-    let mut imports = Vec::new();
-
-    for line in source.lines() {
-        let line = line.trim();
-
-        if let Some(index) = line.find(" from ") {
-            if let Some(specifier) = quoted_value(&line[index + " from ".len()..]) {
-                imports.push(specifier);
-            }
-        } else if line.starts_with("import ")
-            && let Some(specifier) = quoted_value(line.trim_start_matches("import").trim())
-        {
-            imports.push(specifier);
-        }
-    }
-
-    imports.extend(call_import_specifiers(&source, "import"));
-    imports.extend(call_import_specifiers(&source, "require"));
-
-    imports
-}
-
-fn call_import_specifiers(source: &str, keyword: &str) -> Vec<String> {
-    let bytes = source.as_bytes();
-    let mut imports = Vec::new();
-    let mut index = 0;
-
-    while index + keyword.len() <= bytes.len() {
-        let Some(relative) = source[index..].find(keyword) else {
-            break;
-        };
-        let start = index + relative;
-        index = start + keyword.len();
-        if start > 0
-            && matches!(
-                bytes[start - 1],
-                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'$' | b'.'
-            )
-        {
-            continue;
-        }
-
-        let mut cursor = index;
-        while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
-            cursor += 1;
-        }
-        if bytes.get(cursor) != Some(&b'(') {
-            continue;
-        }
-        cursor += 1;
-        while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
-            cursor += 1;
-        }
-        let Some(quote) = bytes
-            .get(cursor)
-            .copied()
-            .filter(|byte| *byte == b'\'' || *byte == b'\"')
-        else {
-            continue;
-        };
-        let value_start = cursor + 1;
-        let Some(value_len) = source[value_start..].find(quote as char) else {
-            continue;
-        };
-        let after_quote = value_start + value_len + 1;
-        let mut after_call = after_quote;
-        while bytes.get(after_call).is_some_and(u8::is_ascii_whitespace) {
-            after_call += 1;
-        }
-        if bytes.get(after_call) == Some(&b')') {
-            imports.push(source[value_start..value_start + value_len].to_string());
-            index = after_call + 1;
-        }
-    }
-
-    imports
-}
-
-fn quoted_value(input: &str) -> Option<String> {
-    let quote = input
-        .chars()
-        .find(|character| *character == '"' || *character == '\'')?;
-    let start = input.find(quote)? + 1;
-    let rest = &input[start..];
-    let end = rest.find(quote)?;
-    Some(rest[..end].to_string())
+    ruvyxa_bundler::ast::parse_module(source).import_specifiers()
 }
 
 fn resolve_relative_import(from: &Path, specifier: &str) -> Option<PathBuf> {
@@ -849,48 +794,6 @@ fn skip_regex_literal(
         chars.next();
         output.push(' ');
     }
-}
-
-fn code_for_import_specifiers(source: &str) -> String {
-    let mut output = String::with_capacity(source.len());
-    let mut chars = source.char_indices().peekable();
-
-    while let Some((_, character)) = chars.next() {
-        match character {
-            '"' | '\'' => {
-                if should_preserve_import_string(&output) {
-                    output.push(character);
-                    copy_quoted_string(character, &mut chars, &mut output);
-                } else {
-                    output.push(' ');
-                    skip_quoted_string(character, &mut chars, &mut output);
-                }
-            }
-            '`' => {
-                output.push(' ');
-                skip_template_literal(&mut chars, &mut output, true);
-            }
-            '/' if chars.peek().is_some_and(|(_, next)| *next == '/') => {
-                output.push(' ');
-                chars.next();
-                output.push(' ');
-                skip_line_comment(&mut chars, &mut output);
-            }
-            '/' if chars.peek().is_some_and(|(_, next)| *next == '*') => {
-                output.push(' ');
-                chars.next();
-                output.push(' ');
-                skip_block_comment(&mut chars, &mut output);
-            }
-            '/' if regex_can_start(&output) => {
-                output.push(' ');
-                skip_regex_literal(&mut chars, &mut output);
-            }
-            _ => output.push(character),
-        }
-    }
-
-    output
 }
 
 fn should_preserve_import_string(output: &str) -> bool {
@@ -1366,10 +1269,11 @@ fn parse_hydration_mode(source: &str) -> HydrationMode {
 /// Route-level rendering exports are intentionally handled from the page source only, while data
 /// markers in any dependency make automatic SSG unsafe.
 fn render_reachable_code(app_dir: &Path, file: &Path, layout_chain: &[String]) -> Option<String> {
-    let mut files = collect_relative_graph(file);
+    let mut edges = ModuleEdges::default();
+    let mut files = collect_relative_graph(file, &mut edges);
     for layout in layout_chain {
         let layout = resolve_layout_file(app_dir, layout)?;
-        files.extend(collect_relative_graph(&layout));
+        files.extend(collect_relative_graph(&layout, &mut edges));
     }
 
     let mut code = String::new();
@@ -2056,6 +1960,59 @@ mod tests {
         assert!(codes.contains(&"RUV1008"), "{codes:?}");
     }
 
+    /// The edge cache is shared across walks, so the second walk over a module
+    /// finds its edges already memoized. It must still return the full
+    /// reachable set — caching the edges, not the reachable set, is what keeps
+    /// a warm walk identical to a cold one.
+    #[test]
+    fn a_warm_edge_cache_returns_the_same_reachable_set() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = temp.path().join("app");
+        fs::create_dir_all(app.join("blog")).unwrap();
+        fs::write(app.join("shared.ts"), "export const shared = 1;").unwrap();
+        fs::write(
+            app.join("layout.tsx"),
+            "import { shared } from './shared'; export default function Layout() { return shared; }",
+        )
+        .unwrap();
+        fs::write(
+            app.join("page.tsx"),
+            "import { shared } from './shared'; export default function Page() { return shared; }",
+        )
+        .unwrap();
+        fs::write(
+            app.join("blog/page.tsx"),
+            "import { shared } from '../shared'; export default function Blog() { return shared; }",
+        )
+        .unwrap();
+
+        let mut edges = ModuleEdges::default();
+        let cold = collect_relative_graph(&app.join("page.tsx"), &mut edges);
+        // `shared.ts` is memoized by now; walking a second entry through it must
+        // not short-circuit into a partial graph.
+        let warm_blog = collect_relative_graph(&app.join("blog/page.tsx"), &mut edges);
+        let warm_layout = collect_relative_graph(&app.join("layout.tsx"), &mut edges);
+        // Repeating the first entry on a fully warm cache must be idempotent.
+        let warm_repeat = collect_relative_graph(&app.join("page.tsx"), &mut edges);
+
+        assert_eq!(cold, warm_repeat, "a warm walk must match the cold walk");
+        let shared = normalized_canonical_path(&app.join("shared.ts"));
+        for (label, graph) in [
+            ("page", &cold),
+            ("blog", &warm_blog),
+            ("layout", &warm_layout),
+        ] {
+            assert_eq!(graph.len(), 2, "{label} graph: {graph:?}");
+            assert!(
+                graph.contains(&shared),
+                "{label} graph lost the shared module"
+            );
+        }
+
+        // Every entry above still resolves through one read of `shared.ts`.
+        assert!(edges.edges.contains_key(&shared));
+    }
+
     #[test]
     fn validates_dynamic_imports_and_requires_in_boundary_graphs() {
         let temp = tempfile::tempdir().unwrap();
@@ -2130,12 +2087,15 @@ mod tests {
             private_env_reads(r#"const re = /['"]/g; const secret = process.env.DATABASE_URL;"#);
         assert_eq!(names, vec!["DATABASE_URL"]);
 
-        let code = code_for_import_specifiers(
+        let specifiers = import_specifiers(
             r#"const re = /['"]/g;
 import 'server-only';
 "#,
         );
-        assert!(code.contains("server-only"), "{code}");
+        assert!(
+            specifiers.iter().any(|s| s == "server-only"),
+            "{specifiers:?}"
+        );
     }
 
     #[test]
