@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use oxc::allocator::Allocator;
 use oxc::codegen::Codegen;
@@ -22,20 +23,63 @@ use crate::resolver::ResolvedModule;
 use crate::{BundleError, BundleInput, JsxRuntime, Result};
 
 /// A compiled module: TypeScript/JSX has been converted to plain JavaScript.
+///
+/// Both heavy fields are shared rather than owned. A build holds the same module
+/// in several collections at once — the full graph, the entry's static closure,
+/// and one closure per emitted chunk — and each of those used to carry its own
+/// copy of the generated JavaScript. Construct with [`CompiledModule::new`].
 #[derive(Debug, Clone)]
 pub struct CompiledModule {
     /// Canonical path (or virtual label for the synthetic entry).
     pub path: PathBuf,
     /// Plain JavaScript source after Oxc transformation.
-    pub js: String,
+    pub js: Arc<str>,
+    /// Facts parsed from [`Self::js`], computed once at construction.
+    pub ast: Arc<ast::ModuleAst>,
     /// Dependency paths preserved from the resolver stage.
-    pub deps: Vec<PathBuf>,
+    pub deps: Arc<[PathBuf]>,
     /// Exact source specifier to resolved path bindings from the resolver.
-    pub dependency_aliases: BTreeMap<String, PathBuf>,
+    pub dependency_aliases: Arc<BTreeMap<String, PathBuf>>,
     /// Whether this module comes from `node_modules` (external).
     pub is_external: bool,
     /// Whether this module's compiled output came from the compile cache.
     pub cache_hit: bool,
+}
+
+impl CompiledModule {
+    /// Build a compiled module, scanning its output exactly once.
+    ///
+    /// The AST is parsed here — the single point where a `CompiledModule` comes
+    /// into existence — so no later stage has a reason to walk `js` again. Chunk
+    /// planning alone re-parsed every module once per dynamic root, once per
+    /// emitted chunk, and twice more for the boundary check; that cost scaled
+    /// with the number of `import()` sites in the app rather than with its size.
+    pub(crate) fn new(
+        path: PathBuf,
+        js: String,
+        deps: Vec<PathBuf>,
+        dependency_aliases: BTreeMap<String, PathBuf>,
+        is_external: bool,
+        cache_hit: bool,
+    ) -> Self {
+        // External modules are excluded from linking, chunk closures, and the
+        // boundary check, so their AST is never read. Scanning node_modules
+        // output to fill a field nobody consults is pure cost.
+        let ast = if is_external {
+            Arc::new(ast::ModuleAst::default())
+        } else {
+            Arc::new(ast::parse_module(&js))
+        };
+        Self {
+            path,
+            js: js.into(),
+            ast,
+            deps: deps.into(),
+            dependency_aliases: Arc::new(dependency_aliases),
+            is_external,
+            cache_hit,
+        }
+    }
 }
 
 struct CompiledModuleOutput {
@@ -116,14 +160,14 @@ fn compile_module(
         let js = crate::style_module::css_module_javascript(&css_module)
             .map_err(|error| BundleError::Compiler(error.to_string()))?;
         return Ok(CompiledModuleOutput {
-            module: CompiledModule {
-                path: module.path.clone(),
+            module: CompiledModule::new(
+                module.path.clone(),
                 js,
-                deps: module.deps.clone(),
-                dependency_aliases: module.dependency_aliases.clone(),
-                is_external: false,
-                cache_hit: false,
-            },
+                module.deps.clone(),
+                module.dependency_aliases.clone(),
+                false,
+                false,
+            ),
             hook_source_map: None,
         });
     }
@@ -148,14 +192,14 @@ fn compile_module(
     // Virtual entries and plain JavaScript pass through after registered transforms.
     if matches!(ext, "js" | "mjs" | "cjs") || module.path.to_string_lossy().contains("ruvyxa:") {
         return Ok(CompiledModuleOutput {
-            module: CompiledModule {
-                path: module.path.clone(),
-                js: source,
-                deps: module.deps.clone(),
-                dependency_aliases: module.dependency_aliases.clone(),
-                is_external: module.is_external,
-                cache_hit: false,
-            },
+            module: CompiledModule::new(
+                module.path.clone(),
+                source,
+                module.deps.clone(),
+                module.dependency_aliases.clone(),
+                module.is_external,
+                false,
+            ),
             hook_source_map,
         });
     }
@@ -166,14 +210,14 @@ fn compile_module(
 
     match cache.lookup_with_options(&source, has_jsx, jsx_runtime) {
         CacheLookup::Hit(cached_js) => Ok(CompiledModuleOutput {
-            module: CompiledModule {
-                path: module.path.clone(),
-                js: cached_js,
-                deps: module.deps.clone(),
-                dependency_aliases: module.dependency_aliases.clone(),
-                is_external: module.is_external,
-                cache_hit: true,
-            },
+            module: CompiledModule::new(
+                module.path.clone(),
+                cached_js,
+                module.deps.clone(),
+                module.dependency_aliases.clone(),
+                module.is_external,
+                true,
+            ),
             hook_source_map,
         }),
         CacheLookup::Miss(key) => {
@@ -184,14 +228,14 @@ fn compile_module(
             cache.store(&key, &js);
 
             Ok(CompiledModuleOutput {
-                module: CompiledModule {
-                    path: module.path.clone(),
+                module: CompiledModule::new(
+                    module.path.clone(),
                     js,
-                    deps: module.deps.clone(),
-                    dependency_aliases: module.dependency_aliases.clone(),
-                    is_external: module.is_external,
-                    cache_hit: false,
-                },
+                    module.deps.clone(),
+                    module.dependency_aliases.clone(),
+                    module.is_external,
+                    false,
+                ),
                 hook_source_map,
             })
         }

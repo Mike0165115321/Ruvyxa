@@ -99,7 +99,7 @@ fn dfs_detect_cycle(
     stack.push(path.clone());
 
     if let Some(module) = module_map.get(path) {
-        for dep in &module.deps {
+        for dep in module.deps.iter() {
             if module_map.contains_key(dep) {
                 dfs_detect_cycle(dep, module_map, visited, stack)?;
             }
@@ -447,7 +447,7 @@ fn visit_module<'a>(
         return;
     };
 
-    for dep in &module.deps {
+    for dep in module.deps.iter() {
         if module_map.contains_key(dep) {
             visit_module(dep, module_map, visiting, visited, ordered);
         }
@@ -1299,6 +1299,12 @@ fn extract_var_declaration_name(decl: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// Build a compiled module the way the pipeline does, so tests exercise the
+    /// same construction path — including the single AST parse — as a real build.
+    fn fixture(path: PathBuf, js: impl Into<String>, deps: Vec<PathBuf>) -> CompiledModule {
+        CompiledModule::new(path, js.into(), deps, BTreeMap::new(), false, false)
+    }
+
     /// Every resolution rule the index precomputes for, exercised against one
     /// dep list. The keys are derived once at build time now instead of per
     /// lookup, so a mistake in that derivation silently changes which module a
@@ -1635,14 +1641,11 @@ mod tests {
             options: crate::BundleOptions::default(),
             specials: crate::RouteSpecials::default(),
         };
-        let module = CompiledModule {
-            path: entry,
-            js: "import React from \"react\";\nexport default function Page() {}".to_string(),
-            deps: Vec::new(),
-            dependency_aliases: BTreeMap::new(),
-            is_external: false,
-            cache_hit: false,
-        };
+        let module = fixture(
+            entry,
+            "import React from \"react\";\nexport default function Page() {}",
+            Vec::new(),
+        );
 
         let output = link(&[module], &input).unwrap();
 
@@ -1694,14 +1697,7 @@ mod tests {
             options: crate::BundleOptions::default(),
             specials: crate::RouteSpecials::default(),
         };
-        let module = CompiledModule {
-            path,
-            js: "module.exports = { answer: 42 };".to_string(),
-            deps: Vec::new(),
-            dependency_aliases: BTreeMap::new(),
-            is_external: false,
-            cache_hit: false,
-        };
+        let module = fixture(path, "module.exports = { answer: 42 };", Vec::new());
 
         let output = link_parallel(&[module], &input).unwrap();
 
@@ -1726,23 +1722,16 @@ mod tests {
             specials: crate::RouteSpecials::default(),
         };
         let modules = vec![
-            CompiledModule {
-                path: page.clone(),
-                js: "import { label } from \"./helper\";\nexport default function Page() { return label; }"
-                    .to_string(),
-                deps: vec![helper.clone()],
-                dependency_aliases: BTreeMap::new(),
-                is_external: false,
-                cache_hit: false,
-            },
-            CompiledModule {
-                path: helper.clone(),
-                js: "export const label = \"ready\";".to_string(),
-                deps: Vec::new(),
-                dependency_aliases: BTreeMap::new(),
-                is_external: false,
-                cache_hit: false,
-            },
+            fixture(
+                page.clone(),
+                "import { label } from \"./helper\";\nexport default function Page() { return label; }",
+                vec![helper.clone()],
+            ),
+            fixture(
+                helper.clone(),
+                "export const label = \"ready\";",
+                Vec::new(),
+            ),
         ];
 
         let output = link(&modules, &input).unwrap();
@@ -1765,20 +1754,16 @@ mod tests {
             options: crate::BundleOptions::default(),
             specials: crate::RouteSpecials::default(),
         };
-        let module = CompiledModule {
-            path: page,
-            js: r#"export const meta = {
+        let module = fixture(
+            page,
+            r#"export const meta = {
   title: "Ruvyxa",
 };
 export default function Layout({ children }) {
   return children;
-}"#
-            .to_string(),
-            deps: Vec::new(),
-            dependency_aliases: BTreeMap::new(),
-            is_external: false,
-            cache_hit: false,
-        };
+}"#,
+            Vec::new(),
+        );
 
         let output = link(&[module], &input).unwrap();
         let object_end = output.find("  };").unwrap();
@@ -1803,14 +1788,11 @@ export default function Layout({ children }) {
             options: crate::BundleOptions::default(),
             specials: crate::RouteSpecials::default(),
         };
-        let module = CompiledModule {
-            path: entry.clone(),
-            js: "export async function render(ctx) {\n  return String(ctx.path);\n}".to_string(),
-            deps: Vec::new(),
-            dependency_aliases: BTreeMap::new(),
-            is_external: false,
-            cache_hit: false,
-        };
+        let module = fixture(
+            entry.clone(),
+            "export async function render(ctx) {\n  return String(ctx.path);\n}",
+            Vec::new(),
+        );
 
         let output = link(&[module], &input).unwrap();
 
@@ -1826,22 +1808,8 @@ export default function Layout({ children }) {
         let b = PathBuf::from("/app/b.ts");
 
         let modules = vec![
-            CompiledModule {
-                path: a.clone(),
-                js: "import B from './b';".into(),
-                deps: vec![b.clone()],
-                dependency_aliases: BTreeMap::new(),
-                is_external: false,
-                cache_hit: false,
-            },
-            CompiledModule {
-                path: b.clone(),
-                js: "import A from './a';".into(),
-                deps: vec![a.clone()],
-                dependency_aliases: BTreeMap::new(),
-                is_external: false,
-                cache_hit: false,
-            },
+            fixture(a.clone(), "import B from './b';", vec![b.clone()]),
+            fixture(b.clone(), "import A from './a';", vec![a.clone()]),
         ];
 
         let result = detect_cycles(&modules);
@@ -1862,38 +1830,10 @@ export default function Layout({ children }) {
         let shared = PathBuf::from("/app/shared.ts");
 
         let modules = vec![
-            CompiledModule {
-                path: page.clone(),
-                js: String::new(),
-                deps: vec![a.clone(), b.clone()],
-                dependency_aliases: BTreeMap::new(),
-                is_external: false,
-                cache_hit: false,
-            },
-            CompiledModule {
-                path: a.clone(),
-                js: String::new(),
-                deps: vec![shared.clone()],
-                dependency_aliases: BTreeMap::new(),
-                is_external: false,
-                cache_hit: false,
-            },
-            CompiledModule {
-                path: b.clone(),
-                js: String::new(),
-                deps: vec![shared.clone()],
-                dependency_aliases: BTreeMap::new(),
-                is_external: false,
-                cache_hit: false,
-            },
-            CompiledModule {
-                path: shared.clone(),
-                js: String::new(),
-                deps: vec![],
-                dependency_aliases: BTreeMap::new(),
-                is_external: false,
-                cache_hit: false,
-            },
+            fixture(page.clone(), String::new(), vec![a.clone(), b.clone()]),
+            fixture(a.clone(), String::new(), vec![shared.clone()]),
+            fixture(b.clone(), String::new(), vec![shared.clone()]),
+            fixture(shared.clone(), String::new(), vec![]),
         ];
 
         // Diamond graph is NOT circular.

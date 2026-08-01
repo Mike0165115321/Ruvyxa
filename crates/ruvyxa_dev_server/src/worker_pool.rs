@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, mpsc};
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 use ruvyxa_diagnostics::{Diagnostic, Result, RuvyxaError};
 use ruvyxa_graph::RouteParams;
@@ -527,6 +527,39 @@ impl Drop for WorkerBodyStream {
 
 // --- Worker Process ---
 
+/// Log one line of worker stderr at the severity the worker asked for.
+///
+/// stdout carries the NDJSON response protocol, so stderr is the worker's only
+/// other channel home and routine lifecycle notices share it with real
+/// failures. This side cannot tell them apart from the text, and treating the
+/// whole channel as warnings turned an ordinary end-of-build shutdown into one
+/// warning per worker on every build.
+///
+/// The worker tags the lines it knows are routine; anything untagged — a Node
+/// stack trace, an unhandled rejection, a bare `console.error` — stays a
+/// warning, so the noisy default only applies where nobody has classified the
+/// line. An unrecognized tag is logged whole rather than unwrapped: better a
+/// loud odd-looking line than a silently downgraded failure.
+fn log_worker_stderr(line: &str) {
+    match parse_worker_stderr_tag(line) {
+        Some(("debug", message)) => debug!(target: "ruvyxa::worker_stderr", "{message}"),
+        Some(("info", message)) => info!(target: "ruvyxa::worker_stderr", "{message}"),
+        Some(("warn", message)) => warn!(target: "ruvyxa::worker_stderr", "{message}"),
+        Some(("error", message)) => error!(target: "ruvyxa::worker_stderr", "{message}"),
+        _ => warn!(target: "ruvyxa::worker_stderr", "{line}"),
+    }
+}
+
+/// Split a `[ruvyxa:<level>] <message>` line into its level and message.
+///
+/// Emitted by `note()` in `packages/ruvyxa/runtime/worker-pool.mjs`; keep the
+/// two in step.
+fn parse_worker_stderr_tag(line: &str) -> Option<(&str, &str)> {
+    let rest = line.strip_prefix("[ruvyxa:")?;
+    let (level, message) = rest.split_once(']')?;
+    Some((level, message.strip_prefix(' ').unwrap_or(message)))
+}
+
 struct Worker {
     stdin_tx: StdMutex<Option<mpsc::Sender<String>>>,
     pending: PendingResponses,
@@ -595,11 +628,12 @@ impl Worker {
         });
 
         // Spawn stderr drain task — prevents the pipe buffer from filling up and
-        // blocking the Node process. Logs lines at warn level for visibility.
+        // blocking the Node process. Severity comes from the worker (see
+        // `log_worker_stderr`); untagged lines stay warnings.
         tokio::spawn(async move {
             let mut reader = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = reader.next_line().await {
-                warn!(target: "ruvyxa::worker_stderr", "{}", line);
+                log_worker_stderr(&line);
             }
         });
 
@@ -1534,6 +1568,38 @@ fn find_worker_script(root: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_stderr_severity_comes_from_the_tag() {
+        assert_eq!(
+            parse_worker_stderr_tag("[ruvyxa:debug] worker shutting down (stdin-close)"),
+            Some(("debug", "worker shutting down (stdin-close)"))
+        );
+        assert_eq!(
+            parse_worker_stderr_tag("[ruvyxa:error] render failed"),
+            Some(("error", "render failed"))
+        );
+    }
+
+    #[test]
+    fn untagged_and_malformed_worker_stderr_stays_a_warning() {
+        // A thrown stack trace has no tag and must not be quieted.
+        assert_eq!(
+            parse_worker_stderr_tag("TypeError: x is not a function"),
+            None
+        );
+        assert_eq!(parse_worker_stderr_tag("[ruvyxa] not a level"), None);
+        // A tag this side does not know falls through to the `_` arm, which
+        // logs the whole line rather than unwrapping it at an assumed level.
+        assert_eq!(
+            parse_worker_stderr_tag("[ruvyxa:trace] noisy"),
+            Some(("trace", "noisy"))
+        );
+        assert!(!matches!(
+            parse_worker_stderr_tag("[ruvyxa:trace] noisy"),
+            Some(("debug" | "info" | "warn" | "error", _))
+        ));
+    }
 
     /// Build a worker backed by a plain channel instead of a real process, so
     /// queueing behavior can be asserted without spawning Node.

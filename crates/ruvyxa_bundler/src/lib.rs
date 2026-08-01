@@ -256,7 +256,7 @@ pub fn bundle_shared_prepared_route_modules(
                 path.display()
             )));
         };
-        for dependency in &module.deps {
+        for dependency in module.deps.iter() {
             if available.contains_key(dependency) && !visited.contains(dependency) {
                 queue.push_back(dependency.clone());
             }

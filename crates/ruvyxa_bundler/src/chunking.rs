@@ -3,7 +3,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use crate::ast::{self, ImportKind};
+use rayon::prelude::*;
+
+use crate::ast::ImportKind;
 use crate::compiler::CompiledModule;
 use crate::{
     BundleInput, DynamicImportChunk, OutputChunk, OutputChunkKind, Result, linker, minifier,
@@ -28,8 +30,14 @@ pub(crate) fn plan_dynamic_chunk_files(
     // static closures overlap would execute a shared module once in each output file.  Keep every
     // overlapping root in the entry instead; this preserves evaluation semantics until a shared
     // chunk runtime exists.
+    //
+    // Each root's closure is an independent walk of a shared read-only map, and
+    // the pairwise disjointness test below is quadratic in the number of roots,
+    // so both scale with how many `import()` sites the app has. Rayon splits
+    // them; the result is collected into a `BTreeSet`, so ordering stays
+    // deterministic regardless of completion order.
     let closures = dynamic_roots
-        .iter()
+        .par_iter()
         .map(|root| {
             let mut closure = BTreeSet::new();
             collect_static_transitive_modules(root, &module_map, &mut closure);
@@ -39,7 +47,7 @@ pub(crate) fn plan_dynamic_chunk_files(
     // A root is split only when its closure is disjoint from the entry and every other dynamic
     // closure. Roots with any overlap are linked into the entry by `entry_modules` below.
     let split_roots = closures
-        .iter()
+        .par_iter()
         .filter(|(root, closure)| {
             closure.is_disjoint(&entry_modules)
                 && closures.iter().all(|(other_root, other_closure)| {
@@ -143,9 +151,8 @@ pub(crate) fn dynamic_import_chunks(
 ) -> Vec<DynamicImportChunk> {
     let mut dynamic_imports = Vec::new();
     for module in compiled.iter().filter(|module| !module.is_external) {
-        let ast = ast::parse_module(&module.js);
         let deps = linker::DepIndex::new(&module.deps, &module.dependency_aliases);
-        for specifier in ast.dynamic_import_specifiers() {
+        for specifier in module.ast.dynamic_import_specifiers() {
             if let Some(dep) = deps.resolve(&specifier)
                 && let Some(file) = dynamic_import_files.get(dep)
             {
@@ -174,9 +181,8 @@ fn dynamic_roots(
 ) -> BTreeSet<PathBuf> {
     let mut roots = BTreeSet::new();
     for module in compiled.iter().filter(|module| !module.is_external) {
-        let ast = ast::parse_module(&module.js);
         let deps = linker::DepIndex::new(&module.deps, &module.dependency_aliases);
-        for specifier in ast.dynamic_import_specifiers() {
+        for specifier in module.ast.dynamic_import_specifiers() {
             if let Some(dep) = deps.resolve(&specifier)
                 && module_map.contains_key(dep)
             {
@@ -200,9 +206,9 @@ fn collect_static_transitive_modules(
         return;
     };
 
-    let ast = ast::parse_module(&module.js);
     let deps = linker::DepIndex::new(&module.deps, &module.dependency_aliases);
-    for edge in ast
+    for edge in module
+        .ast
         .imports
         .iter()
         .filter(|edge| edge.kind != ImportKind::Dynamic)

@@ -191,14 +191,32 @@ function releaseRequestSlot() {
   if (next) next()
 }
 
+/**
+ * Write a stderr line tagged with the severity this worker intends.
+ *
+ * stdout belongs to the NDJSON response protocol, so stderr carries everything
+ * else — routine lifecycle notices alongside genuine failures. The host cannot
+ * tell those apart from the text and used to log the whole channel as warnings.
+ * Only the side that knows *why* it is writing can classify the line, so the
+ * tag carries that decision across the pipe. Untagged output (a thrown stack,
+ * an unhandled rejection) is still treated as a warning on the far side.
+ *
+ * Parsed by `parse_worker_stderr_tag` in `crates/ruvyxa_dev_server/src/worker_pool.rs`.
+ */
+function note(level, message) {
+  process.stderr.write(`[ruvyxa:${level}] ${message}\n`)
+}
+
 // --- Graceful Shutdown ---
 function shutdown(reason = 'unknown') {
   if (isShuttingDown) return
   isShuttingDown = true
   // The reason was previously discarded — `shutdown` took no parameter while
   // every caller passed one — which made a signal indistinguishable from a
-  // closed stdin in the logs.
-  process.stderr.write(`ruvyxa worker shutting down (${reason})\n`)
+  // closed stdin in the logs. It is `debug` because reaching here is the
+  // normal end of a worker's life: the host closes stdin once a build or dev
+  // session is done.
+  note('debug', `worker shutting down (${reason})`)
   // Queued requests will never run: nothing new is admitted once shutting down,
   // and their callers are already accounted for by the Rust side's timeout.
   admissionQueue.length = 0

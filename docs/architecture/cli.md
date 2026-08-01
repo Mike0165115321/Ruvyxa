@@ -1,8 +1,29 @@
 # CLI Architecture
 
 **Crate**: `ruvyxa_cli`  
-**Source**: `crates/ruvyxa_cli/src/main.rs` (~7500 lines, 4 sibling modules: `image_optimizer`,
-`image_usage`, `site_discovery`)
+**Source**: `crates/ruvyxa_cli/src/`
+
+`main.rs` holds only the clap command surface and `main`'s dispatch. Everything a command does lives
+in a sibling module, and the modules reach each other through crate-root re-exports:
+
+| Module                                             | Owns                                                                             |
+| -------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `build`                                            | the `build` command's pipeline, stage by stage                                   |
+| `build_output`                                     | staging directory, atomic commit, Windows rename retry                           |
+| `client_bundle`                                    | per-route browser bundles and the shared chunk                                   |
+| `prerender`                                        | static HTML generation, job planning, path safety                                |
+| `artifact_cache`                                   | content-addressed caching of every build artifact                                |
+| `plugins`                                          | the TypeScript build-plugin worker bridge                                        |
+| `config`                                           | `ruvyxa.config.*` loading and validation                                         |
+| `runtime_config`                                   | args + config → `ServerConfig`, adapter and runtime selection                    |
+| `cli_args`                                         | argument spelling normalization, plugin scaffolding                              |
+| `commands`                                         | `routes`, `analyze`, `check`, `doctor`, `clean`, `trace`, `bench`, `test:parity` |
+| `environment`                                      | toolchain and dependency probing for `doctor`                                    |
+| `ui`                                               | progress bars, tables, colouring, byte/duration formatting                       |
+| `image_optimizer`, `image_usage`, `site_discovery` | asset and discovery-file generation                                              |
+
+The split is by responsibility, not by size. A command that needs more than dispatch belongs beside
+the other logic of its kind rather than in `main.rs`.
 
 ## Entry Point
 

@@ -1,0 +1,639 @@
+//! The `build` command: the full production build pipeline.
+//!
+//! One build runs, in order: config load, route discovery, server bundle,
+//! client bundles, static prerendering, asset optimization, and manifest
+//! emission. Each stage is timed and reported, and every stage that can be
+//! skipped by an unchanged input is.
+//!
+//! Output never lands in place incrementally. The whole build renders into a
+//! staging directory and is committed at the end (see [`crate::build_output`]),
+//! so a failed or interrupted build leaves the previous `dist/` intact rather
+//! than a half-written one that `start` would serve.
+
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+use std::time::{Duration, Instant};
+
+use anyhow::Context;
+use ruvyxa_graph::{RenderStrategy, RouteManifest, validate_app, write_manifest};
+use tracing::{info, warn};
+
+use crate::*;
+
+pub(crate) async fn build(args: BuildArgs) -> anyhow::Result<()> {
+    build_with_output(args, true).await
+}
+
+pub(crate) struct PreparedBuildAssets {
+    pub(crate) styles: ruvyxa_dev_server::StyleCollection,
+    pub(crate) images: ImageOptimizationReport,
+    pub(crate) asset_files: usize,
+    pub(crate) duration: Duration,
+}
+
+/// Owns an in-progress staging tree so every pre-commit error path cleans it.
+///
+/// A successful commit moves the named outputs and removes the now-empty tree;
+/// the existence check keeps the guard a no-op on that path.
+pub(crate) struct BuildStagingCleanup {
+    pub(crate) path: PathBuf,
+}
+
+impl BuildStagingCleanup {
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+}
+
+impl Drop for BuildStagingCleanup {
+    fn drop(&mut self) {
+        if self.path.exists()
+            && let Err(error) = fs::remove_dir_all(&self.path)
+        {
+            warn!(
+                path = %self.path.display(),
+                %error,
+                "failed to clean incomplete build staging directory"
+            );
+        }
+    }
+}
+
+pub(crate) fn prepare_build_assets(
+    root: &Path,
+    app_dir: &Path,
+    server_dir: &Path,
+    assets_dir: &Path,
+    style_entries: &[PathBuf],
+    image_cache_dir: &Path,
+    image_options: &ImageOptimizationOptions,
+) -> anyhow::Result<PreparedBuildAssets> {
+    let started = Instant::now();
+    let (styles, images) = std::thread::scope(|scope| -> anyhow::Result<_> {
+        let styles =
+            scope.spawn(|| ruvyxa_dev_server::collect_styles(root, app_dir, style_entries));
+        let app_copy = scope.spawn(|| copy_dir_all(app_dir, &server_dir.join("app")));
+        let components_copy = scope
+            .spawn(|| copy_optional_dir(&root.join("components"), &server_dir.join("components")));
+        let server_copy =
+            scope.spawn(|| copy_optional_dir(&root.join("server"), &server_dir.join("server")));
+        let images = scope.spawn(|| {
+            optimize_public_images(
+                &root.join("public"),
+                assets_dir,
+                image_cache_dir,
+                image_options,
+            )
+        });
+
+        // Join in the original phase order so simultaneous failures remain
+        // deterministic even though the independent work runs concurrently.
+        let styles = styles
+            .join()
+            .map_err(|_| anyhow::anyhow!("style collection worker panicked"))??;
+        app_copy
+            .join()
+            .map_err(|_| anyhow::anyhow!("application copy worker panicked"))??;
+        components_copy
+            .join()
+            .map_err(|_| anyhow::anyhow!("component copy worker panicked"))??;
+        server_copy
+            .join()
+            .map_err(|_| anyhow::anyhow!("server copy worker panicked"))??;
+        let images = images
+            .join()
+            .map_err(|_| anyhow::anyhow!("image optimization worker panicked"))??;
+        Ok((styles, images))
+    })?;
+
+    // Style sources can overlap app/components destinations, so copy them only
+    // after the directory workers finish instead of racing writes to one file.
+    copy_style_sources(root, server_dir, &styles.files)?;
+    let asset_files = count_files(assets_dir);
+
+    Ok(PreparedBuildAssets {
+        styles,
+        images,
+        asset_files,
+        duration: started.elapsed(),
+    })
+}
+
+pub(crate) async fn build_with_output(args: BuildArgs, show_summary: bool) -> anyhow::Result<()> {
+    let started = Instant::now();
+    let config = load_project_config(&args.root)?;
+    let target = config.build_target(args.target);
+    let app_dir = args.root.join(config.app_dir());
+    let out_dir = args.root.join(config.out_dir());
+
+    if show_summary {
+        print_tui_header("Build");
+        print_field("target", accent(format!("{:?}", target).to_lowercase()));
+        print_field("profile", accent("production"));
+        print_field("root", path_text(&args.root));
+        print_field("app dir", path_text(&app_dir));
+        print_field("out dir", path_text(&out_dir));
+        println!();
+    }
+
+    let phase_started = Instant::now();
+    let manifest = discover_project_routes(&args.root, &config)?;
+    let route_discovery_duration = phase_started.elapsed();
+    if show_summary {
+        print_build_phase(
+            "routes discovered",
+            format!("{} routes", manifest.routes.len()),
+            route_discovery_duration,
+        );
+    }
+    let phase_started = Instant::now();
+    let validation = validate_app(&args.root, &manifest)?;
+    fail_on_diagnostics(&validation.diagnostics)?;
+    let validation_duration = phase_started.elapsed();
+    if show_summary {
+        print_build_phase("validated", "ok".to_string(), validation_duration);
+    }
+    let plugin_session = TypeScriptPluginBuildSession::new(
+        &args.root,
+        &config.plugins,
+        config.javascript_runtime(),
+    )?;
+    plugin_session.run_start(&out_dir)?;
+    let staging_dir = create_build_staging_dir(&out_dir).with_context(|| {
+        format!(
+            "failed to create build staging dir in {}",
+            out_dir.display()
+        )
+    })?;
+    let _staging_cleanup = BuildStagingCleanup::new(staging_dir.clone());
+    let server_dir = staging_dir.join("server");
+    let client_dir = staging_dir.join("client");
+    let assets_dir = staging_dir.join("assets");
+    let image_cache_dir = build_cache_dir(&args.root, &config.cache).join("images");
+    let style_entries = config.style_entries(&args.root);
+    fs::create_dir_all(&client_dir)?;
+    write_manifest(&manifest, &staging_dir.join("manifest.json"))?;
+
+    // Asset preparation and client bundling both read the immutable project
+    // snapshot but write disjoint staging trees. Overlap them, then reduce
+    // results in the historical phase order so errors and output stay stable.
+    let ((prepared_assets, client_manifest), client_bundle_duration) =
+        std::thread::scope(|scope| -> anyhow::Result<_> {
+            let preparation = scope.spawn(|| {
+                prepare_build_assets(
+                    &args.root,
+                    &app_dir,
+                    &server_dir,
+                    &assets_dir,
+                    &style_entries,
+                    &image_cache_dir,
+                    &config.images,
+                )
+            });
+            let bundle_started = Instant::now();
+            let client_manifest = emit_client_bundles_with_session(
+                &args.root,
+                &app_dir,
+                &manifest,
+                &client_dir,
+                &config.build,
+                &config.plugins,
+                RuvyxaBuildCache {
+                    dependency_hash: &config.config_dependency_hash,
+                    directory: &build_cache_dir(&args.root, &config.cache),
+                },
+                &plugin_session,
+            );
+            let client_bundle_duration = bundle_started.elapsed();
+            let prepared_assets = preparation
+                .join()
+                .map_err(|_| anyhow::anyhow!("asset preparation worker panicked"))??;
+            Ok(((prepared_assets, client_manifest?), client_bundle_duration))
+        })?;
+    let PreparedBuildAssets {
+        styles: style_collection,
+        images: image_report,
+        asset_files,
+        duration: preparation_duration,
+    } = prepared_assets;
+
+    // The optimizer converted these images; a raw `<img>` still ships the
+    // original bytes, so the build's work is silently unused.
+    let bypassed_images = scan_raw_image_usage(&app_dir, &image_report.entries);
+    for usage in bypassed_images.iter().take(5) {
+        warn!(
+            "{}:{} <img src=\"{}\"> ships {} instead of the generated WebP ({}). Use <Image> from @ruvyxa/react to serve the optimized file.",
+            usage.file.display(),
+            usage.line,
+            usage.url,
+            format_bytes(usage.source_bytes as usize),
+            format_bytes(usage.webp_bytes as usize),
+        );
+    }
+    if bypassed_images.len() > 5 {
+        warn!(
+            "{} more raw <img> references bypass the image pipeline.",
+            bypassed_images.len() - 5
+        );
+    }
+
+    if show_summary {
+        let mut detail = format!("{asset_files} files");
+        if image_report.optimized_images > 0 {
+            detail.push_str(&format!(
+                " · {} optimized image{}",
+                image_report.optimized_images,
+                if image_report.optimized_images == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            ));
+        }
+        print_build_phase("assets prepared", detail, preparation_duration);
+    }
+
+    // The client manifest is machine-read (the server resolves per-route scripts
+    // and preloads from it) and never hand-edited, so emit compact JSON: it is
+    // part of the deployed artifact and is parsed on the render path.
+    fs::write(
+        client_dir.join("manifest.json"),
+        serde_json::to_string(&client_manifest)?,
+    )?;
+    let client_bundles = client_manifest
+        .get("routes")
+        .and_then(|routes| routes.as_array())
+        .map(Vec::len)
+        .unwrap_or_default();
+    if show_summary {
+        print_build_phase(
+            "client bundles",
+            format!("{client_bundles} bundles"),
+            client_bundle_duration,
+        );
+    }
+
+    // ─── SSG / ISR / PPR pre-rendering at build time ──────────────────────────
+    let prerender_dir = staging_dir.join("prerender");
+    let phase_started = Instant::now();
+    let prerendered = prerender_static_routes(
+        &args.root,
+        &app_dir,
+        &manifest,
+        &prerender_dir,
+        &client_dir,
+        &style_collection.css,
+        &config.build,
+        RuvyxaBuildCache {
+            dependency_hash: &config.config_dependency_hash,
+            directory: &build_cache_dir(&args.root, &config.cache),
+        },
+        config.javascript_runtime(),
+        show_summary,
+    )
+    .await?;
+    let prerender_duration = phase_started.elapsed();
+    if show_summary && !prerendered.is_empty() {
+        print_build_phase(
+            "prerendered",
+            format!(
+                "{} page{}",
+                prerendered.len(),
+                if prerendered.len() == 1 { "" } else { "s" }
+            ),
+            prerender_duration,
+        );
+    }
+
+    // Discovery files are written after prerendering: a dynamic route has no
+    // URL until the build produces one, and `public/` has already been staged,
+    // so a file the project ships still wins.
+    let prerendered_paths: Vec<String> =
+        prerendered.iter().map(|route| route.path.clone()).collect();
+    let site_url = resolve_site_url(config.site.url.as_deref(), |name| std::env::var(name).ok())
+        .map_err(anyhow::Error::msg)?;
+    let discovery = write_discovery_files(
+        &manifest,
+        &prerendered_paths,
+        &assets_dir,
+        site_url.as_deref(),
+        &config.site,
+    )
+    .with_context(|| {
+        format!(
+            "failed to write discovery files into {}",
+            assets_dir.display()
+        )
+    })?;
+    if discovery.sitemap_needs_site_url {
+        warn!(
+            "no production site URL is configured, so sitemap.xml was not generated. Set `site.url`, RUVYXA_SITE_URL, or a supported production host URL environment variable."
+        );
+    }
+
+    // Zero-config deploys: pick the adapter from the hosting platform's build
+    // environment when neither ruvyxa.config nor --adapter selected one.
+    let detected_adapter = if args.adapter.is_none() && config.adapter.is_none() {
+        detect_platform_adapter(|key| std::env::var(key).ok())
+    } else {
+        None
+    };
+    if let Some((name, source)) = &detected_adapter {
+        info!(adapter = %name, source = %source, "auto-detected deploy adapter");
+    }
+
+    let mut build_info = serde_json::json!({
+        "framework": "Ruvyxa",
+        "version": env!("CARGO_PKG_VERSION"),
+        "target": format!("{:?}", target).to_lowercase(),
+        "profile": "production",
+        "createdAtUnix": SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or_default(),
+        "routes": manifest.routes.len(),
+        "serverDir": "server",
+        "clientDir": "client",
+        "assetsDir": "assets",
+        "adapter": args
+            .adapter
+            .as_deref()
+            .map(|name| serde_json::json!(name))
+            .or_else(|| config.adapter.clone())
+            .or_else(|| detected_adapter
+                .as_ref()
+                .map(|(name, _)| serde_json::json!(name))),
+        "adapterOptions": config.adapter_options.clone(),
+        "images": image_report,
+        "hashAlgorithm": ASSET_HASH_ALGORITHM,
+        "security": {
+            "actionLimit": config.security.action_body_limit_bytes.unwrap_or(1024 * 1024),
+            "apiLimit": config.security.api_body_limit_bytes.unwrap_or(10 * 1024 * 1024),
+            "pluginLimit": config.security.plugin_response_body_limit_bytes.unwrap_or(32 * 1024 * 1024),
+            "actionRateLimit": {
+                "max": config.security.action_rate_limit.as_ref().and_then(|value| value.max).unwrap_or(600),
+                "window": config.security.action_rate_limit.as_ref().and_then(|value| value.window).unwrap_or(60)
+            },
+            "sameOrigin": config.security.same_origin_actions.unwrap_or(true),
+            "fetchMeta": config.security.fetch_metadata_actions.unwrap_or(true),
+            "trustedProxyIps": config.security.trusted_proxy_ips,
+            "headers": config.security.security_headers.unwrap_or(true)
+        },
+        "build": {
+            "minify": config.build.minify.unwrap_or(true),
+            "map": config.build.sourcemap.unwrap_or(false),
+            "treeShake": config.build.tree_shaking.unwrap_or(true),
+            "split": config.build.split_strategy.as_deref().unwrap_or("route"),
+            "jsx": config.build.jsx_runtime.as_deref().unwrap_or("automatic"),
+            "target": config.build.es_target.as_deref().unwrap_or("es2022"),
+            "manifest": config.build.emit_chunk_manifest.unwrap_or(false),
+            "warm": config.build.prebundle_dependencies.unwrap_or(true),
+            "prerenderCache": config.build.prerender_cache.unwrap_or(true),
+            "workers": client_manifest.get("parallelism").cloned().unwrap_or(serde_json::Value::Null)
+        },
+        "render": {
+            "prerendered": prerendered.len(),
+            "routes": prerendered.iter().map(|p| serde_json::json!({
+                "path": p.path,
+                "strategy": format!("{:?}", p.strategy).to_lowercase(),
+                "revalidate": p.revalidate,
+                "cacheHit": p.artifact_cache_hit,
+            })).collect::<Vec<_>>()
+        },
+        "timing": {
+            "routeDiscoveryMs": duration_ms(route_discovery_duration),
+            "validationMs": duration_ms(validation_duration),
+            "preparationMs": duration_ms(preparation_duration),
+            "clientBundleMs": duration_ms(client_bundle_duration),
+            "prerenderMs": duration_ms(prerender_duration)
+        }
+    });
+    fs::write(
+        staging_dir.join("build.json"),
+        serde_json::to_string_pretty(&build_info)?,
+    )?;
+
+    // The commit path retries renames with blocking backoff sleeps on
+    // Windows; run it off the async runtime so a locked file can't stall
+    // other tasks sharing the worker thread.
+    let commit_staging = staging_dir.clone();
+    let commit_out = out_dir.clone();
+    tokio::task::spawn_blocking(move || commit_staged_build_outputs(&commit_staging, &commit_out))
+        .await
+        .context("build output commit task panicked")?
+        .with_context(|| format!("failed to commit build output into {}", out_dir.display()))?;
+    plugin_session.run_complete(&out_dir, &build_info)?;
+    // Adapters must snapshot the committed output after build-complete hooks:
+    // first-party and application plugins can add public artifacts such as a
+    // sitemap or service worker that must be present in static deploy output.
+    if config.adapter.is_some() || args.adapter.is_some() || detected_adapter.is_some() {
+        let phase_started = Instant::now();
+        let named_adapter = args
+            .adapter
+            .as_deref()
+            .or_else(|| detected_adapter.as_ref().map(|(name, _)| name.as_str()));
+        let artifacts = run_adapter_runner(
+            &args.root,
+            &out_dir,
+            config.javascript_runtime(),
+            named_adapter,
+        )?;
+        if show_summary {
+            let detail = match (&args.adapter, &detected_adapter) {
+                (Some(name), _) => name.clone(),
+                (None, Some((name, source))) => format!("{name} (auto via {source})"),
+                (None, None) => format!("{} artifact(s)", artifacts.len()),
+            };
+            print_build_phase("adapter", detail, phase_started.elapsed());
+        }
+        build_info["adapterArtifacts"] = serde_json::to_value(artifacts)?;
+    }
+    build_info["timing"]["totalMs"] = serde_json::json!(duration_ms(started.elapsed()));
+    fs::write(
+        out_dir.join("build.json"),
+        serde_json::to_string_pretty(&build_info)?,
+    )?;
+
+    info!(
+        target = ?target,
+        routes = manifest.routes.len(),
+        output = %out_dir.display(),
+        "build complete"
+    );
+    if show_summary {
+        println!();
+        print_route_size_table(&manifest, &client_manifest);
+        println!(
+            "  {} Built into {} in {}\n",
+            success(),
+            path_text(&out_dir),
+            accent(format_duration(started.elapsed()))
+        );
+    }
+    Ok(())
+}
+
+pub(crate) fn print_build_phase(name: &str, detail: String, duration: Duration) {
+    println!(
+        "  {} {}{} {} {}",
+        dim("◌"),
+        label(name),
+        spaces(18, name.len()),
+        accent(detail),
+        dim(format!("· {}", format_duration(duration)))
+    );
+}
+
+/// Per-route bundle size table shown after a successful build.
+pub(crate) fn print_route_size_table(
+    manifest: &RouteManifest,
+    client_manifest: &serde_json::Value,
+) {
+    let page_routes = manifest
+        .routes
+        .iter()
+        .filter(|route| route.kind == ruvyxa_graph::RouteKind::Page)
+        .collect::<Vec<_>>();
+    if page_routes.is_empty() {
+        return;
+    }
+    let client_routes = client_manifest
+        .get("routes")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let shared_chunks = client_manifest
+        .get("sharedRouteChunks")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+
+    let route_width = page_routes
+        .iter()
+        .map(|route| route.path.len())
+        .max()
+        .unwrap_or(0)
+        .max("shared by all".len())
+        .max(24);
+    println!(
+        "      {}{} {}{} {}",
+        label("route"),
+        spaces(route_width, "route".len()),
+        label("size"),
+        spaces(9, "size".len()),
+        label("first load")
+    );
+    for (index, route) in page_routes.iter().enumerate() {
+        let client_route = client_routes.iter().find(|entry| {
+            entry.get("path").and_then(serde_json::Value::as_str) == Some(route.path.as_str())
+        });
+        let route_bytes = client_route.map(manifest_entry_bytes).unwrap_or_default();
+        let first_load = client_route.map(first_load_bytes).unwrap_or_default();
+        let branch = if index + 1 == page_routes.len() && shared_chunks.is_empty() {
+            "└"
+        } else {
+            "├"
+        };
+        let size = format_bytes(route_bytes);
+        println!(
+            "  {} {} {}{} {}{} {}",
+            dim(branch),
+            styled_render_symbol(route.render.strategy),
+            route.path,
+            spaces(route_width, route.path.len()),
+            size,
+            spaces(9, size.len()),
+            accent(format_bytes(first_load))
+        );
+    }
+    let shared_bytes = shared_chunks
+        .iter()
+        .map(manifest_entry_bytes)
+        .sum::<usize>();
+    if shared_bytes > 0 {
+        println!(
+            "  {}   shared by all{}{}",
+            dim("└"),
+            spaces(route_width + 11, "shared by all".len()),
+            accent(format_bytes(shared_bytes))
+        );
+    }
+    println!("  {}", dim("○ csr · ● static · ◐ isr/ppr · ƒ dynamic"));
+    println!();
+}
+
+pub(crate) fn styled_render_symbol(strategy: RenderStrategy) -> String {
+    match strategy {
+        RenderStrategy::Csr => dim("○"),
+        RenderStrategy::Ssg => ok_text("●"),
+        RenderStrategy::Isr | RenderStrategy::Ppr => warn_text("◐"),
+        RenderStrategy::Ssr => accent("ƒ"),
+    }
+}
+
+pub(crate) fn styled_strategy_word(strategy: RenderStrategy) -> String {
+    match strategy {
+        RenderStrategy::Csr => dim("csr"),
+        RenderStrategy::Ssg => ok_text("ssg"),
+        RenderStrategy::Isr => warn_text("isr"),
+        RenderStrategy::Ppr => warn_text("ppr"),
+        RenderStrategy::Ssr => accent("ssr"),
+    }
+}
+
+pub(crate) fn manifest_entry_bytes(entry: &serde_json::Value) -> usize {
+    entry
+        .get("bytes")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|bytes| usize::try_from(bytes).ok())
+        .unwrap_or_default()
+}
+
+pub(crate) fn first_load_bytes(entry: &serde_json::Value) -> usize {
+    let mut files = BTreeSet::new();
+    let mut total = 0;
+    add_manifest_entry_bytes(entry, &mut files, &mut total);
+    for section in ["chunks", "sharedChunks"] {
+        for chunk in entry
+            .get(section)
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            add_manifest_entry_bytes(chunk, &mut files, &mut total);
+        }
+    }
+    total
+}
+
+pub(crate) fn add_manifest_entry_bytes(
+    entry: &serde_json::Value,
+    files: &mut BTreeSet<String>,
+    total: &mut usize,
+) {
+    let should_count = entry
+        .get("file")
+        .and_then(serde_json::Value::as_str)
+        .map(|file| files.insert(file.to_string()))
+        .unwrap_or(true);
+    if should_count {
+        *total += manifest_entry_bytes(entry);
+    }
+}
+
+// `deploy` and `static` hold adapter artifacts (see artifactDestination in
+// adapter-runner.mjs); omitting them here would silently drop adapter output
+// when the staged build is committed.
+pub(crate) const BUILD_OUTPUT_DIRS: [&str; 6] = [
+    "server",
+    "client",
+    "assets",
+    "prerender",
+    "deploy",
+    "static",
+];
+pub(crate) const BUILD_OUTPUT_FILES: [&str; 2] = ["manifest.json", "build.json"];
+// Default cap balances Node process memory against prerender throughput; an
+// explicit `build.parallelism` config value may raise it up to the pool limit.

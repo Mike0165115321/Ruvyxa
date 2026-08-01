@@ -617,55 +617,18 @@ fn resolve_relative_import(from: &Path, specifier: &str) -> Option<PathBuf> {
         .map(|candidate| normalized_canonical_path(&candidate))
 }
 
+/// Statically-known `process.env` reads that must not reach the browser.
+///
+/// The reads come from the bundler's scanner, so `check` and `build` cannot
+/// disagree about which env vars a module touches. This used to be a private
+/// marker search over a privately-masked copy of the source: a second answer to
+/// the same question, kept in step with the bundler only by hand.
 fn private_env_reads(source: &str) -> Vec<String> {
-    let code = code_without_strings_and_comments(source);
-    let mut names = Vec::new();
-    let marker = "process.env";
-    let mut offset = 0;
-
-    while let Some(index) = code[offset..].find(marker) {
-        let start = offset + index + marker.len();
-        let rest = &code[start..];
-        let trimmed = rest.trim_start_matches(char::is_whitespace);
-        let name = if let Some(rest) = trimmed.strip_prefix('.') {
-            rest.chars()
-                .take_while(|character| character.is_ascii_alphanumeric() || *character == '_')
-                .collect()
-        } else if let Some(bracket_offset) = rest.find('[') {
-            let before_bracket = &rest[..bracket_offset];
-            if before_bracket.chars().all(char::is_whitespace) {
-                literal_env_name(&source[start + bracket_offset..]).unwrap_or_default()
-            } else {
-                String::new()
-            }
-        } else {
-            String::new()
-        };
-
-        if !name.is_empty() && !name.starts_with("RUVYXA_PUBLIC_") {
-            names.push(name);
-        }
-        offset = start;
-    }
-
-    names
-}
-
-fn literal_env_name(source: &str) -> Option<String> {
-    let source = source.strip_prefix('[')?.trim_start();
-    let quote = source.chars().next()?;
-    if quote != '\'' && quote != '"' {
-        return None;
-    }
-    let rest = &source[quote.len_utf8()..];
-    let end = rest.find(quote)?;
-    let name = &rest[..end];
-    rest[end + quote.len_utf8()..]
-        .trim_start()
-        .strip_prefix(']')?;
-    name.chars()
-        .all(|character| character.is_ascii_alphanumeric() || character == '_')
-        .then(|| name.to_string())
+    ruvyxa_bundler::ast::parse_module(source)
+        .env_reads
+        .into_iter()
+        .filter(|name| !name.starts_with("RUVYXA_PUBLIC_"))
+        .collect()
 }
 
 fn relative_starts_with_server(relative: &Path) -> bool {
@@ -675,312 +638,20 @@ fn relative_starts_with_server(relative: &Path) -> bool {
         .is_some_and(|component| component.as_os_str() == "server")
 }
 
+/// Blank out strings, template text, comments, and regular-expression literals.
+///
+/// Rendering-strategy detection matches on code *text* — `export const
+/// revalidate`, `fetch(`, `process.env.` — so it needs masked source rather than
+/// structured facts, and byte offsets and line breaks are preserved for it.
+///
+/// The masking is the bundler's, which is the point. This file used to carry a
+/// character-wise lexer of its own: a duplicate `regex_can_start`, a duplicate
+/// template-literal walk, a duplicate comment skipper. A bug in that copy read
+/// `/['"]/` as a division followed by an unterminated string and blanked
+/// everything after it, silently disabling RUV1007/RUV1008/RUV1010 for the
+/// module. One scanner cannot drift from itself.
 fn code_without_strings_and_comments(source: &str) -> String {
-    let mut output = String::with_capacity(source.len());
-    let mut chars = source.char_indices().peekable();
-
-    while let Some((_, character)) = chars.next() {
-        match character {
-            '"' | '\'' => {
-                output.push(' ');
-                skip_quoted_string(character, &mut chars, &mut output);
-            }
-            '`' => {
-                output.push(' ');
-                skip_template_literal(&mut chars, &mut output, false);
-            }
-            '/' if chars.peek().is_some_and(|(_, next)| *next == '/') => {
-                output.push(' ');
-                chars.next();
-                output.push(' ');
-                skip_line_comment(&mut chars, &mut output);
-            }
-            '/' if chars.peek().is_some_and(|(_, next)| *next == '*') => {
-                output.push(' ');
-                chars.next();
-                output.push(' ');
-                skip_block_comment(&mut chars, &mut output);
-            }
-            '/' if regex_can_start(&output) => {
-                output.push(' ');
-                skip_regex_literal(&mut chars, &mut output);
-            }
-            _ => output.push(character),
-        }
-    }
-
-    output
-}
-
-/// Decide whether the `/` about to be consumed opens a regular expression.
-///
-/// `output` holds the code produced so far, so its last non-space character is
-/// the previous token. A regex may only start where a value is expected; after
-/// an identifier, number, or closing bracket the slash is a division operator.
-///
-/// Without this, a regex such as `/['"]/` is read as a division followed by an
-/// unterminated string, and every later `import` and `process.env` read in the
-/// file is blanked out — silently disabling the RUV1007/RUV1008/RUV1010
-/// boundary rules for that module.
-fn regex_can_start(output: &str) -> bool {
-    let trimmed = output.trim_end();
-    let Some(previous) = trimmed.chars().next_back() else {
-        return true;
-    };
-    match previous {
-        ')' | ']' | '}' => false,
-        character if is_identifier_char(character) => {
-            let word_start = trimmed
-                .rfind(|character| !is_identifier_char(character))
-                .map(|index| index + trimmed[index..].chars().next().map_or(1, char::len_utf8))
-                .unwrap_or(0);
-            matches!(
-                &trimmed[word_start..],
-                "await"
-                    | "case"
-                    | "delete"
-                    | "do"
-                    | "else"
-                    | "in"
-                    | "instanceof"
-                    | "new"
-                    | "of"
-                    | "return"
-                    | "throw"
-                    | "typeof"
-                    | "void"
-                    | "yield"
-            )
-        }
-        _ => true,
-    }
-}
-
-fn is_identifier_char(character: char) -> bool {
-    character.is_alphanumeric() || character == '_' || character == '$'
-}
-
-/// Consume a regular expression literal, replacing it with spaces.
-fn skip_regex_literal(
-    chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
-    output: &mut String,
-) {
-    let mut inside_character_class = false;
-    let mut escaped = false;
-
-    for (_, character) in chars.by_ref() {
-        output.push(' ');
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match character {
-            '\\' => escaped = true,
-            '[' => inside_character_class = true,
-            ']' if inside_character_class => inside_character_class = false,
-            // An unterminated literal was a division after all; stop so the rest
-            // of the line keeps its original meaning.
-            '\n' => return,
-            '/' if !inside_character_class => break,
-            _ => {}
-        }
-    }
-
-    // Consume trailing flags so they cannot be mistaken for an identifier.
-    while chars
-        .peek()
-        .is_some_and(|(_, character)| is_identifier_char(*character))
-    {
-        chars.next();
-        output.push(' ');
-    }
-}
-
-fn should_preserve_import_string(output: &str) -> bool {
-    let trimmed = output.trim_end();
-    trimmed.ends_with(" from")
-        || trimmed.ends_with("import")
-        || trimmed.ends_with("import(")
-        || trimmed.ends_with("require(")
-}
-
-fn copy_quoted_string(
-    quote: char,
-    chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
-    output: &mut String,
-) {
-    let mut escaped = false;
-    for (_, character) in chars.by_ref() {
-        output.push(character);
-
-        if escaped {
-            escaped = false;
-            continue;
-        }
-
-        if character == '\\' {
-            escaped = true;
-            continue;
-        }
-
-        if character == quote {
-            break;
-        }
-    }
-}
-
-/// Blank out one source character while preserving byte offsets, so scanners
-/// that map positions in the stripped code back into the original source
-/// (e.g. `literal_env_name`) stay index-accurate even after multibyte text.
-fn push_blanked(output: &mut String, character: char) {
-    if character == '\n' {
-        output.push('\n');
-    } else {
-        for _ in 0..character.len_utf8() {
-            output.push(' ');
-        }
-    }
-}
-
-fn skip_quoted_string(
-    quote: char,
-    chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
-    output: &mut String,
-) {
-    let mut escaped = false;
-    for (_, character) in chars.by_ref() {
-        push_blanked(output, character);
-
-        if escaped {
-            escaped = false;
-            continue;
-        }
-
-        if character == '\\' {
-            escaped = true;
-            continue;
-        }
-
-        if character == quote {
-            break;
-        }
-    }
-}
-
-fn skip_template_literal(
-    chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
-    output: &mut String,
-    preserve_import_strings: bool,
-) {
-    let mut escaped = false;
-    while let Some((_, character)) = chars.next() {
-        if escaped {
-            escaped = false;
-            push_blanked(output, character);
-            continue;
-        }
-
-        match character {
-            '\\' => {
-                escaped = true;
-                output.push(' ');
-            }
-            '`' => {
-                output.push(' ');
-                return;
-            }
-            // `${...}` interpolations are live expressions, not string text.
-            // Blanking them would hide private env reads and server-only
-            // imports from the boundary scanners, so emit their code.
-            '$' if chars.peek().is_some_and(|(_, next)| *next == '{') => {
-                chars.next();
-                output.push(' ');
-                output.push(' ');
-                emit_template_interpolation(chars, output, preserve_import_strings);
-            }
-            _ => push_blanked(output, character),
-        }
-    }
-}
-
-/// Emit the code inside a `${...}` template interpolation, stripping nested
-/// strings, templates, and comments the same way as the top-level scan.
-fn emit_template_interpolation(
-    chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
-    output: &mut String,
-    preserve_import_strings: bool,
-) {
-    let mut depth = 1_usize;
-    while let Some((_, character)) = chars.next() {
-        match character {
-            '{' => {
-                depth += 1;
-                output.push('{');
-            }
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    output.push(' ');
-                    return;
-                }
-                output.push('}');
-            }
-            '"' | '\'' => {
-                if preserve_import_strings && should_preserve_import_string(output) {
-                    output.push(character);
-                    copy_quoted_string(character, chars, output);
-                } else {
-                    output.push(' ');
-                    skip_quoted_string(character, chars, output);
-                }
-            }
-            '`' => {
-                output.push(' ');
-                skip_template_literal(chars, output, preserve_import_strings);
-            }
-            '/' if chars.peek().is_some_and(|(_, next)| *next == '/') => {
-                output.push(' ');
-                chars.next();
-                output.push(' ');
-                skip_line_comment(chars, output);
-            }
-            '/' if chars.peek().is_some_and(|(_, next)| *next == '*') => {
-                output.push(' ');
-                chars.next();
-                output.push(' ');
-                skip_block_comment(chars, output);
-            }
-            _ => output.push(character),
-        }
-    }
-}
-
-fn skip_line_comment(
-    chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
-    output: &mut String,
-) {
-    for (_, character) in chars.by_ref() {
-        if character == '\n' {
-            output.push('\n');
-            break;
-        }
-        push_blanked(output, character);
-    }
-}
-
-fn skip_block_comment(
-    chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
-    output: &mut String,
-) {
-    let mut previous = '\0';
-    for (_, character) in chars.by_ref() {
-        push_blanked(output, character);
-
-        if previous == '*' && character == '/' {
-            break;
-        }
-        previous = character;
-    }
+    ruvyxa_bundler::ast::masked_code(source)
 }
 
 fn route_path_from_dir(relative_dir: &Path) -> Result<String> {

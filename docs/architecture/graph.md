@@ -189,9 +189,12 @@ const MARKERS: &[&str] = &[
 ];
 ```
 
-The scanner strips strings, comments, and regex literals before checking for these markers. It also
-expands the reachable dependency graph (including layouts) to determine whether any imported module
-introduces dynamic behavior.
+Markers are matched against `ruvyxa_bundler::ast::masked_code()` output, which blanks strings,
+template text, comments, and regex literals while preserving byte offsets and line breaks. This
+crate owns no masking pass of its own — the one it used to own carried a duplicate regex-literal
+rule, and a bug in that copy blanked every later `import` and env read in a module, silently
+disabling RUV1007/RUV1008/RUV1010 for it. Detection also expands the reachable dependency graph
+(including layouts) to determine whether any imported module introduces dynamic behavior.
 
 ## Validation
 
@@ -260,6 +263,10 @@ and still miss a dependency in the output. The shared scanner handles:
 - Type-only `import type` forms, which are excluded because they leave no runtime edge
 - Strings, comments, regex literals, and template literals — with `${…}` interpolations scanned as
   code, so `${require("server-only")}` is still an edge
+
+The same call answers the other two source questions this crate asks. `has_default_export` decides
+whether a file is a real page (RUV1004), and `env_reads` feeds the private-env check (RUV1008); both
+were previously separate walks over the same bytes.
 
 ### Edge memoization
 

@@ -4,8 +4,27 @@
 //! the resolver and transformer a shared structured view of imports, exports,
 //! JSX, decorators, and TypeScript-only syntax instead of duplicating ad hoc
 //! line scans in each stage.
+//!
+//! ## One walk, one answer
+//!
+//! [`scan_code`] is the only byte scanner in this crate, and every fact any
+//! stage needs is recorded during that single pass. This is a correctness
+//! constraint before it is a performance one. A second scanner has to re-derive
+//! where strings, template literals, comments, and regular expressions begin
+//! and end, and twice already a scanner that got one of those wrong swallowed
+//! the rest of a module: imports vanished from the graph, `server-only` stopped
+//! being seen, private env reads went unreported. Facts that look like they
+//! belong to a consumer — a page's default export, a `process.env` read — are
+//! collected here so no consumer has a reason to walk the bytes again.
+//!
+//! Policy stays with the consumer. This module records *that* `process.env.X`
+//! was read; deciding which names are allowed in a browser bundle belongs to
+//! [`crate::boundary`].
 
 use serde::{Deserialize, Serialize};
+
+/// The `process.env` member access this scanner recognizes.
+const ENV_MARKER: &[u8] = b"process.env";
 
 /// Import edge discovered in a source module.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,10 +49,15 @@ pub enum ImportKind {
 pub struct ModuleAst {
     pub imports: Vec<ImportEdge>,
     pub exports: Vec<String>,
+    /// Every statically-known `process.env.NAME` / `process.env["NAME"]` read,
+    /// in source order and unfiltered. See the module docs on policy.
+    pub env_reads: Vec<String>,
     pub has_jsx: bool,
     pub has_typescript: bool,
     pub has_decorators: bool,
     pub has_enums: bool,
+    /// Whether the module declares a runtime default export.
+    pub has_default_export: bool,
 }
 
 impl ModuleAst {
@@ -144,6 +168,20 @@ fn scan_code(source: &str, start: usize, end: usize, ast: &mut ModuleAst) {
                 if let Some(name) = export_name(source, index, end) {
                     ast.exports.push(name);
                 }
+                if export_declares_default(source, index, end) {
+                    ast.has_default_export = true;
+                }
+            }
+            // `process.env` is a member access, not a keyword, so the scanner
+            // stops on the `process` identifier and the marker check confirms
+            // the rest. Recording it here is what lets the boundary check read
+            // env usage off this AST instead of walking the module again.
+            "process" if starts_env_read(bytes, start) => {
+                if let Some(name) = env_read_name(bytes, start + ENV_MARKER.len()) {
+                    ast.env_reads.push(name);
+                }
+                index = start + ENV_MARKER.len();
+                previous_significant = Some(index - 1);
             }
             "enum" => {
                 ast.has_enums = true;
@@ -253,6 +291,78 @@ fn quoted_value_at(source: &str, start: usize, end: usize) -> Option<String> {
     None
 }
 
+/// Return `source` with every non-code region blanked out.
+///
+/// Strings, template text, comments, and regular-expression literals become
+/// spaces; code bytes are copied through. Byte offsets and line breaks are
+/// preserved, so the result can be matched line by line and positions in it
+/// still name the same place in the original file.
+///
+/// This exists for consumers that need to *search* code text rather than read
+/// structured facts — route rendering-strategy detection matches on things like
+/// `export const revalidate` and `fetch(` and has no AST field to read. Giving
+/// them a masking primitive built on this module's scanner is what keeps them
+/// from growing a private lexer: the previous one in `ruvyxa_graph` re-derived
+/// where strings, templates, comments, and regexes end, which is precisely the
+/// decision that has silently blinded a boundary check before.
+///
+/// Interpolated expressions inside a template literal are code and survive; the
+/// literal text around them does not.
+pub fn masked_code(source: &str) -> String {
+    let bytes = source.as_bytes();
+    let mut out: Vec<u8> = bytes
+        .iter()
+        .map(|byte| if *byte == b'\n' { b'\n' } else { b' ' })
+        .collect();
+    mask_range(source, 0, bytes.len(), &mut out);
+    // Every byte is either an ASCII blank, an ASCII newline, or copied from a
+    // code region whose bounds fall on ASCII token boundaries, so the result is
+    // still valid UTF-8 and cannot split a multi-byte character.
+    String::from_utf8(out).unwrap_or_else(|_| " ".repeat(bytes.len()))
+}
+
+/// Copy the code bytes of `source[start..end]` into `out`, leaving the rest
+/// blank. Mirrors [`scan_code`]'s walk and shares its skipping helpers, so the
+/// two agree on where code begins and ends by construction.
+fn mask_range(source: &str, start: usize, end: usize, out: &mut [u8]) {
+    let bytes = &source.as_bytes()[..end];
+    let mut index = start;
+    let mut previous_significant: Option<usize> = None;
+    while index < bytes.len() {
+        if is_comment_start(bytes, index) {
+            index = skip_comment(bytes, index);
+            continue;
+        }
+        if bytes[index] == b'`' {
+            let (after, interpolations) = template_literal(bytes, index);
+            for (code_start, code_end) in interpolations {
+                mask_range(source, code_start, code_end, out);
+            }
+            previous_significant = Some(index);
+            index = after;
+            continue;
+        }
+        if is_quote(bytes[index]) {
+            let quote = index;
+            index = skip_string(bytes, index);
+            previous_significant = Some(quote);
+            continue;
+        }
+        if bytes[index] == b'/' && regex_can_start(bytes, previous_significant) {
+            let slash = index;
+            index = skip_regex_literal(bytes, index);
+            previous_significant = Some(slash);
+            continue;
+        }
+
+        out[index] = bytes[index];
+        if !bytes[index].is_ascii_whitespace() {
+            previous_significant = Some(index);
+        }
+        index += 1;
+    }
+}
+
 /// Whether `source` declares a runtime default export.
 ///
 /// Route validation needs this to tell a real page from a module that only
@@ -261,55 +371,13 @@ fn quoted_value_at(source: &str, start: usize, end: usize) -> Option<String> {
 /// and `export * as default from './page'`, which are valid default exports, and
 /// it accepted a commented-out or quoted occurrence.
 ///
-/// Reusing this module's comment- and string-skipping scanner means the answer
-/// comes from the same view of the source the resolver and transformer already
-/// share, rather than a third ad hoc text scan.
+/// This is a thin read of [`parse_module`]. It used to be its own walk over the
+/// bytes, which meant a second place that had to agree with the dependency
+/// scanner about where strings, templates, comments, and regular expressions
+/// end — and the two drifted. Callers that also need imports should call
+/// [`parse_module`] once and read both facts off the result.
 pub fn has_default_export(source: &str) -> bool {
-    let bytes = source.as_bytes();
-    let mut index = 0;
-    let mut previous_significant: Option<usize> = None;
-    while index < bytes.len() {
-        if is_comment_start(bytes, index) {
-            index = skip_comment(bytes, index);
-            continue;
-        }
-        if bytes[index] == b'`' {
-            // An `export` cannot appear inside an interpolation, but the
-            // literal's extent still has to be measured the same way the
-            // dependency scanner measures it, or the two disagree about where
-            // code resumes.
-            previous_significant = Some(index);
-            index = template_literal(bytes, index).0;
-            continue;
-        }
-        if is_quote(bytes[index]) {
-            let start = index;
-            index = skip_string(bytes, index);
-            previous_significant = Some(start);
-            continue;
-        }
-        if bytes[index] == b'/' && regex_can_start(bytes, previous_significant) {
-            let start = index;
-            index = skip_regex_literal(bytes, index);
-            previous_significant = Some(start);
-            continue;
-        }
-        if !is_ident_start_byte(bytes[index]) {
-            if !bytes[index].is_ascii_whitespace() {
-                previous_significant = Some(index);
-            }
-            index += 1;
-            continue;
-        }
-        let start = index;
-        index = skip_identifier(bytes, index);
-        previous_significant = Some(index - 1);
-        if &source[start..index] == "export" && export_declares_default(source, index, bytes.len())
-        {
-            return true;
-        }
-    }
-    false
+    parse_module(source).has_default_export
 }
 
 /// Whether the export clause starting after `export` produces a default binding.
@@ -409,6 +477,66 @@ fn export_name(source: &str, after_keyword: usize, end: usize) -> Option<String>
     (end > index).then(|| source[index..end].to_string())
 }
 
+/// Whether the bytes at `index` begin a `process.env` member access.
+///
+/// The preceding byte must not continue an identifier or be a `.`, so
+/// `myprocess.env` and `globalThis.process.env` are not counted as a bare
+/// `process.env` read.
+fn starts_env_read(bytes: &[u8], index: usize) -> bool {
+    bytes.get(index..index + ENV_MARKER.len()) == Some(ENV_MARKER)
+        && bytes
+            .get(index.wrapping_sub(1))
+            .is_none_or(|previous| !is_ident_continue_byte(*previous) && *previous != b'.')
+}
+
+/// Read the variable name from the member access that follows `process.env`.
+///
+/// Handles both `process.env.NAME` and `process.env["NAME"]`. A computed access
+/// with a non-literal key (`process.env[key]`) has no statically-known name and
+/// yields `None`.
+fn env_read_name(bytes: &[u8], mut index: usize) -> Option<String> {
+    while bytes.get(index).is_some_and(u8::is_ascii_whitespace) {
+        index += 1;
+    }
+
+    if bytes.get(index) == Some(&b'.') {
+        index += 1;
+        let start = index;
+        index = skip_identifier(bytes, index);
+        return std::str::from_utf8(&bytes[start..index])
+            .ok()
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned);
+    }
+
+    if bytes.get(index) != Some(&b'[') {
+        return None;
+    }
+    index += 1;
+    while bytes.get(index).is_some_and(u8::is_ascii_whitespace) {
+        index += 1;
+    }
+    let quote = *bytes.get(index)?;
+    if quote != b'\'' && quote != b'"' {
+        return None;
+    }
+    index += 1;
+    let start = index;
+    index = skip_identifier(bytes, index);
+    let name = std::str::from_utf8(&bytes[start..index])
+        .ok()
+        .filter(|name| !name.is_empty())?
+        .to_owned();
+    if bytes.get(index) != Some(&quote) {
+        return None;
+    }
+    index += 1;
+    while bytes.get(index).is_some_and(u8::is_ascii_whitespace) {
+        index += 1;
+    }
+    (bytes.get(index) == Some(&b']')).then_some(name)
+}
+
 fn word_at(source: &str, start: usize, end: usize) -> Option<&str> {
     let bytes = &source.as_bytes()[..end];
     if start >= bytes.len() || !is_ident_start_byte(bytes[start]) {
@@ -467,7 +595,11 @@ fn skip_comment(bytes: &[u8], start: usize) -> usize {
 ///
 /// `previous_significant` is the index of the last byte that can end a token, or
 /// `None` at the start of the source.
-pub(crate) fn regex_can_start(bytes: &[u8], previous_significant: Option<usize>) -> bool {
+///
+/// Deliberately private: it is only correct in the context of a scan that also
+/// tracks strings, templates, and comments. Exposing it invited a second
+/// scanner that shared this one decision and re-derived every other one.
+fn regex_can_start(bytes: &[u8], previous_significant: Option<usize>) -> bool {
     let Some(index) = previous_significant else {
         return true;
     };
@@ -506,7 +638,7 @@ fn previous_token_is_keyword(bytes: &[u8], end: usize) -> bool {
 ///
 /// Quotes and slashes inside a character class (`/[/"']/`) are literal, so the
 /// class state has to be tracked or the literal ends in the wrong place.
-pub(crate) fn skip_regex_literal(bytes: &[u8], start: usize) -> usize {
+fn skip_regex_literal(bytes: &[u8], start: usize) -> usize {
     let mut index = start + 1;
     let mut inside_character_class = false;
     while index < bytes.len() {
@@ -892,6 +1024,46 @@ import { helper } from "./helper"
         );
 
         assert_eq!(ast.import_specifiers(), vec!["./helper"]);
+    }
+
+    /// Imports, the default export, and env reads used to come from three
+    /// separate walks over the same bytes. One walk now answers all of them,
+    /// and this pins that they stay consistent with each other.
+    #[test]
+    fn one_scan_answers_imports_default_export_and_env_reads() {
+        let ast = parse_module(
+            r#"
+const QUOTED = /["']/g
+import { helper } from "./helper"
+const db = process.env.DATABASE_URL
+const key = process.env['API_KEY']
+const mode = process.env.NODE_ENV
+export default function Page() { return helper(db, key, mode) }
+"#,
+        );
+
+        assert_eq!(ast.import_specifiers(), vec!["./helper"]);
+        assert!(ast.has_default_export);
+        assert_eq!(ast.env_reads, ["DATABASE_URL", "API_KEY", "NODE_ENV"]);
+    }
+
+    /// Env reads are code only where code is. Text that merely spells
+    /// `process.env` is not a read, and a member access on another object is a
+    /// different variable entirely.
+    #[test]
+    fn env_reads_ignore_text_and_qualified_access() {
+        let ast = parse_module(
+            r#"
+const docs = "process.env.DATABASE_URL"
+// process.env.COMMENTED
+const other = globalThis.process.env.NOT_BARE
+const shadow = myprocess.env.NOT_THIS
+const rendered = `${process.env.INTERPOLATED}`
+const computed = process.env[dynamicKey]
+"#,
+        );
+
+        assert_eq!(ast.env_reads, ["INTERPOLATED"]);
     }
 
     #[test]

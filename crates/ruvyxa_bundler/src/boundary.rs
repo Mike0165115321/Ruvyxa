@@ -37,6 +37,12 @@ pub fn check(
     // Client bundles: enforce all three rules. Keep scanning after the
     // first hard violation so one build reports every affected module
     // instead of surfacing them one fix-and-rebuild cycle at a time.
+    //
+    // Deliberately sequential. Every rule now reads a short list off the
+    // module's already-parsed AST, so a module check is a handful of
+    // comparisons; rayon would cost more to schedule than it saves, and the
+    // sequential walk is what makes "first error in module order" and the
+    // diagnostic order in `out` stable across runs.
     let mut first_error = None;
     for module in modules {
         if let Err(error) = check_client_module(module, &input.project_root, out)
@@ -61,10 +67,9 @@ fn check_client_module(
         return Ok(());
     }
 
-    let source = &module.js;
-
     // RUV1007 – "server-only" import
-    if ast::parse_module(source)
+    if module
+        .ast
         .imports
         .iter()
         .any(|edge| is_server_only_specifier(&edge.specifier))
@@ -98,7 +103,7 @@ fn check_client_module(
     }
 
     // RUV1008 – private env var reads (non-fatal: recorded as diagnostic)
-    for var_name in find_private_env_reads(source) {
+    for var_name in private_env_reads(&module.ast) {
         out.push(
             Diagnostic::new(
                 "RUV1008",
@@ -124,10 +129,8 @@ fn check_ssr_module(module: &CompiledModule, out: &mut Vec<Diagnostic>) -> Resul
         return Ok(());
     }
 
-    let source = &module.js;
-
     // client-only import in SSR graph
-    if imports_marker(source, "client-only") {
+    if imports_marker(&module.ast, "client-only") {
         out.push(
             Diagnostic::new("RUV1009", "Client-only module imported into SSR graph")
                 .explain(
@@ -141,11 +144,8 @@ fn check_ssr_module(module: &CompiledModule, out: &mut Vec<Diagnostic>) -> Resul
     Ok(())
 }
 
-fn imports_marker(source: &str, marker: &str) -> bool {
-    ast::parse_module(source)
-        .imports
-        .iter()
-        .any(|edge| edge.specifier == marker)
+fn imports_marker(module: &ast::ModuleAst, marker: &str) -> bool {
+    module.imports.iter().any(|edge| edge.specifier == marker)
 }
 
 fn is_server_only_specifier(specifier: &str) -> bool {
@@ -164,202 +164,36 @@ fn is_inside_server_dir(path: &Path, project_root: &Path) -> bool {
         .is_some_and(|component| component.as_os_str() == "server")
 }
 
-/// Scan source text for statically-known `process.env` reads that are not
-/// `RUVYXA_PUBLIC_*` or `NODE_ENV`.
-fn find_private_env_reads(source: &str) -> Vec<String> {
-    let mut names = Vec::new();
-    let mut index = 0;
-    scan_code_for_env_reads(source.as_bytes(), &mut index, 0, &mut names);
-
-    names
-}
-
-fn scan_code_for_env_reads(
-    source: &[u8],
-    index: &mut usize,
-    mut template_expression_depth: usize,
-    names: &mut Vec<String>,
-) {
-    // Index of the last byte that can end a JavaScript token. A `/` is only a
-    // regular expression when no value precedes it; without this the scanner
-    // treats `/["']/` as a division followed by an unterminated string and
-    // silently skips the rest of the module, hiding every later env read.
-    // The decision itself lives in `ast` so every scanner in this crate shares
-    // one answer instead of each re-deriving it.
-    let mut previous_significant: Option<usize> = None;
-
-    while *index < source.len() {
-        let start = *index;
-        match source[*index] {
-            b'\'' | b'"' => {
-                skip_quoted_bytes(source, index);
-                previous_significant = Some(start);
-            }
-            b'`' => {
-                skip_template_literal(source, index, names);
-                previous_significant = Some(start);
-            }
-            b'/' if source.get(*index + 1) == Some(&b'/') => skip_line_comment_bytes(source, index),
-            b'/' if source.get(*index + 1) == Some(&b'*') => {
-                skip_block_comment_bytes(source, index)
-            }
-            b'/' if ast::regex_can_start(source, previous_significant) => {
-                *index = ast::skip_regex_literal(source, *index);
-                previous_significant = Some(start);
-            }
-            b'{' if template_expression_depth > 0 => {
-                template_expression_depth += 1;
-                *index += 1;
-                previous_significant = Some(start);
-            }
-            b'}' if template_expression_depth > 0 => {
-                template_expression_depth -= 1;
-                *index += 1;
-                if template_expression_depth == 0 {
-                    return;
-                }
-                previous_significant = Some(start);
-            }
-            _ if starts_env_read(source, *index) => {
-                if let Some(name) = parse_env_name(source, *index + b"process.env".len())
-                    && name != "NODE_ENV"
-                    && !name.starts_with("RUVYXA_PUBLIC_")
-                {
-                    names.push(name);
-                }
-                *index += b"process.env".len();
-                previous_significant = Some(*index - 1);
-            }
-            byte => {
-                if !byte.is_ascii_whitespace() {
-                    previous_significant = Some(start);
-                }
-                *index += 1;
-            }
-        }
-    }
-}
-
-fn starts_env_read(source: &[u8], index: usize) -> bool {
-    const MARKER: &[u8] = b"process.env";
-    source.get(index..index + MARKER.len()) == Some(MARKER)
-        && source
-            .get(index.wrapping_sub(1))
-            .is_none_or(|previous| !is_identifier_byte(*previous) && *previous != b'.')
-}
-
-fn parse_env_name(source: &[u8], mut index: usize) -> Option<String> {
-    while source.get(index).is_some_and(u8::is_ascii_whitespace) {
-        index += 1;
-    }
-
-    if source.get(index) == Some(&b'.') {
-        index += 1;
-        let start = index;
-        while source
-            .get(index)
-            .is_some_and(|byte| is_identifier_byte(*byte))
-        {
-            index += 1;
-        }
-        return std::str::from_utf8(&source[start..index])
-            .ok()
-            .filter(|name| !name.is_empty())
-            .map(str::to_owned);
-    }
-
-    if source.get(index) != Some(&b'[') {
-        return None;
-    }
-    index += 1;
-    while source.get(index).is_some_and(u8::is_ascii_whitespace) {
-        index += 1;
-    }
-    let quote = *source.get(index)?;
-    if quote != b'\'' && quote != b'"' {
-        return None;
-    }
-    index += 1;
-    let start = index;
-    while source
-        .get(index)
-        .is_some_and(|byte| is_identifier_byte(*byte))
-    {
-        index += 1;
-    }
-    let name = std::str::from_utf8(&source[start..index])
-        .ok()
-        .filter(|name| !name.is_empty())?
-        .to_owned();
-    if source.get(index) != Some(&quote) {
-        return None;
-    }
-    index += 1;
-    while source.get(index).is_some_and(u8::is_ascii_whitespace) {
-        index += 1;
-    }
-    (source.get(index) == Some(&b']')).then_some(name)
-}
-
-fn skip_quoted_bytes(source: &[u8], index: &mut usize) {
-    let quote = source[*index];
-    *index += 1;
-    while *index < source.len() {
-        match source[*index] {
-            b'\\' => *index = (*index + 2).min(source.len()),
-            byte if byte == quote => {
-                *index += 1;
-                return;
-            }
-            _ => *index += 1,
-        }
-    }
-}
-
-fn skip_template_literal(source: &[u8], index: &mut usize, names: &mut Vec<String>) {
-    *index += 1;
-    while *index < source.len() {
-        match source[*index] {
-            b'\\' => *index = (*index + 2).min(source.len()),
-            b'`' => {
-                *index += 1;
-                return;
-            }
-            b'$' if source.get(*index + 1) == Some(&b'{') => {
-                *index += 2;
-                scan_code_for_env_reads(source, index, 1, names);
-            }
-            _ => *index += 1,
-        }
-    }
-}
-
-fn skip_line_comment_bytes(source: &[u8], index: &mut usize) {
-    *index += 2;
-    while source.get(*index).is_some_and(|byte| *byte != b'\n') {
-        *index += 1;
-    }
-}
-
-fn skip_block_comment_bytes(source: &[u8], index: &mut usize) {
-    *index += 2;
-    while *index + 1 < source.len() {
-        if source[*index] == b'*' && source[*index + 1] == b'/' {
-            *index += 2;
-            return;
-        }
-        *index += 1;
-    }
-    *index = source.len();
-}
-
-fn is_identifier_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$')
+/// The `process.env` reads in `module` that must not reach a browser bundle.
+///
+/// `NODE_ENV` is substituted at build time and `RUVYXA_PUBLIC_*` is public by
+/// contract; everything else statically named is a leak.
+///
+/// Which reads exist is decided by the one scanner in [`ast`]; this function
+/// only applies the policy. It used to walk the bytes itself, and that second
+/// walk is exactly where a regex-literal bug hid every env read in a module
+/// twice over.
+fn private_env_reads(module: &ast::ModuleAst) -> Vec<String> {
+    module
+        .env_reads
+        .iter()
+        .filter(|name| name.as_str() != "NODE_ENV" && !name.starts_with("RUVYXA_PUBLIC_"))
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Parse then filter, the same two steps the boundary check performs.
+    ///
+    /// These cases predate the scanner merge and are kept whole: they are the
+    /// regressions that a second byte scanner introduced, and they must still
+    /// hold now that the answer comes from `ast`.
+    fn find_private_env_reads(source: &str) -> Vec<String> {
+        private_env_reads(&ast::parse_module(source))
+    }
 
     #[test]
     fn regex_literals_do_not_hide_later_env_reads() {
@@ -428,10 +262,15 @@ mod tests {
     #[test]
     fn only_treats_actual_imports_as_boundary_markers() {
         assert!(!imports_marker(
-            "export const documentation = 'Use server-only modules for secrets.';",
+            &ast::parse_module(
+                "export const documentation = 'Use server-only modules for secrets.';"
+            ),
             "server-only"
         ));
-        assert!(imports_marker("import 'server-only';", "server-only"));
+        assert!(imports_marker(
+            &ast::parse_module("import 'server-only';"),
+            "server-only"
+        ));
         assert!(is_server_only_specifier("@ruvyxa/auth"));
         assert!(is_server_only_specifier("@ruvyxa/database"));
         assert!(!is_server_only_specifier("@ruvyxa/auth/client"));

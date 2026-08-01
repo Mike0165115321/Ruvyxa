@@ -114,9 +114,6 @@ struct DependencyCacheKey {
     jsx_automatic: bool,
 }
 
-/// Threshold above which source files are read via memory-mapping.
-const MMAP_THRESHOLD_BYTES: u64 = 64 * 1024;
-
 /// Module the automatic JSX transform imports its factory helpers from.
 const JSX_RUNTIME_SPECIFIER: &str = "react/jsx-runtime";
 
@@ -219,7 +216,7 @@ impl ResolveGraphCache {
         }
 
         // Cache miss or stale — read the file.
-        let source = read_source_fast(path, metadata.len())?;
+        let source = read_source_fast(path)?;
         let arc_source: Arc<str> = Arc::from(source.as_str());
 
         self.sources.insert(
@@ -841,29 +838,22 @@ fn resolve_exports_value(
     }
 }
 
-/// Read a source file, using memory-mapping for large files.
-fn read_source_fast(path: &Path, len: u64) -> Result<String> {
-    if len >= MMAP_THRESHOLD_BYTES {
-        // Memory-map for large files: exploits OS page cache, zero-copy into
-        // address space, and avoids a full heap allocation + copy.
-        let file = fs::File::open(path).map_err(|error| {
-            BundleError::Io(std::io::Error::new(
-                error.kind(),
-                format!("{}: {}", path.display(), error),
-            ))
-        })?;
-        let mapped = unsafe { memmap2::Mmap::map(&file) };
-        match mapped {
-            Ok(mmap) => {
-                return String::from_utf8(mmap.to_vec()).map_err(|_| {
-                    std::io::Error::new(std::io::ErrorKind::InvalidData, "non-UTF-8 source").into()
-                });
-            }
-            Err(_) => {
-                // Fallback to regular read on mmap failure.
-            }
-        }
-    }
+/// Read a source file into an owned `String`.
+///
+/// Files above 64 KiB used to take a memory-mapped path, on the stated grounds
+/// that mapping is "zero-copy … and avoids a full heap allocation + copy". It
+/// was not: the mapped bytes were immediately `to_vec()`-ed and then UTF-8
+/// validated, so the allocation and the copy both happened anyway, on top of
+/// the `mmap`/`munmap` syscalls. It also made every source read an `unsafe`
+/// one — a mapped file that is truncated by the editor mid-build faults the
+/// process rather than returning a short read, and `dev` watches files while
+/// they are being saved.
+///
+/// A plain read is one sized allocation, one read, one validation. Reach for
+/// mapping again only with a measurement showing it wins, and only if the
+/// borrowed bytes can reach the scanner without an intermediate copy — that is
+/// the version that would actually be zero-copy.
+fn read_source_fast(path: &Path) -> Result<String> {
     fs::read_to_string(path).map_err(|error| {
         BundleError::Io(std::io::Error::new(
             error.kind(),

@@ -1,0 +1,386 @@
+//! Content-addressed build artifact cache.
+//!
+//! Every cached artifact — a client bundle, a route plan, a shared chunk, a
+//! prerendered page — is keyed by a hash of everything that can change it. The
+//! rule this module exists to enforce is that the key covers *all* such inputs:
+//! a cache hit must be indistinguishable from doing the work again. A key that
+//! omits an input does not make builds slower, it makes them wrong, and the
+//! failure surfaces as stale output nobody can reproduce.
+//!
+//! That is why the prerender key mixes in the runtime script hash and a
+//! filtered view of `process.env` ([`stable_process_env`]): both change what
+//! the renderer produces. Volatile keys are excluded on purpose, since a key
+//! that changes every run caches nothing.
+//!
+//! Reads degrade to a miss on any error. A corrupt or unreadable cache entry
+//! costs time; trusting one costs correctness.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use ruvyxa_dev_server::find_runtime_script;
+
+use crate::*;
+
+pub(crate) fn content_hash(input: &str) -> String {
+    content_hash_bytes(input.as_bytes())
+}
+
+pub(crate) fn content_hash_bytes(input: &[u8]) -> String {
+    blake3::hash(input).to_hex().to_string()
+}
+
+pub(crate) fn client_artifact_cache_file(
+    cache_dir: &Path,
+    route_path: &str,
+    variant: &str,
+) -> PathBuf {
+    let key = content_hash(&format!("{route_path}\0{variant}"));
+    cache_dir.join("client-routes").join(format!("{key}.json"))
+}
+
+pub(crate) fn client_plan_cache_file(cache_dir: &Path, route_path: &str, variant: &str) -> PathBuf {
+    let key = content_hash(&format!("{route_path}\0{variant}"));
+    cache_dir
+        .join("client-route-plans")
+        .join(format!("{key}.json"))
+}
+
+pub(crate) fn shared_route_artifact_cache_file(
+    cache_dir: &Path,
+    module_paths: &BTreeSet<PathBuf>,
+    variant: &str,
+) -> PathBuf {
+    let mut key_source = String::from(variant);
+    for path in module_paths {
+        key_source.push('\0');
+        key_source.push_str(&path.to_string_lossy());
+    }
+    cache_dir
+        .join("shared-route-artifacts")
+        .join(format!("{}.json", content_hash(&key_source)))
+}
+
+pub(crate) fn prerender_artifact_cache_file(cache_dir: &Path, job: &PrerenderJob) -> PathBuf {
+    let kind = match &job.kind {
+        PrerenderJobKind::Csr => "csr",
+        PrerenderJobKind::Render { mode, .. } => mode,
+    };
+    let key = serde_json::json!({
+        "routePath": job.route_path,
+        "renderPath": job.render_path,
+        "params": job.params,
+        "strategy": format!("{:?}", job.strategy),
+        "revalidate": job.revalidate,
+        "kind": kind,
+    });
+    cache_dir
+        .join("prerender-routes")
+        .join(format!("{}.json", content_hash(&key.to_string())))
+}
+
+pub(crate) fn prerender_context_hash(
+    root: &Path,
+    styles: &str,
+    client_assets: &BTreeMap<String, PrerenderClientAssets>,
+    build: &BuildConfigOptions,
+    project_env: &BTreeMap<String, String>,
+) -> String {
+    let process_env = stable_process_env();
+    let context = serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "styles": content_hash(styles),
+        "clientAssets": client_assets,
+        "jsx": build.jsx_runtime.as_deref().unwrap_or("automatic"),
+        "target": build.es_target.as_deref().unwrap_or("es2022"),
+        "workerRuntime": runtime_script_hash(root, "worker-pool.mjs"),
+        "compilerRuntime": runtime_script_hash(root, "compiler.mjs"),
+        "projectEnv": project_env,
+        "processEnv": process_env,
+    });
+    content_hash(&context.to_string())
+}
+
+pub(crate) fn stable_process_env() -> BTreeMap<String, String> {
+    std::env::vars()
+        .filter(|(key, _)| is_stable_process_env_key(key))
+        .collect()
+}
+
+pub(crate) fn is_stable_process_env_key(key: &str) -> bool {
+    let upper = key.to_ascii_uppercase();
+    !matches!(
+        upper.as_str(),
+        "PATH" | "PWD" | "OLDPWD" | "SHLVL" | "CARGO" | "_"
+    ) && ![
+        "CARGO_", "RUST", "RUSTUP_", "CODEX_", "POSH_", "NPM_", "PNPM_",
+    ]
+    .iter()
+    .any(|prefix| upper.starts_with(prefix))
+}
+
+pub(crate) fn runtime_script_hash(root: &Path, name: &str) -> String {
+    find_runtime_script(root, name)
+        .and_then(|path| fs::read(path).ok())
+        .map(|source| content_hash_bytes(&source))
+        .unwrap_or_default()
+}
+
+pub(crate) fn load_prerender_artifact(
+    cache: &PrerenderArtifactCache,
+    job: &PrerenderJob,
+) -> Option<String> {
+    let cache_file = prerender_artifact_cache_file(&cache.directory, job);
+    let source = fs::read_to_string(&cache_file).ok()?;
+    let artifact: CachedPrerenderArtifact = serde_json::from_str(&source).ok()?;
+    if artifact.version != 1
+        || artifact.dependency_hash != cache.dependency_hash
+        || artifact.render_context_hash != cache.render_context_hash
+        || artifact.renderer_dependency_hash.is_empty()
+        || artifact.files.is_empty()
+    {
+        return None;
+    }
+    let valid = artifact
+        .files
+        .iter()
+        .all(|(path, expected)| cache.fingerprints.fingerprint(path).as_deref() == Some(expected));
+    valid.then_some(artifact.html)
+}
+
+pub(crate) fn store_prerender_artifact(
+    cache: &PrerenderArtifactCache,
+    job: &PrerenderJob,
+    renderer_dependency_hash: &str,
+    inputs: &[PathBuf],
+    html: &str,
+) {
+    if renderer_dependency_hash.is_empty() {
+        return;
+    }
+    let files = inputs
+        .iter()
+        .map(|path| ruvyxa_diagnostics::normalized_canonical_path(path))
+        .filter_map(|path| {
+            cache
+                .fingerprints
+                .fingerprint(&path)
+                .map(|fingerprint| (path, fingerprint))
+        })
+        .collect::<BTreeMap<_, _>>();
+    if files.is_empty() {
+        return;
+    }
+    let artifact = CachedPrerenderArtifact {
+        version: 1,
+        dependency_hash: cache.dependency_hash.clone(),
+        render_context_hash: cache.render_context_hash.clone(),
+        renderer_dependency_hash: renderer_dependency_hash.to_string(),
+        files,
+        html: html.to_string(),
+    };
+    let Ok(source) = serde_json::to_vec(&artifact) else {
+        return;
+    };
+    write_client_cache_file(prerender_artifact_cache_file(&cache.directory, job), source);
+}
+
+pub(crate) fn load_shared_route_artifact(
+    cache_dir: &Path,
+    dependency_hash: &str,
+    module_paths: &BTreeSet<PathBuf>,
+    variant: &str,
+    fingerprints: &ArtifactFingerprintCache,
+) -> Option<ruvyxa_bundler::SharedRouteBundleOutput> {
+    let source = fs::read_to_string(shared_route_artifact_cache_file(
+        cache_dir,
+        module_paths,
+        variant,
+    ))
+    .ok()?;
+    let artifact: CachedSharedRouteArtifact = serde_json::from_str(&source).ok()?;
+    if artifact.version != 1
+        || artifact.dependency_hash != dependency_hash
+        || artifact.files.is_empty()
+        || artifact.modules.is_empty()
+    {
+        return None;
+    }
+    artifact
+        .files
+        .iter()
+        .all(|(path, expected)| fingerprints.fingerprint(path).as_deref() == Some(expected))
+        .then_some(ruvyxa_bundler::SharedRouteBundleOutput {
+            code: artifact.code,
+            modules: artifact.modules,
+        })
+}
+
+pub(crate) fn store_shared_route_artifact(
+    cache_dir: &Path,
+    dependency_hash: &str,
+    module_paths: &BTreeSet<PathBuf>,
+    variant: &str,
+    output: &ruvyxa_bundler::SharedRouteBundleOutput,
+    fingerprints: &ArtifactFingerprintCache,
+) {
+    let files = output
+        .modules
+        .iter()
+        .filter_map(|path| {
+            fingerprints
+                .fingerprint(path)
+                .map(|fingerprint| (path.clone(), fingerprint))
+        })
+        .collect::<BTreeMap<_, _>>();
+    if files.is_empty() {
+        return;
+    }
+    let artifact = CachedSharedRouteArtifact {
+        version: 1,
+        dependency_hash: dependency_hash.to_string(),
+        files,
+        code: output.code.clone(),
+        modules: output.modules.clone(),
+    };
+    let Ok(source) = serde_json::to_vec(&artifact) else {
+        return;
+    };
+    write_client_cache_file(
+        shared_route_artifact_cache_file(cache_dir, module_paths, variant),
+        source,
+    );
+}
+
+pub(crate) fn load_client_plan(
+    cache_dir: &Path,
+    dependency_hash: &str,
+    route_path: &str,
+    variant: &str,
+    fingerprints: &ArtifactFingerprintCache,
+) -> Option<BTreeSet<PathBuf>> {
+    let source = fs::read_to_string(client_plan_cache_file(cache_dir, route_path, variant)).ok()?;
+    let plan: CachedClientPlan = serde_json::from_str(&source).ok()?;
+    if plan.version != 2
+        || plan.dependency_hash != dependency_hash
+        || plan.files.is_empty()
+        || plan.module_paths.is_empty()
+    {
+        return None;
+    }
+    plan.files
+        .iter()
+        .all(|(path, expected)| fingerprints.fingerprint(path).as_deref() == Some(expected))
+        .then_some(plan.module_paths)
+}
+
+pub(crate) fn store_client_plan(
+    cache_dir: &Path,
+    dependency_hash: &str,
+    route_path: &str,
+    variant: &str,
+    module_paths: &BTreeSet<PathBuf>,
+    dependency_paths: &BTreeSet<PathBuf>,
+    fingerprints: &ArtifactFingerprintCache,
+) {
+    let files = dependency_paths
+        .iter()
+        .filter_map(|path| {
+            fingerprints
+                .fingerprint(path)
+                .map(|fingerprint| (path.clone(), fingerprint))
+        })
+        .collect::<BTreeMap<_, _>>();
+    if files.is_empty() {
+        return;
+    }
+    let plan = CachedClientPlan {
+        version: 2,
+        dependency_hash: dependency_hash.to_string(),
+        files,
+        module_paths: module_paths.clone(),
+    };
+    let Ok(source) = serde_json::to_vec(&plan) else {
+        return;
+    };
+    write_client_cache_file(
+        client_plan_cache_file(cache_dir, route_path, variant),
+        source,
+    );
+}
+
+pub(crate) fn load_client_artifact(
+    cache_dir: &Path,
+    dependency_hash: &str,
+    route_path: &str,
+    variant: &str,
+    fingerprints: &ArtifactFingerprintCache,
+) -> Option<ClientBundle> {
+    let source =
+        fs::read_to_string(client_artifact_cache_file(cache_dir, route_path, variant)).ok()?;
+    let artifact: CachedClientArtifact = serde_json::from_str(&source).ok()?;
+    if artifact.version != 2
+        || artifact.dependency_hash != dependency_hash
+        || artifact.files.is_empty()
+    {
+        return None;
+    }
+    let valid = artifact
+        .files
+        .iter()
+        .all(|(path, expected)| fingerprints.fingerprint(path).as_deref() == Some(expected));
+    valid.then_some(ClientBundle {
+        artifact_cache_hit: true,
+        ..artifact.bundle
+    })
+}
+
+pub(crate) fn store_client_artifact(
+    cache_dir: &Path,
+    dependency_hash: &str,
+    route_path: &str,
+    variant: &str,
+    bundle: &ClientBundle,
+    fingerprints: &ArtifactFingerprintCache,
+) {
+    let files = bundle
+        .dependency_paths
+        .iter()
+        .filter_map(|path| {
+            fingerprints
+                .fingerprint(path)
+                .map(|fingerprint| (path.clone(), fingerprint))
+        })
+        .collect::<BTreeMap<_, _>>();
+    if files.is_empty() {
+        return;
+    }
+    let artifact = CachedClientArtifact {
+        version: 2,
+        dependency_hash: dependency_hash.to_string(),
+        files,
+        bundle: bundle.clone(),
+    };
+    let Ok(source) = serde_json::to_vec(&artifact) else {
+        return;
+    };
+    write_client_cache_file(
+        client_artifact_cache_file(cache_dir, route_path, variant),
+        source,
+    );
+}
+
+pub(crate) fn write_client_cache_file(path: PathBuf, source: Vec<u8>) {
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let temp = path.with_extension("json.tmp");
+    if fs::write(&temp, source).is_ok() && fs::rename(&temp, &path).is_err() {
+        let _ = fs::write(&path, fs::read(&temp).unwrap_or_default());
+        let _ = fs::remove_file(temp);
+    }
+}

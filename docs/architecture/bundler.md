@@ -177,17 +177,42 @@ Resolution order:
 
 ### Source scanning (`ast`)
 
-`ast::parse_module()` is the crate's only JavaScript byte scanner, and every stage that needs facts
-about a source file goes through it — the resolver's graph walk, the compiler's transform plan,
-chunking, the server/client boundary check, and `ruvyxa_graph`'s route validation. `ast` also
-exports the primitives (`regex_can_start`, `skip_regex_literal`) that `boundary.rs` reuses, so no
-stage carries a private copy.
+`ast::parse_module()` is the only JavaScript byte scanner in the workspace, and every stage that
+needs facts about a source file goes through it — the resolver's graph walk, the compiler's
+transform plan, chunking, the server/client boundary check, and `ruvyxa_graph`'s route validation
+and rendering-strategy detection.
+
+Sharing primitives was not enough. `boundary.rs` and `ruvyxa_graph` each used to own a walk that
+called into `ast` for the regex decision but re-derived everything else: where a string ends, where
+a template literal's interpolations are, how a block comment closes. Those walks are gone. Every
+fact a consumer needs is now recorded during the one pass and read off `ModuleAst`:
+
+| Fact                          | Field                | Consumer                                     |
+| ----------------------------- | -------------------- | -------------------------------------------- |
+| Import edges                  | `imports`            | resolver, chunking, boundary, `ruvyxa_graph` |
+| Exported names                | `exports`            | linker                                       |
+| Runtime default export        | `has_default_export` | route validation (RUV1004)                   |
+| `process.env` reads           | `env_reads`          | boundary (RUV1008), route validation         |
+| JSX / TS / decorators / enums | `has_*`              | compiler transform plan                      |
+
+`ast::masked_code()` covers the one consumer that needs code _text_ rather than facts: rendering
+strategy detection matches on markers like `export const revalidate` and `fetch(`. It blanks
+non-code regions using the same walk, preserving byte offsets and line breaks, so that consumer has
+no reason to grow a lexer either.
+
+Policy stays with the consumer. `ast` records that `process.env.X` was read; deciding which names
+may reach a browser bundle is `boundary`'s.
 
 That consolidation is deliberate. A scanner that does not classify `/` correctly reads `/["']/` as a
 division followed by an unterminated string, and the string skip then swallows the rest of the file:
 imports after that point vanish from the dependency graph, `server-only` stops tripping RUV1007, and
-a page's default export becomes invisible to validation. Each stage that owned a scanner had to
-rediscover that rule; sharing one implementation means it is fixed in one place.
+a page's default export becomes invisible to validation. That exact bug has been fixed more than
+once, in more than one copy of the scanner. One walk cannot drift from itself.
+
+It is also why each compiled module is parsed exactly once, at `CompiledModule::new`, and the result
+carried on the module as `Arc<ModuleAst>`. Chunk planning previously re-parsed every module once per
+dynamic root and once per emitted chunk, so scan cost grew with the number of `import()` sites in
+the app rather than with its size.
 
 The scanner tracks the last token-ending byte to tell a regex literal from a division, skips
 comments and strings, and walks template literals so `${…}` interpolations are scanned as code.
