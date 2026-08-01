@@ -61,26 +61,17 @@ CLI จะแสดง prompt ให้เลือก template แบบ intera
   blog        – MDX blog พร้อม posts, tags, RSS
   crud        – CRUD เต็มรูปแบบ พร้อม database และ auth
   api-backend – API ล้วนๆ มีแต่ route.ts endpoints
-  empty       – มีแค่ config
 ```
 
 ### ตัวเลือก npm create
 
-| ตัวเลือก     | ค่าที่ยอมรับ                                      | ค่าเริ่มต้น | คำอธิบาย                              |
-| ------------ | ------------------------------------------------- | ----------- | ------------------------------------- |
-| `--template` | `minimal`, `blog`, `crud`, `api-backend`, `empty` | `minimal`   | เลือก template โดยไม่ต้อง interactive |
-| `--pm`       | `npm`, `pnpm`, `yarn`, `bun`                      | อัตโนมัติ   | กำหนด package manager                 |
-| `--yes`      | —                                                 | —           | ข้าม prompt ทั้งหมด ใช้ค่าเริ่มต้น    |
+| ตัวเลือก     | ค่าที่ยอมรับ                             | ค่าเริ่มต้น | คำอธิบาย                              |
+| ------------ | ---------------------------------------- | ----------- | ------------------------------------- |
+| `--template` | `minimal`, `blog`, `crud`, `api-backend` | `minimal`   | เลือก template โดยไม่ต้อง interactive |
 
 ```bash
 # สร้าง blog โดยไม่ต้อง interactive
 npm create ruvyxa@latest my-blog -- --template blog
-
-# ใช้ pnpm
-npm create ruvyxa@latest my-app -- --pm pnpm
-
-# ข้าม prompt ทั้งหมด
-npm create ruvyxa@latest my-app -- --yes
 ```
 
 package manager ถูกตรวจสอบโดยอัลกอริทึมนี้:
@@ -118,7 +109,6 @@ my-app/
 │   ├── page.tsx          # หน้าแรกที่ /
 │   └── globals.css       # CSS หลัก
 ├── public/
-│   └── favicon.ico       # static assets
 ├── ruvyxa.config.ts      # Framework config
 ├── tsconfig.json
 ├── package.json
@@ -488,21 +478,21 @@ declare module '*.module.sass' {
 }
 ```
 
-| คำสั่ง        | CLI จริง             | หน้าที่                                  |
-| ------------- | -------------------- | ---------------------------------------- |
-| `dev`         | `ruvyxa dev`         | เริ่ม dev server พร้อม HMR               |
-| `build`       | `ruvyxa build`       | Build สำหรับ production ไปที่ `.ruvyxa/` |
-| `start`       | `ruvyxa start`       | เสิร์ฟ production build                  |
-| `typecheck`   | `tsc --noEmit`       | ตรวจ TypeScript โดยไม่สร้างไฟล์          |
-| `check`       | `ruvyxa check`       | typecheck + parity + smoke render        |
-| `preview`     | `ruvyxa preview`     | Build + start ในคำสั่งเดียว              |
-| `routes`      | `ruvyxa routes`      | แสดง route table                         |
-| `analyze`     | `ruvyxa analyze`     | รายงานวิเคราะห์ bundle + boundaries      |
-| `doctor`      | `ruvyxa doctor`      | วินิจฉัย project setup                   |
-| `clean`       | `ruvyxa clean`       | ลบ `.ruvyxa/` และ cache                  |
-| `trace`       | `ruvyxa trace`       | ดู route manifest entry                  |
-| `bench`       | `ruvyxa bench`       | ทดสอบ route discovery + build            |
-| `test:parity` | `ruvyxa test:parity` | เปรียบเทียบ routes dev/prod              |
+| คำสั่ง        | CLI จริง             | หน้าที่                                               |
+| ------------- | -------------------- | ----------------------------------------------------- |
+| `dev`         | `ruvyxa dev`         | เริ่ม dev server พร้อม HMR                            |
+| `build`       | `ruvyxa build`       | Build สำหรับ production ไปที่ `.ruvyxa/`              |
+| `start`       | `ruvyxa start`       | เสิร์ฟ production build                               |
+| `typecheck`   | `tsc --noEmit`       | ตรวจ TypeScript โดยไม่สร้างไฟล์                       |
+| `check`       | `ruvyxa check`       | typecheck + parity + smoke render                     |
+| `preview`     | `ruvyxa preview`     | เสิร์ฟ production build แบบ local (alias ของ `start`) |
+| `routes`      | `ruvyxa routes`      | แสดง route table                                      |
+| `analyze`     | `ruvyxa analyze`     | รายงานวิเคราะห์ bundle + boundaries                   |
+| `doctor`      | `ruvyxa doctor`      | วินิจฉัย project setup                                |
+| `clean`       | `ruvyxa clean`       | ลบ `.ruvyxa/` และ cache                               |
+| `trace`       | `ruvyxa trace`       | ดู route manifest entry                               |
+| `bench`       | `ruvyxa bench`       | ทดสอบ route discovery + build                         |
+| `test:parity` | `ruvyxa test:parity` | เปรียบเทียบ routes dev/prod                           |
 
 ---
 

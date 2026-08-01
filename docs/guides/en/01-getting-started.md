@@ -43,15 +43,13 @@ npm create ruvyxa@latest my-app
 
 `npm create ruvyxa@latest` accepts the following flags:
 
-| Flag         | Type                                             | Default       | Description                            |
-| ------------ | ------------------------------------------------ | ------------- | -------------------------------------- |
-| `--template` | `'minimal' \| 'blog' \| 'crud' \| 'api-backend'` | `'minimal'`   | Starter template to scaffold           |
-| `--pm`       | `'npm' \| 'pnpm' \| 'yarn' \| 'bun'`             | auto-detected | Package manager for dependency install |
-| `--yes`      | `boolean`                                        | `false`       | Skip interactive prompts, use defaults |
+| Flag         | Type                                             | Default     | Description                  |
+| ------------ | ------------------------------------------------ | ----------- | ---------------------------- |
+| `--template` | `'minimal' \| 'blog' \| 'crud' \| 'api-backend'` | `'minimal'` | Starter template to scaffold |
 
 ```bash
-# Skip prompts, use blog template with pnpm
-npm create ruvyxa@latest my-blog -- --template blog --pm pnpm --yes
+# Use blog template
+npm create ruvyxa@latest my-blog -- --template blog
 ```
 
 ### Interactive Prompt
@@ -64,7 +62,6 @@ You will see an interactive prompt asking which template to use:
   blog        – MDX blog with posts, tags, RSS
   crud        – Full CRUD with database and auth
   api-backend – Pure API with route.ts endpoints
-  empty       – Just the config
 ```
 
 Choose **minimal** for now. The CLI will scaffold the project and install dependencies.
@@ -100,8 +97,7 @@ my-app/
 ├── app/
 │   ├── layout.tsx        # Root layout — wraps every page
 │   ├── page.tsx          # Home page at /
-│   ├── globals.css       # Global stylesheet
-│   └── favicon.ico
+│   └── globals.css       # Global stylesheet
 ├── public/
 ├── AGENTS.md
 ├── CLAUDE.md
@@ -420,21 +416,21 @@ Every Ruvyxa project comes with these scripts:
 }
 ```
 
-| Script        | CLI Command          | Exact invocation         | What it does                                   |
-| ------------- | -------------------- | ------------------------ | ---------------------------------------------- |
-| `dev`         | `ruvyxa dev`         | `npx ruvyxa dev`         | Start dev server with HMR                      |
-| `build`       | `ruvyxa build`       | `npx ruvyxa build`       | Production build to `.ruvyxa/`                 |
-| `start`       | `ruvyxa start`       | `npx ruvyxa start`       | Serve production build from `.ruvyxa/`         |
-| `typecheck`   | `tsc --noEmit`       | `npx tsc --noEmit`       | Type-check without emitting files              |
-| `check`       | `ruvyxa check`       | `npx ruvyxa check`       | Validate routes, config, imports, parity       |
-| `preview`     | `ruvyxa preview`     | `npx ruvyxa preview`     | Build + start in one step                      |
-| `routes`      | `ruvyxa routes`      | `npx ruvyxa routes`      | Print the discovered route table               |
-| `analyze`     | `ruvyxa analyze`     | `npx ruvyxa analyze`     | Validate routes, imports, and boundaries       |
-| `doctor`      | `ruvyxa doctor`      | `npx ruvyxa doctor`      | Diagnose project issues                        |
-| `clean`       | `ruvyxa clean`       | `npx ruvyxa clean`       | Remove configured generated build output       |
-| `trace`       | `ruvyxa trace`       | `npx ruvyxa trace`       | Inspect one route-manifest entry               |
-| `bench`       | `ruvyxa bench`       | `npx ruvyxa bench`       | Benchmark discovery, analysis, and build       |
-| `test:parity` | `ruvyxa test:parity` | `npx ruvyxa test:parity` | Compare dev/prod routes and smoke-render pages |
+| Script        | CLI Command          | Exact invocation         | What it does                                      |
+| ------------- | -------------------- | ------------------------ | ------------------------------------------------- |
+| `dev`         | `ruvyxa dev`         | `npx ruvyxa dev`         | Start dev server with HMR                         |
+| `build`       | `ruvyxa build`       | `npx ruvyxa build`       | Production build to `.ruvyxa/`                    |
+| `start`       | `ruvyxa start`       | `npx ruvyxa start`       | Serve production build from `.ruvyxa/`            |
+| `typecheck`   | `tsc --noEmit`       | `npx tsc --noEmit`       | Type-check without emitting files                 |
+| `check`       | `ruvyxa check`       | `npx ruvyxa check`       | Validate routes, config, imports, parity          |
+| `preview`     | `ruvyxa preview`     | `npx ruvyxa preview`     | Serve production build locally (alias of `start`) |
+| `routes`      | `ruvyxa routes`      | `npx ruvyxa routes`      | Print the discovered route table                  |
+| `analyze`     | `ruvyxa analyze`     | `npx ruvyxa analyze`     | Validate routes, imports, and boundaries          |
+| `doctor`      | `ruvyxa doctor`      | `npx ruvyxa doctor`      | Diagnose project issues                           |
+| `clean`       | `ruvyxa clean`       | `npx ruvyxa clean`       | Remove configured generated build output          |
+| `trace`       | `ruvyxa trace`       | `npx ruvyxa trace`       | Inspect one route-manifest entry                  |
+| `bench`       | `ruvyxa bench`       | `npx ruvyxa bench`       | Benchmark discovery, analysis, and build          |
+| `test:parity` | `ruvyxa test:parity` | `npx ruvyxa test:parity` | Compare dev/prod routes and smoke-render pages    |
 
 ### Dependencies
 
