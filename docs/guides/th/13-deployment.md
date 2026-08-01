@@ -388,7 +388,7 @@ Environment variables ที่ใช้ auto-detect:
   prerendered HTML และ `package.json` สำหรับติดตั้ง dependencies ใน production
 - **Auto-detection**: ไม่มี (fallback เริ่มต้น)
 - **Runtime dependency**: มี — ต้องใช้ `ruvyxa` runtime package ใน `package.json`
-- **Error codes**: `RUV1705` (ไม่พบ entry)
+- **Errors**: ปัญหา entry จะรายงานจาก adapter/runtime โดยไม่มี diagnostic code เฉพาะ
 - **หมายเหตุ**: รองรับ WebSocket ผ่าน realtime plugin และ cluster mode ผ่าน PM2 หรือ `node:cluster`
 
 **@ruvyxa/adapter-static**
@@ -397,7 +397,7 @@ Environment variables ที่ใช้ auto-detect:
   `robots.txt`
 - **Auto-detection**: ไม่มี ต้องระบุเอง
 - **Runtime dependency**: ไม่มี — เป็น static files ล้วน
-- **Error codes**: `RUV1706` (SSR route ใน static build)
+- **Errors**: output ที่ adapter ไม่รองรับจะรายงานจาก adapter/runtime โดยไม่มี diagnostic code เฉพาะ
 - **หมายเหตุ**: รวมเฉพาะ SSG และ CSR routes เท่านั้น Routes ที่ใช้ SSR, ISR, หรือ PPR จะถูกตัดออกตอน
   build พร้อม warning
 
@@ -1659,3 +1659,50 @@ curl -I https://old-domain.com/about
 - CI/CD พร้อม GitHub Actions และ GitLab CI
 - 12 adapter-specific troubleshooting entries
 - Performance benchmarks — TTFB < 200ms, throughput > 1000 req/s
+
+---
+
+## Deployment Decisions ที่ CLI ตรวจได้
+
+Ruvyxa รองรับ built-in adapter names `node`, `bun`, `static`, `vercel`, `netlify`, `cloudflare`,
+`railway`, `render`, `firebase` และ `aws` แต่ละชื่อมี first-party adapter package ใน repository นี้
+และ `--adapter` รับชื่อ npm package ที่รูปแบบถูกต้องสำหรับ third-party adapter ได้ด้วย การเลือกเป็น
+build decision ที่ระบุได้ชัดเจน:
+
+```bash
+ruvyxa doctor --target node --adapter node
+ruvyxa build --target node --adapter node
+ruvyxa doctor --target static --adapter static
+ruvyxa build --target static --adapter static
+```
+
+รัน `doctor` ก่อนเมื่อประเมิน target เพราะตรวจ compatibility โดยไม่สร้าง adapter artifacts ส่วน
+`build` จะ build และเรียก adapter ที่เลือก `start` และ `preview` serve ได้เฉพาะ production build
+ที่มี อยู่แล้ว จึงไม่ใช่สิ่งแทน build command
+
+### Automatic Platform Selection เป็น Fallback
+
+เมื่อไม่ได้กำหนด adapter ผ่าน command หรือ configuration CLI เลือกจาก build environment ได้จาก
+`VERCEL`, `NETLIFY`, `CF_PAGES`, `RAILWAY_PROJECT_ID`, `RENDER` หรือ `AWS_APP_ID` `RUVYXA_ADAPTER`
+มี priority เหนือ platform markers เหล่านี้เมื่อค่าเป็น adapter name ที่ถูกต้อง นี่เป็น
+ความสะดวกสำหรับ host ที่รู้จัก ไม่ใช่เหตุผลให้ละการตรวจ adapter แบบ explicit ใน CI
+
+### Deployment Gate ขนาดเล็กที่ทำซ้ำได้
+
+```bash
+npm run check
+ruvyxa analyze --format sarif --output reports/ruvyxa.sarif
+ruvyxa doctor --adapter cloudflare --json
+ruvyxa build --adapter cloudflare
+```
+
+สร้าง `reports/` ก่อนเขียน analysis file และให้ target/adapter ตรงกับ environment ที่จะรัน output
+edge/static adapter อาจปฏิเสธ route strategy ที่ Node adapter เสิร์ฟได้ ให้มองเป็น design constraint
+ของ deployment ไม่ใช่ warning ที่ควรข้าม
+
+### แยก Framework Output ออกจาก Host Configuration
+
+framework สร้าง output directory ตาม config (minimal starter ใช้ `.ruvyxa`) ส่วน domain, TLS,
+secrets, DNS, traffic splitting และ provider dashboard เป็นความรับผิดชอบของ hosting platform ให้
+document/automate งาน platform ใน repository configuration ของ host และอย่าอธิบายว่า `ruvyxa build`
+deploy ออก external platform เอง เว้นแต่ package ของ adapter ที่เลือกบอกไว้ชัดเจน

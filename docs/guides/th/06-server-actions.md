@@ -819,6 +819,62 @@ pub(crate) fn action_file_for(route: &RouteEntry) -> Option<PathBuf> {
 
 ---
 
+## Contract ของ Action Builder
+
+Server-action API ที่รองรับคือ builder จาก `@ruvyxa/core/server` ซึ่งแยกการตัดสินใจเป็น 3 ส่วน:
+validation ของ input (เลือกใช้ได้), การ publish realtime (เลือกใช้ได้) และ server handler schema
+ต้องมีเพียงเมทอด `parse(value)` จึงไม่บังคับให้ใช้ validation library ใด library หนึ่ง
+
+```ts
+import { action } from '@ruvyxa/core/server'
+
+const createTodoInput = {
+  parse(value: unknown) {
+    if (
+      !value ||
+      typeof value !== 'object' ||
+      typeof (value as { title?: unknown }).title !== 'string'
+    ) {
+      throw new TypeError('title is required')
+    }
+    return { title: (value as { title: string }).title.trim() }
+  },
+}
+
+export const createTodo = action
+  .input(createTodoInput)
+  .realtime('todos')
+  .handler(async ({ input, request, user, invalidate }) => {
+    const todo = { id: crypto.randomUUID(), title: input.title, actor: user }
+    invalidate('todos')
+    return { todo, requestId: request.headers.get('x-request-id') }
+  })
+```
+
+handler context มี `input` ที่ validate แล้ว, `request` ที่เข้ามา, `user` ที่ runtime integration
+อาจ ใส่ให้ และ `invalidate(key)` แต่ไม่ได้สร้าง authentication หรือ persistent storage ให้อัตโนมัติ
+แอปยัง ต้อง authenticate request และเขียนข้อมูลลง data store ของตนเอง
+
+### Realtime Channels มีขอบเขตชัดเจน
+
+`.realtime()` รับ channel เดียวหรือรายการ channels ระบบ trim, ตัดค่าซ้ำ, จำกัดไม่เกิน 16 ค่า และชื่อ
+ต้องยาว 1–128 ตัว ใช้ได้เฉพาะ letters, digits, `:`, `.`, `_`, `/` หรือ `-` การไม่ส่ง argument จะใช้
+route channel ให้มอง realtime event เป็นสัญญาณให้ refresh/invalidate state ไม่ใช่หลักฐานว่า
+subscriber ทุกคนได้รับ database change ที่ durable แล้ว
+
+### ความปลอดภัยของ Request เกิดก่อน Handler
+
+action endpoint ตรวจ request และ rate limiter ที่ตั้งค่าไว้ก่อนส่งงานให้ worker รัน action ดังนั้น
+`security.actionLimit`, `security.actionRateLimit`, same-origin checks, Fetch Metadata checks และ
+trusted-proxy settings ต้องอยู่ในการทบทวน deployment/security; schema `parse` ไม่ได้แทนการป้องกันนี้
+
+ใช้ `ruvyxa analyze --format human` ตรวจว่า dependencies ของ action ไม่ไปอยู่ใน client graph แล้วใช้
+`npm run check` เป็น project-level type/parity gate ไม่ควรอธิบายหรือเรียก `'use server'` ว่าเป็นกลไก
+register action: route-local `action.ts`/`action.js` และ exported action values คือ convention
+ปัจจุบัน
+
+---
+
 ## ขั้นตอนถัดไป
 
 - **[07-api-routes.md](./07-api-routes.md)** — API routes สำหรับ REST endpoints

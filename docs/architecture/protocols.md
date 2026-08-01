@@ -106,7 +106,7 @@ Content-Type: application/json
 {
   "error": "ActionError",
   "message": "Something went wrong",
-  "code": "RUV3005"
+  "code": "RUV1500"
 }
 ```
 

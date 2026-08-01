@@ -2090,3 +2090,45 @@ export default function TodoApp() {
 - Import rule ชัดเจน — server-only vs client-safe
 - 3 ตัวอย่างรวม: Todo app, chat room, collaborative editor, live dashboard
 - Troubleshooting 18 ข้อ — error + สาเหตุ + วิธีแก้
+
+---
+
+## เลือก First-party Package จาก Boundary ที่มันรับผิดชอบ
+
+repository มี first-party integration packages 3 ตัวที่รับผิดชอบต่างกัน:
+
+| Package            | รับผิดชอบ                                                                  | Boundary สำคัญ                                                    |
+| ------------------ | -------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `@ruvyxa/auth`     | authentication runtime, provider/session flows และ auth plugin integration | เก็บ credentials และ session handling ไว้ฝั่ง server              |
+| `@ruvyxa/database` | typed facade เหนือ database adapter ที่แอปส่งให้                           | ไม่เลือก, install หรือ pool database driver ให้เอง                |
+| `@ruvyxa/realtime` | realtime plugin/client integration                                         | มอง delivery เป็น transient event delivery ไม่ใช่ durable storage |
+
+`@ruvyxa/database` เริ่มจาก adapter ที่ระบุชัด แล้วให้ model delegates เช่น `findMany`,
+`findUnique`, `create`, `update` และ `delete` โดย validate unsafe model names และบังคับ non-empty
+`where` สำหรับ unique/update/delete operations แอปเป็นเจ้าของ connection lifecycle ของ adapter และ
+database schema
+
+```ts
+import { createDatabase } from '@ruvyxa/database'
+
+const db = createDatabase<AppSchema>(adapter)
+const product = await db.Product.findUnique({ where: { id: productId } })
+```
+
+`@ruvyxa/auth` ให้ `createAuth()` และ OAuth provider helpers เช่น `google()` กับ `github()` runtime
+ทำงานที่ sensitive เช่น same-origin request checks และ session-cookie handling แต่ยังต้องมี
+application configuration กับ secure deployment origin อย่า import งาน auth/database ฝั่ง server
+เข้า module ที่ client เข้าถึงได้ เพราะ boundary validator มองทั้งสอง package เป็น server-only
+specifiers
+
+### Integrate ทีละ Capability
+
+1. install/configure หนึ่ง package ด้วย options ที่เอกสารของมันรองรับ
+2. เก็บ secrets ใน server-only module/environment
+3. รัน `ruvyxa analyze --format human` เพื่อหา boundary leak
+4. ทดสอบ route/action ที่ใช้ integration นั้น
+5. รัน `npm run check` ก่อนขยาย integration
+
+ลำดับนี้ช่วยไม่ให้ package ถูกอธิบายเกินว่าเป็น architecture สมบูรณ์ของ auth/database/event delivery
+มันให้ framework integration boundary ส่วน data modeling, authorization policy, driver configuration
+และ operational monitoring ยังเป็นการตัดสินใจของแอป

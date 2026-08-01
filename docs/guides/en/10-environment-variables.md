@@ -593,6 +593,70 @@ export function Analytics() {
 
 ---
 
+## Current Environment-loading Contract
+
+For project configuration and JavaScript runtimes, Ruvyxa currently loads `.env` and then
+`.env.local` from the project root; a value in `.env.local` wins over the same key in `.env`. The
+parser accepts blank lines, comments, `KEY=value`, quoted values, and dotenv-style
+`export KEY=value`. It does not, by itself, implement an environment-name matrix such as
+`.env.production.local` or an `import.meta.env` API.
+
+```dotenv
+# .env -- safe defaults shared by the project
+RUVYXA_PUBLIC_SITE_NAME=Catalog
+CATALOG_API_URL=https://catalog.example.test
+
+# .env.local -- developer-specific override; keep secrets out of version control
+CATALOG_API_URL=http://localhost:4010
+```
+
+Use normal process environment variables for platform-provided production configuration. A command
+or platform environment can supply those values without requiring a new env-file naming convention.
+
+### Public Exposure Is a Build Boundary
+
+The client-boundary scanner permits `NODE_ENV` and names beginning with `RUVYXA_PUBLIC_` in modules
+reachable from the browser. Other statically known `process.env.NAME` reads in that graph produce
+`RUV1008`. Prefixing a value is therefore a disclosure decision, not a convenience mechanism.
+
+```tsx
+'use client'
+
+export function ProductApiStatus() {
+  const apiBase = process.env.RUVYXA_PUBLIC_API_BASE
+  return <p>Using {apiBase ?? 'the default API'}</p>
+}
+```
+
+```ts
+// app/server/database.ts
+import 'server-only'
+
+export function databaseUrl() {
+  const value = process.env.DATABASE_URL
+  if (!value) throw new Error('DATABASE_URL is required')
+  return value
+}
+```
+
+Never rename a secret with `RUVYXA_PUBLIC_` merely to silence a diagnostic. Move the read behind a
+server module, action, loader, or API route instead.
+
+### Verify the Boundary Rather Than Printing Values
+
+Avoid commands that dump environment contents into logs. The useful checks are structural:
+
+```bash
+ruvyxa analyze --format human
+npm run check
+```
+
+`analyze` reports a private variable that reaches the client graph; `check` exercises the project
+readiness flow. Keep a committed `.env.example` with variable names and non-secret placeholders, and
+exclude `.env.local` when it contains credentials.
+
+---
+
 ## Next Steps
 
 - [03-server-client-components.md](./03-server-client-components.md) -- Understanding the

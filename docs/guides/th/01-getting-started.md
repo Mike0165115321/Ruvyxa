@@ -591,10 +591,10 @@ Adapter names ที่รู้จัก: `node`, `bun`, `static`, `vercel`, `n
 1. ใช้ port จาก config.server.port (default 3000)
 2. ถ้า port ว่าง → bind
 3. ถ้า port ไม่ว่าง → fallback scan
-   - ลอง port +1, +2, ... จนถึง +50
+   - ลอง port ถัดไปเมื่อ port ที่เลือกใช้งานไม่ได้
    - ถ้าเจอ port ว่าง → bind
-   - ถ้าไม่เจอ → RUV1204 PortConflictError
-4. ถ้า --port flag ถูกระบุ → ใช้ port นั้นโดยไม่ fallback
+   - ถ้าไม่เจอ → `RUV1201: No available server port was found`
+4. `--port` ใช้ override port จาก config
 ```
 
 ### เฟส 3: Route scan
@@ -829,9 +829,9 @@ Ruvyxa ใช้ **Radix Tree** (compressed trie) สำหรับการจ
 | `RUV1010` | Server directory reached by client | client import จากโฟลเดอร์ server/                               | ย้าย shared code ไว้นอก server/                                |
 | `RUV1100` | React SSR failed                   | Server-side render error                                        | ดู stack trace ใน console                                      |
 | `RUV1102` | SSR renderer not found             | Build output ขาด server handler                                 | รัน `npm run build` ใหม่                                       |
-| `RUV1200` | API route execution failed         | route.ts runtime error                                          | ดู error message                                               |
-| `RUV1201` | API route error (runtime)          | API route throw exception                                       | ตรวจสอบ route handler                                          |
-| `RUV1204` | Port conflict                      | Port ไม่ว่าง                                                    | ใช้ `--port` flag หรือ kill process                            |
+| `RUV1200` | API route execution failed         | `route.ts` runtime error                                        | ดู error message                                               |
+| `RUV1201` | No available server port           | ไม่พบ port ที่ bind ได้                                         | ระบุ `--port` หรือหยุด process ที่ใช้ port                     |
+| `RUV1202` | API renderer was not found         | runtime renderer ไม่พร้อม                                       | ติดตั้ง/ตรวจ runtime dependency                                |
 | `RUV1205` | Prerender path conflict            | static path ชนกับ build output                                  | เปลี่ยน outDir                                                 |
 | `RUV1300` | Client hydration bundling failed   | Build client bundle error                                       | ดู compiler output                                             |
 | `RUV1303` | Client route not found             | Request client bundle ที่ไม่มี route                            | เช็ค route path                                                |
@@ -915,10 +915,11 @@ Error: RUV1300: Client hydration bundling failed
 
 ```bash
 # clean + rebuild
-npm run clean && npm run build
+ruvyxa clean
+npm run build
 
-# หรือดู error ละเอียด
-npm run build -- --verbose
+# ตรวจ routes, imports และ boundaries
+ruvyxa analyze
 ```
 
 ### TypeScript error หลังสร้างโปรเจค
@@ -981,6 +982,69 @@ rm -rf node_modules yarn.lock && yarn install
 | **Directive**     | คำสั่ง 'use client' หรือ 'use server' ที่บอก bundler     |
 | **Radix Trie**    | data structure สำหรับ route matching                     |
 | **Meta**          | Metadata export สำหรับ SEO: title, description, OG       |
+
+---
+
+## สิ่งที่ Scaffold ใหม่มีให้จริง
+
+`create-ruvyxa` เริ่มจากแอปขนาดเล็กที่ตรวจสอบได้ ไม่ได้สร้างไฟล์แบบเดาสุ่ม ปัจจุบันเลือก template
+ได้ 4 แบบคือ `minimal` (ค่าเริ่มต้น), `blog`, `crud` และ `api-backend`:
+
+```bash
+npm create ruvyxa@latest my-app
+npm create ruvyxa@latest my-blog -- --template blog
+npm create ruvyxa@latest my-api -- --template api-backend
+```
+
+project ที่สร้างจะมีอย่างน้อย `app/page.tsx`, `app/layout.tsx`, `app/globals.css`,
+`ruvyxa.config.ts`, `package.json`, `AGENTS.md` และ `CLAUDE.md` ชื่อ package ใน `package.json`
+มาจากชื่อ directory ดังนั้นควรสร้างใน directory ว่างที่ต้องการให้เป็นเจ้าของจริง ตัวสร้างจะปฏิเสธ
+directory ที่มีไฟล์อยู่แล้วและชื่อที่ไม่ปลอดภัยบน Windows ก่อนคัดลอก template
+
+### หน้าที่ของไฟล์แรก ๆ แยกจากกัน
+
+| ไฟล์               | หน้าที่                                                 | จุดเริ่มต้นที่ปลอดภัย                                 |
+| ------------------ | ------------------------------------------------------- | ----------------------------------------------------- |
+| `app/page.tsx`     | page ของ `/` และต้องมี default export                   | แก้เนื้อหาใน `<main>` ของ starter                     |
+| `app/layout.tsx`   | ครอบ child pages และ import stylesheet หลัก             | ตั้งภาษาเอกสารหรือ shared shell                       |
+| `app/globals.css`  | CSS แบบ global ที่ root layout import                   | เพิ่ม reset, font หรือ design tokens                  |
+| `ruvyxa.config.ts` | ตั้งค่า server, build, cache และ security ระดับ project | เปลี่ยน `server.port` หรือเพิ่ม field ที่เอกสารรองรับ |
+| `package.json`     | versions ของ dependencies และ scripts ที่รันได้         | ใช้ scripts ในไฟล์นี้เป็น workflow หลัก               |
+
+Minimal template ใช้ `app` เป็น application directory และ `.ruvyxa` เป็น generated output อย่า
+commit `.ruvyxa`: build สร้างใหม่ได้เสมอด้วย `ruvyxa clean` แล้วตามด้วย `ruvyxa build`
+
+### ตรวจทีละข้อ แทนการเดา
+
+Minimal starter มี scripts `dev`, `build`, `start`, `typecheck` และ `check` เท่านั้น ส่วน `routes`,
+`analyze`, `doctor`, `clean`, `trace` และ `bench` เป็น CLI commands ไม่ใช่ starter scripts จึงเรียก
+ตรง ๆ เว้นแต่ project ของคุณเพิ่ม script เหล่านั้นเอง:
+
+```bash
+npm run dev
+ruvyxa routes
+ruvyxa doctor
+ruvyxa analyze --format human
+```
+
+ข้อแตกต่างนี้ทำให้ตัวอย่างย้ายข้าม project ได้: `npm run <name>` ใช้ได้ก็ต่อเมื่อมี script
+ชื่อนั้นใน `package.json` ของ project ปัจจุบัน
+
+### Loop ที่ใช้ได้ในชั่วโมงแรก
+
+หลังติดตั้ง dependencies ให้ใช้ลำดับสั้น ๆ นี้ แทนการแก้ config แบบลองผิดลองถูก:
+
+```bash
+npm run dev
+# เปิด terminal อีกอันหลังเพิ่มหรือเปลี่ยนชื่อ page
+ruvyxa routes
+# ก่อน commit การเปลี่ยนแปลงสำคัญ
+npm run check
+```
+
+`dev` ดูแล file watching และ HMR ส่วน `routes` แค่ค้นหาและพิมพ์ routes ไม่ได้เปิด server และ `check`
+จะตรวจ TypeScript เมื่อมี `tsconfig.json` แล้วรัน framework parity flow หาก generated output ดูเก่า
+ให้ใช้ `ruvyxa clean` ก่อน build ใหม่ ไม่ต้องลบ dependencies หรือ source files
 
 ---
 

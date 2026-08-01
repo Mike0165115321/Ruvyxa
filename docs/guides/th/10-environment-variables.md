@@ -1026,7 +1026,7 @@ export default defineConfig({
 **Error output เมื่อ env var หาย:**
 
 ```
-RUV1703: Required environment variable `DATABASE_URL` is not set
+Required environment variable `DATABASE_URL` is not set
   Defined in requireEnv plugin configuration
   Fix: Add DATABASE_URL to your .env file or set it in the environment
 ```
@@ -1434,12 +1434,12 @@ deploy:
 
 ### Error Codes
 
-| Code    | ปัญหา                            | สาเหตุ                                       | วิธีแก้                          |
-| ------- | -------------------------------- | -------------------------------------------- | -------------------------------- |
-| RUV1008 | Private env in client            | ใช้ `process.env.DB_URL` ใน client component | เปลี่ยน prefix หรือย้ายไป server |
-| RUV1009 | Public env not allowed on server | ไม่มี error — public ใช้ server ได้เสมอ      | -                                |
-| RUV1703 | Required env var missing         | ขาด env var ที่ plugin requireEnv กำหนด      | เพิ่ม env var                    |
-| RUV1201 | Config validation error          | .env syntax ผิด (format ไม่ถูก)              | ตรวจสอบรูปแบบ .env               |
+| Code              | ปัญหา                            | สาเหตุ                                       | วิธีแก้                          |
+| ----------------- | -------------------------------- | -------------------------------------------- | -------------------------------- |
+| RUV1008           | Private env in client            | ใช้ `process.env.DB_URL` ใน client component | เปลี่ยน prefix หรือย้ายไป server |
+| RUV1009           | Public env not allowed on server | ไม่มี error — public ใช้ server ได้เสมอ      | -                                |
+| ไม่มี code ตายตัว | Required env var missing         | ขาด env var ที่ plugin `requireEnv` กำหนด    | เพิ่ม env var                    |
+| RUV1201           | Config validation error          | .env syntax ผิด (format ไม่ถูก)              | ตรวจสอบรูปแบบ .env               |
 
 ### ปัญหาทั่วไป
 
@@ -1517,3 +1517,66 @@ RUVYXA_DEBUG=* ruvyxa dev
 - `requireEnv` plugin ตรวจสอบตอน build
 - Platform auto-detection (Vercel, Netlify, Cloudflare ฯลฯ)
 - อย่า commit secrets — ใช้ `.env.example` แทน
+
+---
+
+## Contract การโหลด Environment ปัจจุบัน
+
+สำหรับ project configuration และ JavaScript runtimes ปัจจุบัน Ruvyxa โหลด `.env` แล้วตามด้วย
+`.env.local` จาก project root โดยค่าซ้ำใน `.env.local` ชนะ `.env` parser รองรับบรรทัดว่าง, comments,
+`KEY=value`, quoted values และ dotenv-style `export KEY=value` แต่ไม่ได้ทำ environment-name matrix
+เช่น `.env.production.local` หรือ API แบบ `import.meta.env` ด้วยตัวเอง
+
+```dotenv
+# .env -- ค่า default ที่แชร์ใน project ได้
+RUVYXA_PUBLIC_SITE_NAME=Catalog
+CATALOG_API_URL=https://catalog.example.test
+
+# .env.local -- override เฉพาะ developer; เก็บ secrets ออกจาก version control
+CATALOG_API_URL=http://localhost:4010
+```
+
+ใช้ process environment variables ปกติสำหรับ production configuration ที่ platform ให้มาได้
+โดยไม่ต้อง สร้างกติกาชื่อ env-file เพิ่มเอง
+
+### Public Exposure คือ Build Boundary
+
+client-boundary scanner อนุญาต `NODE_ENV` และชื่อที่ขึ้นต้นด้วย `RUVYXA_PUBLIC_` ใน modules ที่
+browser เข้าถึงได้ ส่วน `process.env.NAME` ที่รู้ค่าแบบ static และไม่อยู่ในกลุ่มนี้จะได้ `RUV1008`
+การเติม prefix จึงเป็นการตัดสินใจเปิดเผยค่า ไม่ใช่กลไกเพื่อความสะดวก
+
+```tsx
+'use client'
+
+export function ProductApiStatus() {
+  const apiBase = process.env.RUVYXA_PUBLIC_API_BASE
+  return <p>Using {apiBase ?? 'the default API'}</p>
+}
+```
+
+```ts
+// app/server/database.ts
+import 'server-only'
+
+export function databaseUrl() {
+  const value = process.env.DATABASE_URL
+  if (!value) throw new Error('DATABASE_URL is required')
+  return value
+}
+```
+
+อย่าเปลี่ยนชื่อ secret เป็น `RUVYXA_PUBLIC_` เพื่อปิด diagnostic ให้ย้ายการอ่านไปหลัง server module,
+action, loader หรือ API route แทน
+
+### ตรวจ Boundary แทนการพิมพ์ค่าจริง
+
+หลีกเลี่ยงคำสั่งที่ dump environment contents ลง log การตรวจที่มีประโยชน์เป็นการตรวจโครงสร้าง:
+
+```bash
+ruvyxa analyze --format human
+npm run check
+```
+
+`analyze` รายงาน private variable ที่ไปถึง client graph และ `check` รัน project readiness flow เก็บ
+`.env.example` ที่ commit ได้พร้อมชื่อตัวแปร/placeholder ที่ไม่ secret และ exclude `.env.local`
+เมื่อมี credentials

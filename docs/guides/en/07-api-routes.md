@@ -1262,6 +1262,74 @@ curl http://localhost:3000/api/notes/1
 
 ---
 
+## What an API Route Receives and Returns
+
+An API entry is `route.ts` or `route.js`. The runtime looks up a named export matching the uppercase
+HTTP method and invokes it with one object containing `request` and `params`. Returning a `Response`
+preserves its status and headers; returning any other value is normalized to JSON.
+
+```ts
+// app/api/products/[id]/route.ts
+export async function GET({ request, params }: { request: Request; params: { id: string } }) {
+  const url = new URL(request.url)
+  return Response.json({ id: params.id, include: url.searchParams.get('include') })
+}
+
+export async function DELETE({ params }: { params: { id: string } }) {
+  await removeProduct(params.id)
+  return new Response(null, { status: 204 })
+}
+```
+
+If the matching named method is absent, the current runtime returns a
+`405 Method <METHOD> is not allowed` response. That is different from a missing route, which is a
+routing problem. Use method exports rather than a framework-specific request class: the handler
+receives the standard Web `Request` and can return the standard Web `Response`.
+
+### Body Limits Apply Before the Handler Runs
+
+For methods that can carry a body, the dev server reads the body under `security.apiLimit` before
+dispatching the API module. A request that exceeds that limit receives a payload-too-large response
+without executing the handler. Parse and validate application data inside the handler as well:
+
+```ts
+export async function POST({ request }: { request: Request }) {
+  const body: unknown = await request.json()
+  if (
+    !body ||
+    typeof body !== 'object' ||
+    typeof (body as { title?: unknown }).title !== 'string'
+  ) {
+    return Response.json({ error: 'title is required' }, { status: 400 })
+  }
+
+  return Response.json(
+    { id: crypto.randomUUID(), title: (body as { title: string }).title },
+    { status: 201 },
+  )
+}
+```
+
+Body-size enforcement limits transport size; it does not validate JSON shape, authorization, or
+ownership. Keep those decisions in the handler or a server-only service it calls.
+
+### Route Diagnostics Before Endpoint Debugging
+
+When an endpoint returns an unexpected result, establish which route was discovered before changing
+handler code:
+
+```bash
+ruvyxa routes
+ruvyxa trace /api/products/[id]
+ruvyxa analyze --format human
+```
+
+The route manifest separates page and API entries, and the analyzer treats API import graphs as
+server graphs. Keep browser-only imports out of `route.ts`; a server graph that imports
+`client-only` receives `RUV1009`.
+
+---
+
 ## Next Steps
 
 - **[06-server-actions.md](./06-server-actions.md)** — Server actions for mutations

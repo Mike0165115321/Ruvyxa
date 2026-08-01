@@ -826,8 +826,8 @@ export default config({
 ```
 
 **Under the hood**: At `build.onComplete`, reads chunk sizes from manifest. Sums all client bundle
-sizes. Compares against configured limits. If exceeded and `strict`, throws error (RUV1302). If not
-strict, logs warning.
+sizes. Compares against configured limits. If a limit is exceeded, it throws a build error. The
+current implementation does not assign a dedicated RUV diagnostic code to bundle-budget failures.
 
 ---
 
@@ -1473,9 +1473,9 @@ npm publish --access public
 | Plugin not running          | Name mismatch                 | Check `name` matches in `definePlugin`      |
 | RUV1600: Boundary violation | Server data in client context | Remove `process.env` from client hooks      |
 | RUV1601: Hook timeout       | Plugin too slow               | Reduce work or increase `pluginLimit`       |
-| RUV1602: Hook error         | Unhandled exception           | Fix plugin code, check error details        |
-| RUV1603: Unknown plugin     | Name not recognized           | Install or register the plugin              |
-| RUV1604: Config error       | Invalid plugin options        | Check plugin docs for correct options       |
+| Plugin hook error           | Unhandled exception           | Fix plugin code; check the reported error   |
+| Plugin is not loaded        | Plugin is absent from config  | Install it and add it to `plugins`          |
+| Invalid plugin options      | The plugin rejects its input  | Check that plugin's documented options      |
 | RUV2102: Invalid plugin     | Not a valid Plugin object     | Return from `definePlugin` or `Plugin` type |
 | Virtual module not found    | `resolveId` returns null      | Verify specifier match and importer         |
 | Plugin order wrong          | Hooks overwriting             | Reorder plugins or use `next()`             |
@@ -1491,16 +1491,61 @@ npm publish --access public
 
 ## Error Codes (RUV1600-1699, RUV2000-2102)
 
-| Code    | Title                           | Source            | Fix                           |
-| ------- | ------------------------------- | ----------------- | ----------------------------- |
-| RUV1600 | Plugin boundary violation       | Plugin host       | Fix server/client boundary    |
-| RUV1601 | Plugin hook timeout             | Plugin host       | Reduce work or increase limit |
-| RUV1602 | Plugin hook error               | Plugin host       | Fix plugin code               |
-| RUV1603 | Unknown plugin                  | Plugin registry   | Install plugin                |
-| RUV1604 | Plugin configuration error      | Config validation | Fix plugin options            |
-| RUV2000 | Adapter/Middleware config error | Config validation | Fix config                    |
-| RUV2001 | Adapter option error            | Adapter build     | Fix adapter options           |
-| RUV2102 | Invalid plugin definition       | `definePlugin()`  | Return valid plugin object    |
+| Code    | Title                        | Source           | Fix                           |
+| ------- | ---------------------------- | ---------------- | ----------------------------- |
+| RUV1600 | Plugin boundary violation    | Plugin host      | Fix server/client boundary    |
+| RUV1601 | Plugin hook timeout          | Plugin host      | Reduce work or increase limit |
+| RUV1700 | Plugin hook failed           | Plugin runtime   | Inspect the hook error        |
+| RUV1701 | Plugin bridge/protocol error | Plugin runtime   | Inspect the plugin response   |
+| RUV2102 | Invalid plugin definition    | `definePlugin()` | Return a valid plugin object  |
+| RUV2103 | Font self-hosting warning    | `fonts()` plugin | Check the font URL/network    |
+
+---
+
+## Plugin Boundaries and a Minimal Safe Plugin
+
+The public plugin constructor is `definePlugin()` from `@ruvyxa/core/plugin` (also re-exported by
+`ruvyxa/plugin`). A plugin needs a non-empty name and at least one behavior: a registration
+callback, HTTP behavior, build hooks, development file-change behavior, diagnostics, a native
+capability, or head entries. The constructor validates this before the plugin is registered.
+
+```ts
+import { definePlugin, withResponseHeader } from '@ruvyxa/core/plugin'
+
+export default definePlugin({
+  name: 'example:request-id',
+  http: {
+    match: '/api/*',
+    onResponse({ response }) {
+      return withResponseHeader(response, 'x-example-plugin', 'enabled')
+    },
+  },
+})
+```
+
+Register the returned plugin value in `ruvyxa.config.ts`. The route pattern `*` matches all paths, a
+trailing `*` is a prefix pattern, and any other pattern is exact. Keep request/response work
+bounded: plugin runtime communication is a system boundary, so an expensive or broad hook affects
+every matched request.
+
+### Select a Capability, Not a Marketing Name
+
+The first-party `ruvyxa/plugins` module currently exports: `redirects`, `headers`, `observability`,
+`securityHeaders`, `cacheRules`, `pwa`, `sitemap`, `robots`, `feed`, `searchIndex`, `contentEngine`,
+`openApi`, `alias`, `bundleBudget`, `requireEnv`, and `fonts`. Read the exported options type for
+the capability being used; a plugin name in a tutorial is not a substitute for its current contract.
+
+### Scaffold, Then Prove the Smallest Behavior
+
+```bash
+ruvyxa plugin create @acme/request-id --dir packages/request-id
+ruvyxa analyze --format human
+ruvyxa build
+```
+
+The CLI scaffolder creates a publishable package structure. It does not register the package in an
+application config or publish it to npm. Add one behavior, test the matching request/build path, and
+only then add wider hooks or a native capability.
 
 ---
 

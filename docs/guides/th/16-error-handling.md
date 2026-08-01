@@ -1383,10 +1383,10 @@ export default async function BlogPost({ params }: { params: { slug: string } })
 ```bash
 # CLI tools สำหรับ debug
 ruvyxa doctor            # ตรวจสอบทุกอย่าง — config, routes, boundary, env
-ruvyxa doctor --verbose  # แสดงละเอียดทุก error
-ruvyxa check             # เฉพาะ config + routes + boundary
-ruvyxa analyze           # bundle analysis — dependencies, size
-ruvyxa trace             # build trace — timing, dependencies
+ruvyxa doctor --json     # รับ compatibility report เป็น JSON
+ruvyxa check             # TypeScript check (เมื่อมี tsconfig) และ parity test
+ruvyxa analyze           # ตรวจ routes, imports และ server/client boundary
+ruvyxa trace /           # ดู route manifest entry ของ path ที่ระบุ
 ```
 
 **Output `ruvyxa doctor`**:
@@ -1542,3 +1542,42 @@ ruvyxa trace             # build trace — timing, dependencies
 - `notFound()` และ `redirect()` (301, 302, 307, 308) สำหรับควบคุม flow
 - `ruvyxa doctor` ตรวจทุกอย่าง — config, routes, boundary, env
 - 2 ตาราง: error code ทั้งหมด + cross-reference
+
+---
+
+## อ่าน Diagnostic เป็น Boundary Signal
+
+diagnostics ของ Ruvyxa ถูกสร้างจาก subsystem ที่เห็นปัญหา ให้เริ่มจาก code/message แล้วไปที่
+boundary ที่เป็นเจ้าของปัญหา แทนการมอง numeric ranges ว่าทุกเลขต้องมีอยู่จริง กลุ่มสำคัญปัจจุบันคือ:
+
+| Area                    | ตัวอย่าง                                              | จุดที่ควรตรวจแรก                                                       |
+| ----------------------- | ----------------------------------------------------- | ---------------------------------------------------------------------- |
+| Route discovery         | `RUV1001`, `RUV1002`, `RUV1004`                       | `appDir`, route entry filename, รูปแบบ dynamic segment, default export |
+| Client/server boundary  | `RUV1007`, `RUV1008`, `RUV1009`, `RUV1010`            | ไฟล์ที่ diagnostic ระบุและ reachable relative imports                  |
+| Content และ styles      | `RUV1310`–`RUV1312`, `RUV1402`, `RUV1403`             | Markdown/MDX frontmatter, Sass source หรือ stylesheet import path      |
+| Configuration           | `RUV1601`, `RUV1602`                                  | config field ที่ระบุและ range/path constraint ในเอกสาร                 |
+| Plugin/adapter contract | `RUV2102`, `RUV2200`, `RUV2202`, `RUV2203`, `RUV2210` | plugin definition หรือ target/adapter package ที่เลือก                 |
+
+ใช้คำสั่งที่เล็กที่สุดที่เปิดเผย boundary เดียวกัน:
+
+```bash
+ruvyxa routes
+ruvyxa trace /the-route-pattern
+ruvyxa analyze --format human
+ruvyxa doctor --json
+```
+
+`routes` ตอบเรื่อง discovery, `trace` ตอบ manifest entry เดียว, `analyze` ตอบ route/import
+validation และ `doctor` ตอบ environment/configuration/adapter compatibility คำสั่งเหล่านี้ไม่ได้แก้
+source/config ให้อัตโนมัติ จึงควรเก็บ file/path context ของ diagnostic แล้วแก้ที่สาเหตุที่เล็กที่สุด
+
+### ลำดับ Escalation ที่ปลอดภัย
+
+1. reproduce ด้วยคำสั่งที่เป็นเจ้าของ failure
+2. อ่านไฟล์และ import/config edge ที่ result ระบุ
+3. เปลี่ยนสาเหตุเดียว ไม่เปลี่ยน settings ที่ไม่เกี่ยวหลายอย่างพร้อมกัน
+4. รัน focused command ซ้ำ
+5. รัน `npm run check` เมื่อ failure ข้าม route, render หรือ type boundary
+
+อย่า log secrets, environment dump ทั้งหมด หรือ private request payload เพื่อ "ดูรายละเอียดเพิ่ม"
+boundary diagnostics ตั้งใจให้ชี้ source location และ safe direction โดยไม่ต้องใช้ข้อมูล sensitive

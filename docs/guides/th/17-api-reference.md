@@ -1266,3 +1266,23 @@ interface ImageLoaderProps {
 ---
 
 _เอกสารอ้างอิงสำหรับ Ruvyxa 1.0 — อัปเดตล่าสุดตาม codebase ณ เวลาที่เผยแพร่_
+
+## วิธีใช้ API Reference อย่างปลอดภัย
+
+public export barrels เป็น source ที่ผูกกับ implementation สำหรับบทนี้: `@ruvyxa/react` export
+UI/runtime helpers เช่น `Image`, `Picture`, `Link`, `Seo`, `Answer`, route-context hooks,
+`useRuvyxaLoader`, hydration helpers และ error/not-found helpers ส่วน `@ruvyxa/core` export
+`config`, plugin helpers, server helpers `action`, `cache`, `loader`, `json`, `notFound`,
+`redirect`, `invalidateCache` รวมถึง public configuration และ route types
+
+ควร import จาก public package paths เหล่านี้ ไม่ควรเข้าถึง `src/` หรือ runtime files โดยตรง:
+
+```ts
+import { config } from 'ruvyxa/config'
+import { action, cache, loader } from '@ruvyxa/core/server'
+import { Image, Link, useParams } from '@ruvyxa/react'
+```
+
+types และ runtime behavior เปลี่ยนไปด้วยกันได้ เมื่อเพิ่มตัวอย่างใหม่หรือ upgrade package ให้ตรวจ
+exported symbol ที่ตรงกันและรัน TypeScript/project check อย่าถือว่า type snippet
+ในหน้านี้เป็นหลักฐานของ private implementation contract

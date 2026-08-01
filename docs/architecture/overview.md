@@ -167,6 +167,38 @@ my-app/
 
 ## Next: Architecture Deep Dives
 
+## Implementation Entry Points and Reading Order
+
+This documentation is easiest to verify by following the runtime path rather than reading crates
+alphabetically. The table below maps each user-visible concern to its primary source boundary.
+
+| Concern                           | Primary implementation                                                           | What it owns                                                           | Read next                                         |
+| --------------------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------- |
+| Command parsing and orchestration | `crates/ruvyxa_cli/src/main.rs`                                                  | CLI surface, argument precedence, dispatch                             | [CLI & Build Pipeline](cli.md)                    |
+| Configuration translation         | `crates/ruvyxa_cli/src/config.rs`, `packages/ruvyxa/runtime/config-renderer.mjs` | Config files, validation, runtime config hand-off                      | [CLI & Build Pipeline](cli.md)                    |
+| Route discovery and validation    | `crates/ruvyxa_graph/src/lib.rs`                                                 | File conventions, manifests, rendering detection, boundary diagnostics | [Route Discovery](graph.md)                       |
+| Client compilation and linking    | `crates/ruvyxa_bundler/src`                                                      | AST scanning, resolution, boundary checks, output                      | [Bundler](bundler.md)                             |
+| HTTP serving and rendering        | `crates/ruvyxa_dev_server/src/lib.rs`                                            | Axum routes, request dispatch, HMR, render cache, security application | [Dev Server](dev-server.md)                       |
+| Middleware and plugin bridge      | `crates/ruvyxa_middleware/src` and `packages/ruvyxa/runtime/plugin-runtime.mjs`  | Middleware stacking and JavaScript-plugin communication                | [Middleware](middleware.md)                       |
+| Public TypeScript contract        | `packages/@ruvyxa/core/src`, `packages/@ruvyxa/react/src`                        | Config, server helpers, React components/hooks                         | [API Reference](../guides/en/17-api-reference.md) |
+
+### Boundary Walkthrough: One Request
+
+For a page request, the dev server obtains or refreshes the route manifest from `ruvyxa_graph`,
+matches the request, and sends rendering work through its worker/runtime path. The bundler and graph
+share source-scanning facts for imports and environment reads so a `check` result and a build are
+less likely to disagree about a client/server boundary. Plugins and middleware wrap the HTTP path;
+they are not a substitute for route discovery or rendering strategy selection.
+
+When investigating a framework issue, start with the user-visible symptom and follow this order:
+
+```text
+CLI command -> config -> route manifest -> module/boundary validation -> dev server or build output
+```
+
+This order prevents a common debugging mistake: changing the server or adapter when the route was
+never discovered, or changing a page when the failure is a module boundary violation.
+
 - [Route Discovery & Validation](graph.md) — how `app/` becomes a route manifest
 - [Compilation Pipeline](bundler.md) — resolver → compiler → linker → minifier
 - [Dev Server](dev-server.md) — Axum serving, HMR protocol, render cache

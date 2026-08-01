@@ -210,3 +210,24 @@ Use `analyze` first for route/import/boundary problems, `check` for full readine
 - Adapter `build()` runs within staging before atomic commit
 - `check` is application-readiness signal, not E2E/load/security audit
 - If Windows locks `target/debug/ruvyxa.exe` → stop dev server, don't delete `target/`
+
+---
+
+## 11. Documentation Evidence Workflow
+
+When changing a user-visible behavior, update the documentation that owns the contract, not an
+unrelated overview. Use the implementation boundary to choose the document:
+
+| Changed behavior                                | Inspect first                                                   | Update first                                         |
+| ----------------------------------------------- | --------------------------------------------------------------- | ---------------------------------------------------- |
+| Route convention, manifest, or render detection | `crates/ruvyxa_graph/src/lib.rs` and graph tests                | routing/rendering guides and `architecture/graph.md` |
+| CLI command or flag                             | `crates/ruvyxa_cli/src/main.rs` and live `--help`               | CLI guide and `architecture/cli.md`                  |
+| Config field                                    | `packages/@ruvyxa/core/src/types.ts` plus CLI config validation | configuration guide                                  |
+| Bundling/resolution/boundary rule               | `crates/ruvyxa_bundler/src` and parser tests                    | bundler architecture and affected guide              |
+| Server behavior/HMR/security                    | `crates/ruvyxa_dev_server/src`                                  | dev-server/security/protocol docs                    |
+| Public package export                           | package `src/index.ts` and package tests                        | API reference and package guide                      |
+
+For a documentation-only change, verify Markdown formatting and links. For a factual change tied to
+runtime behavior, also run the narrowest owning check. Never create an example around an inferred
+flag, an imagined generated file, or a planned plugin capability; label a proposal as proposed until
+the code and tests exist.

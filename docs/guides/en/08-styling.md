@@ -1342,6 +1342,67 @@ Open the browser — inspect the card. The class names are hashed and unique.
 
 ---
 
+## How Style Collection Works in This Framework
+
+Style collection starts from application scripts and follows their import graph. It also accepts
+explicit project-relative `css.entries` from configuration, which is the right escape hatch for a
+global stylesheet that is intentionally not imported by application code. A missing style import is
+reported as `RUV1403`; adding a path to `css.entries` is appropriate only when the stylesheet is
+truly global, not as a way to hide a broken relative import.
+
+```ts
+// ruvyxa.config.ts
+import { config } from 'ruvyxa/config'
+
+export default config({
+  css: {
+    entries: ['styles/print.css', 'styles/tokens.css'],
+  },
+})
+```
+
+The paths are project-relative and validated with the rest of the configuration. Keep a component's
+stylesheet imported by that component whenever possible; this preserves a readable dependency path
+for both development and production collection.
+
+### CSS Modules and Sass Have Separate Steps
+
+Files ending in `.module.css`, `.module.scss`, or `.module.sass` are CSS Modules. Sass sources are
+compiled first, then the framework scopes local class selectors using a stable project-relative path
+and class name. The generated map is what the TypeScript module imports:
+
+```tsx
+import styles from './Button.module.scss'
+
+export function Button({ children }: { children: React.ReactNode }) {
+  return <button className={styles.primary}>{children}</button>
+}
+```
+
+Use `:global(...)` only for a selector that must intentionally escape module scoping. It is not a
+replacement for a global stylesheet; broad rules belong in an imported global CSS file or an
+explicit `css.entries` file.
+
+### What to Verify When a Style Does Not Appear
+
+1. Check that the stylesheet is imported from a reachable application module, or listed in
+   `css.entries`.
+2. Check the exact relative path and extension; unresolved imports are not silently skipped.
+3. For Sass, fix the compiler error rather than expecting a partial stylesheet.
+4. Re-run the normal route/analysis checks after changing a shared style entry.
+
+```bash
+ruvyxa analyze --format human
+ruvyxa trace /
+npm run build
+```
+
+Development serves the collected CSS while watching files. Production rendering minifies the
+collected CSS before embedding it in the document, so test a production build as well when order or
+minification-sensitive rules are involved.
+
+---
+
 ## Next Steps
 
 - **[01-getting-started.md](./01-getting-started.md)** — Project setup

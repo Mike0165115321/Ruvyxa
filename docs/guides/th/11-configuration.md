@@ -1024,46 +1024,36 @@ RUVYXA_ADAPTER=vercel npm run build
 
 ### รหัส Error RUV1600-RUV1699
 
-| Code    | เงื่อนไข                       | ฟิลด์        | วิธีแก้              |
-| ------- | ------------------------------ | ------------ | -------------------- |
-| RUV1601 | ค่าไม่ถูกต้อง (invalid)        | หลายฟิลด์    | ตรวจค่าตามที่กำหนด   |
-| RUV1602 | ค่าเกินขีดจำกัด (out of range) | หลายฟิลด์    | ปรับค่าให้อยู่ในช่วง |
-| RUV1603 | ฟิลด์ไม่รู้จัก (unknown field) | ทั้ง config  | ตรวจ camelCase       |
-| RUV1604 | ฟิลด์ซ้ำ (duplicate)           | plugins.name | เปลี่ยนชื่อ plugin   |
-| RUV1605 | ชนิดข้อมูลผิด (type mismatch)  | ทุกฟิลด์     | ใช้ชนิดที่ถูกต้อง    |
-| RUV1606 | ฟิลด์ required ขาดหาย          | -            | เพิ่มฟิลด์ที่จำเป็น  |
+| Code    | เงื่อนไข                       | ฟิลด์                                     | วิธีแก้                   |
+| ------- | ------------------------------ | ----------------------------------------- | ------------------------- |
+| RUV1601 | ค่าไม่ถูกต้อง (invalid)        | หลายฟิลด์                                 | ตรวจค่าตามที่กำหนด        |
+| RUV1602 | ค่าเกินขีดจำกัด (out of range) | หลายฟิลด์                                 | ปรับค่าให้อยู่ในช่วง      |
+| RUV1603 | ฟิลด์ไม่รู้จัก (unknown field) | ทั้ง config                               | ตรวจ camelCase            |
+| RUV1602 | config มีโครงสร้างไม่ถูกต้อง   | plugins.name ซ้ำหรือ field ไม่ถูกต้อง     | แก้ schema และชื่อ plugin |
+| RUV1603 | adapter definition ไม่ถูกต้อง  | adapter ไม่มี `build(context)` ที่ถูกต้อง | แก้ adapter contract      |
 
 ### Validation Matrix
 
-| Config Field                         | RUV1601     | RUV1602          | RUV1605 | หมายเหตุ               |
-| ------------------------------------ | ----------- | ---------------- | ------- | ---------------------- |
-| `appDir` empty/absolute              | ✅          | -                | ✅      | relative path required |
-| `outDir` empty/absolute              | ✅          | -                | ✅      | relative path required |
-| `server.port` 0                      | ✅          | ✅ (ถ้า > 65535) | ✅      | 1024-65535             |
-| `server.host` invalid                | -           | ✅               | ✅      | valid hostname/IP      |
-| `site.url` invalid                   | -           | ✅               | ✅      | origin เท่านั้น        |
-| `site.sitemap.defaults.priority`     | -           | ✅ (0-1)         | ✅      | float                  |
-| `build.parallelism` 0                | ✅          | ✅ (ถ้า > 64)    | ✅      | 1-64                   |
-| `build.splitStrategy` invalid        | ✅          | -                | ✅      | auto/route/vendor/all  |
-| `build.jsxRuntime` invalid           | ✅          | -                | ✅      | automatic/classic      |
-| `build.esTarget` invalid             | ✅          | -                | ✅      | es2020-esnext          |
-| `security.actionLimit` 0             | ✅          | ✅ (>10MB)       | ✅      | 1B-10MB                |
-| `security.apiLimit` 0                | ✅          | ✅ (>50MB)       | ✅      | 1B-50MB                |
-| `security.pluginLimit` 0             | ✅          | ✅ (>50MB)       | ✅      | 1B-50MB                |
-| `security.maxBodySize` 0             | ✅          | ✅ (>100MB)      | ✅      | 1B-100MB               |
-| `security.trustedProxyIps[]` invalid | -           | ✅               | ✅      | valid IP/CIDR          |
-| `security.actionRateLimit.max` 0     | ✅          | -                | ✅      | ≥ 1                    |
-| `security.actionRateLimit.window` 0  | ✅          | -                | ✅      | ≥ 1                    |
-| `middleware.workers` 0               | ✅          | ✅ (>8)          | ✅      | 1-8                    |
-| `middleware.timeoutMs` 0             | ✅          | ✅ (>300s)       | ✅      | 1ms-300s               |
-| `image.quality` out of range         | ✅ (0/100+) | -                | ✅      | 1-100                  |
-| `image.avifQuality` out of range     | ✅ (0/100+) | -                | ✅      | 1-100                  |
-| `image.sizes[]` 0                    | ✅          | ✅ (>10000)      | ✅      | 1-9999                 |
-| `image.formats` empty                | ✅          | -                | ✅      | ≥ 1 format             |
-| `css.entries[]` absolute             | ✅          | -                | ✅      | relative path          |
-| `cache.buildDir` absolute            | ✅          | -                | ✅      | relative path          |
-| `adapter` unknown                    | ✅          | -                | ✅      | ดู AdapterType         |
-| `plugins[].name` empty/duplicate     | ✅          | -                | ✅      | unique, non-empty      |
+| Config Field | RUV1601 | RUV1602 | หมายเหตุ | | ------------------------------------ | -----------
+| ---------------- | ------- | ---------------------- | | `appDir` empty/absolute | ✅ | - | ✅ |
+relative path required | | `outDir` empty/absolute | ✅ | - | ✅ | relative path required | |
+`server.port` 0 | ✅ | ✅ (ถ้า > 65535) | ✅ | 1024-65535 | | `server.host` invalid | - | ✅ | ✅ |
+valid hostname/IP | | `site.url` invalid | - | ✅ | ✅ | origin เท่านั้น | |
+`site.sitemap.defaults.priority` | - | ✅ (0-1) | ✅ | float | | `build.parallelism` 0 | ✅ | ✅
+(ถ้า > 64) | ✅ | 1-64 | | `build.splitStrategy` invalid | ✅ | - | ✅ | auto/route/vendor/all | |
+`build.jsxRuntime` invalid | ✅ | - | ✅ | automatic/classic | | `build.esTarget` invalid | ✅ | - |
+✅ | es2020-esnext | | `security.actionLimit` 0 | ✅ | ✅ (>10MB) | ✅ | 1B-10MB | |
+`security.apiLimit` 0 | ✅ | ✅ (>50MB) | ✅ | 1B-50MB | | `security.pluginLimit` 0 | ✅ | ✅
+(>50MB) | ✅ | 1B-50MB | | `security.maxBodySize` 0 | ✅ | ✅ (>100MB) | ✅ | 1B-100MB | |
+`security.trustedProxyIps[]` invalid | - | ✅ | ✅ | valid IP/CIDR | |
+`security.actionRateLimit.max` 0 | ✅ | - | ✅ | ≥ 1 | | `security.actionRateLimit.window` 0 | ✅
+| - | ✅ | ≥ 1 | | `middleware.workers` 0 | ✅ | ✅ (>8) | ✅ | 1-8 | | `middleware.timeoutMs` 0 |
+✅ | ✅ (>300s) | ✅ | 1ms-300s | | `image.quality` out of range | ✅ (0/100+) | - | ✅ | 1-100 | |
+`image.avifQuality` out of range | ✅ (0/100+) | - | ✅ | 1-100 | | `image.sizes[]` 0 | ✅ | ✅
+(>10000) | ✅ | 1-9999 | | `image.formats` empty | ✅ | - | ✅ | ≥ 1 format | | `css.entries[]`
+absolute | ✅ | - | ✅ | relative path | | `cache.buildDir` absolute | ✅ | - | ✅ | relative path |
+| `adapter` unknown | ✅ | - | ✅ | ดู AdapterType | | `plugins[].name` empty/duplicate | ✅ | - |
+✅ | unique, non-empty |
 
 ---
 
@@ -1379,14 +1369,13 @@ Output:
 
 ## Troubleshooting — ทุก Error และวิธีแก้
 
-| Error Code | ปัญหา                     | สาเหตุ                                  | วิธีแก้                                   |
-| ---------- | ------------------------- | --------------------------------------- | ----------------------------------------- |
-| RUV1601    | Config field invalid      | ค่าไม่ถูกต้อง (0, empty, absolute path) | ตรวจค่าที่กำหนดในตาราง                    |
-| RUV1602    | Config value out of range | ค่าเกินขีดจำกัด                         | ปรับค่าให้อยู่ในช่วง                      |
-| RUV1603    | Unknown field             | พิมพ์ชื่อฟิลด์ผิด                       | ตรวจ camelCase (`appDir` ไม่ใช่ `appdir`) |
-| RUV1604    | Duplicate plugin name     | plugin ชื่อซ้ำ                          | เปลี่ยนชื่อ plugin                        |
-| RUV1605    | Type mismatch             | ชนิดข้อมูลผิด (string แทน number)       | ตรวจชนิดที่ถูกต้อง                        |
-| RUV1606    | Required field missing    | ฟิลด์จำเป็นขาด                          | เพิ่มฟิลด์ที่ต้องการ                      |
+| Error Code | ปัญหา                      | สาเหตุ                                  | วิธีแก้                                   |
+| ---------- | -------------------------- | --------------------------------------- | ----------------------------------------- |
+| RUV1601    | Config field invalid       | ค่าไม่ถูกต้อง (0, empty, absolute path) | ตรวจค่าที่กำหนดในตาราง                    |
+| RUV1602    | Config value out of range  | ค่าเกินขีดจำกัด                         | ปรับค่าให้อยู่ในช่วง                      |
+| RUV1603    | Unknown field              | พิมพ์ชื่อฟิลด์ผิด                       | ตรวจ camelCase (`appDir` ไม่ใช่ `appdir`) |
+| RUV1602    | Invalid config structure   | plugin ชื่อซ้ำหรือชนิดข้อมูลไม่ถูกต้อง  | ตรวจ schema และชื่อ plugin                |
+| RUV1603    | Invalid adapter definition | adapter contract ไม่ถูกต้อง             | ตรวจ `build(context)` และผลลัพธ์          |
 
 | ปัญหาทั่วไป                    | สาเหตุ                     | วิธีแก้                                                       |
 | ------------------------------ | -------------------------- | ------------------------------------------------------------- |
@@ -1455,3 +1444,57 @@ RUVYXA_DEBUG=plugin ruvyxa dev
 - ทุกฟิลด์มี default + validation
 - Rust backend validation ที่ robust
 - `npm run doctor` ตรวจสอบทุกอย่าง
+
+---
+
+## Configuration เป็น Typed Contract
+
+public contract คือ `RuvyxaConfig` จาก `@ruvyxa/core` ซึ่งปกติเขียนผ่าน `config()` จาก
+`ruvyxa/config` top-level fields คือ `appDir`, `outDir`, `runtime`, `react`, `typescript`, `css`,
+`server`, `build`, `render`, `debug`, `image`, `security`, `cache`, `site`, `middleware`, `adapter`,
+`adapterOptions` และ `plugins` ควรตั้งค่าให้แคบ: ไม่ต้อง copy "full production" object
+ที่เดาไว้เมื่อ defaults เดิมตรงกับแอปแล้ว
+
+```ts
+import { config, type RuvyxaConfig } from 'ruvyxa/config'
+
+const settings: RuvyxaConfig = {
+  server: { host: 'localhost', port: 3000 },
+  build: { minify: true, split: 'route', workers: 4 },
+  render: { strategy: 'ssr' },
+  css: { entries: ['styles/print.css'] },
+}
+
+export default config(settings)
+```
+
+`appDir`, `outDir` และทุกค่าใน `css.entries` เป็น project-relative paths CLI จะปฏิเสธ path ว่าง,
+absolute path หรือ path ที่หนีออกนอก project แทนการ resolve ออกไปอย่างเงียบ ๆ นี่เป็น safety
+boundary: ใช้ relative directory ภายในแอป ไม่ใช่ absolute path ที่ผูกกับ OS
+
+### Precedence เป็นราย Input ไม่ใช่ Global Override
+
+คำสั่งที่รับ `--runtime` ให้ CLI value ชนะ `RUVYXA_RUNTIME` และ `config.runtime` สำหรับ `dev`,
+`start` และ `preview`, `--host`/`--port` ชนะ server config ส่วน build target และ adapter มี CLI
+overrides ของตัวเอง จึงไม่ควรเหมารวม precedence นี้ไปยัง config fields อื่น
+
+```bash
+ruvyxa dev --port 4000 --runtime bun
+ruvyxa build --target static --adapter static
+ruvyxa doctor --adapter cloudflare --json
+```
+
+### Validate ก่อน Deploy
+
+ใช้ `doctor` เพื่อตรวจ configuration/runtime/adapter compatibility และใช้ `analyze` ตรวจ
+route/import boundaries เพราะรับผิดชอบคนละเรื่อง จึงไม่แทนกัน:
+
+```bash
+ruvyxa doctor
+ruvyxa analyze --format human
+npm run check
+```
+
+configuration validation บังคับ positive bounded limits เช่น action/API payload limits และค่า
+trusted-proxy IP/CIDR ที่ถูกต้อง หากค่าถูกปฏิเสธให้แก้ field นั้น ไม่ควรเพิ่ม environment override
+ที่ เอกสารไม่ได้รองรับ

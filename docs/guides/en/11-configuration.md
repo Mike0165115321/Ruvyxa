@@ -1227,6 +1227,62 @@ Run `ruvyxa doctor` to validate your config against all rules:
 
 ---
 
+## Configuration as a Typed Contract
+
+The public contract is `RuvyxaConfig` from `@ruvyxa/core`, normally authored through `config()` from
+`ruvyxa/config`. Its top-level fields are `appDir`, `outDir`, `runtime`, `react`, `typescript`,
+`css`, `server`, `build`, `render`, `debug`, `image`, `security`, `cache`, `site`, `middleware`,
+`adapter`, `adapterOptions`, and `plugins`. Keep configuration narrow: omit fields whose defaults
+match the application instead of copying a speculative "full production" object.
+
+```ts
+import { config, type RuvyxaConfig } from 'ruvyxa/config'
+
+const settings: RuvyxaConfig = {
+  server: { host: 'localhost', port: 3000 },
+  build: { minify: true, split: 'route', workers: 4 },
+  render: { strategy: 'ssr' },
+  css: { entries: ['styles/print.css'] },
+}
+
+export default config(settings)
+```
+
+`appDir`, `outDir`, and every `css.entries` value are project-relative paths. The CLI rejects an
+empty, absolute, or escaping path rather than resolving it outside the project. This is a safety
+boundary: use a relative directory inside the application rather than an operating-system-specific
+absolute path.
+
+### Precedence Is Per Input, Not a Global Override
+
+For commands that accept `--runtime`, the command-line value wins over `RUVYXA_RUNTIME` and
+`config.runtime`. For `dev`, `start`, and `preview`, command-line `--host` and `--port` override the
+corresponding server configuration. Build target and adapter have their own CLI overrides. Do not
+generalize that precedence to unrelated config fields.
+
+```bash
+ruvyxa dev --port 4000 --runtime bun
+ruvyxa build --target static --adapter static
+ruvyxa doctor --adapter cloudflare --json
+```
+
+### Validate Before Deploying
+
+Use `doctor` to inspect configuration/runtime/adapter compatibility and `analyze` for route/import
+boundaries. Their concerns differ, so a successful one does not replace the other:
+
+```bash
+ruvyxa doctor
+ruvyxa analyze --format human
+npm run check
+```
+
+Configuration validation enforces positive bounded limits such as action/API payload limits and
+valid trusted-proxy IP/CIDR values. If a config value is rejected, correct the field rather than
+adding an undocumented environment override.
+
+---
+
 ## Next Steps
 
 - [12-cli-commands.md](./12-cli-commands.md) -- CLI commands that consume this config

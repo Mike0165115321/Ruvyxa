@@ -750,6 +750,80 @@ function parseTtl(value: string): number {
 
 ---
 
+## ขอบเขตของ Cache และพฤติกรรมเมื่อเกิดข้อผิดพลาด
+
+`cache(key)` จาก `@ruvyxa/core/server` เป็น application-data cache ใน process เดียว แตกต่างจาก
+route-render cache และ generated build cache จึงไม่ควรใช้ชื่อเดียวแล้วคาดว่าจะ invalidate กันทั้งหมด
+contract ปัจจุบันมีขอบเขตชัดเจน:
+
+- เก็บได้สูงสุด 1,024 keys; เมื่อเต็มจะ evict key ที่ใช้งานล่าสุดน้อยที่สุด
+- `ttl()` รับ duration ที่เป็นบวกพร้อมหน่วย `ms`, `s`, `m`, `h` หรือ `d`
+- `swr()` เพิ่มช่วง stale-while-revalidate หลัง TTL
+- ถ้า producer ล้มเหลวแต่ยังมี stale value ในช่วง SWR ระบบคืนค่านั้นได้; cache ว่างจะไม่กลายเป็น
+  success
+- `invalidateCache()` invalidate ได้ทั้ง key เดียว, prefix ที่คั่นด้วย colon หรือทุก key เมื่อไม่ส่ง
+  argument
+
+เพราะฉะนั้นการตั้งชื่อ key จึงเกี่ยวกับความถูกต้อง ไม่ใช่แค่รูปแบบ:
+
+```ts
+import { cache, invalidateCache } from '@ruvyxa/core/server'
+
+export const listProducts = () =>
+  cache('catalog:products')
+    .ttl('5m')
+    .swr('30s')
+    .get(() => fetch('https://catalog.example.test/products').then((r) => r.json()))
+
+export function refreshCatalog() {
+  invalidateCache('catalog') // invalidate catalog และ keys ที่ขึ้นต้น catalog:
+}
+```
+
+เลือก key จากทุก input ที่ทำให้ผลลัพธ์เปลี่ยน ข้อมูลเฉพาะ user ต้องมี user/tenant ที่เหมาะสมใน key
+มิฉะนั้น caller หนึ่งอาจได้ข้อมูลของอีก caller หนึ่ง Cache นี้อยู่ใน process เดียว ดังนั้น
+deployment หลาย instances ที่ต้องการข้อมูลตรงกันต้องใช้ data/cache strategy แบบ shared นอกเหนือจาก
+helper นี้
+
+### Loader กับ Client Fetch ใช้คนละช่วงของ Flow
+
+`loader(handler)` ห่อ server-side handler และให้ context ที่มี `params`, `request` และ cache helper
+เดียวกัน จึงเหมาะกับการอ่านข้อมูลตอน render page:
+
+```ts
+import { loader } from '@ruvyxa/core/server'
+
+export const productLoader = loader(async ({ params, cache }) => {
+  const id = params.id
+  return cache(`catalog:product:${id}`)
+    .ttl('1m')
+    .get(async () => {
+      const response = await fetch(`https://catalog.example.test/products/${id}`)
+      if (!response.ok) throw new Error(`catalog returned ${response.status}`)
+      return response.json()
+    })
+})
+```
+
+เก็บ initial page read ไว้บน server เมื่อใช้ private credentials หรือต้องการให้ข้อมูลอยู่ใน HTML
+response ส่วน client hook หรือ browser `fetch` เหมาะกับ refresh ที่เกิดจาก interaction และต้องเรียก
+endpoint ที่ เปิดเผยต่อ browser ได้อย่างปลอดภัย
+
+### Debug Cache โดยไม่เดา CLI Flag
+
+ไม่มี CLI flag สำหรับ inspect cache โดยตรง ให้ทำให้ behavior เห็นได้ที่ producer boundary แล้วตรวจ
+route รอบ ๆ ตามปกติ:
+
+```bash
+ruvyxa trace /products/[id]
+ruvyxa analyze --format human
+```
+
+log เฉพาะ metadata ของ key ที่ไม่ sensitive ใน development Cache key อาจมี account identifier
+หรือข้อมูล routing ที่อ่อนไหว จึงไม่ควรใส่ secrets ใน key หรือใน diagnostics ที่ browser เห็นได้
+
+---
+
 ## ขั้นตอนถัดไป
 
 - **[06-server-actions.md](./06-server-actions.md)** — Server actions สำหรับ mutation

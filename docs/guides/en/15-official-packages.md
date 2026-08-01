@@ -1576,6 +1576,48 @@ Always use the latest compatible version. Breaking changes are documented in cha
 
 ---
 
+## Choose a First-party Package by Its Boundary
+
+The repository ships three first-party integration packages with distinct responsibilities:
+
+| Package            | Owns                                                                         | Important boundary                                               |
+| ------------------ | ---------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `@ruvyxa/auth`     | Authentication runtime, provider/session flows, and auth plugin integration. | Keep credentials and session handling server-side.               |
+| `@ruvyxa/database` | Typed facade over an application-supplied database adapter.                  | It does not select, install, or pool a database driver for you.  |
+| `@ruvyxa/realtime` | Realtime plugin/client integration.                                          | Treat delivery as transient event delivery, not durable storage. |
+
+`@ruvyxa/database` starts with an explicit adapter, then exposes model delegates such as `findMany`,
+`findUnique`, `create`, `update`, and `delete`. It validates unsafe model names and requires a
+non-empty `where` clause for unique/update/delete operations. The application owns the adapter's
+connection lifecycle and database schema.
+
+```ts
+import { createDatabase } from '@ruvyxa/database'
+
+const db = createDatabase<AppSchema>(adapter)
+const product = await db.Product.findUnique({ where: { id: productId } })
+```
+
+`@ruvyxa/auth` provides `createAuth()` and built-in OAuth provider helpers such as `google()` and
+`github()`. Its runtime performs security-sensitive work such as same-origin request checks and
+session-cookie handling, but it still needs application configuration and a secure deployment
+origin. Never import auth/database server work into a client-reachable module: the framework's
+boundary validator treats both packages as server-only specifiers.
+
+### Integrate One Capability at a Time
+
+1. Install and configure one package with its documented options.
+2. Keep its secrets in a server-only module/environment.
+3. Run `ruvyxa analyze --format human` to catch a boundary leak.
+4. Exercise the route/action that consumes the integration.
+5. Run `npm run check` before broadening the integration.
+
+This sequence avoids presenting a package as a complete authentication, database, or event-delivery
+architecture. It supplies a framework integration boundary; data modeling, authorization policy,
+driver configuration, and operational monitoring remain application decisions.
+
+---
+
 ## Next Steps
 
 - **[03-server-client-components.md](./03-server-client-components.md)** — Server/client boundary

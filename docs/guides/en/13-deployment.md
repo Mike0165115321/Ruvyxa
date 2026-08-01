@@ -349,7 +349,8 @@ type, and deployment platform:
   assets, prerendered HTML, and a generated `package.json` for production dependency install.
 - **Auto-detection**: None (default fallback).
 - **Runtime dependency**: `ruvyxa` runtime package in generated `package.json`.
-- **Error codes**: `RUV1705` (entry not found).
+- **Errors**: entry failures are reported by the adapter/runtime; there is no dedicated diagnostic
+  code for this case.
 - **Notes**: Supports WebSocket via realtime plugin and cluster mode via PM2 or `node:cluster`.
 
 **@ruvyxa/adapter-static**
@@ -358,7 +359,8 @@ type, and deployment platform:
   `robots.txt`.
 - **Auto-detection**: None. Must be explicitly configured.
 - **Runtime dependency**: None. Pure static files.
-- **Error codes**: `RUV1706` (SSR route in static build).
+- **Errors**: unsupported output is reported by the adapter/runtime; there is no dedicated
+  diagnostic code for this case.
 - **Notes**: Only SSG and CSR routes are included. Routes using SSR, ISR, or PPR are excluded at
   build time with a warning.
 
@@ -1528,40 +1530,88 @@ deploy:
 
 ## Troubleshooting
 
-| Problem                             | Cause                              | Fix                                              |
-| ----------------------------------- | ---------------------------------- | ------------------------------------------------ |
-| Build fails in CI                   | Missing env vars                   | Set secrets in CI dashboard secrets              |
-| 404 on all routes                   | Adapter not set / wrong output dir | Verify `adapter` config, check `.ruvyxa/` output |
-| Static site blank                   | SSR routes in static mode          | Use SSG strategy or switch to Node adapter       |
-| Images not optimized                | `image.optimize` off               | Enable in config and rebuild                     |
-| Vercel 502 timeout                  | Serverless function too slow       | Increase `maxDuration` or optimize route         |
-| Netlify function cold start         | No warm requests                   | Enable `build.warm: true`                        |
-| "Adapter not found"                 | Missing adapter package            | `npm install @ruvyxa/adapter-<name>`             |
-| RUV1700: Adapter not found          | Adapter package not installed      | Install the matching adapter                     |
-| RUV1701: Adapter build failed       | Adapter incompatibility            | Check adapter version, framework version         |
-| RUV1702: Manifest failed            | Disk space / permissions           | Free space, check write permissions              |
-| RUV1703: Config missing             | No platform config                 | Create `vercel.json`, `netlify.toml`, etc.       |
-| RUV1704: Adapter incompatible       | Strategy not supported             | Use different strategy or adapter                |
-| Docker: Connection refused          | Port mismatch                      | Check EXPOSE and `server.port` config            |
-| Docker: Healthcheck fails           | Missing /api/health route          | Add health check API route                       |
-| Static: Pre-rendered page not found | Missing `getStaticParams`          | Export params for dynamic routes                 |
-| Cloudflare: 1014                    | Worker exceeds CPU                 | Optimize SSR path, enable caching                |
-| Firebase: Function timeout          | Too much work in SSR/API           | Increase function timeout or optimize            |
+| Problem                             | Cause                               | Fix                                              |
+| ----------------------------------- | ----------------------------------- | ------------------------------------------------ |
+| Build fails in CI                   | Missing env vars                    | Set secrets in CI dashboard secrets              |
+| 404 on all routes                   | Adapter not set / wrong output dir  | Verify `adapter` config, check `.ruvyxa/` output |
+| Static site blank                   | SSR routes in static mode           | Use SSG strategy or switch to Node adapter       |
+| Images not optimized                | `image.optimize` off                | Enable in config and rebuild                     |
+| Vercel 502 timeout                  | Serverless function too slow        | Increase `maxDuration` or optimize route         |
+| Netlify function cold start         | No warm requests                    | Enable `build.warm: true`                        |
+| "Adapter not found"                 | Missing adapter package             | `npm install @ruvyxa/adapter-<name>`             |
+| RUV1700: Adapter not found          | Adapter package not installed       | Install the matching adapter                     |
+| RUV1701: Adapter build failed       | Adapter incompatibility             | Check adapter version, framework version         |
+| RUV1702: Manifest failed            | Disk space / permissions            | Free space, check write permissions              |
+| Adapter configuration issue         | Adapter is missing or misconfigured | Check the adapter package and `ruvyxa.config.ts` |
+| RUV1704: Adapter incompatible       | Strategy not supported              | Use different strategy or adapter                |
+| Docker: Connection refused          | Port mismatch                       | Check EXPOSE and `server.port` config            |
+| Docker: Healthcheck fails           | Missing /api/health route           | Add health check API route                       |
+| Static: Pre-rendered page not found | Missing `getStaticParams`           | Export params for dynamic routes                 |
+| Cloudflare: 1014                    | Worker exceeds CPU                  | Optimize SSR path, enable caching                |
+| Firebase: Function timeout          | Too much work in SSR/API            | Increase function timeout or optimize            |
 
 ---
 
 ## Error Codes (RUV1700-1799)
 
-| Code    | Title                        | Source                 | Fix                         |
-| ------- | ---------------------------- | ---------------------- | --------------------------- |
-| RUV1700 | Adapter not found            | CLI adapter resolution | Install adapter package     |
-| RUV1701 | Adapter build failed         | Adapter `build()`      | Check adapter compatibility |
-| RUV1702 | Adapter manifest failed      | Build JSON write       | Check disk/permissions      |
-| RUV1703 | Deploy config missing        | Platform config file   | Create platform config      |
-| RUV1704 | Adapter incompatible         | Strategy check         | Change strategy or adapter  |
-| RUV1705 | Node adapter entry not found | Missing server.js      | Rebuild                     |
-| RUV1706 | Static adapter SSR route     | SSR in static build    | Use SSG or switch adapter   |
-| RUV1707 | Atomic commit failed         | Directory rename       | Manual cleanup of .staging/ |
+| Code    | Title                       | Source                                | Fix                          |
+| ------- | --------------------------- | ------------------------------------- | ---------------------------- |
+| RUV1700 | Adapter not found           | CLI adapter resolution                | Install adapter package      |
+| RUV1701 | Adapter build failed        | Adapter `build()`                     | Check adapter compatibility  |
+| RUV1702 | Adapter manifest failed     | Build JSON write                      | Check disk/permissions       |
+| RUV2200 | Adapter runner failure      | Invalid adapter output                | Check adapter implementation |
+| RUV2202 | Unsupported adapter target  | Target is incompatible                | Choose a supported target    |
+| RUV2203 | Adapter package unavailable | Package cannot resolve                | Install or correct adapter   |
+| RUV2210 | Strategy unsupported        | Platform cannot render route strategy | Choose a supported strategy  |
+
+---
+
+## Deployment Decisions That the CLI Can Verify
+
+Ruvyxa supports the built-in adapter names `node`, `bun`, `static`, `vercel`, `netlify`,
+`cloudflare`, `railway`, `render`, `firebase`, and `aws`. Each name has a corresponding first-party
+adapter package in this repository, and `--adapter` may also accept a syntactically valid npm
+package name for a third-party adapter. Selection is an explicit build decision:
+
+```bash
+ruvyxa doctor --target node --adapter node
+ruvyxa build --target node --adapter node
+ruvyxa doctor --target static --adapter static
+ruvyxa build --target static --adapter static
+```
+
+Run `doctor` first when evaluating a target; it inspects compatibility without materializing adapter
+artifacts. `build` performs the build and invokes the selected adapter. `start` and `preview` only
+serve an existing production build, so neither is a substitute for the build command.
+
+### Automatic Platform Selection Is a Fallback
+
+When no adapter is set by the command or configuration, the CLI can select one from its build
+environment: `VERCEL`, `NETLIFY`, `CF_PAGES`, `RAILWAY_PROJECT_ID`, `RENDER`, or `AWS_APP_ID`.
+`RUVYXA_ADAPTER` has priority over those platform markers when it contains a valid adapter name.
+This is a convenience for a known host, not a reason to omit explicit adapter checks from CI.
+
+### A Small, Reproducible Deployment Gate
+
+```bash
+npm run check
+ruvyxa analyze --format sarif --output reports/ruvyxa.sarif
+ruvyxa doctor --adapter cloudflare --json
+ruvyxa build --adapter cloudflare
+```
+
+Create `reports/` before writing an analysis file. Keep the target and adapter consistent with the
+environment that will execute the output. An edge/static adapter may reject a route strategy that a
+Node adapter can serve; treat that as a design constraint of the deployment, not as a warning to
+ignore.
+
+### Separate Framework Output From Host Configuration
+
+The framework creates its configured output directory (the minimal starter uses `.ruvyxa`). Domain
+names, TLS certificates, secret provisioning, DNS, traffic splitting, and provider dashboards are
+owned by the hosting platform. Document and automate those platform operations in the host's own
+repository configuration; do not claim that `ruvyxa build` performs an external deployment unless
+the selected adapter's package explicitly does so.
 
 ---
 

@@ -1238,6 +1238,73 @@ Run `npm run routes` to verify.
 
 ---
 
+## The Route-discovery Contract
+
+Route discovery is intentionally file-based and narrow. Under the configured `appDir` (normally
+`app`), the current implementation recognizes these route entry files:
+
+| File name              | Route kind | Notes                                                                         |
+| ---------------------- | ---------- | ----------------------------------------------------------------------------- |
+| `page.tsx`, `page.jsx` | Page       | A JavaScript/TypeScript page must provide a default export.                   |
+| `page.md`, `page.mdx`  | Page       | Compiled as a content page; the content compiler supplies the page component. |
+| `route.ts`, `route.js` | API route  | Named HTTP-method exports are invoked by the API renderer.                    |
+
+Directories whose name starts with `_` or `@` are ignored while walking the app tree. A parenthesis
+group such as `(marketing)` is traversed but omitted from the URL. That makes it an organization
+tool, not a URL segment:
+
+```text
+app/(marketing)/pricing/page.tsx  ->  /pricing
+app/(marketing)/layout.tsx        ->  participates in the layout chain
+```
+
+### Dynamic Segment Rules, Including the Failure Case
+
+Use `[name]` for one segment, `[...name]` for one-or-more remaining segments, and `[[...name]]` for
+an optional catch-all. A catch-all must be the final visible segment because it consumes the rest of
+the path.
+
+```text
+app/products/[id]/page.tsx              -> /products/[id]
+app/docs/[...parts]/page.tsx             -> /docs/[...parts]
+app/docs/[[...parts]]/page.tsx           -> /docs/[[...parts]]
+app/docs/[...parts]/edit/page.tsx        -> invalid: catch-all is not final
+```
+
+The parameter name may not be empty, contain another bracket, or start with `.`. Those are route
+discovery errors, so fix the directory name before debugging rendering code.
+
+### Layouts and Route-local Modules
+
+For each route, Ruvyxa collects `layout.tsx` from the application root down to that route's
+directory. A route directory may also contain `server.ts`/`server.js`, `action.ts`/`action.js`, and
+`client.tsx`; those files become part of the route manifest's server or client module lists. Keep
+route-local concerns together when they are used by one route, and move broadly shared code outside
+the route directory.
+
+```text
+app/blog/[slug]/
+  layout.tsx       # adds a nested layout for this branch
+  page.tsx         # page entry
+  action.ts        # actions associated with this page route
+  client.tsx       # route-local client entry, if needed
+```
+
+### Verify the Manifest Before Assuming a URL Exists
+
+Use the CLI, not an assumed package script, to inspect discovery:
+
+```bash
+ruvyxa routes
+ruvyxa trace /blog/[slug]
+```
+
+`routes` prints the discovered table. `trace` accepts the route pattern shown by the table rather
+than a component filename or a concrete parameter value. If a new directory does not appear, first
+check its entry-file name and whether an ancestor directory starts with `_` or `@`.
+
+---
+
 ## Next Steps
 
 - **[03-server-client-components.md](./03-server-client-components.md)** — Server vs client

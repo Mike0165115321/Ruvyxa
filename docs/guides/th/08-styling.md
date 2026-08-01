@@ -1035,6 +1035,64 @@ app/styles/
 
 ---
 
+## วิธีที่ Framework รวบรวม Styles
+
+Style collection เริ่มจาก application scripts แล้วเดินตาม import graph และรับ `css.entries` แบบ
+project-relative จาก config ด้วย ซึ่งเหมาะกับ global stylesheet ที่ตั้งใจไม่ import จาก application
+code หาก import stylesheet หาไม่พบจะรายงาน `RUV1403`; การเพิ่ม path ใน `css.entries` ควรทำเฉพาะเมื่อ
+stylesheet นั้นเป็น global จริง ไม่ใช่ใช้ซ่อน relative import ที่พัง
+
+```ts
+// ruvyxa.config.ts
+import { config } from 'ruvyxa/config'
+
+export default config({
+  css: {
+    entries: ['styles/print.css', 'styles/tokens.css'],
+  },
+})
+```
+
+paths เหล่านี้ถูก validate พร้อม config ส่วนอื่น เก็บ stylesheet ของ component ให้ import จาก
+component นั้นเมื่อทำได้ เพื่อให้ dependency path อ่านง่ายทั้งตอน development และ production
+collection
+
+### CSS Modules กับ Sass มีคนละขั้น
+
+ไฟล์ที่ลงท้าย `.module.css`, `.module.scss` หรือ `.module.sass` คือ CSS Modules สำหรับ Sass ระบบจะ
+compile ก่อน แล้ว scope local class selectors ด้วย project-relative path และชื่อ class ที่คงที่ map
+ที่ ได้คือสิ่งที่ TypeScript module import:
+
+```tsx
+import styles from './Button.module.scss'
+
+export function Button({ children }: { children: React.ReactNode }) {
+  return <button className={styles.primary}>{children}</button>
+}
+```
+
+ใช้ `:global(...)` เฉพาะ selector ที่ต้อง escape module scoping จริง ๆ ไม่ใช่สิ่งแทน global
+stylesheet; กฎกว้าง ๆ ควรอยู่ใน global CSS ที่ import หรือไฟล์ใน `css.entries`
+
+### ตรวจอะไรเมื่อ Style ไม่ปรากฏ
+
+1. ตรวจว่า stylesheet ถูก import จาก application module ที่เข้าถึงได้ หรือระบุใน `css.entries`
+2. ตรวจ relative path และ extension ให้ตรง; import ที่ resolve ไม่ได้จะไม่ถูกข้ามแบบเงียบ ๆ
+3. สำหรับ Sass ให้แก้ compiler error แทนคาดหวัง stylesheet ที่ compile ได้บางส่วน
+4. รัน route/analysis ตามปกติหลังเปลี่ยน shared style entry
+
+```bash
+ruvyxa analyze --format human
+ruvyxa trace /
+npm run build
+```
+
+Development เสิร์ฟ CSS ที่รวบรวมไว้ขณะ watch ไฟล์ ส่วน production rendering จะ minify CSS
+ชุดนั้นก่อน ฝังใน document จึงควรทดสอบ production build ด้วยเมื่อเกี่ยวข้องกับ order หรือกฎที่ไวต่อ
+minification
+
+---
+
 ## ขั้นตอนถัดไป
 
 กลับไปที่ **[ดัชนี](../../index.md)** หรือดูบทอื่นๆ:

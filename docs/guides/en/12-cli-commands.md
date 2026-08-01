@@ -1,902 +1,559 @@
 # CLI Commands
 
-Ruvyxa ships with 13 CLI commands that cover the full development lifecycle -- from scaffolding to
-dev servers to production builds to diagnostics. Every command shares the same `ruvyxa` binary,
-built in Rust and published via npm.
+The `ruvyxa` package installs the Ruvyxa CLI. Its command surface is defined in
+`crates/ruvyxa_cli/src/main.rs`; the command help shown by the installed binary is the authoritative
+source for flags.
 
----
-
-## What You Will Learn
-
-- Every CLI command with full syntax and all options
-- Real example output for each command (exact format)
-- Global flags available on all commands
-- Exit codes: 0 = success, 1 = error, 2 = config error
-- All subcommand argument structs (Rust source)
-- Common use cases and recipes
-- Troubleshooting every known issue
-
----
-
-## Global Options
-
-These flags work with any command:
-
-| Flag               | Short | Type        | Default     | Description                                             |
-| ------------------ | ----- | ----------- | ----------- | ------------------------------------------------------- |
-| `--root <path>`    | `-r`  | `PathBuf`   | `.`         | Project root directory                                  |
-| `--runtime <name>` |       | `node\|bun` | auto-detect | JS runtime; overrides RUVYXA_RUNTIME and config.runtime |
-| `--help`           | `-h`  | flag        | --          | Print command help                                      |
-| `--version`        | `-v`  | flag        | --          | Print Ruvyxa version                                    |
-| `--no-color`       |       | flag        | --          | Disable colored output                                  |
-
-### CLI Entry Point
-
-The CLI uses `clap` v4 with derive macros. Entry point in `crates/ruvyxa_cli/src/main.rs`:
-
-```rust
-#[derive(Debug, Parser)]
-#[command(styles = cli_styles(), ...)]
-struct Cli {
-    #[command(subcommand)]
-    command: Command,
-}
+```bash
+ruvyxa --help
 ```
 
----
+> Flags are command-specific. `--root` and `--runtime` are not global flags, and the CLI does not
+> define `--verbose`, `--no-color`, `--open`, or build-analysis flags.
 
-## Command Tree
+## Command Overview
 
-```
-ruvyxa
-├── dev            Start dev server with HMR
-├── build          Production build
-├── start          Serve production build
-├── preview        Build + start
-├── check          Validate project
-├── routes         Print route table
-├── analyze        Bundle analysis (human | json | sarif)
-├── doctor         Environment diagnostics
-├── clean          Remove build artifacts
-├── trace          Inspect a specific route
-├── bench          Benchmark rendering
-├── test:parity    Dev/prod parity check (alias: parity)
-└── plugin         Plugin scaffolding
-    └── create     Scaffold a new plugin package
-```
+| Command         | Purpose                                                                      |
+| --------------- | ---------------------------------------------------------------------------- |
+| `dev`           | Start the development server with route watching and HMR.                    |
+| `build`         | Produce a production build and optionally run a deployment adapter.          |
+| `check`         | Run TypeScript checking when `tsconfig.json` exists, then run `test:parity`. |
+| `start`         | Serve an existing production build.                                          |
+| `preview`       | Serve an existing production build for local preview.                        |
+| `routes`        | Print the discovered route table.                                            |
+| `analyze`       | Validate routes, imports, and server/client boundaries.                      |
+| `doctor`        | Inspect project setup, dependencies, runtime, and optionally an adapter.     |
+| `clean`         | Remove the configured generated build output.                                |
+| `trace`         | Print one discovered route-manifest entry.                                   |
+| `bench`         | Benchmark route discovery, analysis, and production build work.              |
+| `test:parity`   | Compare dev and production route behavior and smoke-render page routes.      |
+| `plugin create` | Scaffold a publishable plugin package.                                       |
 
-### Rust Command Enum
+`test:parity` also accepts the `parity` alias.
 
-```rust
-enum Command {
-    Dev(ServerArgs),
-    Build(BuildArgs),
-    Check(ProjectArgs),
-    Start(ServerArgs),
-    Preview(ServerArgs),
-    Routes(ProjectArgs),
-    Analyze(AnalyzeArgs),
-    Doctor(DoctorArgs),
-    Clean(ProjectArgs),
-    Trace(TraceArgs),
-    Bench(BenchArgs),
-    TestParity(ProjectArgs),  // alias: parity
-    Plugin(PluginArgs),
-}
+## Shared Command Options
+
+Commands that take a project root expose `--root <PATH>` and default it to the current directory.
+The following commands also accept `--runtime <node|bun>`: `dev`, `build`, `check`, `start`,
+`preview`, `routes`, `analyze`, `doctor`, `clean`, and `test:parity`. For the commands that accept
+it, this override has priority over `RUVYXA_RUNTIME` and `config.runtime`.
+
+Every command supports `-h` / `--help`.
+
+## `ruvyxa dev`
+
+```bash
+ruvyxa dev [--root <PATH>] [--host <HOST>] [--port <PORT>] [--runtime <node|bun>]
 ```
 
----
-
-## ruvyxa dev
-
-Start the development server with Hot Module Replacement.
+Use it while developing an application. Host and port are optional; the final defaults come from the
+project configuration and server configuration.
 
 ```bash
 ruvyxa dev
-ruvyxa dev --root ./my-app
-ruvyxa dev --host 127.0.0.1 --port 4000
-ruvyxa dev -r ./my-app --port 8080
-ruvyxa dev --runtime bun
+ruvyxa dev --port 4000
+ruvyxa dev --root ../other-app --runtime bun
 ```
 
-### Options
-
-| Option             | Short | Type        | Default   | Description         |
-| ------------------ | ----- | ----------- | --------- | ------------------- |
-| `--root <path>`    | `-r`  | `PathBuf`   | `.`       | Project root        |
-| `--host <host>`    |       | `String`    | `0.0.0.0` | Bind host           |
-| `--port <port>`    | `-p`  | `u16`       | `3000`    | Bind port           |
-| `--runtime <name>` |       | `node\|bun` | auto      | JS runtime override |
-
-### Rust Struct
-
-```rust
-struct ServerArgs {
-    root: PathBuf,
-    host: Option<String>,
-    port: Option<u16>,
-    runtime: Option<CliRuntime>,
-}
-```
-
-### Example Output
-
-```
-+============================================+
-|  Ruvyxa dev server running                 |
-|                                            |
-|  -> Local:   http://localhost:3000         |
-|  -> Network: http://192.168.1.42:3000      |
-|                                            |
-|  v 15 routes scanned                       |
-|  v 0 conflicts                             |
-|  v HMR ready                               |
-+============================================+
-
-  SSR     /                          app/page.tsx
-  SSR     /about                     app/about/page.tsx
-  ISR     /blog/[slug]               app/blog/[slug]/page.tsx
-  API     /api/hello                 app/api/hello/route.ts
-  STATIC  /favicon.ico               app/favicon.ico
-
-  v Ready in 48ms
-```
-
-HMR is active. Edit any file -- the browser updates instantly.
-
-### Common Uses
+## `ruvyxa build`
 
 ```bash
-# Different port if 3000 is busy
-ruvyxa dev --port 4000
-
-# Only listen locally (safer for shared networks)
-ruvyxa dev --host 127.0.0.1
-
-# Work on a project in a different directory
-ruvyxa dev --root ../my-other-project
-
-# Use Bun runtime
-ruvyxa dev --runtime bun
+ruvyxa build [--root <PATH>] [--target <node|bun|edge|static>] \
+  [--adapter <NAME_OR_NPM_PACKAGE>] [--runtime <node|bun>]
 ```
 
----
-
-## ruvyxa build
-
-Create a production build in `outDir`.
+`--target` overrides the build target. `--adapter` selects a deployment adapter without editing
+`ruvyxa.config.ts`; the built-in names are `node`, `bun`, `static`, `vercel`, `netlify`,
+`cloudflare`, `railway`, `render`, `firebase`, and `aws`. A syntactically valid npm package name is
+also accepted and resolved by the adapter runner.
 
 ```bash
 ruvyxa build
-ruvyxa build --root ./my-app
-ruvyxa build --target es2022
+ruvyxa build --target static
 ruvyxa build --adapter vercel
-ruvyxa build --runtime bun
 ```
 
-### Options
+The output directory is configured by `outDir` (the starter uses `.ruvyxa`). For the detailed build
+stages and generated artifacts, see [CLI Architecture](../../architecture/cli.md) and
+[Deployment](./13-deployment.md).
 
-| Option                | Short | Type                      | Default      | Description                                                                                                      |
-| --------------------- | ----- | ------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------- |
-| `--root <path>`       | `-r`  | `PathBuf`                 | `.`          | Project root                                                                                                     |
-| `--target <target>`   |       | `node\|bun\|edge\|static` | config value | Override build target                                                                                            |
-| `--adapter <adapter>` |       | `string`                  | --           | Override deploy adapter (node, vercel, netlify, cloudflare, railway, render, firebase, aws, or npm package name) |
-| `--runtime <name>`    |       | `node\|bun`               | auto         | JS runtime override                                                                                              |
-
-### Rust Struct
-
-```rust
-struct BuildArgs {
-    root: PathBuf,
-    target: Option<BuildTarget>,
-    adapter: Option<String>,
-    runtime: Option<CliRuntime>,
-}
-```
-
-### Example Output
-
-```
-+============================================+
-|  Ruvyxa build                              |
-|                                            |
-|  v Resolved 47 modules                     |
-|  v Compiled 12 routes                      |
-|  v Optimized 8 images                      |
-|  v Minified 3 bundles                      |
-|  v Manifest written                        |
-|                                            |
-|  Output: .ruvyxa/                          |
-|  Size:   1.2 MB (632 KB gzip)              |
-|  Time:   2.3s                              |
-+============================================+
-```
-
-### Build Output Structure
-
-```
-.ruvyxa/
-+-- client/              # Browser bundles
-|   +-- _entry.js        # Entry point
-|   +-- _shared.js       # Shared dependencies
-|   +-- index.js         # Route: /
-|   +-- about.js         # Route: /about
-+-- server/              # Server bundles
-|   +-- index.js
-|   +-- about.js
-+-- assets/              # Static assets
-|   +-- images/          # Optimized images
-|   +-- fonts/
-|   +-- styles.css
-+-- prerender/           # SSG output
-|   +-- index.html
-|   +-- about.html
-+-- manifest.json        # Build manifest
-+-- build.json           # Adapter input
-```
-
-### Build Pipeline (Rust)
-
-```
-1. load_project_config(root) -- evaluate ruvyxa.config.ts
-2. discover_routes() -- scan appDir for route files
-3. compile_styles() -- process CSS entries
-4. optimize_public_images() -- PNG/JPEG -> WebP via rayon
-5. scan_raw_image_usage() -- warn on raw <img> tags
-6. build_router() -- compile all routes (server + client)
-7. write_manifest() -- emit manifest.json
-8. run_adapter_runner() -- if adapter configured, emit deploy artifacts
-```
-
----
-
-## ruvyxa start
-
-Serve a production build. Run this after `ruvyxa build`.
+## `ruvyxa check`
 
 ```bash
-ruvyxa start
-ruvyxa start --root ./my-app
-ruvyxa start --port 8080
+ruvyxa check [--root <PATH>] [--runtime <node|bun>]
 ```
 
-### Options
-
-Same as `dev` -- uses the same `ServerArgs` struct.
-
-### Example Output
-
-```
-+============================================+
-|  Ruvyxa production server                  |
-|                                            |
-|  -> Local:   http://localhost:3000         |
-|  -> Network: http://192.168.1.42:3000      |
-|                                            |
-|  v Serving 12 routes                       |
-|  v Cache layer active                      |
-|  v 3 workers ready                         |
-|                                            |
-|  Mode: production                          |
-+============================================+
-```
-
----
-
-## ruvyxa preview
-
-Build then start in one step -- useful for CI checks and quick production testing.
+This is the project readiness command. It runs `tsc --noEmit` when the project contains a
+`tsconfig.json`, then runs the same parity flow as `ruvyxa test:parity`.
 
 ```bash
-ruvyxa preview
-ruvyxa preview --root ./my-app --port 5000
-```
-
-### Options
-
-Combines `BuildArgs` and `ServerArgs`.
-
----
-
-## ruvyxa check
-
-Type-check your project and validate routes, config, and imports. Runs `tsc --noEmit` internally
-plus parity checks.
-
-```bash
-ruvyxa check
-ruvyxa check --root ./my-app
+npm run check
 ruvyxa check --runtime bun
 ```
 
-### Options
+## `ruvyxa start` and `ruvyxa preview`
 
-| Option             | Short | Type        | Default | Description         |
-| ------------------ | ----- | ----------- | ------- | ------------------- |
-| `--root <path>`    | `-r`  | `PathBuf`   | `.`     | Project root        |
-| `--runtime <name>` |       | `node\|bun` | auto    | JS runtime override |
-
-### Rust Struct
-
-```rust
-struct ProjectArgs {
-    root: PathBuf,
-    runtime: Option<CliRuntime>,
-}
+```bash
+ruvyxa start [--root <PATH>] [--host <HOST>] [--port <PORT>] [--runtime <node|bun>]
+ruvyxa preview [--root <PATH>] [--host <HOST>] [--port <PORT>] [--runtime <node|bun>]
 ```
 
-### Example Output (pass)
+Both commands serve an existing production build; run `ruvyxa build` first. `preview` is a separate
+command for the local-preview workflow, not a command that builds automatically.
 
-```
-+============================================+
-|  Ruvyxa check                              |
-|                                            |
-|  v TypeScript: 0 errors                    |
-|  v 12 routes valid                         |
-|  v 0 route conflicts                       |
-|  v Config validated                        |
-|  v Server/client boundary clean            |
-|  v 0 unused files                          |
-|                                            |
-|  All checks passed.                        |
-+============================================+
+```bash
+npm run build
+npm run start
+ruvyxa preview --port 4173
 ```
 
-### Example Output (fail)
+## `ruvyxa routes`
 
-```
-x TypeScript: 2 errors
-  app/page.tsx:5:12 -- Type 'string' is not assignable to type 'number'
-
-x 1 route conflict
-  app/blog/[slug]/page.tsx and app/blog/latest/page.tsx
-  Both match /blog/latest
-
-x Config: unknown field "unkownField"
-  ruvyxa.config.ts:3
-
-  Run with --verbose for details.
+```bash
+ruvyxa routes [--root <PATH>] [--runtime <node|bun>]
 ```
 
-### Checks Performed
-
-1. TypeScript compilation (`tsc --noEmit`)
-2. Route validation (no conflicts, valid params)
-3. Config validation (RUV1600-1602)
-4. Server/client boundary check (RUV1007, RUV1008, RUV1009, RUV1010)
-5. Unused file detection
-6. Dependency resolution
-
----
-
-## ruvyxa routes
-
-Print the route table -- every URL path your app handles.
+Print the routes discovered from the configured application directory. Use it to inspect route paths
+before building or to investigate a route conflict.
 
 ```bash
 ruvyxa routes
-ruvyxa routes --root ./my-app
 ```
 
-### Options
+## `ruvyxa analyze`
 
-Same `ProjectArgs` struct as `check`.
-
-### Example Output
-
-```
-+============================================+
-|  Route Table                               |
-|                                            |
-|  Method  URL                     File      |
-|  ------  -----------------------  -------- |
-|  SSR     /                       app/page.tsx
-|  SSR     /about                  app/about/page.tsx
-|  SSR     /blog                   app/blog/page.tsx
-|  SSR     /blog/[slug]            app/blog/[slug]/page.tsx
-|  SSG     /blog/hello-world       app/blog/[slug]/page.tsx
-|  API     /api/hello              app/api/hello/route.ts
-|  POST    /api/users              app/api/users/route.ts
-|  ACTION  /actions/newsletter     app/actions/newsletter/action.ts
-|  STATIC  /favicon.ico            app/favicon.ico
-|  MDX     /docs/guide             app/docs/guide/page.mdx
-|                                            |
-|  10 routes total, 0 conflicts              |
-+============================================+
+```bash
+ruvyxa analyze [--root <PATH>] [--runtime <node|bun>] \
+  [--format <auto|human|json|sarif>] [--output <PATH>]
 ```
 
-The Method column shows rendering strategy or HTTP method. This is the fastest way to understand
-your app's URL surface.
-
-### Route Method Types
-
-| Method   | Meaning                  | Source                                                          |
-| -------- | ------------------------ | --------------------------------------------------------------- |
-| `SSR`    | Server-side render       | `page.tsx`, `page.md`, `page.mdx` without export const strategy |
-| `SSG`    | Static generation        | Page with `strategy = 'ssg'`                                    |
-| `ISR`    | Incremental static regen | Page with `strategy = 'isr'`                                    |
-| `CSR`    | Client-side render       | Page with `strategy = 'csr'`                                    |
-| `API`    | API route (GET)          | `route.ts` with `export GET`                                    |
-| `POST`   | API route (POST)         | `route.ts` with `export POST`                                   |
-| `ACTION` | Server action            | `action.ts` files                                               |
-| `STATIC` | Static file              | `favicon.ico`, `robots.txt`, etc.                               |
-| `MDX`    | Markdown/MDX page        | `page.md`, `page.mdx`                                           |
-
----
-
-## ruvyxa analyze
-
-Generate a detailed analysis of your build -- bundle sizes, module dependencies, image sizes.
+The command validates routes, imports, and server/client boundaries. `auto` preserves the terminal
+or piped-output behavior; `--output` writes the selected report to a file.
 
 ```bash
 ruvyxa analyze
-ruvyxa analyze --format json --output report.json
-ruvyxa analyze --format tree
-ruvyxa analyze --format sarif
+ruvyxa analyze --format sarif --output reports/ruvyxa.sarif
 ```
 
-### Options
+## `ruvyxa doctor`
 
-| Option              | Short | Type                       | Default | Description                                               |
-| ------------------- | ----- | -------------------------- | ------- | --------------------------------------------------------- |
-| `--root <path>`     | `-r`  | `PathBuf`                  | `.`     | Project root                                              |
-| `--runtime <name>`  |       | `node\|bun`                | auto    | JS runtime override                                       |
-| `--format <format>` |       | `auto\|human\|json\|sarif` | `auto`  | Output format (auto = table for terminal, json for piped) |
-| `--output <path>`   | `-o`  | `PathBuf`                  | stdout  | Write to file instead of stdout                           |
-
-### Rust Struct
-
-```rust
-struct AnalyzeArgs {
-    root: PathBuf,
-    runtime: Option<CliRuntime>,
-    format: AnalyzeFormat,  // Auto, Human, Json, Sarif
-    output: Option<PathBuf>,
-}
-
-enum AnalyzeFormat { Auto, Human, Json, Sarif }
+```bash
+ruvyxa doctor [--root <PATH>] [--target <node|bun|edge|static>] \
+  [--adapter <NAME_OR_NPM_PACKAGE>] [--runtime <node|bun>] [--json]
 ```
 
-### Example Output (human/table)
-
-```
-+============================================+
-|  Bundle Analysis                           |
-|                                            |
-|  Bundle          Size    Modules           |
-|  --------------- ------ ------------------ |
-|  _entry.js       12 KB   3                |
-|  _shared.js      48 KB   14               |
-|  index.js        124 KB  22               |
-|  about.js        89 KB   18               |
-|  blog/[slug].js  156 KB  31               |
-|                                            |
-|  Images          Original  Optimized       |
-|  --------------- --------  --------------- |
-|  hero.jpg        1.2 MB   84 KB           |
-|  cat.png         800 KB   320 KB          |
-|                                            |
-|  Total: 1.2 MB (632 KB gzip)              |
-+============================================+
-```
-
-### Example Output (tree)
-
-```
-.ruvyxa/                  1.2 MB
-+-- client/              892 KB
-|   +-- _entry.js         12 KB
-|   +-- _shared.js        48 KB
-|   +-- index.js         124 KB
-|   |   +-- react-dom    420 KB (shared)
-|   |   +-- lodash        24 KB (shared)
-|   +-- about.js          89 KB
-+-- server/              312 KB
-+-- assets/
-    +-- images/          210 KB
-```
-
----
-
-## ruvyxa doctor
-
-Diagnose your project environment -- Node version, port availability, config validity, dependency
-health.
+Use `--adapter` to inspect an adapter without writing its artifacts. `--json` emits the complete
+compatibility report as JSON.
 
 ```bash
 ruvyxa doctor
-ruvyxa doctor --target production
-ruvyxa doctor --adapter vercel
-ruvyxa doctor --json
-ruvyxa doctor --runtime bun
+ruvyxa doctor --adapter cloudflare --json
 ```
 
-### Options
+## `ruvyxa clean`
 
-| Option                | Short | Type                      | Default | Description                               |
-| --------------------- | ----- | ------------------------- | ------- | ----------------------------------------- |
-| `--root <path>`       | `-r`  | `PathBuf`                 | `.`     | Project root                              |
-| `--target <target>`   |       | `node\|bun\|edge\|static` | --      | Check compatibility with specific runtime |
-| `--adapter <adapter>` |       | `string`                  | --      | Check adapter compatibility               |
-| `--runtime <name>`    |       | `node\|bun`               | auto    | JS runtime override                       |
-| `--json`              |       | `bool`                    | `false` | Output as JSON                            |
-
-### Rust Struct
-
-```rust
-struct DoctorArgs {
-    root: PathBuf,
-    target: Option<BuildTarget>,
-    adapter: Option<String>,
-    runtime: Option<CliRuntime>,
-    json: bool,
-}
+```bash
+ruvyxa clean [--root <PATH>] [--runtime <node|bun>]
 ```
 
-### Example Output
-
-```
-+============================================+
-|  Ruvyxa doctor                             |
-|                                            |
-|  v Node.js 22.4.1                          |
-|  v Config valid                            |
-|  v Dependencies up to date                 |
-|  v Port 3000 available                     |
-|  v OutDir .ruvyxa/ writable                |
-|  v 12 routes valid                         |
-|  v TypeScript config found                 |
-|  v .env file present                       |
-|  v Adapter: vercel compatible              |
-|                                            |
-|  w Recommendation:                         |
-|    Set build.manifest: true in            |
-|    ruvyxa.config.ts for Vercel            |
-+============================================+
-```
-
-### JSON Output
-
-```json
-{
-  "nodeVersion": "22.4.1",
-  "configValid": true,
-  "portAvailable": true,
-  "outDirWritable": true,
-  "routesValid": 12,
-  "envFilePresent": true,
-  "adapterCompatible": true,
-  "recommendations": ["Set build.manifest: true"],
-  "node": "22.4.1",
-  "platform": "win32"
-}
-```
-
-### Checks Performed
-
-1. Node.js version
-2. Config validity
-3. Dependency freshness
-4. Port availability
-5. Output directory writability
-6. Route validity (via discovery)
-7. TypeScript config presence
-8. .env file presence
-9. Adapter compatibility (if --adapter specified)
-10. .env.example presence
-
----
-
-## ruvyxa clean
-
-Delete the output directory (`.ruvyxa/` by default) and all caches.
+Removes the configured generated build directory. It is intentionally scoped to Ruvyxa output, not
+to dependencies or arbitrary project files.
 
 ```bash
 ruvyxa clean
-ruvyxa clean --root ./my-app
 ```
 
-### Options
-
-Same `ProjectArgs` struct.
-
-### Example Output
-
-```
-+============================================+
-|  Ruvyxa clean                              |
-|                                            |
-|  v Removed .ruvyxa/                        |
-|  v Removed .cache/                         |
-|                                            |
-|  Cleaned 2 directories, 347 files          |
-+============================================+
-```
-
-Use this when you suspect stale cache is causing issues, then rebuild.
-
----
-
-## ruvyxa trace
-
-Inspect a specific route -- its rendering strategy, params, layout chain, and data dependencies.
+## `ruvyxa trace`
 
 ```bash
-ruvyxa trace /blog/hello-world
-ruvyxa trace /blog/[slug] --root ./my-app
+ruvyxa trace <ROUTE> [--root <PATH>]
 ```
 
-### Options
-
-| Option          | Short | Type      | Default  | Description         |
-| --------------- | ----- | --------- | -------- | ------------------- |
-| `--root <path>` | `-r`  | `PathBuf` | `.`      | Project root        |
-| positional      |       | `String`  | required | Route path to trace |
-
-### Rust Struct
-
-```rust
-struct TraceArgs {
-    route: String,
-    root: PathBuf,
-}
-```
-
-### Example Output
-
-```
-+============================================+
-|  Route trace: /blog/hello-world            |
-|                                            |
-|  Route                                     |
-|    Path:       /blog/[slug]                |
-|    File:       app/blog/[slug]/page.tsx    |
-|    Strategy:   ISR (revalidate: 60)        |
-|    Params:     { slug: "hello-world" }     |
-|                                            |
-|  Layout chain                              |
-|    root/layout.tsx                         |
-|    +-- blog/layout.tsx                    |
-|                                            |
-|  Data                                      |
-|    loader:    app/blog/[slug]/page.tsx:12  |
-|    cache:     force-cache                  |
-|    deps:      [                            |
-|      "app/blog/posts.json"                 |
-|    ]                                       |
-|                                            |
-|  Preview                                   |
-|    http://localhost:3000/blog/             |
-|    hello-world                             |
-+============================================+
-```
-
----
-
-## ruvyxa bench
-
-Benchmark your application rendering performance.
+`<ROUTE>` is required. The command discovers the current manifest and prints the matching entry.
 
 ```bash
-ruvyxa bench
-ruvyxa bench --samples 100
-ruvyxa bench --samples 5 --json
-ruvyxa bench --json --output bench.json
+ruvyxa trace /
+ruvyxa trace /blog/[slug]
 ```
 
-### Options
+## `ruvyxa bench`
 
-| Option          | Short | Type      | Default | Description                 |
-| --------------- | ----- | --------- | ------- | --------------------------- |
-| `--root <path>` | `-r`  | `PathBuf` | `.`     | Project root                |
-| `--samples <n>` | `-s`  | `usize`   | `3`     | Number of samples per route |
-| `--json`        |       | `bool`    | `false` | JSON output                 |
-
-### Rust Struct
-
-```rust
-struct BenchArgs {
-    root: PathBuf,
-    samples: usize,       // default: 3
-    json: bool,
-}
+```bash
+ruvyxa bench [--root <PATH>] [--samples <COUNT>] [--json]
 ```
 
-### Example Output
+The default sample count is `3`. Use JSON when a CI job or another tool needs to consume the
+benchmark result.
 
-```
-+============================================+
-|  Bench results (3 samples)                 |
-|                                            |
-|  Route           Avg      P95              |
-|  --------------- -------  ---------------- |
-|  /                12 ms    18 ms           |
-|  /about            8 ms    14 ms           |
-|  /blog/[slug]     24 ms    42 ms           |
-|  /api/hello        3 ms     5 ms           |
-|                                            |
-|  Overall avg: 12 ms                        |
-|  Slowest route: /blog/[slug] 24 ms        |
-+============================================+
+```bash
+ruvyxa bench --samples 5
+ruvyxa bench --json
 ```
 
----
+## `ruvyxa test:parity`
 
-## ruvyxa test:parity
+```bash
+ruvyxa test:parity [--root <PATH>] [--runtime <node|bun>]
+```
 
-Compare dev server output against production build output for every route. Ensures no differences
-between dev and prod rendering.
+This compares dev and production route manifests and smoke-renders page routes. It is the parity
+check used by `ruvyxa check`.
 
 ```bash
 ruvyxa test:parity
-ruvyxa test:parity --root ./my-app
-ruvyxa parity      # alias
+ruvyxa parity
 ```
 
-### Options
+## `ruvyxa plugin create`
 
-Same `ProjectArgs` struct.
-
-### Example Output (pass)
-
-```
-+============================================+
-|  Dev/Prod parity check                     |
-|                                            |
-|  Route           Status                    |
-|  --------------- ------------------------- |
-|  /               v match                   |
-|  /about          v match                   |
-|  /blog/[slug]    v match                   |
-|  /api/hello      v match                   |
-|                                            |
-|  4/4 routes passed                        |
-+============================================+
+```bash
+ruvyxa plugin create <NAME> [--root <PATH>] [--dir <PATH>]
 ```
 
-### Example Output (fail)
-
-```
-|  /counter        x mismatch               |
-|    dev:   <button>Count: 5</button>       |
-|    prod:  <button>Count: 0</button>       |
-|    Cause: client state hydration           |
-```
-
----
-
-## ruvyxa plugin create
-
-Scaffold a new plugin package.
+`<NAME>` is required. `--dir` is relative to `--root`; without it, the CLI creates the package in a
+directory named after the plugin.
 
 ```bash
 ruvyxa plugin create my-plugin
-ruvyxa plugin create my-plugin --dir ./plugins
-ruvyxa plugin create @scope/ruvyxa-plugin-analytics
+ruvyxa plugin create @acme/analytics --dir packages/analytics
 ```
 
-### Options
+See [Plugins](./14-plugins.md) for the TypeScript plugin contract.
 
-| Option          | Short | Type      | Default         | Description                     |
-| --------------- | ----- | --------- | --------------- | ------------------------------- |
-| `--root <path>` | `-r`  | `PathBuf` | `.`             | Project root                    |
-| `--dir <path>`  |       | `PathBuf` | `{root}/<name>` | Parent directory for the plugin |
+## Starter Scripts
 
-### Rust Struct
+The minimal starter currently defines these scripts:
 
-```rust
-struct PluginCreateArgs {
-    name: String,
-    root: PathBuf,
-    dir: Option<PathBuf>,
+```json
+{
+  "dev": "ruvyxa dev",
+  "build": "ruvyxa build",
+  "start": "ruvyxa start",
+  "typecheck": "tsc --noEmit",
+  "check": "ruvyxa check"
 }
 ```
 
-### Example Output
+Run commands that do not have a package script directly with `ruvyxa`, for example
+`ruvyxa analyze --format json`.
 
-```
-+============================================+
-|  Creating plugin: my-plugin                |
-|                                            |
-|  v Created plugins/my-plugin/              |
-|  v Created package.json                    |
-|  v Created src/index.ts                    |
-|  v Created tsconfig.json                   |
-|  v Created README.md                       |
-|  v Created test/plugin.test.mjs            |
-|  v Created .gitignore                      |
-|                                            |
-|  Next steps:                              |
-|    cd plugins/my-plugin                   |
-|    npm install                            |
-|    npm run build                          |
-+============================================+
+## Practical Recipes
+
+The recipes below deliberately use direct CLI invocations for commands that are not scripts in the
+minimal starter. Replace `../my-app` with the path to your project when needed.
+
+### Start a Project on a Different Port
+
+Use this when another local service already owns your usual port:
+
+```bash
+ruvyxa dev --port 4000
 ```
 
-### Template Files
+To make the server reachable from another device on your network, choose a host explicitly:
 
-The plugin scaffold creates these files:
-
-```rust
-const PLUGIN_TEMPLATE_FILES: &[(&str, &str)] = &[
-    ("src/index.ts", ...),
-    ("test/plugin.test.mjs", ...),
-    ("package.json", ...),
-    ("tsconfig.json", ...),
-    ("README.md", ...),
-    (".gitignore", ...),
-];
+```bash
+ruvyxa dev --host 0.0.0.0 --port 4000
 ```
 
-### Name Validation
+Keep the terminal open while developing; HMR and route watching run in that process.
 
-Plugin names are normalized: non-alphanumeric characters replaced with hyphens, lowercase. The `dir`
-must not contain `..` components and must not be empty.
+### Work on Another Checkout
 
----
+`--root` makes it unnecessary to change directories before using the CLI:
 
-## Exit Codes
+```bash
+ruvyxa dev --root ../my-app
+ruvyxa routes --root ../my-app
+ruvyxa analyze --root ../my-app --format human
+```
 
-| Code | Meaning       | When                                       |
-| ---- | ------------- | ------------------------------------------ |
-| `0`  | Success       | Command completed without errors           |
-| `1`  | General error | Build failure, config error, runtime error |
-| `2`  | Config error  | Config validation failure (RUV1600-1602)   |
+The root is resolved per command, so pass it to every command in a script rather than assuming a
+previous invocation changes the shell's current directory.
 
-Exit codes are returned by Rust's `anyhow::Error` propagation through `main()`.
+### Use Bun for a Command
 
----
+When a project is configured for Node but you need to test it with Bun, use the per-command runtime
+override:
 
-## Quick Reference Card
+```bash
+ruvyxa dev --runtime bun
+ruvyxa build --runtime bun
+ruvyxa check --runtime bun
+```
 
-| What you want        | Command                          |
-| -------------------- | -------------------------------- |
-| Start coding         | `ruvyxa dev`                     |
-| Build for production | `ruvyxa build`                   |
-| Serve production     | `ruvyxa start`                   |
-| Build + serve        | `ruvyxa preview`                 |
-| Validate everything  | `ruvyxa check`                   |
-| See all URLs         | `ruvyxa routes`                  |
-| Debug a route        | `ruvyxa trace /my-route`         |
-| Find problems        | `ruvyxa doctor`                  |
-| Analyze bundle       | `ruvyxa analyze`                 |
-| Fresh start          | `ruvyxa clean && ruvyxa dev`     |
-| Performance test     | `ruvyxa bench`                   |
-| Dev vs prod check    | `ruvyxa test:parity`             |
-| Create a plugin      | `ruvyxa plugin create my-plugin` |
+The override applies only to that invocation. It does not edit `ruvyxa.config.ts` or the
+environment.
 
----
+### Build for a Local Node Server
 
-## Troubleshooting
+The default production workflow builds first and then serves the generated output:
 
-| Problem                        | Solution                                                          |
-| ------------------------------ | ----------------------------------------------------------------- |
-| `ruvyxa: command not found`    | Install: `npm install -g ruvyxa` or use `npx ruvyxa`              |
-| Dev server won't start         | Run `ruvyxa doctor` to check Node, port, config                   |
-| "Address in use"               | Port 3000 taken -- use `ruvyxa dev --port 4000`                   |
-| Build fails with cryptic error | `ruvyxa clean && ruvyxa build` for fresh build                    |
-| Routes not showing             | Ensure files are in correct `app/` directory                      |
-| `check` reports false errors   | Update `tsconfig.json` paths, run `ruvyxa clean`                  |
-| Config load fails              | `ruvyxa doctor` to validate config; check ruvyxa.config.ts syntax |
-| RUV1600 on startup             | Config renderer failed; check Node/Bun installation               |
-| Adapter not found              | Use known name or full npm package name                           |
-| --runtime flag ignored         | Ensure runtime is installed on PATH                               |
+```bash
+npm run build
+npm run start
+```
 
----
+To be explicit about the output target, run:
 
-## Environment Variables Affecting CLI
+```bash
+ruvyxa build --target node
+ruvyxa start --port 3001
+```
 
-| Variable                                                                      | Effect                                                                      |
-| ----------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `RUVYXA_RUNTIME`                                                              | JS runtime (node/bun); overrides config, overridden by --runtime flag       |
-| `RUVYXA_ADAPTER`                                                              | Overrides platform adapter auto-detection                                   |
-| `VERCEL`, `NETLIFY`, `CF_PAGES`, `RAILWAY_PROJECT_ID`, `RENDER`, `AWS_APP_ID` | Auto-detect deployment platform (see `PLATFORM_ADAPTER_ENV` in Rust source) |
+`start` and `preview` read an existing build; neither command performs a build implicitly.
 
----
+### Preview a Static Build
+
+Use the static target only when the application and selected adapter support the routes being built:
+
+```bash
+ruvyxa build --target static --adapter static
+ruvyxa preview --port 4173
+```
+
+If a route strategy is not supported by the platform adapter, the build reports that
+incompatibility. See [Deployment](./13-deployment.md) for adapter-specific output and hosting steps.
+
+### Build for a Hosting Adapter Without Editing Config
+
+`--adapter` is useful in CI or when evaluating a deployment target temporarily:
+
+```bash
+ruvyxa build --adapter vercel
+ruvyxa build --adapter cloudflare
+ruvyxa build --adapter @acme/ruvyxa-adapter-internal
+```
+
+The last form is a package name; it must be resolvable by the adapter runner in the project
+environment.
+
+### Run the Pre-commit Readiness Check
+
+The shortest repeatable gate for an application is:
+
+```bash
+npm run check
+```
+
+It type-checks with `tsc --noEmit` when the project contains `tsconfig.json`, then runs the route
+and render parity flow. To run just the parity portion:
+
+```bash
+ruvyxa test:parity
+# equivalent alias
+ruvyxa parity
+```
+
+### Inspect Routes Before Debugging a URL
+
+First list the discovered URL table, then inspect the route that matters:
+
+```bash
+ruvyxa routes
+ruvyxa trace /about
+ruvyxa trace /blog/[slug]
+```
+
+`trace` takes the route pattern, not a source filename. For a dynamic page, use `/blog/[slug]`, not
+a specific slug such as `/blog/hello`.
+
+### Produce a Machine-readable Analysis Report
+
+Use JSON when another program will consume the result, or SARIF when a code-scanning tool accepts
+it:
+
+```bash
+ruvyxa analyze --format json --output reports/ruvyxa-analysis.json
+ruvyxa analyze --format sarif --output reports/ruvyxa.sarif
+```
+
+Create the destination directory first if it does not exist. Use `--format human` for a readable
+terminal report.
+
+### Inspect Toolchain and Adapter Compatibility
+
+Run `doctor` before a first deployment or after changing runtime/adapter settings:
+
+```bash
+ruvyxa doctor
+ruvyxa doctor --target edge
+ruvyxa doctor --adapter cloudflare --json
+```
+
+`--adapter` inspects the adapter contract without materializing its build artifacts.
+
+### Reset Only Generated Output
+
+When a local build needs to be regenerated, clean the configured Ruvyxa output and build again:
+
+```bash
+ruvyxa clean
+ruvyxa build
+```
+
+This command is limited to the configured output directory. It does not delete `node_modules`,
+source files, or arbitrary cache directories.
+
+### Measure a Change Repeatedly
+
+Use a fixed number of samples when comparing two local changes:
+
+```bash
+ruvyxa bench --samples 5
+ruvyxa bench --samples 5 --json
+```
+
+Treat a benchmark as a local signal: use the same machine, dependency state, and sample count when
+comparing runs.
+
+### Scaffold a Plugin Outside the App Directory
+
+For a monorepo, choose the package directory explicitly:
+
+```bash
+ruvyxa plugin create analytics --root . --dir packages/analytics
+```
+
+For a standalone project, the default is enough:
+
+```bash
+ruvyxa plugin create my-plugin
+```
+
+Then follow [Plugins](./14-plugins.md) to implement and register the generated package.
+
+### CI Example
+
+The CLI commands can be used directly in a CI job after dependencies are installed:
+
+```bash
+npm run check
+ruvyxa analyze --format sarif --output reports/ruvyxa.sarif
+ruvyxa build --adapter node
+```
+
+Do not add unsupported flags such as `--verbose`, `--no-cache`, or `--sourcemap`; they are not part
+of the current CLI contract.
+
+## Guided Workflows
+
+The following walkthroughs show how the commands fit together. They intentionally show commands that
+exist today rather than guessed output: projects differ in their routes, configuration, and
+installed adapters.
+
+### First Development Session
+
+Start by checking what the project exposes, then keep the development server running while making
+changes:
+
+```bash
+# from the application root
+ruvyxa routes
+ruvyxa dev
+```
+
+If the app is in a sibling directory, the same workflow is:
+
+```bash
+ruvyxa routes --root ../my-app
+ruvyxa dev --root ../my-app
+```
+
+Use `routes` before `dev` when you are unsure whether a page was discovered. Do not expect it to
+start a server; it only reports the route table. Conversely, leave `dev` running while editing,
+because it owns the watcher and HMR lifecycle.
+
+### Diagnose a Route That Does Not Behave as Expected
+
+For a route issue, move from broad discovery to the route-specific manifest entry, then run the
+static checks:
+
+```bash
+ruvyxa routes
+ruvyxa trace /blog/[slug]
+ruvyxa analyze --format human
+ruvyxa check
+```
+
+Replace `/blog/[slug]` with the pattern printed by `routes`. `trace` needs that route pattern; it
+does not accept a component filename or a concrete URL parameter. `analyze` checks project structure
+and boundaries, while `check` additionally runs TypeScript checking when applicable and the parity
+flow. None of these commands edits source files.
+
+### Investigate an Adapter Before Building
+
+When moving an app to a platform target, inspect the selected target and adapter first:
+
+```bash
+ruvyxa doctor --target edge
+ruvyxa doctor --target edge --adapter cloudflare --json
+ruvyxa build --target edge --adapter cloudflare
+```
+
+The first two commands are diagnostics. The final command is the one that builds and invokes the
+selected adapter. If the project is intended for a Node server instead, use `--target node` and
+`--adapter node`; adapter selection should agree with the deployment environment.
+
+### Produce Files for a Code-quality Job
+
+`analyze` can write an artifact without forcing a particular CI vendor. Make the report directory as
+part of the job, then select a format that the next tool understands:
+
+```bash
+mkdir -p reports
+ruvyxa analyze --format json --output reports/ruvyxa-analysis.json
+ruvyxa analyze --format sarif --output reports/ruvyxa.sarif
+```
+
+In PowerShell, create the directory with `New-Item -ItemType Directory -Force reports` instead of
+`mkdir -p reports`. The JSON and SARIF files are different formats; choose one unless the job
+actually needs both. Keep `npm run check` as a separate gate for the type-check and parity flow.
+
+### Rebuild After Changing Build Configuration
+
+Use this sequence after a configuration or adapter change when you want fresh generated output:
+
+```bash
+ruvyxa doctor --adapter vercel
+ruvyxa clean
+ruvyxa build --adapter vercel
+ruvyxa preview
+```
+
+`clean` removes only Ruvyxa's configured output directory. It is not a dependency reset, and it does
+not replace package-manager commands such as `npm install`. `preview` comes last because it serves
+what `build` has already generated.
+
+### Compare a Performance Change Fairly
+
+Benchmark before and after a focused change using the same sample count and output form:
+
+```bash
+ruvyxa bench --samples 10 --json
+# make one focused change, then run the same command again
+ruvyxa bench --samples 10 --json
+```
+
+Save the two JSON results in your CI system or compare them locally. Avoid treating two runs with
+different runtimes, dependency trees, or sample counts as a direct regression comparison.
+
+### Get Help Without Guessing a Flag
+
+The CLI itself is the safest way to confirm a command's current syntax:
+
+```bash
+ruvyxa --help
+ruvyxa build --help
+ruvyxa analyze --help
+ruvyxa plugin create --help
+```
+
+Use command-specific help before putting a command in a script. In particular, `--format` belongs to
+`analyze`, `--json` belongs to `doctor` and `bench`, and `--dir` belongs to `plugin create`.
 
 ## Next Steps
 
-- [01-getting-started.md](./01-getting-started.md) -- First project with CLI
-- [11-configuration.md](./11-configuration.md) -- Config options consumed by CLI
-- [13-deployment.md](./13-deployment.md) -- Build and deploy
-- [14-plugins.md](./14-plugins.md) -- Plugin create command
+- [Configuration](./11-configuration.md) — configure the CLI's project inputs.
+- [Deployment](./13-deployment.md) — select and configure an adapter.
+- [Plugins](./14-plugins.md) — write or scaffold a plugin.

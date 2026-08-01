@@ -786,6 +786,72 @@ action.ts)
 
 ---
 
+## สิ่งที่ API Route รับและคืนจริง
+
+API entry คือ `route.ts` หรือ `route.js` runtime จะหา named export ที่ตรงกับ HTTP method
+ตัวพิมพ์ใหญ่ แล้วเรียกด้วย object เดียวที่มี `request` และ `params` การคืน `Response` จะเก็บ
+status/headers ไว้ ส่วน การคืนค่าแบบอื่นจะถูกแปลงเป็น JSON
+
+```ts
+// app/api/products/[id]/route.ts
+export async function GET({ request, params }: { request: Request; params: { id: string } }) {
+  const url = new URL(request.url)
+  return Response.json({ id: params.id, include: url.searchParams.get('include') })
+}
+
+export async function DELETE({ params }: { params: { id: string } }) {
+  await removeProduct(params.id)
+  return new Response(null, { status: 204 })
+}
+```
+
+หากไม่มี named method ที่ตรงกัน runtime ปัจจุบันคืน `405 Method <METHOD> is not allowed` ซึ่งต่างจาก
+route หายที่เป็นปัญหาของ routing ใช้ method exports แทน request class เฉพาะ framework เพราะ handler
+ได้รับ Web `Request` มาตรฐานและคืน Web `Response` มาตรฐานได้
+
+### Body Limit ถูกตรวจก่อนเข้า Handler
+
+สำหรับ methods ที่ส่ง body ได้ dev server จะอ่าน body ภายใต้ `security.apiLimit` ก่อน dispatch API
+module request ที่เกิน limit ได้รับ payload-too-large response โดย handler ไม่ทำงาน แต่ยังต้อง parse
+และ validate ข้อมูลของแอปใน handler:
+
+```ts
+export async function POST({ request }: { request: Request }) {
+  const body: unknown = await request.json()
+  if (
+    !body ||
+    typeof body !== 'object' ||
+    typeof (body as { title?: unknown }).title !== 'string'
+  ) {
+    return Response.json({ error: 'title is required' }, { status: 400 })
+  }
+
+  return Response.json(
+    { id: crypto.randomUUID(), title: (body as { title: string }).title },
+    { status: 201 },
+  )
+}
+```
+
+การบังคับ body size จำกัดขนาด transport เท่านั้น ไม่ได้ validate JSON shape, authorization หรือ
+ownership ให้เก็บการตัดสินใจเหล่านี้ใน handler หรือ server-only service ที่ handler เรียก
+
+### ตรวจ Route ก่อน Debug Endpoint
+
+เมื่อ endpoint ตอบกลับไม่ตรงคาด ให้ยืนยันก่อนว่า route ใดถูกค้นพบ แล้วจึงแก้ handler:
+
+```bash
+ruvyxa routes
+ruvyxa trace /api/products/[id]
+ruvyxa analyze --format human
+```
+
+route manifest แยก page และ API entries และ analyzer มอง API import graph เป็น server graph
+จึงควรเก็บ browser-only imports ออกจาก `route.ts`; server graph ที่ import `client-only` จะได้รับ
+`RUV1009`
+
+---
+
 ## ขั้นตอนถัดไป
 
 - **[08-styling.md](./08-styling.md)** — CSS, SCSS, CSS Modules

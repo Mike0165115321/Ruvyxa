@@ -1081,6 +1081,78 @@ npm run start
 
 ---
 
+## วิธีที่ Strategy Detector ปัจจุบันตัดสินใจ
+
+Rendering strategy ได้จาก source ของ page ร่วมกับ route และ relative dependencies ที่เข้าถึงได้
+Detector ใช้ลำดับความสำคัญนี้ โดยกฎแรกที่ตรงจะชนะ:
+
+1. `'use client'` ที่ต้นไฟล์ทำให้ page เป็น CSR
+2. `export const ppr = true` เลือก PPR
+3. `export const revalidate = <number>` เลือก ISR พร้อม interval นั้น
+4. export `getStaticParams` หรือ `staticParams` เลือก SSG
+5. route ที่ไม่มี dynamic segment และไม่มี marker `fetch(` หรือ `process.env.` ใน dependencies เป็น
+   SSG candidate อัตโนมัติ
+6. นอกนั้นเป็น SSR เว้นแต่ `render.strategy` ใน config กำหนดค่าเริ่มต้นไว้
+
+ดังนั้น `Date.now()` เพียงอย่างเดียวไม่ใช่สัญญาณที่ detector ใช้ตัดสิน SSR หาก page ต้องการ contract
+ชัดเจน ให้ประกาศ strategy ผ่าน export หรือ config ที่รองรับ แทนการพึ่งรูปร่างของโค้ดโดยบังเอิญ
+
+### ตัวอย่าง Explicit และผลลัพธ์
+
+```tsx
+// app/docs/page.tsx -- ไม่มี dynamic segment และ data marker: SSG candidate
+export default function Docs() {
+  return <main>Documentation</main>
+}
+```
+
+```tsx
+// app/blog/[slug]/page.tsx -- dynamic SSG ต้องให้ concrete parameters
+export const getStaticParams = async () => [{ slug: 'welcome' }, { slug: 'release-notes' }]
+
+export default function Post({ params }: { params: { slug: string } }) {
+  return <main>{params.slug}</main>
+}
+```
+
+```tsx
+// app/status/page.tsx -- build ครั้งเดียว แล้ว refresh เบื้องหลังเมื่อครบ 30 วินาที
+export const revalidate = 30
+
+export default async function Status() {
+  const response = await fetch('https://status.example.test/api')
+  return <pre>{await response.text()}</pre>
+}
+```
+
+สำหรับ ISR interval อยู่ใน `revalidate`; พฤติกรรม cache ระหว่าง request เป็นหน้าที่ของ server หรือ
+deployment adapter ที่เลือก ให้ตรวจ manifest จริง แทนการเดาจาก directory output:
+
+```bash
+ruvyxa routes
+ruvyxa trace /status
+```
+
+### Hydration เป็นการตัดสินใจแยกกัน
+
+สำหรับ server-rendered strategies, `export const hydrate` ควบคุมว่าจะโหลด client bundle หรือไม่และ
+เมื่อไร ค่าที่รองรับคือ `false` (ไม่ส่ง client bundle), `'idle'`, `'visible'` และค่า default ที่โหลด
+ทันที CSR page ที่มาจาก `'use client'` ยังเป็น client-rendered แม้จะมี hydration export ด้วย
+
+```tsx
+// static content page แบบ zero-JS
+export const hydrate = false
+
+export default function LegalNotice() {
+  return <main>Terms and conditions</main>
+}
+```
+
+ใช้ zero-JS page เมื่อ rendered content ไม่พึ่ง client interactivity เท่านั้น เพราะ client islands
+ยังต้องมี hydrated client bundle จึงควรเก็บ behavior ที่ interactive ไว้ใน client-reachable module
+
+---
+
 ## ขั้นตอนถัดไป
 
 - **[05-data-loading-cache.md](./05-data-loading-cache.md)** — โหลดข้อมูลและ cache

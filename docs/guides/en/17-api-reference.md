@@ -1158,3 +1158,23 @@ interface TransformResult {
   map?: unknown
 }
 ```
+
+## How to Use This Reference Safely
+
+The public export barrels are the implementation-backed source for this chapter: `@ruvyxa/react`
+exports UI/runtime helpers such as `Image`, `Picture`, `Link`, `Seo`, `Answer`, route-context hooks,
+`useRuvyxaLoader`, hydration helpers, and error/not-found helpers. `@ruvyxa/core` exports `config`,
+plugin helpers, the server helpers `action`, `cache`, `loader`, `json`, `notFound`, `redirect`, and
+`invalidateCache`, plus the public configuration and route types.
+
+Prefer importing from these public package paths rather than reaching into `src/` or runtime files:
+
+```ts
+import { config } from 'ruvyxa/config'
+import { action, cache, loader } from '@ruvyxa/core/server'
+import { Image, Link, useParams } from '@ruvyxa/react'
+```
+
+Types and runtime behavior can evolve together. When adding a new example or upgrading the package,
+check the corresponding exported symbol and run the TypeScript/project check; do not treat a type
+snippet in this page as proof of a private implementation contract.

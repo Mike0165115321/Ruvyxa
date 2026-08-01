@@ -1,5 +1,44 @@
 # Changelog
 
+## v1.0.26 (2026-08-01)
+
+### Bundler Correctness
+
+- **Fixed dependency scanning around regular expressions and template literals.** The shared source
+  scanner now distinguishes a regular-expression literal from division, skips quoted content and
+  comments correctly, and scans `${…}` interpolations as code. Imports, `require()` calls,
+  re-exports, default-export validation, and client-boundary checks therefore remain visible after
+  patterns such as `/["']/` and inside real template expressions.
+- **Fixed interpolation scans reading into surrounding template text.** Scanner helpers are now
+  bounded to the interpolation range, so text following `${import}` or `${require}` cannot be
+  interpreted as a module specifier.
+- **Fixed warm builds resolving aliases differently from cold builds.** The incremental graph cache
+  now persists each source-specifier-to-path alias with its dependency edges. Cache entries created
+  before that field are resolved fresh rather than being reused with an empty alias map, preventing
+  unresolved alias specifiers in warm client bundles.
+
+### Realtime
+
+- **Coalesced subscription-driven reconnects.** A burst of channel subscriptions now settles into
+  one queued refresh using the final channel set, instead of repeatedly opening and discarding
+  sockets as each subscription is registered.
+
+### Build Architecture
+
+- **Consolidated source facts in the bundler AST.** The compiler, linker, boundary validation, and
+  route graph now share the parsed import/export/default-export/environment-read facts. Compiled
+  modules keep that parse result for the duration of a build, avoiding repeated scans while keeping
+  route validation and bundling aligned.
+- **Split the CLI implementation by responsibility.** Command dispatch remains in `main.rs`; build,
+  caching, client bundles, prerendering, configuration, plugin bridging, diagnostics, and UI now
+  live in dedicated CLI modules. This is an internal refactor and does not add or remove CLI
+  commands.
+
+### Documentation
+
+- Updated the bundler, graph, and CLI architecture references to describe the shared scanner, cache
+  and resolver behavior, and the current CLI module layout.
+
 ## v1.0.25 (2026-07-30)
 
 ### Route Metadata

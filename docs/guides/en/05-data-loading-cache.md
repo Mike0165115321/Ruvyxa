@@ -988,6 +988,80 @@ hit (no log). After 30 seconds, the cache expires and the log reappears.
 
 ---
 
+## Cache Scope and Failure Behavior
+
+The public `cache(key)` helper in `@ruvyxa/core/server` is an in-process application-data cache. It
+is different from route-render caching and from the generated build cache: do not use one name as if
+it invalidates the others. Its current contract is deliberately modest:
+
+- Entries are capped at 1,024 keys; the least-recently-used entry is evicted when the cache is full.
+- `ttl()` accepts a positive duration with `ms`, `s`, `m`, `h`, or `d` units.
+- `swr()` adds a stale-while-revalidate period after the TTL.
+- A producer failure can return an existing stale value during its SWR window; it does not turn an
+  empty cache into a successful response.
+- `invalidateCache()` can invalidate one key, a colon-delimited key prefix, or every key when called
+  without an argument.
+
+This makes namespacing a correctness tool, not merely a convention:
+
+```ts
+import { cache, invalidateCache } from '@ruvyxa/core/server'
+
+export const listProducts = () =>
+  cache('catalog:products')
+    .ttl('5m')
+    .swr('30s')
+    .get(() => fetch('https://catalog.example.test/products').then((r) => r.json()))
+
+export function refreshCatalog() {
+  invalidateCache('catalog') // invalidates catalog and catalog:* keys
+}
+```
+
+Choose a key based on every input that changes the result. A user-specific result must include an
+appropriate user/tenant dimension in its key; otherwise one caller can receive another caller's
+data. The cache is process-local, so multi-instance deployments need a shared data/cache strategy
+outside this helper when cross-instance coherence is required.
+
+### Loader and Client Fetching Serve Different Moments
+
+`loader(handler)` wraps a server-side handler and supplies a context with `params`, `request`, and
+the same cache helper. It is a useful boundary for page-time reads:
+
+```ts
+import { loader } from '@ruvyxa/core/server'
+
+export const productLoader = loader(async ({ params, cache }) => {
+  const id = params.id
+  return cache(`catalog:product:${id}`)
+    .ttl('1m')
+    .get(async () => {
+      const response = await fetch(`https://catalog.example.test/products/${id}`)
+      if (!response.ok) throw new Error(`catalog returned ${response.status}`)
+      return response.json()
+    })
+})
+```
+
+Keep an initial page read on the server when it needs private credentials or should render in the
+HTML response. Use a client hook or a browser `fetch` only for interaction-driven refreshes; it must
+call an endpoint that is safe to expose to the browser.
+
+### Debug a Cache Without Inventing a CLI Flag
+
+There is no cache-inspection CLI flag. Make cache behavior observable at the producer boundary, then
+validate the surrounding route normally:
+
+```bash
+ruvyxa trace /products/[id]
+ruvyxa analyze --format human
+```
+
+Log only non-sensitive key metadata in development. A cache key may contain account identifiers or
+other sensitive routing information, so never put secrets in keys or browser-visible diagnostics.
+
+---
+
 ## Next Steps
 
 - **[06-server-actions.md](./06-server-actions.md)** — Mutate data with server actions

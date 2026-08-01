@@ -1542,6 +1542,48 @@ RUV3201     Realtime          15-official-packages.md
 
 ---
 
+## Read a Diagnostic as a Boundary Signal
+
+Ruvyxa diagnostics are emitted by the subsystem that observed the problem. Start from the code and
+message, then move to the owning boundary rather than treating numeric ranges as a promise that
+every number exists. The current high-value groups include:
+
+| Area                    | Examples                                              | First place to inspect                                                |
+| ----------------------- | ----------------------------------------------------- | --------------------------------------------------------------------- |
+| Route discovery         | `RUV1001`, `RUV1002`, `RUV1004`                       | `appDir`, route entry filename, dynamic-segment shape, default export |
+| Client/server boundary  | `RUV1007`, `RUV1008`, `RUV1009`, `RUV1010`            | The diagnostic file and its reachable relative imports                |
+| Content and styles      | `RUV1310`–`RUV1312`, `RUV1402`, `RUV1403`             | Markdown/MDX frontmatter, Sass source, or stylesheet import path      |
+| Configuration           | `RUV1601`, `RUV1602`                                  | The named config field and its documented range/path constraint       |
+| Plugin/adapter contract | `RUV2102`, `RUV2200`, `RUV2202`, `RUV2203`, `RUV2210` | Plugin definition or selected target/adapter package                  |
+
+Use the smallest command that exposes the same boundary:
+
+```bash
+ruvyxa routes
+ruvyxa trace /the-route-pattern
+ruvyxa analyze --format human
+ruvyxa doctor --json
+```
+
+`routes` answers discovery, `trace` answers one manifest entry, `analyze` answers route/import
+validation, and `doctor` answers environment/configuration/adapter compatibility. None of these
+commands automatically repairs source or config; preserve the diagnostic's file/path context while
+making the smallest correction.
+
+### A Safe Escalation Sequence
+
+1. Reproduce with the narrow command that owns the failure.
+2. Read the exact file and import/config edge named by the result.
+3. Change one cause, not several unrelated settings.
+4. Re-run the focused command.
+5. Run `npm run check` when the failure crosses route, render, or type boundaries.
+
+Avoid logging secrets, full environment dumps, or private request payloads to "get more detail". The
+framework's boundary diagnostics are intentionally designed to identify a source location and a safe
+direction without requiring sensitive data.
+
+---
+
 ## Next Steps
 
 - **[02-routing.md](./02-routing.md)** — Resolve route conflicts (RUV1002-1004)

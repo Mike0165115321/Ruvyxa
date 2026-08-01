@@ -1,1726 +1,542 @@
-# คำสั่ง CLI ทั้ง 13 คำสั่ง
+# คำสั่ง CLI
 
-Ruvyxa CLI มีเครื่องมือครบทุกงานพัฒนา — ตั้งแต่ dev server, production build, static analysis,
-debug, benchmark, parity testing, ไปจนถึง scaffolding plugins
-
-```
-Ruvyxa <COMMAND> [options]
-
-Commands:
-  dev           dev server พร้อม HMR
-  build         production build
-  check         production readiness validation
-  start         serve production build
-  preview       build + start
-  routes        print route table
-  analyze       validate routes, imports, boundaries
-  doctor        project diagnostics
-  clean         ลบ generated output + cache
-  trace         inspect route manifest (ละเอียด)
-  bench         benchmark (route discovery, analysis, build)
-  test:parity   เปรียบเทียบ dev vs prod rendering
-  plugin        create plugin package scaffolding
-```
-
----
-
-## Global Options
-
-| Option             | Alias | คำอธิบาย                     | ใช้กับทุกคำสั่ง |
-| ------------------ | ----- | ---------------------------- | --------------- |
-| `--help`           | `-h`  | แสดง help                    | ✅              |
-| `--root <path>`    | -     | รากโปรเจกต์ (default: `.`)   | ✅              |
-| `--runtime <name>` | -     | JS runtime (`node` \| `bun`) | ✅              |
-| `--verbose`        | `-v`  | แสดง log ละเอียด             | ✅              |
-| `--no-color`       | -     | ปิด colored output           | ✅              |
-| `--version`        | -     | แสดง version                 | ✅              |
+แพ็กเกจ `ruvyxa` ติดตั้ง Ruvyxa CLI โดยนิยามคำสั่งและ flag อยู่ที่ `crates/ruvyxa_cli/src/main.rs`
+ดังนั้นผลจาก `--help` ของ binary ที่ติดตั้งคือข้อมูลอ้างอิงของ flag ที่ถูกต้องที่สุด
 
 ```bash
-# ดู help รวม
 ruvyxa --help
-
-# ดู help แต่ละคำสั่ง
-ruvyxa dev --help
-ruvyxa build --help
-ruvyxa analyze --help
-
-# ใช้ verbose mode
-ruvyxa build --verbose
-
-# ระบุ runtime
-ruvyxa dev --runtime bun
-
-# ระบุรากโปรเจกต์
-ruvyxa dev --root /home/user/my-project
 ```
 
----
+> Flag เป็นของแต่ละคำสั่ง ไม่ใช่ global flag: ไม่มี `--verbose`, `--no-color`, `--open` หรือ flag
+> สำหรับ bundle analysis ใน CLI ปัจจุบัน และ `--root`/`--runtime` ใช้ได้เฉพาะคำสั่งที่ระบุไว้
+> ด้านล่าง
 
-## Exit Codes
+## ภาพรวมคำสั่ง
 
-| Code | ความหมาย                 | คำสั่งที่ใช         |
-| ---- | ------------------------ | ------------------- |
-| `0`  | Success                  | ทุกคำสั่ง           |
-| `1`  | General error            | ทุกคำสั่ง           |
-| `2`  | Config validation error  | check, build, dev   |
-| `3`  | Build failed             | build, preview      |
-| `4`  | Boundary violation found | check, analyze      |
-| `5`  | Route conflict found     | check, routes       |
-| `6`  | Doctor found issues      | doctor              |
-| `7`  | Parity test failed       | test:parity         |
-| `8`  | Port in use              | dev, start, preview |
-| `9`  | Plugin scaffolding error | plugin create       |
-| `10` | Cache clean error        | clean               |
-| `11` | Benchmark interrupted    | bench               |
+| คำสั่ง          | หน้าที่                                                              |
+| --------------- | -------------------------------------------------------------------- |
+| `dev`           | เปิด development server พร้อม route watching และ HMR                 |
+| `build`         | สร้าง production build และเลือก deployment adapter ได้               |
+| `check`         | รัน TypeScript check (เมื่อมี `tsconfig.json`) แล้วรัน `test:parity` |
+| `start`         | เปิดใช้ production build ที่สร้างไว้แล้ว                             |
+| `preview`       | เปิดใช้ production build เพื่อดูในเครื่อง                            |
+| `routes`        | แสดง route table ที่ค้นพบ                                            |
+| `analyze`       | ตรวจ routes, imports และ server/client boundary                      |
+| `doctor`        | ตรวจ project setup, dependencies, runtime และ adapter                |
+| `clean`         | ลบ generated build output ตาม config                                 |
+| `trace`         | แสดง manifest entry ของ route เดียว                                  |
+| `bench`         | วัด route discovery, analysis และ production build                   |
+| `test:parity`   | เปรียบเทียบพฤติกรรม dev/production และ smoke-render page routes      |
+| `plugin create` | สร้างโครง package สำหรับ plugin ที่ publish ได้                      |
 
----
+`test:parity` ใช้ alias `parity` ได้ด้วย
 
-## 1. `ruvyxa dev`
+## Options ที่ใช้ร่วมกัน
 
-เริ่ม dev server พร้อม Hot Module Replacement (HMR)
+คำสั่งที่รับ project root มี `--root <PATH>` และใช้ directory ปัจจุบันเป็นค่าเริ่มต้น คำสั่ง `dev`,
+`build`, `check`, `start`, `preview`, `routes`, `analyze`, `doctor`, `clean` และ `test:parity` รับ
+`--runtime <node|bun>` ด้วย โดย flag นี้มีความสำคัญเหนือกว่า `RUVYXA_RUNTIME` และ `config.runtime`
 
-### Syntax
+ทุกคำสั่งมี `-h` / `--help`
+
+## `ruvyxa dev`
 
 ```bash
-ruvyxa dev [options]
+ruvyxa dev [--root <PATH>] [--host <HOST>] [--port <PORT>] [--runtime <node|bun>]
 ```
 
-### Options
-
-| Option         | Type              | Default       | คำอธิบาย                   |
-| -------------- | ----------------- | ------------- | -------------------------- |
-| `--root`       | `string`          | `.`           | รากโปรเจกต์                |
-| `--host`       | `string`          | `'localhost'` | Host ที่ server ผูก        |
-| `--port`       | `number`          | `3000`        | Port                       |
-| `--runtime`    | `'node' \| 'bun'` | auto          | JS runtime                 |
-| `--open`       | `boolean`         | `false`       | เปิด browser อัตโนมัติ     |
-| `--https`      | `boolean`         | `false`       | ใช้ HTTPS (ต้องมี cert)    |
-| `--cert`       | `string`          | -             | Path ถึง HTTPS certificate |
-| `--key`        | `string`          | -             | Path ถึง HTTPS private key |
-| `--no-hmr`     | `boolean`         | `false`       | ปิด HMR                    |
-| `--no-overlay` | `boolean`         | `false`       | ปิด error overlay          |
-| `--inspect`    | `boolean`         | `false`       | เปิด Node.js inspector     |
-
-### ตัวอย่าง
+ใช้สำหรับพัฒนาแอป โดย `host` และ `port` เป็นค่าเลือกได้; ค่าเริ่มต้นสุดท้ายมาจาก config ของ project
+และ server
 
 ```bash
-# พื้นฐาน
-npm run dev
-
-# เปลี่ยน host และ port
-ruvyxa dev --host 0.0.0.0 --port 8080
-
-# ใช้ Bun runtime
-ruvyxa dev --runtime bun
-
-# HTTPS
-ruvyxa dev --https --cert ./cert.pem --key ./key.pem
-
-# เปิด browser อัตโนมัติ
-ruvyxa dev --open
-
-# Dev + debug inspector
-ruvyxa dev --inspect
-
-# Dev without HMR (สำหรับ debug)
-ruvyxa dev --no-hmr
+ruvyxa dev
+ruvyxa dev --port 4000
+ruvyxa dev --root ../other-app --runtime bun
 ```
 
-### ตัวอย่าง Output
-
-```
-⚡ Ruvyxa dev server running
-
-  ➜  Local:   http://localhost:3000
-  ➜  Network: http://192.168.1.100:3000
-  ➜  Runtime: node (v22.5.0)
-
-  ✓ 4 routes scanned       in 12ms
-  ✓ 0 conflicts
-  ✓ Config valid
-  ✓ HMR ready              (WebSocket)
-  ✓ Layout chain: root
-
-  Watching for changes...
-  [HMR] 2026-07-29 10:00:00 — app/page.tsx modified
-  [HMR] 2026-07-29 10:00:01 ✓ Rebuilt (23ms)
-```
-
-### Output เมื่อมี Warning
-
-```
-⚠ Port 3000 is in use by another process
-  Using port 3001 instead
-
-⚠ 2 routes have duplicate slugs
-  Run `ruvyxa routes` for details
-
-⚠ 1 boundary violation
-  Run `ruvyxa analyze` for details
-```
-
-### คุณสมบัติ Dev Server
-
-| Feature                      | รายละเอียด                                       |
-| ---------------------------- | ------------------------------------------------ |
-| HMR (Hot Module Replacement) | แก้ไฟล์ → browser อัปเดตทันที ไม่ต้อง refresh    |
-| Error Overlay                | แสดง error ใน browser แทน white screen           |
-| Route Watching               | เพิ่ม route ใหม่ → ขึ้นอัตโนมัติ ไม่ต้อง restart |
-| CSS Hot Reload               | เปลี่ยน CSS → inject โดยไม่ refresh              |
-| Server Action Debugging      | แสดง server action logs ใน terminal              |
-| Fast Refresh                 | React component state ยังคงอยู่                  |
-| WebSocket Connection         | HMR ใช้ WebSocket (ข้าม firewall ไม่ได้)         |
-| Source Maps                  | แสดง source code จริง (ไม่ใช่ compiled)          |
-
----
-
-## 2. `ruvyxa build`
-
-Build แอปพลิเคชันสำหรับ production
-
-### Syntax
+## `ruvyxa build`
 
 ```bash
-ruvyxa build [options]
+ruvyxa build [--root <PATH>] [--target <node|bun|edge|static>] \
+  [--adapter <NAME_OR_NPM_PACKAGE>] [--runtime <node|bun>]
 ```
 
-### Options
-
-| Option        | Type                                     | Default  | คำอธิบาย             |
-| ------------- | ---------------------------------------- | -------- | -------------------- |
-| `--root`      | `string`                                 | `.`      | รากโปรเจกต์          |
-| `--target`    | `'node' \| 'bun' \| 'edge' \| 'static'`  | auto     | Build target         |
-| `--adapter`   | `string`                                 | auto     | Deployment adapter   |
-| `--runtime`   | `'node' \| 'bun'`                        | auto     | JS runtime           |
-| `--analyze`   | `boolean`                                | `false`  | เปิด bundle analyzer |
-| `--profile`   | `boolean`                                | `false`  | เปิด build profiler  |
-| `--sourcemap` | `boolean`                                | `false`  | สร้าง source maps    |
-| `--no-minify` | `boolean`                                | `false`  | ปิด minification     |
-| `--no-cache`  | `boolean`                                | `false`  | ปิด build cache      |
-| `--log-level` | `'error' \| 'warn' \| 'info' \| 'debug'` | `'info'` | ระดับ log            |
-
-### ตัวอย่าง
+`--target` ใช้ override build target ส่วน `--adapter` เลือก adapter โดยไม่ต้องแก้ `ruvyxa.config.ts`
+ชื่อที่มีในตัวคือ `node`, `bun`, `static`, `vercel`, `netlify`, `cloudflare`, `railway`, `render`,
+`firebase` และ `aws` หรือใช้ชื่อ npm package ที่ถูกต้องได้
 
 ```bash
-# พื้นฐาน
-npm run build
-
-# ระบุ target
-ruvyxa build --target node
+ruvyxa build
 ruvyxa build --target static
-ruvyxa build --target edge
-
-# ระบุ adapter
 ruvyxa build --adapter vercel
-
-# เปิด bundle analyzer
-ruvyxa build --analyze
-
-# Build without cache (clean build)
-ruvyxa build --no-cache
-
-# สร้าง source maps
-ruvyxa build --sourcemap
-
-# Production debug log
-ruvyxa build --log-level debug
 ```
 
-### ตัวอย่าง Output — Success
+โฟลเดอร์ output กำหนดด้วย `outDir` (starter ใช้ `.ruvyxa`) ดูรายละเอียดขั้นตอน build ได้ที่
+[CLI Architecture](../../architecture/cli.md) และ [Deployment](./13-deployment.md)
 
-```
-━━━ Build ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  target    production
-  root      /home/user/my-app
-  app dir   /home/user/my-app/app
-  out dir   /home/user/my-app/.ruvyxa
-  adapter   node
-  runtime   node
-
-  ✓ routes discovered    4 routes         12ms
-  ✓ validated            ok                8ms
-  ✓ style collected      3 files          45ms
-  ✓ built                compiled          2.3s
-  ✓ image optimized      12 variants       1.1s
-  ✓ prerendered          2 pages          0.8s
-
-  ✓ Build complete (4.2s)
-
-    ├─ server/                   2.1 MB
-    │  ├─ server.js             1.2 MB
-    │  └─ chunks/               0.9 MB
-    ├─ client/                  890 KB (gzip: 280 KB)
-    │  ├─ client.js             420 KB
-    │  ├─ pages/                320 KB
-    │  └─ chunks/               150 KB
-    ├─ prerender/               4 pages
-    │  ├─ index.html            12 KB
-    │  ├─ about.html            8 KB
-    │  └─ blog/                 2 files
-    └─ assets/                  12 files
-       ├─ images/               10 files
-       └─ manifest.json         1 file
-```
-
-### ตัวอย่าง Output — Error
-
-```
-━━━ Build Error ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  ✗ Build failed (2 errors)
-
-  RUV1008: Environment boundary violation
-    File: app/components/danger.tsx:5:18
-    Code: process.env.DATABASE_URL used in client component
-    Fix: Move to server component or prefix with RUVYXA_PUBLIC_
-
-  RUV1010: Module not found
-    File: app/api/route.ts:3:22
-    Code: import 'missing-package'
-    Fix: npm install missing-package
-
-  ─────────────────────────────────────────────
-  ✗ Build exited with code 3
-```
-
-### Build Targets Detail
-
-| Target   | คำอธิบาย       | Output                        | ใช้ deploy กับ                      |
-| -------- | -------------- | ----------------------------- | ----------------------------------- |
-| `node`   | Node.js server | server bundle (Express-based) | VPS, Docker, Railway, Render        |
-| `bun`    | Bun runtime    | bun-friendly bundle           | Bun deploy                          |
-| `edge`   | Edge runtime   | smallest bundle               | Vercel Edge, Cloudflare Workers     |
-| `static` | Static export  | HTML + JS + CSS files         | Any static host (S3, Netlify, etc.) |
-
-### Build Phases
-
-| Phase              | คำอธิบาย                                     | เวลาโดยประมาณ |
-| ------------------ | -------------------------------------------- | ------------- |
-| Route Discovery    | scan app directory, parse file system routes | 10-50ms       |
-| Validation         | check route conflicts, boundary rules        | 5-20ms        |
-| Style Collection   | collect CSS entries, process PostCSS         | 20-100ms      |
-| Compilation        | transpile TypeScript, bundle JS              | 1-10s         |
-| Image Optimization | resize, encode WebP/AVIF                     | 0.5-5s        |
-| Prerendering       | SSG pages rendering                          | 0.1-2s        |
-| Output             | write files, generate manifest               | 10-50ms       |
-
----
-
-## 3. `ruvyxa check`
-
-ตรวจสอบ production readiness — routes, config, imports, server/client boundaries
-
-### Syntax
+## `ruvyxa check`
 
 ```bash
-ruvyxa check [options]
+ruvyxa check [--root <PATH>] [--runtime <node|bun>]
 ```
 
-### Options
-
-| Option      | Type              | Default | คำอธิบาย                   |
-| ----------- | ----------------- | ------- | -------------------------- |
-| `--root`    | `string`          | `.`     | รากโปรเจกต์                |
-| `--runtime` | `'node' \| 'bun'` | auto    | JS runtime                 |
-| `--strict`  | `boolean`         | `false` | ตรวจเข้ม (warning → error) |
-| `--json`    | `boolean`         | `false` | JSON output                |
-
-### ตัวอย่าง
+คำสั่งนี้รัน `tsc --noEmit` เมื่อพบ `tsconfig.json` แล้วรัน parity flow เดียวกับ
+`ruvyxa test:parity`
 
 ```bash
-# พื้นฐาน
 npm run check
-
-# Strict mode
-ruvyxa check --strict
-
-# JSON output สำหรับ CI
-ruvyxa check --json
+ruvyxa check --runtime bun
 ```
 
-### ตัวอย่าง Output — Pass
-
-```
-━━━ Check ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  ✓ All checks passed (0.8s)
-
-  Checks performed:
-    Routes:               4 valid
-    Layout chain:         OK
-    No ambiguous routes  OK
-    Server/client boundaries: OK
-    Config:              valid
-    Imports:             23 modules
-    Dependencies:        all installed
-    No critical diagnostics
-```
-
-### ตัวอย่าง Output — Fail
-
-```
-━━━ Check ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  ✗ 3 issues found (use --strict to see warnings)
-
-  RUV1007: Client boundary violation
-    app/page.tsx:15 imports from 'server-only' module
-    ✗ Fix: move import behind server boundary
-
-  RUV1010: Module not found
-    app/api/route.ts:3 imports 'missing-package'
-    ✗ Fix: npm install missing-package
-
-  RUV1005: Missing Meta component
-    app/contact/page.tsx
-    ⚠ Fix: add <Meta> component for SEO
-
-  ─────────────────────────────────────────────
-  ✗ Check failed (1.2s)
-  ✗ Exit code: 4
-```
-
-### Checks Performed
-
-| Check                 | รายละเอียด                  | Error Code |
-| --------------------- | --------------------------- | ---------- |
-| Route conflicts       | route path ซ้ำ              | RUV1001    |
-| Ambiguous routes      | dynamic route ไม่ชัดเจน     | RUV1002    |
-| Layout chain          | layout hierarchy ถูกต้อง    | RUV1003    |
-| Boundary violations   | server code ใน client       | RUV1007    |
-| Private env in client | process.env.XXX ใน client   | RUV1008    |
-| Missing modules       | import ไม่มี                | RUV1010    |
-| Config validity       | ruvyxa.config.ts validation | RUV1600+   |
-| Syntax errors         | TypeScript/JS syntax        | RUV1011    |
-| Circular dependencies | import loop                 | RUV1012    |
-| Missing dependencies  | npm packages                | RUV1013    |
-| SEO metadata          | missing Meta component      | RUV1005    |
-
----
-
-## 4. `ruvyxa start`
-
-รัน production server จาก build ที่ compile แล้ว (ใช้ไฟล์จาก `.ruvyxa/`)
-
-### Syntax
+## `ruvyxa start` และ `ruvyxa preview`
 
 ```bash
-ruvyxa start [options]
+ruvyxa start [--root <PATH>] [--host <HOST>] [--port <PORT>] [--runtime <node|bun>]
+ruvyxa preview [--root <PATH>] [--host <HOST>] [--port <PORT>] [--runtime <node|bun>]
 ```
 
-### Options
-
-| Option      | Type              | Default       | คำอธิบาย    |
-| ----------- | ----------------- | ------------- | ----------- |
-| `--root`    | `string`          | `.`           | รากโปรเจกต์ |
-| `--host`    | `string`          | `'localhost'` | Host        |
-| `--port`    | `number`          | `3000`        | Port        |
-| `--runtime` | `'node' \| 'bun'` | auto          | JS runtime  |
-
-### ตัวอย่าง
+ทั้งสองคำสั่ง serve production build ที่มีอยู่แล้ว จึงต้อง `ruvyxa build` ก่อน `preview` เป็น
+คำสั่งสำหรับ local-preview โดยเฉพาะและไม่ได้ build ให้อัตโนมัติ
 
 ```bash
-# build ก่อน แล้วค่อย start
-npm run build && npm run start
-
-# ระบุ port
-ruvyxa start --port 8080
-
-# เปิด network
-ruvyxa start --host 0.0.0.0 --port 443
+npm run build
+npm run start
+ruvyxa preview --port 4173
 ```
 
-### ตัวอย่าง Output
-
-```
-━━━ Ruvyxa production server running ━━━━━━━
-
-  ➜  Local:   http://localhost:3000
-  ➜  Network: http://192.168.1.100:3000
-  ➜  Mode:    production
-  ➜  Runtime: node (v22.5.0)
-
-  ✓ Server initialized
-  ✓ 4 routes loaded
-  ✓ Adapter: node
-  ✓ Production ready
-
-  ℹ Press Ctrl+C to stop
-```
-
-### ตัวอย่าง Error
-
-```
-━━━ Server Error ━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  ✗ Build output not found
-    Expected .ruvyxa/ directory to exist
-    Fix: Run `ruvyxa build` first
-
-  ✗ Port 3000 is in use
-    Fix: Use --port 4000 or stop the other process
-    ✗ Exit code: 8
-```
-
----
-
-## 5. `ruvyxa preview`
-
-Build + start ในคำสั่งเดียว (ใช้สำหรับ preview ก่อน deploy)
-
-### Syntax
+## `ruvyxa routes`
 
 ```bash
-ruvyxa preview [options]
+ruvyxa routes [--root <PATH>] [--runtime <node|bun>]
 ```
 
-### Options
-
-| Option      | Type                                    | Default       | คำอธิบาย           |
-| ----------- | --------------------------------------- | ------------- | ------------------ |
-| `--root`    | `string`                                | `.`           | รากโปรเจกต์        |
-| `--host`    | `string`                                | `'localhost'` | Host               |
-| `--port`    | `number`                                | `3000`        | Port               |
-| `--runtime` | `'node' \| 'bun'`                       | auto          | JS runtime         |
-| `--target`  | `'node' \| 'bun' \| 'edge' \| 'static'` | auto          | Build target       |
-| `--adapter` | `string`                                | auto          | Deployment adapter |
-
-### ตัวอย่าง
+แสดง routes ที่ค้นพบจาก application directory ตาม config ใช้ตรวจ route paths หรือหา conflict
 
 ```bash
-npm run preview
-ruvyxa preview --port 4000
+ruvyxa routes
 ```
 
-### ตัวอย่าง Output
-
-```
-━━━ Preview ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  [Build Phase]
-  ✓ routes discovered     4 routes      12ms
-  ✓ validated             ok             8ms
-  ✓ built                 compiled      2.3s
-  ✓ image optimized       12 variants   1.1s
-  ✓ Build complete (3.5s)
-
-  [Server Phase]
-  ⚡ Ruvyxa production server running
-  ➜  Local:   http://localhost:3000
-  ➜  Mode:    production
-  ➜  Runtime: node
-
-  ✓ Preview ready (3.6s total)
-  ℹ Press Ctrl+C to stop
-```
-
----
-
-## 6. `ruvyxa routes`
-
-แสดง route table ทั้งหมด — path, type, layouts, strategy
-
-### Syntax
+## `ruvyxa analyze`
 
 ```bash
-ruvyxa routes [options]
+ruvyxa analyze [--root <PATH>] [--runtime <node|bun>] \
+  [--format <auto|human|json|sarif>] [--output <PATH>]
 ```
 
-### Options
-
-| Option      | Type                             | Default  | คำอธิบาย                  |
-| ----------- | -------------------------------- | -------- | ------------------------- |
-| `--root`    | `string`                         | `.`      | รากโปรเจกต์               |
-| `--runtime` | `'node' \| 'bun'`                | auto     | JS runtime                |
-| `--json`    | `boolean`                        | `false`  | JSON output               |
-| `--filter`  | `string`                         | -        | กรอง route (glob pattern) |
-| `--sort`    | `'path' \| 'type' \| 'strategy'` | `'path'` | เรียงลำดับ                |
-
-### ตัวอย่าง
+ตรวจ routes, imports และ server/client boundaries ค่า `auto` รักษาพฤติกรรมตาม terminal หรือ piped
+output และ `--output` เขียนรายงานตาม format ที่เลือกลงไฟล์
 
 ```bash
-npm run routes
-
-# JSON
-ruvyxa routes --json
-
-# กรองเฉพาะ blog routes
-ruvyxa routes --filter 'blog/*'
-
-# เรียงตาม strategy
-ruvyxa routes --sort strategy
-
-# ใช้กับ pipe
-ruvyxa routes --json | jq '.routes | length'
+ruvyxa analyze
+ruvyxa analyze --format sarif --output reports/ruvyxa.sarif
 ```
 
-### ตัวอย่าง Output — Human
-
-```
-━━━ Route Manifest ━━━━━━━━━━━━━━━━━━━━━━━━━
-  App directory: /home/user/my-app/app
-
-  Path                  Type      Layouts            Strategy
- ─────────────────────────────────────────────────────────────
-  /                     page      root                SSG
-  /about                page      root                SSR
-  /blog                 page      root                SSR
-  /blog/[slug]          page      root                SSG
-  /api/health           api       -                   -
-  /api/users/[id]       api       -                   -
-  /api/auth/login       api       -                   -
-
-  Legend: page → 4, api → 3, layout → 1, action → 2
-  Total: 7 routes • 0 conflicts • 0 warnings
-```
-
-### ตัวอย่าง Output — JSON
-
-```json
-{
-  "appDir": "/home/user/my-app/app",
-  "routes": [
-    {
-      "path": "/",
-      "type": "page",
-      "layouts": ["root"],
-      "strategy": "SSG",
-      "file": "app/page.tsx",
-      "params": [],
-      "staticPaths": []
-    },
-    {
-      "path": "/blog/[slug]",
-      "type": "page",
-      "layouts": ["root"],
-      "strategy": "SSG",
-      "file": "app/blog/[slug]/page.tsx",
-      "params": ["slug"],
-      "staticPaths": [{ "slug": "hello-world" }, { "slug": "second-post" }]
-    },
-    {
-      "path": "/api/health",
-      "type": "api",
-      "layouts": [],
-      "strategy": null,
-      "file": "app/api/health/route.ts",
-      "methods": ["GET"]
-    }
-  ],
-  "total": 7,
-  "conflicts": 0,
-  "warnings": 0
-}
-```
-
-### Route Type Legend
-
-| Type      | Icon | คำอธิบาย       |
-| --------- | ---- | -------------- |
-| `page`    | 📄   | หน้าเพจ        |
-| `api`     | 🔌   | API route      |
-| `layout`  | 🏗️   | Layout wrapper |
-| `action`  | ⚡   | Server action  |
-| `loading` | ⏳   | Loading UI     |
-| `error`   | ❌   | Error boundary |
-
----
-
-## 7. `ruvyxa analyze`
-
-วิเคราะห์ routes, imports, server/client boundaries, dependencies, การใช้งานรูป
-
-### Syntax
+## `ruvyxa doctor`
 
 ```bash
-ruvyxa analyze [options]
+ruvyxa doctor [--root <PATH>] [--target <node|bun|edge|static>] \
+  [--adapter <NAME_OR_NPM_PACKAGE>] [--runtime <node|bun>] [--json]
 ```
 
-### Options
-
-| Option      | Type                                     | Default   | คำอธิบาย               |
-| ----------- | ---------------------------------------- | --------- | ---------------------- |
-| `--root`    | `string`                                 | `.`       | รากโปรเจกต์            |
-| `--runtime` | `'node' \| 'bun'`                        | auto      | JS runtime             |
-| `--format`  | `'auto' \| 'human' \| 'json' \| 'sarif'` | `'auto'`  | รูปแบบ output          |
-| `--output`  | `string`                                 | -         | เขียน output ไปยังไฟล์ |
-| `--checks`  | `string[]`                               | all       | เฉพาะ check บางประเภท  |
-| `--fail-on` | `'error' \| 'warning'`                   | `'error'` | exit code เมื่อเจอ     |
-
-### ตัวอย่าง
+ใช้ `--adapter` เพื่อตรวจ adapter โดยไม่สร้าง artifacts และใช้ `--json` เพื่อรับ compatibility
+report แบบ JSON
 
 ```bash
-# พื้นฐาน
-npm run analyze
-
-# JSON output
-ruvyxa analyze --format json
-
-# SARIF สำหรับ GitHub
-ruvyxa analyze --format sarif --output results.sarif
-
-# เฉพาะบาง check
-ruvyxa analyze --checks boundaries,images,env
-
-# Fail on warnings
-ruvyxa analyze --fail-on warning
+ruvyxa doctor
+ruvyxa doctor --adapter cloudflare --json
 ```
 
-### ตัวอย่าง Output — Human
-
-```
-━━━ Analyze ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  Routes
-  ──────
-  4 pages
-  2 api routes
-  0 conflicts                ✅
-  0 ambiguous                ✅
-
-  Layouts
-  ───────
-  1 root layout
-  2 nested layouts
-  Chain valid                ✅
-
-  Imports
-  ───────
-  23 server modules
-  12 client modules
-  1 boundary violation        ⚠️
-
-  Environment Variables
-  ────────────────────
-  5 public (RUVYXA_PUBLIC_*)
-  8 private (server-only)
-  0 violations               ✅
-
-  Images
-  ──────
-  8 total
-  6 using <Image>
-  2 using <img>               ⚠️
-  0 external (unoptimized)
-
-  Bundle Size
-  ───────────
-  Server:  2.1 MB
-  Client:  890 KB (gzip: 280 KB)
-
-  Diagnostics: 3 issues
-  ───────────────────
-
-  RUV1007: Client boundary violation
-    File: app/page.tsx:15:5
-    Why: Imports 'server-only' module
-    Fix: Move import behind server boundary
-
-  RUV1008: Private env in client
-    File: app/utils.ts:3:10
-    Why: DATABASE_URL used in client scope
-    Fix: Prefix with RUVYXA_PUBLIC_ or move to server
-
-  RUV1005: Missing Meta component
-    File: app/contact/page.tsx
-    Why: No SEO metadata defined
-    Fix: Add <Meta> component
-
-  ─────────────────────────────────────────────
-  ℹ 3 issues found (3 warnings, 0 errors)
-```
-
-### ตัวอย่าง Output — JSON
-
-```json
-{
-  "routes": {
-    "pages": 4,
-    "apis": 2,
-    "conflicts": 0,
-    "ambiguous": 0
-  },
-  "imports": {
-    "server": 23,
-    "client": 12,
-    "boundaryViolations": 1
-  },
-  "env": {
-    "public": 5,
-    "private": 8,
-    "violations": 0
-  },
-  "images": {
-    "total": 8,
-    "usingImageComponent": 6,
-    "usingImgTag": 2,
-    "external": 0
-  },
-  "diagnostics": [
-    {
-      "code": "RUV1007",
-      "severity": "warning",
-      "file": "app/page.tsx",
-      "line": 15,
-      "message": "Client boundary violation",
-      "detail": "Imports 'server-only' module",
-      "fix": "Move import behind server boundary"
-    }
-  ],
-  "totalIssues": 3,
-  "errors": 0,
-  "warnings": 3
-}
-```
-
-### Output Format Detail
-
-| Format  | คำอธิบาย                                                           | เหมาะกับ                 |
-| ------- | ------------------------------------------------------------------ | ------------------------ |
-| `auto`  | ตัดสินใจจาก terminal หรือ pipe (human ถ้า terminal, json ถ้า pipe) | ทั่วไป                   |
-| `human` | อ่านง่าย สีสัน                                                     | Local dev                |
-| `json`  | Structured data                                                    | Tools, scripts           |
-| `sarif` | SARIF 2.1.0                                                        | GitHub Code Scanning, CI |
-
-### Check Types
-
-| Check        | คำอธิบาย                               | Default              |
-| ------------ | -------------------------------------- | -------------------- |
-| `routes`     | ตรวจสอบ route conflicts, ambiguous     | ✅                   |
-| `boundaries` | ตรวจ server/client boundary violations | ✅                   |
-| `images`     | ตรวจการใช้งานรูป <Image> vs <img>      | ✅                   |
-| `env`        | ตรวจ environment variables violations  | ✅                   |
-| `imports`    | ตรวจ dependency graph                  | ✅                   |
-| `seo`        | ตรวจ missing Meta component            | ✅                   |
-| `deps`       | ตรวจ missing npm packages              | ✅                   |
-| `size`       | ตรวจ bundle size                       | ❌ (ต้อง build ก่อน) |
-
----
-
-## 8. `ruvyxa doctor`
-
-วินิจฉัยโปรเจกต์ — Node version, config validity, routes, dependencies, port, adapter
-
-### Syntax
+## `ruvyxa clean`
 
 ```bash
-ruvyxa doctor [options]
+ruvyxa clean [--root <PATH>] [--runtime <node|bun>]
 ```
 
-### Options
-
-| Option                 | Type              | Default | คำอธิบาย              |
-| ---------------------- | ----------------- | ------- | --------------------- |
-| `--root`               | `string`          | `.`     | รากโปรเจกต์           |
-| `--target`             | `string`          | auto    | Build target          |
-| `--adapter`            | `string`          | auto    | Deployment adapter    |
-| `--runtime`            | `'node' \| 'bun'` | auto    | JS runtime            |
-| `--json`               | `boolean`         | `false` | JSON output           |
-| `--fix`                | `boolean`         | `false` | auto-fix บางปัญหา     |
-| `--generate-env-types` | `boolean`         | `false` | สร้าง ruvyxa-env.d.ts |
-
-### ตัวอย่าง
+ลบเฉพาะ generated build directory ตาม config ของ Ruvyxa ไม่ลบ dependencies หรือไฟล์ project อื่น
 
 ```bash
-npm run doctor
-
-# JSON
-ruvyxa doctor --json
-
-# Auto-fix
-ruvyxa doctor --fix
-
-# Generate env types
-ruvyxa doctor --generate-env-types
-
-# ใช้ใน CI
-ruvyxa doctor --json | jq '.ok'
+ruvyxa clean
 ```
 
-### ตัวอย่าง Output
-
-```
-━━━ Ruvyxa Doctor ━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  Environment
-  ───────────
-  ✓ Node.js           v22.5.0 (>= 22.x)
-  ✓ OS                win32
-  ✓ Runtime           node
-
-  Config
-  ──────
-  ✓ File exists       ruvyxa.config.ts
-  ✓ Config valid
-  ✓ No unknown fields
-  ✓ site.url          https://example.com
-
-  Routes
-  ──────
-  ✓ Routes            / (SSG), /about (SSR),
-                       /blog (SSR), /api/health
-  ✓ Layouts           root → valid chain
-  ✓ No conflicts
-  ✓ No ambiguous
-
-  Adapter
-  ───────
-  ✓ Detected          node
-  ✓ Override          RUVYXA_ADAPTER not set
-
-  Environment Variables
-  ────────────────────
-  ✓ Files loaded      .env, .env.local
-  ✓ Public vars       5 found
-  ✓ Private vars      8 found
-  ✓ No violations
-
-  Dependencies
-  ────────────
-  ✓ All installed     (0 missing)
-  ✓ Package manager   pnpm
-
-  Port
-  ────
-  ⚠ Port 3000 in use by another process
-
-  ─────────────────────────────────────────────
-  ⚠ 1 issue found
-    Fix: use --port 4000 or stop the other process
-    ℹ Run `ruvyxa doctor --fix` to auto-resolve
-```
-
-### ตัวอย่าง Output — JSON
-
-```json
-{
-  "ok": false,
-  "nodeVersion": "v22.5.0",
-  "os": "win32",
-  "runtime": "node",
-  "configValid": true,
-  "routes": 4,
-  "adapter": "node",
-  "env": {
-    "files": [".env", ".env.local"],
-    "publicCount": 5,
-    "privateCount": 8,
-    "violations": 0
-  },
-  "issues": [
-    {
-      "code": "RUV1201",
-      "severity": "warning",
-      "title": "Port 3000 is in use",
-      "fix": "Use --port 4000 or stop the other process",
-      "autoFixable": true
-    }
-  ],
-  "issueCount": 1,
-  "autoFixableCount": 1
-}
-```
-
-### Doctor Checks
-
-| Check             | ตรวจ                     | แก้ไขอัตโนมัติ      |
-| ----------------- | ------------------------ | ------------------- |
-| Node.js version   | ≥ 22.x                   | ❌                  |
-| Config file       | มีไฟล์ + syntax ถูก      | ❌                  |
-| Config validation | ทุก field ถูกต้อง        | ❌                  |
-| Routes            | conflicts, ambiguous     | ❌                  |
-| Layout chain      | missing layout           | ❌                  |
-| Adapter           | auto-detect หรือตั้งค่า  | ❌                  |
-| Env vars          | files loaded, violations | ❌                  |
-| Dependencies      | missing packages         | ✅ (npm install)    |
-| Port              | port 3000 ถูกใช้งาน      | ✅ (suggest --port) |
-| .env.example      | มีไฟล์                   | ✅ (generate)       |
-
----
-
-## 9. `ruvyxa clean`
-
-ลบโฟลเดอร์ `.ruvyxa/` และ cache ทั้งหมด
-
-### Syntax
+## `ruvyxa trace`
 
 ```bash
-ruvyxa clean [options]
+ruvyxa trace <ROUTE> [--root <PATH>]
 ```
 
-### Options
-
-| Option      | Type              | Default | คำอธิบาย            |
-| ----------- | ----------------- | ------- | ------------------- |
-| `--root`    | `string`          | `.`     | รากโปรเจกต์         |
-| `--runtime` | `'node' \| 'bun'` | auto    | JS runtime          |
-| `--all`     | `boolean`         | `false` | ลบทุกอย่างรวม cache |
-
-### ตัวอย่าง
-
-```bash
-npm run clean
-
-# Clean ทั้งหมด
-ruvyxa clean --all
-
-# Dry run (แสดงว่าจะลบอะไรบ้าง)
-ruvyxa clean --dry-run
-```
-
-### ตัวอย่าง Output
-
-```
-━━━ Clean ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  ✓ Removed .ruvyxa/            (124.5 MB)
-  ✓ Removed .ruvyxa/cache       (23.1 MB)
-  ✓ Removed .ruvyxa/assets      (45.2 MB)
-
-  ──────────────────────────────────
-  ✓ Freed 192.8 MB
-
-  Directories cleaned:
-  - .ruvyxa/         (build output)
-  - .ruvyxa/cache/   (build cache)
-  - .ruvyxa/assets/  (optimized images)
-```
-
-### เมื่อไหร่ควร clean
-
-| สถานการณ์                | เหตุผล                            |
-| ------------------------ | --------------------------------- |
-| build error แปลก ๆ       | cache เสีย → clean + rebuild      |
-| เปลี่ยน config ครั้งใหญ่ | cache เก่า conflict               |
-| ต้องการพื้นที่ว่าง       | .ruvyxa/ อาจใหญ่ถึง 200MB+        |
-| ก่อน deploy              | clean state → deterministic build |
-| เปลี่ยน image sizes      | image cache เก่า                  |
-| เปลี่ยน plugins          | plugin ลงทะเบียน hooks ใหม่       |
-
----
-
-## 10. `ruvyxa trace`
-
-ตรวจสอบ route แต่ละรายการแบบละเอียด — layout chain, server/client modules, static params, rendering
-
-### Syntax
-
-```bash
-ruvyxa trace <route-path> [options]
-```
-
-### Arguments
-
-| Argument       | Required | คำอธิบาย                                                     |
-| -------------- | -------- | ------------------------------------------------------------ |
-| `<route-path>` | ✅       | เส้นทาง route (เช่น `/`, `/blog/hello-world`, `/api/health`) |
-
-### Options
-
-| Option   | Type      | Default | คำอธิบาย    |
-| -------- | --------- | ------- | ----------- |
-| `--root` | `string`  | `.`     | รากโปรเจกต์ |
-| `--json` | `boolean` | `false` | JSON output |
-
-### ตัวอย่าง
+ต้องระบุ `<ROUTE>` คำสั่งจะสร้าง manifest ปัจจุบันและแสดง entry ที่ตรงกัน
 
 ```bash
 ruvyxa trace /
-ruvyxa trace /blog/hello-world
-
-# JSON
-ruvyxa trace /api/health --json
-
-# Trace route ที่มี params
-ruvyxa trace /blog/hello-world
-ruvyxa trace /users/123
+ruvyxa trace /blog/[slug]
 ```
 
-### ตัวอย่าง Output
-
-```
-━━━ Trace: /blog/hello-world ━━━━━━━━━━━━━━
-
-  Route
-  ─────
-  Path:     /blog/[slug]
-  Kind:     page
-  File:     app/blog/[slug]/page.tsx
-  Strategy: SSG (static params: 2)
-
-  Layout Chain
-  ─────────────
-  Level 1: app/layout.tsx (root)
-    Children: <slot/>
-  Level 2: app/blog/layout.tsx (nested)
-    Children: <slot/>
-
-  Server Modules
-  ──────────────
-  ✓ app/blog/[slug]/page.tsx
-  ✓ app/blog/layout.tsx
-  ✓ app/layout.tsx
-  ✓ app/actions.ts
-  ✓ server/db.ts
-
-  Client Modules
-  ──────────────
-  ✓ app/blog/[slug]/client-component.tsx
-  ✓ components/counter.tsx
-
-  Static Params
-  ─────────────
-  slug: hello-world
-  slug: second-post
-  slug: getting-started
-
-  Rendering
-  ─────────
-  HTML:  /blog/hello-world.html     (prerendered)
-  JSON:  /blog/hello-world.json     (static data)
-  RSC:   /blog/hello-world.rsc      (RSC payload)
-
-  Imports
-  ───────
-  app/blog/[slug]/page.tsx
-    ├── @ruvyxa/react              (server-compatible)
-    ├── ../../components/counter   (client)
-    ├── ../../server/db            (server-only)
-    └── ../../lib/utils            (shared)
-```
-
-### ตัวอย่าง Output — JSON
-
-```json
-{
-  "route": {
-    "path": "/blog/[slug]",
-    "kind": "page",
-    "file": "app/blog/[slug]/page.tsx",
-    "strategy": "SSG",
-    "staticParams": [{ "slug": "hello-world" }, { "slug": "second-post" }]
-  },
-  "layouts": [
-    { "level": 1, "file": "app/layout.tsx", "type": "root" },
-    { "level": 2, "file": "app/blog/layout.tsx", "type": "nested" }
-  ],
-  "modules": {
-    "server": ["app/blog/[slug]/page.tsx", "app/actions.ts"],
-    "client": ["app/blog/[slug]/client-component.tsx"]
-  },
-  "rendering": {
-    "html": ".ruvyxa/prerender/blog/hello-world.html",
-    "json": ".ruvyxa/prerender/blog/hello-world.json"
-  }
-}
-```
-
----
-
-## 11. `ruvyxa bench`
-
-วัดประสิทธิภาพ — route discovery, validation, analysis, style collection
-
-### Syntax
+## `ruvyxa bench`
 
 ```bash
-ruvyxa bench [options]
+ruvyxa bench [--root <PATH>] [--samples <COUNT>] [--json]
 ```
 
-### Options
-
-| Option      | Type       | Default | คำอธิบาย           |
-| ----------- | ---------- | ------- | ------------------ |
-| `--root`    | `string`   | `.`     | รากโปรเจกต์        |
-| `--samples` | `number`   | `3`     | จำนวนครั้งที่ทดสอบ |
-| `--json`    | `boolean`  | `false` | JSON output        |
-| `--warmup`  | `number`   | `1`     | จำนวน warmup runs  |
-| `--phases`  | `string[]` | all     | เฉพาะ phases       |
-
-### ตัวอย่าง
+ค่าเริ่มต้นของ `--samples` คือ `3`; ใช้ `--json` เมื่อให้ CI หรือเครื่องมืออื่นอ่านผล
 
 ```bash
-npm run bench
-
-# 10 samples
-ruvyxa bench --samples 10
-
-# JSON สำหรับเก็บสถิติ
-ruvyxa bench --json --samples 5 > bench-results.json
-
-# เฉพาะบาง phase
-ruvyxa bench --phases discovery,validation
-
-# รวม warmup
-ruvyxa bench --samples 5 --warmup 2
+ruvyxa bench --samples 5
+ruvyxa bench --json
 ```
 
-### ตัวอย่าง Output
-
-```
-━━━ Benchmark ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Samples: 3
-  Warmup:  1
-
-  Phase                    Avg           Min           Max         p95
- ──────────────────────────────────────────────────────────────────────
-  Route discovery          12.3 ms       11.8 ms       13.1 ms     13.0 ms
-  Validation                8.7 ms        8.2 ms        9.1 ms      9.0 ms
-  Analysis                 45.2 ms       43.1 ms       48.0 ms     47.5 ms
-  Style collection         32.1 ms       30.5 ms       34.2 ms     33.9 ms
-  Build (no cache)         2.3 s         2.1 s         2.5 s       2.5 s
-  Image optimization       1.1 s         1.0 s         1.2 s       1.2 s
-
-  Total (build)            3.5 s         3.3 s         3.7 s       3.7 s
-```
-
-### ตัวอย่าง Output — JSON
-
-```json
-{
-  "samples": 3,
-  "warmup": 1,
-  "timestamp": "2026-07-29T10:00:00Z",
-  "phases": {
-    "route_discovery": {
-      "avg": 12.3,
-      "min": 11.8,
-      "max": 13.1,
-      "p95": 13.0,
-      "unit": "ms"
-    },
-    "validation": {
-      "avg": 8.7,
-      "min": 8.2,
-      "max": 9.1,
-      "p95": 9.0,
-      "unit": "ms"
-    },
-    "analysis": {
-      "avg": 45.2,
-      "min": 43.1,
-      "max": 48.0,
-      "p95": 47.5,
-      "unit": "ms"
-    },
-    "total_build": {
-      "avg": 3500,
-      "min": 3300,
-      "max": 3700,
-      "p95": 3700,
-      "unit": "ms"
-    }
-  }
-}
-```
-
-### Benchmark Phases
-
-| Phase        | วัดอะไร                                   | ขึ้นอยู่กับ        |
-| ------------ | ----------------------------------------- | ------------------ |
-| `discovery`  | Scaning app directory, parsing filesystem | จำนวน routes, ไฟล์ |
-| `validation` | Route conflicts, boundary checks          | จำนวน modules      |
-| `analysis`   | Import graph, dependency resolution       | จำนวน imports      |
-| `style`      | CSS collection, PostCSS processing        | จำนวนไฟล์ CSS      |
-| `build`      | Full compilation (ไม่รวม image)           | ขนาดโปรเจกต์       |
-| `image`      | Image optimization pipeline               | จำนวนรูป           |
-
----
-
-## 12. `ruvyxa test:parity`
-
-เปรียบเทียบ dev vs production rendering — ทดสอบว่า output ตรงกัน
-
-### Syntax
+## `ruvyxa test:parity`
 
 ```bash
-ruvyxa test:parity [options]
+ruvyxa test:parity [--root <PATH>] [--runtime <node|bun>]
 ```
 
-### Options
-
-| Option       | Type              | Default | คำอธิบาย                     |
-| ------------ | ----------------- | ------- | ---------------------------- |
-| `--root`     | `string`          | `.`     | รากโปรเจกต์                  |
-| `--runtime`  | `'node' \| 'bun'` | auto    | JS runtime                   |
-| `--routes`   | `string[]`        | all     | เฉพาะ routes ที่ต้องการทดสอบ |
-| `--timeout`  | `number`          | `30000` | Timeout (ms)                 |
-| `--approve`  | `boolean`         | `false` | อัปเดต baseline เป็น current |
-| `--baseline` | `string`          | -       | Path ถึง baseline directory  |
-| `--strict`   | `boolean`         | `false` | เปรียบเทียบทุก byte          |
-| `--json`     | `boolean`         | `false` | JSON output                  |
-
-### ตัวอย่าง
+เปรียบเทียบ route manifests ของ dev/production และ smoke-render page routes เป็น parity check
+เดียวกับที่ `ruvyxa check` เรียกใช้
 
 ```bash
-# พื้นฐาน — ต้อง build ก่อน
-npm run build && npm run test:parity
-
-# เฉพาะบาง route
-ruvyxa test:parity --routes /,/about
-
-# Strict mode (byte-level)
-ruvyxa test:parity --strict
-
-# อัปเดต baseline
-ruvyxa test:parity --approve
-
-# JSON output สำหรับ CI
-ruvyxa test:parity --json
-```
-
-### ตัวอย่าง Output — Pass
-
-```
-━━━ Parity Test ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  Mode:    html-comparison
-  Routes:  4
-  Strict:  false
-
-  Routes
-  ──────
-  ✓ /                  dev = prod (200)    html: ✅  json: ✅
-  ✓ /about             dev = prod (200)    html: ✅  json: ✅
-  ✓ /blog              dev = prod (200)    html: ✅  json: ✅
-  ✓ /blog/hello-world  dev = prod (200)    html: ✅  json: ✅
-
-  ─────────────────────────────────────────────
-  ✓ Result: 4/4 passed (1.2s)
-  ✓ All routes match between dev and production
-```
-
-### ตัวอย่าง Output — Fail
-
-```
-━━━ Parity Test ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  Routes
-  ──────
-  ✓ /                  dev = prod (200)    ✅
-  ✓ /about             dev = prod (200)    ✅
-  ✗ /blog              dev (200) ≠ prod (404)
-    Expected: prod returned 404, dev returned 200
-    Difference: /blog page exists in dev but not in build
-    Fix: Check route file app/blog/page.tsx
-
-  ✗ /blog/hello-world  dev (200) ≠ prod (500)
-    Expected: prod returned 500, dev returned 200
-    Difference: Server error in production bundle
-    Fix: Check server-side error logs
-
-  ─────────────────────────────────────────────
-  ✗ Result: 2/4 passed (0.8s)
-  ✗ Parity check failed (exit code: 7)
-```
-
-### How It Works
-
-1. `ruvyxa test:parity` เริ่ม dev server (ชั่วคราว) และ production server
-2. ส่ง HTTP request ไปยังทั้งสอง server สำหรับแต่ละ route
-3. เปรียบเทียบ status code, headers, HTML body
-4. ถ้า `--strict`: เปรียบเทียบ HTML byte-level (รวม whitespace)
-5. ถ้าไม่ strict: เปรียบเทียบเฉพาะ semantic content
-
-### Parity Check Detail
-
-| Check               | เวอร์ชัน strict | เวอร์ชันปกติ      |
-| ------------------- | --------------- | ----------------- |
-| Status code         | ตรงกันทุกประการ | ตรงกันทุกประการ   |
-| Content-Type header | ตรงกัน          | ตรงกัน            |
-| HTML structure      | ตรง byte-level  | semantic เท่านั้น |
-| Whitespace          | ตรง             | ไม่สน             |
-| React hydration IDs | ตรง             | ไม่สน             |
-| Dynamic content     | ตรง             | ตรง               |
-| Error pages         | รายงาน mismatch | รายงาน mismatch   |
-
----
-
-## 13. `ruvyxa plugin create`
-
-สร้าง scaffolding สำหรับแพ็กเกจ plugin ใหม่
-
-### Syntax
-
-```bash
-ruvyxa plugin create <name> [options]
-```
-
-### Arguments
-
-| Argument | Required | คำอธิบาย                                  |
-| -------- | -------- | ----------------------------------------- |
-| `<name>` | ✅       | ชื่อ plugin (lowercase, hyphen-separated) |
-
-### Options
-
-| Option           | Type                              | Default                | คำอธิบาย               |
-| ---------------- | --------------------------------- | ---------------------- | ---------------------- |
-| `--root`         | `string`                          | `.`                    | รากโปรเจกต์            |
-| `--dir`          | `string`                          | `ruvyxa-plugin-{name}` | ที่อยู่ของ plugin      |
-| `--template`     | `'basic' \| 'advanced' \| 'full'` | `'basic'`              | template               |
-| `--with-tests`   | `boolean`                         | `true`                 | สร้าง test files       |
-| `--with-docs`    | `boolean`                         | `true`                 | สร้าง README           |
-| `--with-example` | `boolean`                         | `false`                | สร้างตัวอย่างการใช้งาน |
-
-### ตัวอย่าง
-
-```bash
-# สร้าง plugin พื้นฐาน
-ruvyxa plugin create my-redirects
-
-# สร้าง plugin ขั้นสูง พร้อม tests และ docs
-ruvyxa plugin create custom-auth --template advanced
-
-# ระบุ directory
-ruvyxa plugin create my-plugin --dir ./packages/my-plugin
-
-# Full template พร้อมตัวอย่าง
-ruvyxa plugin create full-featured --template full --with-example
-```
-
-### ตัวอย่าง Output
-
-```
-━━━ Plugin ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  status    created
-  plugin    my-redirects
-  package   ruvyxa-plugin-my-redirects
-  path      ./ruvyxa-plugin-my-redirects
-  template  basic
-
-  Generated files:
-  ─────────────────
-  ✓ package.json        (dependencies ready)
-  ✓ tsconfig.json       (TypeScript config)
-  ✓ src/index.ts        (main plugin entry)
-  ✓ src/hooks.ts        (hook definitions)
-  ✓ src/types.ts        (TypeScript types)
-  ✓ test/plugin.test.mjs (test file)
-  ✓ README.md           (documentation)
-  ✓ .gitignore
-  ✓ CHANGELOG.md
-
-  ─────────────────────────────────────────────
-  Next steps:
-  1. cd ruvyxa-plugin-my-redirects
-  2. npm install
-  3. Implement hook logic in src/index.ts
-  4. npm test
-  5. Publish to npm when ready
-
-  ✓ Plugin my-redirects is ready to develop
-```
-
-### Template Structure
-
-**Basic Template:**
-
-```
-ruvyxa-plugin-my-redirects/
-├── src/
-│   ├── index.ts       # ลงทะเบียน hooks
-│   ├── hooks.ts       # hook implementations
-│   └── types.ts       # TypeScript interfaces
-├── test/
-│   └── plugin.test.mjs
-├── package.json
-├── tsconfig.json
-├── README.md
-└── .gitignore
-```
-
-**Advanced Template:**
-
-```
-ruvyxa-plugin-my-plugin/
-├── src/
-│   ├── index.ts         # main entry
-│   ├── hooks/           # hooks directory
-│   │   ├── build.ts     # build hooks
-│   │   ├── dev.ts       # dev hooks
-│   │   └── server.ts    # server hooks
-│   ├── utils/
-│   │   ├── config.ts    # config parsing
-│   │   └── validation.ts
-│   └── types.ts
-├── test/
-│   ├── plugin.test.mjs
-│   ├── hooks.test.mjs
-│   └── integration.test.mjs
-├── examples/
-│   └── basic-usage.ts
-├── package.json
-├── tsconfig.json
-├── README.md
-└── .gitignore
-```
-
-**Full Template:**
-
-```
-ruvyxa-plugin-my-plugin/
-├── src/
-│   ├── index.ts
-│   ├── hooks/
-│   │   ├── index.ts
-│   │   ├── build.ts
-│   │   ├── dev.ts
-│   │   ├── server.ts
-│   │   └── config.ts
-│   ├── utils/
-│   │   ├── index.ts
-│   │   ├── logger.ts
-│   │   ├── validation.ts
-│   │   └── helpers.ts
-│   ├── middleware/
-│   │   └── index.ts
-│   └── types.ts
-├── test/
-│   ├── unit/
-│   │   ├── hooks.test.mjs
-│   │   └── utils.test.mjs
-│   ├── integration/
-│   │   └── plugin.test.mjs
-│   └── fixtures/
-│       ├── ruvyxa.config.ts
-│       └── app/
-├── examples/
-│   ├── basic.ts
-│   └── advanced.ts
-├── docs/
-│   ├── API.md
-│   └── guide.md
-├── package.json
-├── tsconfig.json
-├── README.md
-├── LICENSE
-├── CHANGELOG.md
-└── .gitignore
-```
-
-### Generated `src/index.ts` (Basic)
-
-```ts
-import { definePlugin } from 'ruvyxa/plugin'
-import type { RuvyxaHooks } from 'ruvyxa/plugin'
-
-interface PluginOptions {
-  // Define your plugin options here
-  verbose?: boolean
-}
-
-export default definePlugin<PluginOptions>({
-  name: 'my-redirects',
-  version: '0.1.0',
-  hooks: {
-    // Build hooks
-    'build:before': async (config, options) => {
-      console.log(`[my-redirects] Build starting with options:`, options)
-    },
-    'build:after': async (result) => {
-      console.log(`[my-redirects] Build completed in ${result.duration}ms`)
-    },
-
-    // Dev hooks
-    'dev:start': async (server, options) => {
-      console.log(`[my-redirects] Dev server started`)
-    },
-
-    // Server hooks
-    'server:request': async (request, reply) => {
-      // Intercept requests
-    },
-  } satisfies Partial<RuvyxaHooks>,
-})
-```
-
----
-
-## Troubleshooting — ทุก Error Code และปัญหา CLI
-
-### CLI Error Codes
-
-| Exit Code | คำสั่ง              | ปัญหา                   | วิธีแก้                 |
-| --------- | ------------------- | ----------------------- | ----------------------- |
-| 1         | all                 | General error           | ตรวจ log                |
-| 2         | check, build, dev   | Config validation error | `ruvyxa doctor`         |
-| 3         | build, preview      | Build ล้มเหลว           | ดู build output         |
-| 4         | check, analyze      | Boundary violation      | ย้าย server code        |
-| 5         | check, routes       | Route conflict          | แก้ route path          |
-| 6         | doctor              | มี warning/fix          | `ruvyxa doctor --fix`   |
-| 7         | test:parity         | Rendering ต่างกัน       | ตรวจ parity fail output |
-| 8         | dev, start, preview | Port ซ้ำ                | `--port 4000`           |
-| 9         | plugin create       | สร้าง plugin ไม่ได้     | ใช้ชื่อ lower-hyphen    |
-| 10        | clean               | ลบ cache ไม่ได้         | ลบ manual               |
-| 11        | bench               | โดนขัดจังหวะ            | รันใหม่                 |
-
-### ปัญหาทั่วไป
-
-| ปัญหา                         | สาเหตุ                       | วิธีแก้                                 |
-| ----------------------------- | ---------------------------- | --------------------------------------- |
-| `ruvyxa: command not found`   | ไม่ได้ติดตั้ง global         | ใช้ `npx ruvyxa` หรือ `npm i -g ruvyxa` |
-| `Address in use`              | port ซ้ำ                     | `--port 4000`                           |
-| Build error แปลก ๆ            | cache เสีย                   | `ruvyxa clean && ruvyxa build`          |
-| routes ไม่ขึ้น                | ไฟล์ไม่อยู่ใน `app/`         | ตรวจ `appDir` ใน config                 |
-| `test:parity` ล้มเหลว         | build ยังไม่เสร็จ            | `ruvyxa build` ก่อน                     |
-| Dev server ช้า                | file system watcher overload | `--no-hmr` หรือ `--runtime bun`         |
-| `plugin create` error         | ชื่อไม่ถูกต้อง               | lowercase + hyphen (`my-plugin`)        |
-| analyze ไม่เจอ error          | ต้อง build ก่อน              | `ruvyxa build` แล้ว `ruvyxa analyze`    |
-| `--json` output pipe ไม่ทำงาน | auto-detect เป็น human       | ใช้ `--format json`                     |
-| Port 443 ต้อง root            | privileged port              | ใช้ reverse proxy (nginx)               |
-| HTTPS cert error              | cert path ไม่ถูก             | ตรวจ `--cert` `--key`                   |
-
-### Debug Commands
-
-```bash
-# Verbose mode
-ruvyxa build --verbose
-ruvyxa dev --verbose
-
-# Debug logging
-RUVYXA_DEBUG=* ruvyxa dev
-RUVYXA_DEBUG=route,build ruvyxa build
-RUVYXA_DEBUG=hmr ruvyxa dev
-
-# Profile build time
-ruvyxa build --profile
-
-# Bundle analysis
-ruvyxa build --analyze
-
-# Check specific
-ruvyxa check --strict
-
-# Doctor with fix
-ruvyxa doctor --fix --generate-env-types
-
-# Dry-run clean
-ruvyxa clean --dry-run
-```
-
----
-
-## Complete Workflow Examples
-
-### Development Workflow
-
-```bash
-# 1. เริ่ม dev
-npm run dev
-
-# 2. ดู routes
-npm run routes
-
-# 3. วิเคราะห์
-npm run analyze
-
-# 4. ตรวจสอบ
-npm run check
-
-# 5. แก้ปัญหา
-npm run doctor
-```
-
-### Production Workflow
-
-```bash
-# 1. ตรวจสอบทุกอย่าง
-ruvyxa check --strict
-
-# 2. Clean
-ruvyxa clean
-
-# 3. Build
-ruvyxa build
-
-# 4. Preview
-ruvyxa preview
-
-# 5. Parity test (optional)
 ruvyxa test:parity
-
-# 6. Start
-ruvyxa start
+ruvyxa parity
 ```
 
-### CI Pipeline
+## `ruvyxa plugin create`
 
-```yaml
-# .github/workflows/ci.yml
-name: Ruvyxa CI
-on: [push, pull_request]
-
-jobs:
-  validate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-      - run: npm ci
-      - run: npx ruvyxa check # exit code 2 = fail
-      - run: npx ruvyxa analyze # exit code 4 = fail
-      - run: npx ruvyxa doctor --json # exit code 6 = fail
-
-  build:
-    needs: validate
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-      - run: npm ci
-      - run: npx ruvyxa build # exit code 3 = fail
-
-  parity:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-      - run: npm ci
-      - run: npx ruvyxa test:parity # exit code 7 = fail
+```bash
+ruvyxa plugin create <NAME> [--root <PATH>] [--dir <PATH>]
 ```
 
----
+ต้องระบุ `<NAME>` และ `--dir` เป็น path สัมพัทธ์กับ `--root`; หากไม่ระบุจะสร้างใน directory
+ชื่อเดียวกับ plugin
 
-## ลองทำดู
+```bash
+ruvyxa plugin create my-plugin
+ruvyxa plugin create @acme/analytics --dir packages/analytics
+```
 
-1. **Dev**
-   - `ruvyxa dev` — เริ่ม dev server
-   - แก้ไขไฟล์ → ดู HMR ทำงาน
-   - `ruvyxa dev --open --port 4000`
+ดู TypeScript plugin contract ได้ที่ [Plugins](./14-plugins.md)
 
-2. **Routes & Trace**
-   - `ruvyxa routes` — ดู route table
-   - `ruvyxa trace /` — ดู root route ละเอียด
+## Scripts ใน Minimal Starter
 
-3. **Analyze & Doctor**
-   - `ruvyxa analyze` — ดู diagnostics
-   - `ruvyxa doctor` — ดู environment
+Minimal starter ปัจจุบันมี scripts ดังนี้
 
-4. **Build**
-   - `ruvyxa clean && ruvyxa build`
-   - `ruvyxa preview` — build + start
+```json
+{
+  "dev": "ruvyxa dev",
+  "build": "ruvyxa build",
+  "start": "ruvyxa start",
+  "typecheck": "tsc --noEmit",
+  "check": "ruvyxa check"
+}
+```
 
-5. **Plugin**
-   - `ruvyxa plugin create my-plugin`
-   - `cd ruvyxa-plugin-my-plugin && npm test`
+คำสั่งที่ไม่มี script ให้เรียกผ่าน `ruvyxa` โดยตรง เช่น `ruvyxa analyze --format json`
 
-6. **Benchmark**
-   - `ruvyxa bench --samples 5`
-   - `ruvyxa bench --json | ConvertFrom-Json`
+## Recipes สำหรับใช้งานจริง
 
----
+ตัวอย่างด้านล่างใช้คำสั่ง CLI โดยตรงสำหรับคำสั่งที่ minimal starter ยังไม่มี script ให้ เปลี่ยน
+`../my-app` เป็น path ของโปรเจกต์ตามจริงได้
 
-## สรุป
+### เปิดโปรเจกต์บน Port อื่น
 
-- 13 คำสั่ง CLI ครอบคลุมทุกงานพัฒนา
-- `dev` / `build` / `start` = main development loop
-- `check` / `analyze` = static analysis + boundary rules
-- `doctor` = environment diagnostics
-- `trace` / `routes` = route inspection
-- `test:parity` = dev vs production consistency
-- `bench` = performance measurement
-- `plugin create` = scaffolding tool
-- Exit codes 0-11 สำหรับ CI/CD integration
-- Global options: `--root`, `--runtime`, `--help`, `--verbose`
+เมื่อมี service อื่นใช้ port เดิมอยู่ ให้ระบุ port ที่ต้องการ:
+
+```bash
+ruvyxa dev --port 4000
+```
+
+หากต้องการให้เครื่องอื่นในเครือข่ายเข้าถึงได้ ให้ระบุ host ด้วย:
+
+```bash
+ruvyxa dev --host 0.0.0.0 --port 4000
+```
+
+เปิด terminal นี้ค้างไว้ระหว่างพัฒนา เพราะ HMR และ route watching ทำงานอยู่ใน process เดียวกัน
+
+### ทำงานกับ Project คนละ Directory
+
+ใช้ `--root` เพื่อสั่ง CLI กับ project อื่นโดยไม่ต้อง `cd`:
+
+```bash
+ruvyxa dev --root ../my-app
+ruvyxa routes --root ../my-app
+ruvyxa analyze --root ../my-app --format human
+```
+
+`--root` มีผลต่อคำสั่งนั้นเท่านั้น ใน script จึงควรส่ง flag นี้ให้ทุกคำสั่งที่ต้องใช้
+
+### ทดลองรันด้วย Bun
+
+หาก project ตั้งค่า Node อยู่ แต่ต้องการทดสอบด้วย Bun ให้ใช้ runtime override ของคำสั่งนั้น:
+
+```bash
+ruvyxa dev --runtime bun
+ruvyxa build --runtime bun
+ruvyxa check --runtime bun
+```
+
+คำสั่งนี้ไม่แก้ `ruvyxa.config.ts` และไม่เปลี่ยน environment ถาวร
+
+### Build และเปิด Local Production Server
+
+ขั้นตอนปกติคือ build ก่อน แล้วจึง serve output ที่สร้างไว้:
+
+```bash
+npm run build
+npm run start
+```
+
+หากต้องการระบุ target อย่างชัดเจน:
+
+```bash
+ruvyxa build --target node
+ruvyxa start --port 3001
+```
+
+`start` และ `preview` อ่าน build ที่มีอยู่แล้ว จึงไม่ build ให้อัตโนมัติ
+
+### Preview Static Build
+
+ใช้ static target เมื่อ routes และ adapter ที่เลือก รองรับผลลัพธ์ของแอป:
+
+```bash
+ruvyxa build --target static --adapter static
+ruvyxa preview --port 4173
+```
+
+หาก route strategy ไม่รองรับ platform adapter ระบบจะรายงาน incompatibility ระหว่าง build ดู
+[Deployment](./13-deployment.md) สำหรับขั้นตอนของแต่ละ adapter
+
+### เลือก Hosting Adapter ชั่วคราว
+
+`--adapter` เหมาะกับ CI หรือการทดลอง target โดยไม่ต้องแก้ config:
+
+```bash
+ruvyxa build --adapter vercel
+ruvyxa build --adapter cloudflare
+ruvyxa build --adapter @acme/ruvyxa-adapter-internal
+```
+
+ตัวอย่างสุดท้ายเป็นชื่อ package ซึ่งต้อง resolve ได้ใน environment ที่รัน build
+
+### ตรวจความพร้อมก่อน Commit
+
+คำสั่งที่สั้นและทำซ้ำได้สำหรับตรวจแอปคือ:
+
+```bash
+npm run check
+```
+
+เมื่อมี `tsconfig.json` คำสั่งจะรัน `tsc --noEmit` แล้วตามด้วย route/render parity flow หากต้องการ
+รันเฉพาะ parity:
+
+```bash
+ruvyxa test:parity
+# alias ที่เท่ากัน
+ruvyxa parity
+```
+
+### ตรวจ URL หรือ Route ที่มีปัญหา
+
+เริ่มจากดู route table แล้วตรวจ route ที่สนใจ:
+
+```bash
+ruvyxa routes
+ruvyxa trace /about
+ruvyxa trace /blog/[slug]
+```
+
+`trace` รับ route pattern ไม่ใช่ชื่อไฟล์ สำหรับ dynamic page ให้ใช้ `/blog/[slug]` ไม่ใช่ URL จริง
+เช่น `/blog/hello`
+
+### สร้าง Analysis Report สำหรับ Tool อื่น
+
+ใช้ JSON เมื่อโปรแกรมอื่นจะอ่านผล และใช้ SARIF เมื่อ code-scanning tool รองรับ:
+
+```bash
+ruvyxa analyze --format json --output reports/ruvyxa-analysis.json
+ruvyxa analyze --format sarif --output reports/ruvyxa.sarif
+```
+
+สร้าง directory ปลายทางก่อนหากยังไม่มี และใช้ `--format human` เมื่ออยากอ่านใน terminal
+
+### ตรวจ Toolchain และ Adapter
+
+รัน `doctor` ก่อน deploy ครั้งแรก หรือหลังเปลี่ยน runtime/adapter:
+
+```bash
+ruvyxa doctor
+ruvyxa doctor --target edge
+ruvyxa doctor --adapter cloudflare --json
+```
+
+`--adapter` ตรวจ adapter contract โดยไม่สร้าง build artifacts
+
+### ล้างเฉพาะ Generated Output
+
+เมื่อต้องการสร้าง local build ใหม่ ให้ล้าง output ของ Ruvyxa แล้ว build อีกครั้ง:
+
+```bash
+ruvyxa clean
+ruvyxa build
+```
+
+คำสั่งนี้จำกัดอยู่ที่ output directory ตาม config ไม่ลบ `node_modules`, source files หรือ cache
+directory อื่นโดยพลการ
+
+### วัดผลหลายรอบ
+
+ระบุจำนวน sample ให้คงที่เมื่อเปรียบเทียบการเปลี่ยนแปลงสองชุด:
+
+```bash
+ruvyxa bench --samples 5
+ruvyxa bench --samples 5 --json
+```
+
+ควรเปรียบเทียบในเครื่อง, dependency state และจำนวน sample เดียวกัน เพราะ benchmark เป็นสัญญาณ เฉพาะ
+environment ที่รัน
+
+### สร้าง Plugin ใน Monorepo
+
+กำหนด directory ของ package ได้อย่างชัดเจน:
+
+```bash
+ruvyxa plugin create analytics --root . --dir packages/analytics
+```
+
+หากเป็น standalone project ใช้ค่าเริ่มต้นได้:
+
+```bash
+ruvyxa plugin create my-plugin
+```
+
+จากนั้นดู [Plugins](./14-plugins.md) เพื่อเขียนและ register package ที่สร้างขึ้น
+
+### ตัวอย่าง CI
+
+หลังติดตั้ง dependencies แล้ว สามารถเรียก CLI ใน CI โดยตรง:
+
+```bash
+npm run check
+ruvyxa analyze --format sarif --output reports/ruvyxa.sarif
+ruvyxa build --adapter node
+```
+
+อย่าเพิ่ม flag ที่ CLI ปัจจุบันไม่มี เช่น `--verbose`, `--no-cache` หรือ `--sourcemap`
+
+## Workflows แบบมีคำอธิบาย
+
+ตัวอย่างต่อไปนี้แสดงลำดับที่คำสั่งทำงานร่วมกัน โดยจงใจแสดงเฉพาะคำสั่งที่มีอยู่จริงในปัจจุบัน ไม่เดา
+output ขึ้นมาเอง เพราะ routes, config และ adapter ที่ติดตั้งแตกต่างกันในแต่ละ project
+
+### เริ่มพัฒนาโปรเจกต์ครั้งแรก
+
+เริ่มจากตรวจว่าระบบค้นพบ routes อะไรบ้าง แล้วจึงเปิด development server ค้างไว้ระหว่างแก้โค้ด:
+
+```bash
+# รันจาก application root
+ruvyxa routes
+ruvyxa dev
+```
+
+หากแอปอยู่ใน directory ข้างเคียง ใช้ลำดับเดิมโดยส่ง `--root` ให้ทั้งสองคำสั่ง:
+
+```bash
+ruvyxa routes --root ../my-app
+ruvyxa dev --root ../my-app
+```
+
+ใช้ `routes` ก่อน `dev` เมื่อไม่แน่ใจว่า page ถูกค้นพบหรือไม่ เพราะ `routes` แค่รายงาน route table
+และไม่เปิด server ส่วน `dev` ต้องเปิดค้างไว้ขณะเขียนโค้ด เนื่องจากเป็น process ที่ดูแล watcher และ
+HMR
+
+### ตรวจ Route ที่ทำงานไม่ตรงคาด
+
+เมื่อมีปัญหากับ route ให้เริ่มจากการค้นหาแบบกว้าง ไปยัง manifest entry ของ route นั้น แล้วตามด้วย
+static checks:
+
+```bash
+ruvyxa routes
+ruvyxa trace /blog/[slug]
+ruvyxa analyze --format human
+ruvyxa check
+```
+
+แทน `/blog/[slug]` ด้วย pattern ที่ `routes` แสดง `trace` รับ route pattern นี้ ไม่รับชื่อ component
+file หรือ URL ที่ใส่ parameter จริง `analyze` ตรวจโครงสร้างและ boundary ของ project ส่วน `check` จะ
+ตรวจ TypeScript เพิ่มเมื่อใช้ได้ และรัน parity flow คำสั่งเหล่านี้ไม่แก้ source file
+
+### ตรวจ Adapter ก่อน Build
+
+เมื่อจะย้ายแอปไปยัง platform ใหม่ ให้ตรวจ target และ adapter ที่เลือกก่อน:
+
+```bash
+ruvyxa doctor --target edge
+ruvyxa doctor --target edge --adapter cloudflare --json
+ruvyxa build --target edge --adapter cloudflare
+```
+
+สองคำสั่งแรกเป็น diagnostics คำสั่งสุดท้ายจึงเป็นขั้นที่ build และเรียก adapter ที่เลือก หาก project
+จะทำงานบน Node server ให้ใช้ `--target node` และ `--adapter node`; adapter ที่เลือกควรสอดคล้องกับ
+environment สำหรับ deploy
+
+### สร้างไฟล์สำหรับ Code-quality Job
+
+`analyze` เขียน artifact ให้ CI ได้โดยไม่ผูกกับผู้ให้บริการรายใด สร้าง directory ของรายงานก่อน แล้ว
+เลือกรูปแบบที่ tool ถัดไปอ่านได้:
+
+```bash
+mkdir -p reports
+ruvyxa analyze --format json --output reports/ruvyxa-analysis.json
+ruvyxa analyze --format sarif --output reports/ruvyxa.sarif
+```
+
+บน PowerShell ให้สร้าง directory ด้วย `New-Item -ItemType Directory -Force reports` แทน
+`mkdir -p reports` ไฟล์ JSON และ SARIF เป็นคนละ format จึงเลือกเพียงรูปแบบเดียวได้ หาก job ไม่ได้
+ต้องใช้ทั้งคู่ และควรเก็บ `npm run check` เป็น gate แยกสำหรับ type-check และ parity flow
+
+### Build ใหม่หลังเปลี่ยน Configuration
+
+หลังเปลี่ยน config หรือ adapter และต้องการ generated output ชุดใหม่ ให้ใช้ลำดับนี้:
+
+```bash
+ruvyxa doctor --adapter vercel
+ruvyxa clean
+ruvyxa build --adapter vercel
+ruvyxa preview
+```
+
+`clean` ลบเฉพาะ output directory ที่ Ruvyxa กำหนด ไม่ใช่การ reset dependencies และไม่แทนคำสั่งของ
+package manager เช่น `npm install` วาง `preview` เป็นขั้นสุดท้ายเพราะมัน serve สิ่งที่ `build`
+สร้างแล้ว
+
+### เปรียบเทียบ Performance อย่างยุติธรรม
+
+วัดก่อนและหลังการเปลี่ยนแปลงที่เจาะจง โดยใช้จำนวน sample และรูปแบบ output เดียวกัน:
+
+```bash
+ruvyxa bench --samples 10 --json
+# แก้เฉพาะจุดหนึ่ง แล้วรันคำสั่งเดิมอีกครั้ง
+ruvyxa bench --samples 10 --json
+```
+
+เก็บ JSON สองชุดใน CI หรือเทียบในเครื่อง อย่าสรุปว่าเป็น regression โดยตรงจากผลที่ใช้ runtime,
+dependency tree หรือจำนวน sample คนละชุด
+
+### ดู Help แทนการเดา Flag
+
+CLI เป็นแหล่งที่ปลอดภัยที่สุดสำหรับตรวจ syntax ล่าสุดของคำสั่ง:
+
+```bash
+ruvyxa --help
+ruvyxa build --help
+ruvyxa analyze --help
+ruvyxa plugin create --help
+```
+
+เปิดดู help ของคำสั่งนั้นก่อนใส่ลง script โดยเฉพาะ `--format` เป็นของ `analyze`, `--json` เป็นของ
+`doctor` และ `bench`, และ `--dir` เป็นของ `plugin create`
+
+## ขั้นตอนถัดไป
+
+- [Configuration](./11-configuration.md) — กำหนดค่า input ของ CLI
+- [Deployment](./13-deployment.md) — เลือกและกำหนดค่า adapter
+- [Plugins](./14-plugins.md) — เขียนหรือ scaffold plugin

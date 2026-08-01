@@ -849,6 +849,64 @@ shipped for the post list itself.
 
 ---
 
+## Boundary Validation Is Based on Reachability
+
+The important distinction is not a component's filename; it is whether the module is reachable from
+a hydrated page/client graph or from server runtime code. Route validation follows relative imports
+using the same bundler parser used by the build, then emits focused diagnostics for the following
+boundary violations:
+
+| Code      | What was found                                                                          | Correct direction                                                                        |
+| --------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `RUV1007` | A client-reachable module imports `server-only`, `@ruvyxa/auth`, or `@ruvyxa/database`. | Move the server work behind a loader, API route, or action; pass serializable data down. |
+| `RUV1008` | A non-public `process.env.NAME` read is reachable from client code.                     | Keep it server-side or use `RUVYXA_PUBLIC_` only when disclosure is intentional.         |
+| `RUV1010` | A module under the project `server/` directory is reachable from client code.           | Move browser-safe helpers outside `server/`.                                             |
+| `RUV1009` | A server-reachable module imports `client-only`.                                        | Move browser-only code into the client module/entry.                                     |
+
+For example, put an environment read in a server-only module and return only the value the UI needs:
+
+```ts
+// app/server/catalog.ts
+import 'server-only'
+
+export async function loadCatalog() {
+  const endpoint = process.env.CATALOG_API_URL
+  if (!endpoint) throw new Error('CATALOG_API_URL is required')
+  return fetch(endpoint).then((response) => response.json())
+}
+```
+
+```tsx
+// app/page.tsx
+import { loadCatalog } from './server/catalog'
+import { CatalogList } from './components/CatalogList'
+
+export default async function Page() {
+  return <CatalogList items={await loadCatalog()} />
+}
+```
+
+The page may render the data on the server; only a module that needs browser interaction should add
+`'use client'`. A public environment value is read as `process.env.RUVYXA_PUBLIC_NAME`, not as an
+assumed `import.meta.env` compatibility layer.
+
+### A Boundary-debugging Sequence
+
+When a build or check reports a boundary diagnostic, avoid moving directives until the import path
+is understood:
+
+```bash
+ruvyxa analyze --format human
+ruvyxa trace /the-affected-route
+npm run check
+```
+
+Start from the file named by the diagnostic, then inspect its relative imports. The analyzer caches
+those import edges across routes, but the result is still evaluated for each route that reaches the
+module. This is why moving a shared helper can affect more than one page.
+
+---
+
 ## Next Steps
 
 - **[04-rendering-strategies.md](./04-rendering-strategies.md)** — SSR, SSG, ISR, PPR, CSR

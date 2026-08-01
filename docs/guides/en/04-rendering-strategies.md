@@ -1092,6 +1092,82 @@ Look at `.ruvyxa/prerender/` to see what was pre-rendered.
 
 ---
 
+## How the Current Strategy Detector Decides
+
+Rendering strategy is derived from the page source plus the route and its reachable relative
+dependencies. The detector uses this precedence order; the first matching rule wins:
+
+1. A top-of-file `'use client'` directive makes the page CSR.
+2. `export const ppr = true` selects PPR.
+3. `export const revalidate = <number>` selects ISR with that interval.
+4. A `getStaticParams` or `staticParams` export selects SSG.
+5. A non-dynamic route with no reachable `fetch(` or `process.env.` marker is an automatic SSG
+   candidate.
+6. Otherwise, the route is SSR unless `render.strategy` supplies a configured default.
+
+This means `Date.now()` alone is not the detector's SSR signal. A simple static route that needs a
+specific contract should declare the intended strategy explicitly through the supported exports or
+configuration rather than relying on incidental code shape.
+
+### Explicit Examples and Their Consequences
+
+```tsx
+// app/docs/page.tsx -- no dynamic segments and no data markers: SSG candidate
+export default function Docs() {
+  return <main>Documentation</main>
+}
+```
+
+```tsx
+// app/blog/[slug]/page.tsx -- dynamic SSG requires concrete parameters
+export const getStaticParams = async () => [{ slug: 'welcome' }, { slug: 'release-notes' }]
+
+export default function Post({ params }: { params: { slug: string } }) {
+  return <main>{params.slug}</main>
+}
+```
+
+```tsx
+// app/status/page.tsx -- build once, refresh in the background after 30 seconds
+export const revalidate = 30
+
+export default async function Status() {
+  const response = await fetch('https://status.example.test/api')
+  return <pre>{await response.text()}</pre>
+}
+```
+
+For an ISR route, the interval belongs in `revalidate`; request-time caching behavior is handled by
+the server or selected deployment adapter. Test the actual manifest instead of inferring it from the
+generated directory layout:
+
+```bash
+ruvyxa routes
+ruvyxa trace /status
+```
+
+### Hydration Is an Independent Choice
+
+For server-rendered strategies, `export const hydrate` controls whether and when the client bundle
+loads. The supported values are `false` (no client bundle), `'idle'`, `'visible'`, and the default
+load behavior. A CSR page created by `'use client'` remains client-rendered even when a page also
+contains a hydration export.
+
+```tsx
+// static, zero-JS content page
+export const hydrate = false
+
+export default function LegalNotice() {
+  return <main>Terms and conditions</main>
+}
+```
+
+Use zero-JS pages only when their rendered content does not rely on client interactivity. Client
+islands still need a hydrated client bundle, so keep interactive behavior in a deliberately
+client-reachable module.
+
+---
+
 ## Next Steps
 
 - **[05-data-loading-cache.md](./05-data-loading-cache.md)** — Data fetching and caching

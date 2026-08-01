@@ -1051,6 +1051,71 @@ import { useRouter } from '@ruvyxa/react'
 
 ---
 
+## สัญญาของ Route Discovery
+
+Route discovery ตั้งใจให้เป็น file-based และมีขอบเขตชัดเจน ภายใต้ `appDir` ที่ตั้งค่าไว้ (ปกติคือ
+`app`) implementation ปัจจุบันรู้จัก route entry files ต่อไปนี้:
+
+| ชื่อไฟล์               | ชนิด route | หมายเหตุ                                                        |
+| ---------------------- | ---------- | --------------------------------------------------------------- |
+| `page.tsx`, `page.jsx` | Page       | page JavaScript/TypeScript ต้องมี default export                |
+| `page.md`, `page.mdx`  | Page       | เป็น content page ที่ content compiler สร้าง page component ให้ |
+| `route.ts`, `route.js` | API route  | API renderer เรียก named export ตาม HTTP method                 |
+
+ขณะเดิน tree ระบบจะข้าม directory ที่ชื่อขึ้นต้นด้วย `_` หรือ `@` ส่วน group ที่อยู่ในวงเล็บ เช่น
+`(marketing)` จะถูกเดินเข้าไป แต่ไม่กลายเป็นส่วนของ URL จึงใช้จัดระเบียบไฟล์ ไม่ใช่ URL segment:
+
+```text
+app/(marketing)/pricing/page.tsx  ->  /pricing
+app/(marketing)/layout.tsx        ->  อยู่ใน layout chain
+```
+
+### กฎ Dynamic Segment รวมกรณีที่ใช้ไม่ได้
+
+ใช้ `[name]` สำหรับ segment เดียว, `[...name]` สำหรับ segments ที่เหลืออย่างน้อยหนึ่ง segment และ
+`[[...name]]` สำหรับ catch-all ที่ว่างได้ catch-all ต้องเป็น visible segment สุดท้าย เพราะมันกิน
+ส่วนที่เหลือของ path ทั้งหมด:
+
+```text
+app/products/[id]/page.tsx              -> /products/[id]
+app/docs/[...parts]/page.tsx             -> /docs/[...parts]
+app/docs/[[...parts]]/page.tsx           -> /docs/[[...parts]]
+app/docs/[...parts]/edit/page.tsx        -> ใช้ไม่ได้: catch-all ไม่ได้อยู่ท้ายสุด
+```
+
+ชื่อ parameter ห้ามว่าง, ห้ามมี bracket ซ้อน และห้ามขึ้นต้นด้วย `.` ข้อผิดพลาดเหล่านี้เกิดตอน route
+discovery ดังนั้นให้แก้ชื่อ directory ก่อนเริ่ม debug เรื่อง rendering
+
+### Layouts และ Modules เฉพาะ Route
+
+สำหรับทุก route Ruvyxa จะรวม `layout.tsx` ตั้งแต่ root ของแอปลงมาถึง directory ของ route นั้น
+directory ของ route สามารถมี `server.ts`/`server.js`, `action.ts`/`action.js` และ `client.tsx`
+ได้ด้วย ไฟล์เหล่านี้จะเข้าสู่ server หรือ client module list ของ manifest เก็บ concern ที่ใช้กับ
+route เดียวไว้ด้วยกัน และย้าย code ที่ใช้ร่วมกันกว้าง ๆ ออกนอก directory ของ route
+
+```text
+app/blog/[slug]/
+  layout.tsx       # เพิ่ม nested layout ให้ branch นี้
+  page.tsx         # page entry
+  action.ts        # actions ของ page route นี้
+  client.tsx       # client entry เฉพาะ route เมื่อจำเป็น
+```
+
+### ตรวจ Manifest ก่อนสรุปว่า URL มีอยู่
+
+เรียก CLI โดยตรง ไม่ต้องสมมติว่ามี package script:
+
+```bash
+ruvyxa routes
+ruvyxa trace /blog/[slug]
+```
+
+`routes` พิมพ์ route table ที่ค้นพบ ส่วน `trace` รับ route pattern ที่อยู่ในตาราง ไม่ใช่ชื่อ
+component file หรือ parameter จริง หาก directory ใหม่ไม่ปรากฏ ให้ตรวจชื่อ entry file และดูว่า
+ancestor directory มีชื่อขึ้นต้นด้วย `_` หรือ `@` หรือไม่ก่อน
+
+---
+
 ## ขั้นตอนถัดไป
 
 - **[03-server-client-components.md](./03-server-client-components.md)** — Server vs Client

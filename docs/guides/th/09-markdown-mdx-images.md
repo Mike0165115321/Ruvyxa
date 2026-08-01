@@ -1898,16 +1898,15 @@ Output:
 
 ## Troubleshooting — ทุก Error Code
 
-| Error Code | ปัญหา                  | สาเหตุ                            | วิธีแก้                     |
-| ---------- | ---------------------- | --------------------------------- | --------------------------- |
-| RUV1005    | Missing Meta component | หน้าไม่มี SEO metadata            | เพิ่ม `<Meta>` หรือ `<Seo>` |
-| RUV1010    | Module not found       | import path ผิด                   | ตรวจ path สัมพัทธ์          |
-| RUV1201    | MDX compile error      | JSX syntax ผิด                    | ตรวจ JSX ใน MDX             |
-| RUV1202    | Image not found        | src path ไม่มีไฟล์                | ตรวจ public/images/         |
-| RUV1203    | Image not optimized    | ใช้ `<img>`                       | เปลี่ยนเป็น `<Image>`       |
-| RUV1204    | LCP image no priority  | รูป hero ไม่มี priority           | เพิ่ม `priority` prop       |
-| RUV1205    | Frontmatter invalid    | YAML parse error                  | ตรวจ `---` และ syntax       |
-| RUV1206    | Language not supported | Syntax highlight ภาษาที่ไม่รองรับ | เปลี่ยนเป็นภาษามาตรฐาน      |
+| Error Code | ปัญหา                       | สาเหตุ                                          | วิธีแก้                      |
+| ---------- | --------------------------- | ----------------------------------------------- | ---------------------------- |
+| RUV1310    | Content extension ไม่รองรับ | ไฟล์ content ไม่ใช่ Markdown/MDX ที่รองรับ      | ใช้ `.md` หรือ `.mdx`        |
+| RUV1311    | MDX parse error             | MDX หรือ JSX มี syntax ไม่ถูกต้อง               | แก้ syntax ที่ compiler ระบุ |
+| RUV1312    | Frontmatter ไม่ถูกต้อง      | YAML ไม่มี closing delimiter หรือไม่ใช่ mapping | ตรวจ `---` และ YAML          |
+
+การใช้ `<img>` แทน `<Image>` อาจถูกวิเคราะห์เป็นคำแนะนำเรื่อง image pipeline แต่ไม่ได้สร้าง RUV
+error code เฉพาะ และ `priority`/syntax-highlight language ไม่มี validation code เฉพาะใน runtime
+ปัจจุบัน
 
 | ปัญหาทั่วไป                  | สาเหตุ                    | วิธีแก้                                     |
 | ---------------------------- | ------------------------- | ------------------------------------------- |
@@ -1983,3 +1982,71 @@ RUVYXA_DEBUG=* ruvyxa dev
 - Build-time encoders: mozjpeg, oxipng, guetzli, cwebp, libaom (AVIF)
 - SEO: <Meta> (OG, Twitter), <Seo> (JSON-LD: Article, BreadcrumbList, Organization, FAQ)
 - ตรวจสอบ: `ruvyxa analyze`, `run trace`
+
+---
+
+## Content Compilation: อะไรถูกสร้างให้ และอะไรไม่ใช่
+
+`page.md` และ `page.mdx` ถูกค้นพบเป็น page routes Content compiler parse YAML frontmatter ที่มีได้,
+compile Markdown/MDX เป็น React module และใส่ exports ต่อไปนี้ให้เมื่อ document ไม่ได้ประกาศเอง:
+`frontmatter`, `meta`, `headings` และ `contentFormat` page ที่ compile แล้วก็ยังเป็น route ปกติ
+จึงใช้ layout และ rendering-strategy rules เดียวกับ TypeScript page
+
+```mdx
+---
+title: Release notes
+description: Changes in this version
+---
+
+export const author = 'Ruvyxa team'
+
+# Release notes
+
+## Fixed
+
+โค้ดอื่นสามารถ import `frontmatter` และ `headings` ที่ระบบสร้างให้ได้
+```
+
+หาก export ใดถูกประกาศเอง compiler จะไม่เขียนทับ MDX ESM ต้องเป็น JavaScript/TypeScript module
+syntax ที่ถูกต้องและถูก parse แยกจาก Markdown body ส่วน frontmatter ต้องเป็น YAML mapping และมี
+closing delimiter กรณีเหล่านี้เป็นต้นทางของ `RUV1311` (MDX parse) และ `RUV1312` (frontmatter) ไม่ใช่
+page-route error ทั่วไป
+
+### ขอบเขตของ Cache
+
+content ที่ compile ถูกเก็บใน process-local cache 512 entries โดย key เป็น BLAKE3 hash ของ extension
+กับ source content เพื่อลดการ compile ซ้ำใน process ที่กำลังทำงาน แต่ไม่ใช่ durable content store
+และไม่ควร ใช้เป็น application invalidation API
+
+### Images: Local Optimization ตอน Build
+
+production image optimizer จัดการ PNG และ JPEG ใน `public/` เท่านั้น สามารถสร้าง WebP หลักและ
+variants ที่แคบกว่ารูปต้นฉบับได้ โดยไม่ upscale รูป `image.keepOriginal` มีค่าเริ่มต้นไว้เพื่อให้
+plain `<img src="/logo.png">` ยังทำงานบน static host ที่ไม่มี server-side format fallback
+
+```ts
+// ruvyxa.config.ts
+export default config({
+  image: {
+    optimize: true,
+    quality: 82,
+    keepOriginal: true,
+    variantWidths: [640, 1080, 1920],
+  },
+})
+```
+
+ตั้ง `keepOriginal: false` หลังยืนยันแล้วว่าทุก published reference ใช้ generated image path ผ่าน
+workflow ของ `<Image>` ที่รองรับเท่านั้น Remote images และ formats อื่นจะไม่ถูก rewrite เงียบ ๆ โดย
+local public-asset optimizer นี้
+
+### ตรวจ Content แบบทำซ้ำได้
+
+```bash
+ruvyxa routes
+ruvyxa trace /release-notes
+npm run build
+```
+
+ยืนยันก่อนว่า `page.mdx` ถูกค้นพบ แล้วจึงตรวจ route manifest และ build ตามลำดับ วิธีนี้แยกปัญหา
+filename/discovery ออกจาก content parser หรือ image build ได้

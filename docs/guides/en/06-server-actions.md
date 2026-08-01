@@ -1134,6 +1134,65 @@ export function DisplayCount() {
 
 ---
 
+## The Action Builder Contract
+
+The supported server-action API is a builder exported by `@ruvyxa/core/server`. It makes three
+separate decisions explicit: optional input validation, optional realtime publication, and the
+server handler. A schema only needs a `parse(value)` method, which keeps the framework independent
+of a particular validation library.
+
+```ts
+import { action } from '@ruvyxa/core/server'
+
+const createTodoInput = {
+  parse(value: unknown) {
+    if (
+      !value ||
+      typeof value !== 'object' ||
+      typeof (value as { title?: unknown }).title !== 'string'
+    ) {
+      throw new TypeError('title is required')
+    }
+    return { title: (value as { title: string }).title.trim() }
+  },
+}
+
+export const createTodo = action
+  .input(createTodoInput)
+  .realtime('todos')
+  .handler(async ({ input, request, user, invalidate }) => {
+    const todo = { id: crypto.randomUUID(), title: input.title, actor: user }
+    invalidate('todos')
+    return { todo, requestId: request.headers.get('x-request-id') }
+  })
+```
+
+The handler context contains validated `input`, the incoming `request`, an optional `user` supplied
+by the runtime integration, and `invalidate(key)`. It does not create authentication or persistent
+storage by itself; the application remains responsible for authenticating the request and writing to
+its own data store.
+
+### Realtime Channels Have Deliberate Limits
+
+`.realtime()` accepts one channel or a list of channels. Channel names are trimmed, de-duplicated,
+limited to 16 values, and must contain 1–128 letters, digits, `:`, `.`, `_`, `/`, or `-`. Omitting
+the argument selects the route channel. Treat a realtime event as a notification to refresh or
+invalidate state, not as proof that every subscriber has received a durable database change.
+
+### Request Safety Happens Before the Handler
+
+The action endpoint applies its request validation and configured rate limiter before it asks the
+worker to run the action. `security.actionLimit`, `security.actionRateLimit`, same-origin checks,
+Fetch Metadata checks, and trusted-proxy settings therefore belong in the deployment/security
+review; they are not replaced by a schema's `parse` method.
+
+Use `ruvyxa analyze --format human` to check that action dependencies stay out of the client graph,
+then use `npm run check` for the project-level type/parity gate. Do not document or call a
+`'use server'` directive as the action registration mechanism: route-local `action.ts`/`action.js`
+and exported action values are the current route convention.
+
+---
+
 ## Next Steps
 
 - **[05-data-loading-cache.md](./05-data-loading-cache.md)** — Caching server-side data

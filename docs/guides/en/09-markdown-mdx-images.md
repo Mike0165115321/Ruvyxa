@@ -845,6 +845,76 @@ interface SeoProps {
 
 ---
 
+## Content Compilation: What Is Generated and What Is Not
+
+`page.md` and `page.mdx` are discovered as page routes. The content compiler parses optional YAML
+frontmatter, compiles Markdown/MDX to a React module, and supplies these exports when the document
+does not define them itself: `frontmatter`, `meta`, `headings`, and `contentFormat`. The compiled
+page remains a normal route, so it follows the same layout and rendering-strategy rules as a
+TypeScript page.
+
+```mdx
+---
+title: Release notes
+description: Changes in this version
+---
+
+export const author = 'Ruvyxa team'
+
+# Release notes
+
+## Fixed
+
+The generated `frontmatter` and `headings` exports can be imported by code that needs them.
+```
+
+The compiler preserves an explicitly exported value instead of overwriting it. MDX ESM syntax must
+be valid JavaScript/TypeScript module syntax; it is parsed separately from the Markdown body. A
+frontmatter document must be a YAML mapping with a closing delimiter. These are the sources of
+`RUV1311` (MDX parse) and `RUV1312` (frontmatter) rather than generic page-route errors.
+
+### Cache Scope
+
+Compiled content is held in a process-local 512-entry cache keyed by a BLAKE3 hash of the extension
+and source content. It reduces repeated compilation during a running process, but it is not a
+durable content store and should not be used as an application invalidation API.
+
+### Images: Build-time Local Optimization
+
+The production image optimizer handles local PNG and JPEG assets in `public/`. It can emit a WebP
+primary output plus width variants narrower than the original; it does not upscale an image. The
+`image.keepOriginal` default exists because a plain `<img src="/logo.png">` must still work on a
+static host that cannot negotiate a server-side format fallback.
+
+```ts
+// ruvyxa.config.ts
+export default config({
+  image: {
+    optimize: true,
+    quality: 82,
+    keepOriginal: true,
+    variantWidths: [640, 1080, 1920],
+  },
+})
+```
+
+Set `keepOriginal: false` only after confirming every published reference uses a generated image
+path through the supported `<Image>` workflow. Remote images and arbitrary formats are not silently
+rewritten by this local public-asset optimizer.
+
+### A Reproducible Content Check
+
+```bash
+ruvyxa routes
+ruvyxa trace /release-notes
+npm run build
+```
+
+First ensure `page.mdx` was discovered, then inspect the route manifest, then build. This sequence
+separates a filename/discovery problem from a content-parser or image-build problem.
+
+---
+
 ## Next Steps
 
 - [02-routing.md](./02-routing.md) -- File-system routing

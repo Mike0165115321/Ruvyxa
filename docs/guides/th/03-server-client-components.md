@@ -978,6 +978,63 @@ export default function Page() {
 
 ---
 
+## Boundary Validation ดูจาก Reachability
+
+สิ่งที่สำคัญไม่ใช่ชื่อไฟล์ แต่คือ module นั้นถูกเข้าถึงจาก hydrated page/client graph หรือจาก server
+runtime หรือไม่ Route validation เดินตาม relative imports ด้วย parser เดียวกับที่ bundler ใช้ แล้ว
+รายงาน boundary diagnostics ที่สำคัญดังนี้:
+
+| Code      | สิ่งที่พบ                                                                                 | แนวทางที่ถูกต้อง                                                                            |
+| --------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `RUV1007` | module ที่ client เข้าถึงได้ import `server-only`, `@ruvyxa/auth` หรือ `@ruvyxa/database` | ย้ายงาน server ไปอยู่หลัง loader, API route หรือ action แล้วส่งเฉพาะข้อมูลที่ serialize ได้ |
+| `RUV1008` | `process.env.NAME` ที่ไม่ public ไปถึง client code                                        | เก็บไว้ฝั่ง server หรือใช้ `RUVYXA_PUBLIC_` เฉพาะค่าที่ตั้งใจเปิดเผย                        |
+| `RUV1010` | module ใต้ directory `server/` ของ project ถูก client เข้าถึง                             | ย้าย helper ที่ browser ใช้ได้ออกนอก `server/`                                              |
+| `RUV1009` | module ฝั่ง server import `client-only`                                                   | ย้าย browser-only code ไปยัง client module/entry                                            |
+
+ตัวอย่างนี้เก็บ environment read ไว้ใน server-only module และคืนเฉพาะข้อมูลที่ UI ต้องใช้:
+
+```ts
+// app/server/catalog.ts
+import 'server-only'
+
+export async function loadCatalog() {
+  const endpoint = process.env.CATALOG_API_URL
+  if (!endpoint) throw new Error('CATALOG_API_URL is required')
+  return fetch(endpoint).then((response) => response.json())
+}
+```
+
+```tsx
+// app/page.tsx
+import { loadCatalog } from './server/catalog'
+import { CatalogList } from './components/CatalogList'
+
+export default async function Page() {
+  return <CatalogList items={await loadCatalog()} />
+}
+```
+
+page สามารถ render data นี้บน server ได้เอง; มีเพียง module ที่ต้องทำงานใน browser
+เท่านั้นที่ควรเพิ่ม `'use client'` ค่า environment แบบ public อ่านผ่าน
+`process.env.RUVYXA_PUBLIC_NAME` ไม่ควรสมมติว่า มี compatibility layer แบบ `import.meta.env`
+
+### ลำดับ Debug Boundary
+
+เมื่อ build หรือ check รายงาน boundary diagnostic อย่าเพิ่งย้าย directive จนกว่าจะเข้าใจ import
+path:
+
+```bash
+ruvyxa analyze --format human
+ruvyxa trace /the-affected-route
+npm run check
+```
+
+เริ่มจากไฟล์ที่ diagnostic ระบุ แล้วตรวจ relative imports ของไฟล์นั้น Analyzer cache import edges
+เหล่านี้ ข้าม routes ได้ แต่ผลยังถูกประเมินให้ทุก route ที่เข้าถึง module นั้น จึงควรระวังเมื่อย้าย
+shared helper
+
+---
+
 ## ขั้นตอนถัดไป
 
 - **[04-rendering-strategies.md](./04-rendering-strategies.md)** — SSR, SSG, ISR, PPR, CSR

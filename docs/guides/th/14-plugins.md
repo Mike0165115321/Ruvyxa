@@ -1022,7 +1022,7 @@ plugins: [
 **Output เมื่อ env ขาด**:
 
 ```
-RUV1703: Missing required environment variables
+Missing required environment variables
   ✗ DATABASE_URL    (ไม่ได้ตั้งค่า)
   ✗ AUTH_SECRET     (ไม่ได้ตั้งค่า)
   ⚠ RUVYXA_PUBLIC_API_URL (API endpoint สำหรับ client)
@@ -1125,7 +1125,7 @@ build: {
   onStart({ root, config }) {
     const nodeMajor = parseInt(process.versions.node, 10);
     if (nodeMajor < 20) {
-      throw new Error('RUV1307: Node.js 20+ required');
+      throw new Error('Node.js 20+ required');
     }
     console.log(`Building ${config.site?.name || 'app'} from ${root}`);
   },
@@ -1678,7 +1678,7 @@ export default definePlugin<EnvOptions>('env-validator', (options) => ({
 
       if (missing.length > 0) {
         if (options.strict !== false) {
-          throw new Error(`RUV1703: Missing required env vars: ${missing.join(', ')}`)
+          throw new Error(`Missing required env vars: ${missing.join(', ')}`)
         } else {
           console.warn(`Warning: Missing env vars: ${missing.join(', ')}`)
         }
@@ -1799,23 +1799,23 @@ export default definePlugin<S3Options>('s3-upload', (options) => ({
 
 ## Troubleshooting — ฉบับละเอียด
 
-| ปัญหา                     | Error Code | สาเหตุ                        | วิธีแก้                                                          |
-| ------------------------- | ---------- | ----------------------------- | ---------------------------------------------------------------- |
-| Plugin ไม่ทำงาน           | RUV1603    | ชื่อ plugin ไม่ถูกต้อง        | ตรวจชื่อใน `plugins` array — ต้องตรงกับ npm package              |
-| Built-in plugin ไม่มีผล   | —          | ชื่อผิดหรือพิมพ์ผิด           | ใช้ชื่อที่ถูกต้อง: `redirects`, `headers`, `securityHeaders` ฯลฯ |
-| Hook failure              | RUV1604    | Error ใน plugin code          | ดู stack trace ใน terminal — ใช้ try/catch                       |
-| Socket error              | RUV1503    | Worker disconnected           | เพิ่ม middleware timeout, restart dev server                     |
-| Workers เกิน              | RUV1602    | เกินขีดจำกัด                  | ตั้ง `middleware.workers` ≤ 8                                    |
-| Response body ใหญ่เกิน    | RUV1602    | Plugin ส่ง response > 32MiB   | จำกัด response body หรือเพิ่ม `pluginLimit`                      |
-| Plugin หาไม่เจอ           | RUV1603    | ไม่ได้ติดตั้ง package         | `npm install ruvyxa-plugin-<name>`                               |
-| Build ช้าลงมาก            | —          | Plugin transform หนัก         | optimize hook หรือใช้ built-in plugin แทน                        |
-| Middleware ไม่ทำงาน       | —          | ขาด `next()` call             | เรียก `ctx.next()` ทุกครั้ง                                      |
-| onRequest not called      | —          | HTTP hooks not registered     | ใช้ `definePlugin` API (v0.5+)                                   |
-| onResponse ไม่มีผล        | —          | ต้อง return response object   | `return { response: { headers: {...} } }`                        |
-| Head ไม่แสดง              | —          | Head contribution ไม่ถูกเรียก | ตรวจ `head` array syntax                                         |
-| Plugin ordering ผิด       | —          | เข้าใจผิดเรื่อง priority      | onRequest → array order, onResponse → reverse                    |
-| Socket timeout            | RUV1502    | Plugin ทำงานนานเกิน 30s       | เพิ่ม `middleware.timeoutMs` หรือ optimize                       |
-| Multiple plugins conflict | —          | สอง plugin แก้ไขสิ่งเดียวกัน  | เปลี่ยนลำดับหรือ merge logic                                     |
+| ปัญหา                     | Error Code        | สาเหตุ                        | วิธีแก้                                                          |
+| ------------------------- | ----------------- | ----------------------------- | ---------------------------------------------------------------- |
+| Plugin ไม่ทำงาน           | RUV1603           | ชื่อ plugin ไม่ถูกต้อง        | ตรวจชื่อใน `plugins` array — ต้องตรงกับ npm package              |
+| Built-in plugin ไม่มีผล   | —                 | ชื่อผิดหรือพิมพ์ผิด           | ใช้ชื่อที่ถูกต้อง: `redirects`, `headers`, `securityHeaders` ฯลฯ |
+| Hook failure              | ไม่มี code ตายตัว | Error ใน plugin code          | ดู stack trace ใน terminal — ใช้ try/catch                       |
+| Socket error              | RUV1503           | Worker disconnected           | เพิ่ม middleware timeout, restart dev server                     |
+| Workers เกิน              | RUV1602           | เกินขีดจำกัด                  | ตั้ง `middleware.workers` ≤ 8                                    |
+| Response body ใหญ่เกิน    | RUV1602           | Plugin ส่ง response > 32MiB   | จำกัด response body หรือเพิ่ม `pluginLimit`                      |
+| Plugin หาไม่เจอ           | RUV1603           | ไม่ได้ติดตั้ง package         | `npm install ruvyxa-plugin-<name>`                               |
+| Build ช้าลงมาก            | —                 | Plugin transform หนัก         | optimize hook หรือใช้ built-in plugin แทน                        |
+| Middleware ไม่ทำงาน       | —                 | ขาด `next()` call             | เรียก `ctx.next()` ทุกครั้ง                                      |
+| onRequest not called      | —                 | HTTP hooks not registered     | ใช้ `definePlugin` API (v0.5+)                                   |
+| onResponse ไม่มีผล        | —                 | ต้อง return response object   | `return { response: { headers: {...} } }`                        |
+| Head ไม่แสดง              | —                 | Head contribution ไม่ถูกเรียก | ตรวจ `head` array syntax                                         |
+| Plugin ordering ผิด       | —                 | เข้าใจผิดเรื่อง priority      | onRequest → array order, onResponse → reverse                    |
+| Socket timeout            | RUV1502           | Plugin ทำงานนานเกิน 30s       | เพิ่ม `middleware.timeoutMs` หรือ optimize                       |
+| Multiple plugins conflict | —                 | สอง plugin แก้ไขสิ่งเดียวกัน  | เปลี่ยนลำดับหรือ merge logic                                     |
 
 ### RUV1601 — Plugin Config Invalid
 
@@ -1865,13 +1865,13 @@ ls node_modules/ruvyxa-plugin-*  # มี plugin อะไรบ้าง
 npm install ruvyxa-plugin-my-plugin
 ```
 
-### RUV1604 — Plugin Hook Failure
+### Plugin Hook Failure
 
 ```ts
 // ❌ ต้นเหตุ
 hooks: {
   onStart() {
-    throw new Error('Oops');  // RUV1604
+    throw new Error('Oops');
   },
 }
 
@@ -1882,8 +1882,8 @@ hooks: {
       doRiskyOperation();
     } catch (e) {
       console.error('Plugin failed:', e);
-      // หรือ rethrow ด้วย error code
-      throw new RuvyxaError('RUV1604', e.message);
+      // หรือ rethrow เพื่อให้ plugin runtime รายงานข้อผิดพลาด
+      throw e;
     }
   },
 }
@@ -1922,3 +1922,49 @@ hooks: {
 - Head contribution — SEO, analytics, custom tags
 - 5 ตัวอย่าง plugin จริง — request logger, env validator, cache buster, response time, S3 upload
 - Troubleshooting — 14 ปัญหาพร้อม error codes และวิธีแก้
+
+---
+
+## Plugin Boundaries และ Minimal Safe Plugin
+
+public plugin constructor คือ `definePlugin()` จาก `@ruvyxa/core/plugin` (re-export ผ่าน
+`ruvyxa/plugin`) plugin ต้องมีชื่อที่ไม่ว่าง และมี behavior อย่างน้อยหนึ่งอย่าง: registration
+callback, HTTP behavior, build hooks, development file-change behavior, diagnostics, native
+capability หรือ head entries constructor จะ validate ก่อน register plugin
+
+```ts
+import { definePlugin, withResponseHeader } from '@ruvyxa/core/plugin'
+
+export default definePlugin({
+  name: 'example:request-id',
+  http: {
+    match: '/api/*',
+    onResponse({ response }) {
+      return withResponseHeader(response, 'x-example-plugin', 'enabled')
+    },
+  },
+})
+```
+
+นำค่าที่คืนมาไป register ใน `ruvyxa.config.ts` route pattern `*` match ทุก path, trailing `*` เป็น
+prefix pattern และรูปแบบอื่นเป็น exact match เก็บ request/response work ให้มีขอบเขต เพราะ plugin
+runtime communication เป็น system boundary; hook ที่แพงหรือกว้างกระทบทุก matched request
+
+### เลือก Capability ไม่ใช่ชื่อเชิงการตลาด
+
+first-party `ruvyxa/plugins` ปัจจุบัน export `redirects`, `headers`, `observability`,
+`securityHeaders`, `cacheRules`, `pwa`, `sitemap`, `robots`, `feed`, `searchIndex`, `contentEngine`,
+`openApi`, `alias`, `bundleBudget`, `requireEnv` และ `fonts` ให้อ่าน options type ของ capability
+ที่ใช้จริง เพราะชื่อ plugin ใน tutorial ไม่ใช่สิ่งแทน current contract
+
+### Scaffold แล้วพิสูจน์ Behavior ที่เล็กที่สุด
+
+```bash
+ruvyxa plugin create @acme/request-id --dir packages/request-id
+ruvyxa analyze --format human
+ruvyxa build
+```
+
+CLI scaffolder สร้าง publishable package structure แต่ไม่ได้ register package ใน application config
+หรือ publish ไป npm ให้เพิ่ม behavior เดียว, ทดสอบ request/build path ที่ match ก่อน แล้วจึงเพิ่ม
+hooks ที่กว้างขึ้นหรือ native capability

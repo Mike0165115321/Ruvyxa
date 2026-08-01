@@ -142,38 +142,30 @@ emit()                    — write to out_dir
 ### Extensions
 
 ```rust
-const RUVYXA_EXTENSIONS: &[&str] = &[
-    ".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs",
-    ".json", ".node",
-];
+// `resolve_file_candidate()` probes explicit files first, then:
+// ts, tsx, js, jsx, mts, cts, mjs, cjs, md, and mdx.
+// It also probes `index` with the same extensions.
 ```
 
 ### Resolver
 
-`build_resolver()` wraps `OxcResolver::new()` with:
+The workspace resolver (`resolver.rs`) resolves:
 
-- Custom extensions (`.tsx`, `.ts`, `.jsx`, `.js`, `.mjs`, `.cjs`)
-- `node_modules` lookup from project root AND framework package
-- Remaining extensions from `oxc_resolver` default set (`.json`, `.node`)
-- `tsconfig.json` path alias resolution
-- Built-in module map for node builtins (`fs`, `path`, `os` → empty stub on client)
+- project-relative and absolute files with the probe order above;
+- `tsconfig.json` or `jsconfig.json` `paths`/`baseUrl` aliases before package lookup;
+- bare package specifiers and subpaths through `package.json` `exports`;
+- CSS-like imports as non-JavaScript assets, so the style pipeline handles them.
 
 ```rust
-fn resolve_module(specifier: &str, dir: &Path) -> Result<PathBuf>
-
-fn resolve_module_with_extensions(
-    specifier: &str,
-    base_dir: &Path,
-    extensions: &[&str],
-) -> Option<PathBuf>
+pub fn resolve_specifier(base_dir: &Path, specifier: &str) -> Option<PathBuf>
 ```
 
 Resolution order:
 
-1. Absolute path / relative path → check with extension probing
-2. Bare specifier (`react`, `lodash`) → `node_modules` lookup
-3. Deep import (`react/jsx-runtime`) → `node_modules/package/` resolution
-4. Built-in → stub map
+1. Relative path (`./` or `../`) → extension/index probing
+2. Absolute path (used by framework-generated virtual imports)
+3. `tsconfig.json`/`jsconfig.json` aliases
+4. Bare package specifier or package subpath
 
 ### Source scanning (`ast`)
 

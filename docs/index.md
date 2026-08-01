@@ -28,7 +28,7 @@ npm run dev        # → http://localhost:3000
 
 ---
 
-## User Guide (16 chapters)
+## User Guide (17 chapters)
 
 | #   | Chapter                                                                | Level | Topics                                                                                              |
 | --- | ---------------------------------------------------------------------- | ----- | --------------------------------------------------------------------------------------------------- |
@@ -47,11 +47,12 @@ npm run dev        # → http://localhost:3000
 | 13  | [Deployment](guides/en/13-deployment.md)                               | 🟢    | Build output, adapters, all platforms, production checklist, CI/CD                                  |
 | 14  | [Plugins](guides/en/14-plugins.md)                                     | 🔴    | 16 built-in plugins, custom plugin API, hooks, lifecycle                                            |
 | 15  | [Official Packages](guides/en/15-official-packages.md)                 | 🟡    | Auth, Database, Realtime — server API, client API, plugin setup                                     |
-| 16  | [Error Handling](guides/en/16-error-handling.md)                       | 🔴    | Complete RUV#### catalog, error boundaries, diagnostics                                             |
+| 16  | [Error Handling](guides/en/16-error-handling.md)                       | 🔴    | Current RUV#### diagnostics, error boundaries, and recovery guidance                                |
+| 17  | [API Reference](guides/en/17-api-reference.md)                         | 🔴    | Public exports from `@ruvyxa/react` and `@ruvyxa/core`                                              |
 
 ---
 
-## User Guide (ภาษาไทย — 16 บท)
+## User Guide (ภาษาไทย — 17 บท)
 
 | #   | บท                                                                     | ระดับ |
 | --- | ---------------------------------------------------------------------- | ----- |
@@ -71,6 +72,7 @@ npm run dev        # → http://localhost:3000
 | 14  | [ปลั๊กอิน](guides/th/14-plugins.md)                                    | 🔴    |
 | 15  | [แพ็กเกจทางการ](guides/th/15-official-packages.md)                     | 🟡    |
 | 16  | [การจัดการ Error](guides/th/16-error-handling.md)                      | 🔴    |
+| 17  | [เอกสารอ้างอิง API](guides/th/17-api-reference.md)                     | 🔴    |
 
 ---
 
@@ -118,3 +120,23 @@ npm run dev        # → http://localhost:3000
 - **[Configuration](guides/en/11-configuration.md)** — complete config reference
 - **[Error Codes](architecture/diagnostics.md)** — RUV#### code catalog
 - **[Developer Guide](developer-guide.md)** — contributing to the framework
+
+---
+
+## How to Navigate by Task
+
+Use the guides for application decisions and the architecture pages for implementation reasoning.
+Each detailed guide now includes an implementation-bound section that distinguishes the supported
+contract from examples that are application-specific.
+
+| If you need to…                  | Start here                                                     | Then verify with                               |
+| -------------------------------- | -------------------------------------------------------------- | ---------------------------------------------- |
+| Add or troubleshoot a page       | [Routing](guides/en/02-routing.md)                             | `ruvyxa routes`, then `ruvyxa trace <pattern>` |
+| Choose SSR/SSG/ISR/PPR/CSR       | [Rendering Strategies](guides/en/04-rendering-strategies.md)   | Route manifest / `ruvyxa trace`                |
+| Keep a secret out of the browser | [Environment Variables](guides/en/10-environment-variables.md) | `ruvyxa analyze --format human`                |
+| Configure a deployment           | [Deployment](guides/en/13-deployment.md)                       | `ruvyxa doctor --adapter <name>`               |
+| Create a plugin                  | [Plugins](guides/en/14-plugins.md)                             | `ruvyxa plugin create <name>`                  |
+| Understand framework internals   | [Architecture Overview](architecture/overview.md)              | Owning crate/package source listed there       |
+
+The minimal starter has scripts only for `dev`, `build`, `start`, `typecheck`, and `check`. Invoke
+other CLI capabilities directly unless the project deliberately adds a corresponding package script.
