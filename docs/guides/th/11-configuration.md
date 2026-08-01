@@ -134,7 +134,7 @@ type RuvyxaConfig = {
     options?: any
     head?: Array<{ tag: string; attrs?: Record<string, string>; content?: string }>
   }>
-  adapter?: string
+  adapter?: Adapter
   adapterOptions?: Record<string, any>
 }
 ```
@@ -393,7 +393,9 @@ middleware: {
 กำหนดค่าการทำงานใน `middleware.ts`:
 
 - ควบคุมจำนวน V8 Isolate workers เพื่อรัน middleware แบบคู่ขนาน
-- ควบคุม Timeout (RUV2001 timeout error) หาก middleware ค้างและไม่คืนค่า
+- ค่า `middleware.timeoutMs` ที่อยู่นอกช่วง 1–300000 ms จะถูกปฏิเสธด้วย `RUV1602`
+- หาก TypeScript plugin hook หมดเวลาระหว่าง runtime จะใช้ `RUV1700`; `RUV2001` ไม่ใช่รหัส timeout
+  โดยตรง
 
 ---
 
@@ -409,24 +411,36 @@ plugins: [
 ]
 ```
 
-ถูกทำ Schema Validate ในฝั่ง Rust ทันที หากชื่อปลั๊กอินว่างเปล่าหรือตั้งชื่อซ้ำ จะทำให้เกิด RUV1601
+ถูกตรวจสอบก่อนส่งเข้า runtime หากชื่อปลั๊กอินว่างเปล่าหรือตั้งชื่อซ้ำ จะทำให้เกิด `RUV1602`
 
 ---
 
 ## Adapter Configuration
 
+`config.adapter` ต้องเป็น adapter object ที่มี `name`, `target` และ `build(context)` ไม่ใช่ string
+ชื่อสั้นอย่าง `node` หรือ `vercel` ใช้กับ CLI flag `--adapter`:
+
 ```ts
-adapter: 'node',
-adapterOptions: {
-  outDir: 'build'
-}
+import { config } from 'ruvyxa/config'
+import { nodeAdapter } from '@ruvyxa/adapter-node'
+
+export default config({
+  adapter: nodeAdapter({ entry: 'server/index.mjs' }),
+  adapterOptions: { outDir: 'build' },
+})
 ```
 
-ตั้งเป้าหมายของการ Build หากไม่ได้ระบุ จะตรวจจับอัตโนมัติตามสภาพแวดล้อม:
+```bash
+ruvyxa doctor --adapter node
+ruvyxa build --adapter node
+```
+
+เมื่อไม่ได้เลือกผ่าน config object หรือ `--adapter` CLI จะตรวจ `RUVYXA_ADAPTER` และ environment ของ
+hosting platform ที่รองรับ:
 
 1. หากพบ `VERCEL` -> กำหนด adapter `vercel` อัตโนมัติ
 2. หากพบ `NETLIFY` -> กำหนด adapter `netlify` อัตโนมัติ
-3. ค่าเริ่มต้นสุดท้าย -> ใช้ adapter `node`
+3. หากไม่พบตัวเลือกที่รองรับ จะไม่มี named adapter ถูกเลือกโดยอัตโนมัติ
 
 ---
 
@@ -465,7 +479,7 @@ export default config({
   build: { split: 'manual', treeShake: true },
   image: { quality: 90, lossless: true },
   security: { sameOrigin: true },
-  adapter: 'vercel',
+  // เลือก named adapter ด้วย: ruvyxa build --adapter vercel
 })
 ```
 
@@ -531,18 +545,18 @@ adapter output ไม่ถูกต้อง ไม่ควรอนุมา�
 | RUV1602    | Invalid config structure          | plugin ชื่อซ้ำหรือชนิดข้อมูลไม่ถูกต้อง  | ตรวจ schema และชื่อ plugin                |
 | RUV1603    | Invalid adapter definition/output | adapter contract ไม่ถูกต้อง             | ตรวจ `build(context)` และผลลัพธ์          |
 
-| ปัญหาทั่วไป                    | สาเหตุ                                             | วิธีแก้                                                       |
-| ------------------------------ | -------------------------------------------------- | ------------------------------------------------------------- |
-| Config ไม่ถูกโหลด              | syntax error ในไฟล์                                | ตรวจ `config()` และ `,`                                       |
-| `site.url` error               | URL ไม่ใช่ origin                                  | ใช้เฉพาะ origin (`https://x.com` ไม่ใช่ `https://x.com/path`) |
-| Port ถูกใช้                    | port ซ้ำ                                           | เปลี่ยน `server.port`                                         |
-| Unknown field                  | camelCase ผิด                                      | `sourcemap` ไม่ใช่ `sourceMap`                                |
-| Plugin ไม่ทำงาน                | ชื่อ plugin ไม่ถูกต้อง                             | ตรวจชื่อในตาราง                                               |
-| Adapter auto-detect ผิด        | env var ไม่ตั้ง                                    | ใช้ `adapter: 'name'` explicit                                |
-| CSS entries ไม่ inject         | path ผิด                                           | ตรวจว่า path มีอยู่จริง                                       |
-| Image optimization ไม่ได้      | image option ไม่ถูกต้องหรือ source ไม่ใช่ PNG/JPEG | ตรวจ `image.optimize`, `image.quality` และ build output       |
-| Security headers ไม่มา         | `headers: false`                                   | ตั้ง `headers: true`                                          |
-| middleware rate limit ไม่ work | ไม่ได้กำหนด `max`/`window`                         | เพิ่ม rate config                                             |
+| ปัญหาทั่วไป                    | สาเหตุ                                             | วิธีแก้                                                        |
+| ------------------------------ | -------------------------------------------------- | -------------------------------------------------------------- |
+| Config ไม่ถูกโหลด              | syntax error ในไฟล์                                | ตรวจ `config()` และ `,`                                        |
+| `site.url` error               | URL ไม่ใช่ origin                                  | ใช้เฉพาะ origin (`https://x.com` ไม่ใช่ `https://x.com/path`)  |
+| Port ถูกใช้                    | port ซ้ำ                                           | เปลี่ยน `server.port`                                          |
+| Unknown field                  | camelCase ผิด                                      | `sourcemap` ไม่ใช่ `sourceMap`                                 |
+| Plugin ไม่ทำงาน                | ชื่อ plugin ไม่ถูกต้อง                             | ตรวจชื่อในตาราง                                                |
+| Adapter auto-detect ผิด        | env var ไม่ตั้ง                                    | ใช้ `ruvyxa doctor/build --adapter <name>` หรือ adapter object |
+| CSS entries ไม่ inject         | path ผิด                                           | ตรวจว่า path มีอยู่จริง                                        |
+| Image optimization ไม่ได้      | image option ไม่ถูกต้องหรือ source ไม่ใช่ PNG/JPEG | ตรวจ `image.optimize`, `image.quality` และ build output        |
+| Security headers ไม่มา         | `headers: false`                                   | ตั้ง `headers: true`                                           |
+| middleware rate limit ไม่ work | ไม่ได้กำหนด `max`/`window`                         | เพิ่ม rate config                                              |
 
 ### Debug Config
 

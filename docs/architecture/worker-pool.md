@@ -110,7 +110,8 @@ const MAX_CONCURRENT_REQUESTS = positiveIntegerEnv(
 
 A request awaits `acquireRequestSlot()` before dispatch and calls `releaseRequestSlot()` when it
 finishes, which starts the longest-waiting queued request. Below the limit the acquire resolves
-synchronously, so the common case adds no latency.
+synchronously, so the common case does not wait in the request-slot queue. This is a control-flow
+property, not a measured guarantee about wall-clock latency.
 
 Renders are CPU-bound and each one holds a React tree, a compiled bundle, and its response buffer.
 Admitting a whole burst at once exhausts the heap or thrashes the CPU into timeouts that present as

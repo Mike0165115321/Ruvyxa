@@ -470,14 +470,9 @@ Ruvyxa resolves adapter in this priority:
 | Static     | —               | —                     | static          |
 
 ```typescript
-// ruvyxa.config.ts — explicit adapter with options
-export default config({
-  adapter: 'vercel', // or use adapter function import
-  adapterOptions: {
-    regions: ['iad1'],
-    imageOptimization: true,
-  },
-})
+// A named adapter is selected with the CLI; a string is not a valid config.adapter value.
+// ruvyxa doctor --adapter vercel
+// ruvyxa build --adapter vercel
 
 // Using adapter function (TypeScript-safe options)
 import { vercelAdapter } from '@ruvyxa/adapter-vercel'

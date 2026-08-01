@@ -172,8 +172,8 @@ depth without presenting unsupported historical design as production behavior.
 ### Thai package draft — historical draft (non-normative)
 
 > **คำเตือน archive:** เนื้อหาด้านล่างเก็บไว้เพื่อประวัติเท่านั้น ไม่ใช่ package API ปัจจุบัน
-> ตัวอย่างอาจเก่าหรือไม่รองรับ และห้ามนำไปใช้เป็น code จริง production contract
-> ด้านบนเป็นแหล่งอ้างอิงหลัก
+> ตัวอย่างอาจเก่าหรือไม่รองรับ รวมถึงชื่อ API ที่ไม่มีใน export ปัจจุบัน และห้ามนำไปใช้เป็น code
+> จริง หรือใช้ยืนยันความสามารถของ package ใน production contract ด้านบนเป็นแหล่งอ้างอิงหลัก
 
 # Official Packages: Auth, Database, Realtime
 

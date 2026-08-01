@@ -202,8 +202,9 @@ connections.
 - The rate limiter is **in-process only**. There is no Redis backend, no `RateLimitStore` trait.
   High-cardinality token buckets (10k+) trigger a full sweep of expired entries.
 - Compression is applied **to all routes unconditionally** but only activates on responses with a
-  known content-length. Streaming SSE and chunked responses are never run through the async
-  compression adapter.
+  known content-length. Streaming and chunked responses are not run through the async compression
+  adapter. The current server source does not provide an SSE endpoint; do not infer SSE support from
+  this compression rule.
 - Plugin workers are **not restarted automatically** after a failed hook unless the process itself
   died or the protocol stream was poisoned. Application-level errors are returned to the caller
   without process replacement.

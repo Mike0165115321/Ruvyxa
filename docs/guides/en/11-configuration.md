@@ -138,7 +138,7 @@ type RuvyxaConfig = {
     options?: any
     head?: Array<{ tag: string; attrs?: Record<string, string>; content?: string }>
   }>
-  adapter?: string
+  adapter?: Adapter
   adapterOptions?: Record<string, any>
 }
 ```
@@ -1034,38 +1034,51 @@ head: [
 
 ### adapter
 
+`config.adapter` is an `Adapter` object. It is not a string field in `ruvyxa.config.ts`; the object
+must expose `name`, `target`, and `build(context)`. The current renderer reports `RUV1603` when this
+contract or the returned adapter output is invalid.
+
 ```ts
-adapter: 'vercel' // Deploy to Vercel
-adapter: 'netlify' // Deploy to Netlify
-adapter: 'node' // Any Node.js host
-adapter: 'static' // Static hosting
-adapter: '@scope/ruvyxa-adapter-node' // Third-party adapter
+import { config } from 'ruvyxa/config'
+import { vercelAdapter } from '@ruvyxa/adapter-vercel'
+
+export default config({
+  adapter: vercelAdapter({ regions: ['iad1'] }),
+})
 ```
 
-| Property           | Value                                                                                              |
-| ------------------ | -------------------------------------------------------------------------------------------------- |
-| TS type            | `string`                                                                                           |
-| Rust field         | `adapter: Option<serde_json::Value>`                                                               |
-| Default            | Auto-detected from platform env vars (VERCEL, NETLIFY, CF_PAGES, etc.)                             |
-| Available          | `node`, `bun`, `static`, `vercel`, `netlify`, `cloudflare`, `railway`, `render`, `firebase`, `aws` |
-| Platform detection | `detect_platform_adapter()` checks env vars                                                        |
+For a named built-in or installed third-party adapter, select it at the command line instead of
+putting a string in the config object:
 
-Built-in known adapters:
-
-```rust
-const KNOWN_ADAPTER_NAMES: [&str; 10] = [
-    "node", "bun", "static", "vercel", "netlify",
-    "cloudflare", "railway", "render", "firebase", "aws",
-];
+```bash
+ruvyxa doctor --adapter vercel
+ruvyxa build --adapter vercel
+ruvyxa build --adapter @scope/ruvyxa-adapter-node
 ```
 
-Third-party adapters must be valid npm package names (optionally scoped).
+When neither the config object nor `--adapter` selects an adapter, the CLI may use `RUVYXA_ADAPTER`
+or recognized hosting-platform environment variables. This is selection behavior, not a TypeScript
+type for `config.adapter`.
+
+| Property        | Value                                                                                              |
+| --------------- | -------------------------------------------------------------------------------------------------- |
+| TS type         | `Adapter`                                                                                          |
+| Rust field      | serialized adapter output in `adapter: Option<serde_json::Value>`                                  |
+| Config contract | object with `build(context)`; output includes string `name` and `target`                           |
+| Named selection | `--adapter <name>` or an installed adapter package                                                 |
+| Known names     | `node`, `bun`, `static`, `vercel`, `netlify`, `cloudflare`, `railway`, `render`, `firebase`, `aws` |
+
+Third-party adapter names supplied through the CLI must be valid npm package names and resolvable
+from the project or Ruvyxa runtime.
 
 ### adapterOptions
 
 ```ts
-adapter: "vercel",
-adapterOptions: { regions: ["iad1", "hnd1"], imageOptimization: true },
+import { config } from 'ruvyxa/config'
+
+export default config({
+  adapterOptions: { regions: ['iad1', 'hnd1'], imageOptimization: true },
+})
 ```
 
 | Property   | Value                                        |
@@ -1127,7 +1140,7 @@ implemented.
 | `image.workers` invalid              | ✅          | -             | number                             |
 | `css.entries[]` absolute             | ✅          | -             | relative path                      |
 | `cache.buildDir` absolute            | ✅          | -             | relative path                      |
-| `adapter` unknown                    | ✅          | -             | See AdapterType                    |
+| `adapter` is not an Adapter object   | ✅          | -             | Provide `build(context)`           |
 | `plugins[].name` empty/duplicate     | ✅          | -             | unique, non-empty                  |
 
 ---
@@ -1258,7 +1271,7 @@ export default config({
     { name: 'securityHeaders' },
     { name: 'requireEnv', options: { variables: ['DATABASE_URL'] } },
   ],
-  adapter: 'vercel',
+  // Select a named adapter with: ruvyxa build --adapter vercel
   adapterOptions: { regions: ['iad1'] },
 })
 ```

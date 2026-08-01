@@ -469,13 +469,13 @@ Ruvyxa ใช้ adapter เพื่อปรับ output ให้เข้�
 
 ### การเลือก Adapter
 
-1. **Auto-detect**: Ruvyxa ตรวจสอบ environment variables ของ platform — ถ้าตรวจเจอจะใช้ adapter
-   นั้นทันที
-2. **Config**: ระบุ `adapter` ใน `ruvyxa.config.ts`
-3. **CLI flag**: `--adapter` ใน `ruvyxa build`
-4. **Env var**: `RUVYXA_ADAPTER` — มี priority สูงสุด
+1. **CLI flag**: `--adapter` ใน `ruvyxa build` หรือ `ruvyxa doctor`
+2. **Config object**: ระบุ adapter factory object ใน `ruvyxa.config.ts`
+3. **Env var**: `RUVYXA_ADAPTER` ใช้เมื่อไม่มี CLI หรือ config adapter
+4. **Auto-detect**: platform environment ใช้ได้เมื่อไม่มีตัวเลือกข้างต้น
 
-ลำดับความสำคัญ: CLI flag > `RUVYXA_ADAPTER` > Config > Auto-detect > default (node)
+ลำดับความสำคัญคือ CLI flag > config adapter > `RUVYXA_ADAPTER`/platform detection ตามเส้นทางคำสั่ง
+ปัจจุบันไม่ควรสรุปว่ามี default named adapter เสมอเมื่อไม่มีตัวเลือก
 
 ### Algorithm Auto-Detection
 
@@ -1477,49 +1477,31 @@ Staging Area: /.ruvyxa-staging/
 ### ใช้ CLI
 
 ```bash
-# Staging deploy
-ruvyxa deploy:stage                     # Build + validate staging
-ruvyxa deploy:stage --adapter vercel    # ระบุ adapter
-ruvyxa deploy:stage --no-health         # ข้าม health check
+# Validate and build with the current CLI
+ruvyxa check
+ruvyxa doctor --adapter vercel
+ruvyxa build --adapter vercel
+ruvyxa start
+ruvyxa preview
 
-# Swap to production
-ruvyxa deploy:swap                      # Atomic swap
-
-# Rollback
-ruvyxa deploy:rollback                  # กลับไป version ก่อนหน้า
-
-# ตรวจสอบสถานะ
-ruvyxa deploy:status
-
-# Output:
-# ━━━ Deployment Status ━━━━━━━━━━━━━━━━━━━━━━
-#   Active:    .ruvyxa/ (built 2026-07-29 10:30)
-#   Staging:   .ruvyxa-staging/ (built 2026-07-29 11:00)
-#   Previous:  .ruvyxa-prev/ (built 2026-07-29 09:00)
+# Provider staging, health checks, promotion, rollback, and status are
+# provider/CI operations; the repository does not expose deploy:stage,
+# deploy:swap, deploy:rollback, or deploy:status commands.
 ```
 
 ### ใช้ Custom Script
 
 ```ts
 // scripts/deploy.ts
-import { stage, swap, rollback, status } from 'ruvyxa/deploy'
+import { execFileSync } from 'node:child_process'
 
 async function deploy() {
-  // Build + validate
-  await stage({ adapter: 'vercel' })
+  // The current repository exposes build/doctor CLI commands, not a
+  // `ruvyxa/deploy` stage/swap/rollback API.
+  execFileSync('ruvyxa', ['doctor', '--adapter', 'vercel'], { stdio: 'inherit' })
+  execFileSync('ruvyxa', ['build', '--adapter', 'vercel'], { stdio: 'inherit' })
 
-  // Health check
-  const health = await checkHealth('http://localhost:3001/api/health')
-  if (!health.ok) {
-    console.error('Health check failed')
-    process.exit(1)
-  }
-
-  // Swap ไป production
-  await swap()
-
-  // Cleanup
-  await cleanupPrevious()
+  // Provider health checks and promotion are outside the framework adapter runner.
 }
 ```
 

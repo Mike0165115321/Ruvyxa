@@ -1983,37 +1983,36 @@ npm publish --access public
 
 ## Troubleshooting
 
-| Problem                     | Cause                         | Fix                                         |
-| --------------------------- | ----------------------------- | ------------------------------------------- |
-| Plugin not running          | Name mismatch                 | Check `name` matches in `definePlugin`      |
-| RUV1600: Boundary violation | Server data in client context | Remove `process.env` from client hooks      |
-| RUV1601: Hook timeout       | Plugin too slow               | Reduce work or increase `pluginLimit`       |
-| Plugin hook error           | Unhandled exception           | Fix plugin code; check the reported error   |
-| Plugin is not loaded        | Plugin is absent from config  | Install it and add it to `plugins`          |
-| Invalid plugin options      | The plugin rejects its input  | Check that plugin's documented options      |
-| RUV2102: Invalid plugin     | Not a valid Plugin object     | Return from `definePlugin` or `Plugin` type |
-| Virtual module not found    | `resolveId` returns null      | Verify specifier match and importer         |
-| Plugin order wrong          | Hooks overwriting             | Reorder plugins or use `next()`             |
-| Head elements not rendered  | Invalid tag/attr              | Check `PluginHeadEntry` constraints         |
-| `requireEnv` fails          | Missing env vars during dev   | Set variables in `.env.local`               |
-| `bundleBudget` blocks build | Bundle too large              | Optimize or increase budget                 |
-| `alias` not matching        | Regex/string mismatch         | Test pattern in isolation                   |
-| `redirects` not firing      | Source pattern mismatch       | Check wildcard `*` syntax                   |
-| `pwa` icons missing         | Icon path not found           | Ensure files exist in `public/`             |
-| Response middleware 500     | Body exceeds `pluginLimit`    | Increase limit or skip for large responses  |
+| Problem                     | Cause                                 | Fix                                                             |
+| --------------------------- | ------------------------------------- | --------------------------------------------------------------- |
+| Plugin not running          | Name mismatch                         | Check `name` matches in `definePlugin`                          |
+| RUV1008: Private env        | Private server data in client context | Move the read to server code or use an approved public variable |
+| RUV1700: Hook timeout       | Plugin hook exceeded its timeout      | Reduce work or adjust the validated middleware timeout          |
+| Plugin hook error           | Unhandled exception                   | Fix plugin code; check the reported error                       |
+| Plugin is not loaded        | Plugin is absent from config          | Install it and add it to `plugins`                              |
+| Invalid plugin options      | The plugin rejects its input          | Check that plugin's documented options                          |
+| RUV2102: Invalid plugin     | Not a valid Plugin object             | Return from `definePlugin` or `Plugin` type                     |
+| Virtual module not found    | `resolveId` returns null              | Verify specifier match and importer                             |
+| Plugin order wrong          | Hooks overwriting                     | Reorder plugins or use `next()`                                 |
+| Head elements not rendered  | Invalid tag/attr                      | Check `PluginHeadEntry` constraints                             |
+| `requireEnv` fails          | Missing env vars during dev           | Set variables in `.env.local`                                   |
+| `bundleBudget` blocks build | Bundle too large                      | Optimize or increase budget                                     |
+| `alias` not matching        | Regex/string mismatch                 | Test pattern in isolation                                       |
+| `redirects` not firing      | Source pattern mismatch               | Check wildcard `*` syntax                                       |
+| `pwa` icons missing         | Icon path not found                   | Ensure files exist in `public/`                                 |
+| Response middleware 500     | Body exceeds `pluginLimit`            | Increase limit or skip for large responses                      |
 
 ---
 
 ## Error Codes (RUV1600-1699, RUV2000-2102)
 
-| Code    | Title                        | Source           | Fix                           |
-| ------- | ---------------------------- | ---------------- | ----------------------------- |
-| RUV1600 | Plugin boundary violation    | Plugin host      | Fix server/client boundary    |
-| RUV1601 | Plugin hook timeout          | Plugin host      | Reduce work or increase limit |
-| RUV1700 | Plugin hook failed           | Plugin runtime   | Inspect the hook error        |
-| RUV1701 | Plugin bridge/protocol error | Plugin runtime   | Inspect the plugin response   |
-| RUV2102 | Invalid plugin definition    | `definePlugin()` | Return a valid plugin object  |
-| RUV2103 | Font self-hosting warning    | `fonts()` plugin | Check the font URL/network    |
+| Code         | Title                               | Source           | Fix                                     |
+| ------------ | ----------------------------------- | ---------------- | --------------------------------------- |
+| RUV1007-1010 | Plugin boundary violation           | Graph/bundler    | Fix the reported server/client boundary |
+| RUV1700      | Plugin hook timeout or host failure | Plugin runtime   | Inspect the hook error and timeout      |
+| RUV1701      | Plugin bridge/protocol error        | Plugin runtime   | Inspect the plugin response             |
+| RUV2102      | Invalid plugin definition           | `definePlugin()` | Return a valid plugin object            |
+| RUV2103      | Font self-hosting warning           | `fonts()` plugin | Check the font URL/network              |
 
 ---
 

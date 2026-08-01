@@ -474,7 +474,8 @@ fn forwarded_client_ip(config, headers) → Option<IpAddr>:
 
 ## Realtime Actions
 
-Actions can publish realtime events after successful execution:
+Actions can publish a realtime WebSocket event after successful execution when `.realtime(...)` is
+configured. This is an action/runtime capability, not an SSE transport or a delivery-time guarantee:
 
 ```ts
 export const createTodo = action

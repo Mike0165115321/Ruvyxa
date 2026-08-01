@@ -319,6 +319,10 @@ export async function GET() {
 
 ### SSE (Server-Sent Events)
 
+Ruvyxa ไม่มี SSE API เฉพาะ ตัวอย่างนี้ใช้ `Response` แบบ streamed ที่ worker protocol รองรับ แล้วจัด
+รูปแบบ chunk ให้เป็น SSE ต้องตรวจว่า adapter และ proxy ของ platform รองรับ response แบบ long-lived
+หรือไม่ ไม่ใช่คำรับรองการส่ง event ของ framework ทุก target
+
 ```tsx
 // app/api/events/route.ts
 export async function GET() {

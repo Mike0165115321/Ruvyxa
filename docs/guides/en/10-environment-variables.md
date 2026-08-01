@@ -572,13 +572,9 @@ The following environment variables are allowed in Client Components implicitly 
 
 - `NODE_ENV` — `development`, `production`, `test`
 - `RUVYXA_PUBLIC_*` — Any variable starting with this prefix
-- `NEXT_PUBLIC_*` — Next.js compatibility fallback
-- `PUBLIC_*` — SvelteKit compatibility fallback
-- `VITE_*` — Vite compatibility fallback
-- `import.meta.env.MODE` — 'development' | 'production'
-- `import.meta.env.DEV` — boolean
-- `import.meta.env.PROD` — boolean
-- `import.meta.env.SSR` — boolean
+- `NEXT_PUBLIC_*`, `PUBLIC_*`, and `VITE_*` — historical compatibility proposals, not supported
+  aliases in the current source
+- `import.meta.env.*` — historical proposal, not a current Ruvyxa environment API
 
 ---
 
@@ -835,13 +831,9 @@ The `RUVYXA_ADAPTER` env var overrides auto-detection.
 ### Adapter Configuration
 
 ```ts
-// ruvyxa.config.ts
-export default config({
-  adapter: 'vercel',
-  adapterOptions: {
-    regions: ['iad1'],
-  },
-})
+// Select a named adapter from the CLI; a string is not a valid config.adapter value.
+// ruvyxa doctor --adapter vercel
+// ruvyxa build --adapter vercel
 ```
 
 The adapter emits platform-specific configuration that references environment variables. The adapter

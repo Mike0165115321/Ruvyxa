@@ -738,12 +738,13 @@ Ruvyxa จะดาวน์โหลดเนื้อหาของ `@import`
 
 ## Error Codes Reference
 
-| รหัสข้อผิดพลาด | คำอธิบาย                                  | วิธีแก้ไข                              |
-| -------------- | ----------------------------------------- | -------------------------------------- |
-| `RUV3001`      | หาไฟล์ CSS ที่ import ไม่เจอ              | ตรวจสอบ Path หรือการสะกดชื่อไฟล์       |
-| `RUV3002`      | Syntax Error ในไฟล์ SCSS/CSS              | ตรวจสอบบรรทัดที่มีข้อผิดพลาดในไฟล์ CSS |
-| `RUV3003`      | `css.entries` อ้างอิงไฟล์ที่ไม่มีอยู่จริง | ตรวจสอบ Path ใน `ruvyxa.config.ts`     |
-| `RUV3004`      | Tailwind config มีข้อผิดพลาด              | ตรวจสอบไฟล์ `tailwind.config.js`       |
+| รหัสข้อผิดพลาด | คำอธิบาย                            | วิธีแก้ไข                                  |
+| -------------- | ----------------------------------- | ------------------------------------------ |
+| `RUV1400`      | Tailwind CSS compilation failed     | ตรวจสอบ output ของ Tailwind และไฟล์ config |
+| `RUV1401`      | ไม่พบ Tailwind CSS CLI              | ติดตั้งหรือแก้ path ของ Tailwind CLI       |
+| `RUV1402`      | Sass compilation failed             | ตรวจสอบ syntax และ compiler ของ Sass       |
+| `RUV1403`      | CSS import หรือ stylesheet หาไม่เจอ | ตรวจสอบ path และไฟล์ที่อ้างอิง             |
+| `RUV1404`      | CSS entry อยู่นอก project root      | ใช้ path ภายใน project root                |
 
 ---
 
@@ -1412,7 +1413,8 @@ app/styles/
 2. **Global CSS สำหรับ base styles** — reset, typography, CSS custom properties
 3. **SCSS สำหรับ logic ที่ซับซ้อน** — loops, mixins, functions, variables
 4. **css.entries สำหรับไฟล์นอก app/** — shared styles, npm packages, project-level CSS
-5. **HMR ช่วยให้แก้ style ได้เร็ว** — แก้ SCSS → browser อัพเดตทันทีโดยไม่ reload
+5. **HMR ช่วยให้แก้ style ได้เร็ว** — การเปลี่ยน CSS/SCSS ที่อยู่ในเส้นทาง HMR อาจอัปเดต style
+   โดยไม่ reload; การเปลี่ยน layout, route หรือไฟล์ที่กระทบ dependency อาจทำให้ full reload
 6. **ใช้ Tailwind เมื่อต้องการ utility-first** — ใช้ `@import "tailwindcss"` ใน entry CSS
 7. **ระวัง `@import` (deprecated)** — ใช้ `@use` แทนเสมอ
 

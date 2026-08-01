@@ -179,14 +179,14 @@ plugin ของคุณเอง ระบบ plugin รองรับทั�
 
 ### Built-in vs TypeScript Plugins
 
-| ลักษณะ         | Built-in (Rust)                   | TypeScript (Worker)              |
-| -------------- | --------------------------------- | -------------------------------- |
-| ภาษา           | Rust                              | TypeScript/JavaScript            |
-| Performance    | เร็วที่สุด — zero overhead        | มี latency จาก IPC               |
-| ใช้เมื่อ       | ทั่วไป — redirects, headers       | custom logic, complex hooks      |
-| ลงทะเบียน      | ชื่อ string → `name: 'redirects'` | npm package หรือ inline function |
-| Socket         | ไม่ต้อง                           | ใช้ socket registry              |
-| Response limit | ไม่มี                             | 32 MiB default, 256 MiB max      |
+| ลักษณะ         | Built-in (Rust)                                           | TypeScript (Worker)                               |
+| -------------- | --------------------------------------------------------- | ------------------------------------------------- |
+| ภาษา           | Rust                                                      | TypeScript/JavaScript                             |
+| Performance    | ใช้ native path ใน process เดียวกัน; ไม่มี benchmark กลาง | ทำงานผ่าน worker bridge; latency ขึ้นกับ workload |
+| ใช้เมื่อ       | ทั่วไป — redirects, headers                               | custom logic, complex hooks                       |
+| ลงทะเบียน      | ชื่อ string → `name: 'redirects'`                         | npm package หรือ inline function                  |
+| Socket         | ไม่ต้อง                                                   | ใช้ socket registry                               |
+| Response limit | ไม่มี                                                     | 32 MiB default, 256 MiB max                       |
 
 ### Socket Registry — การสื่อสารระหว่าง Rust และ JS
 
@@ -245,14 +245,16 @@ Rust Server                    Plugin Worker
 - middleware: 30s (configurable via `middleware.timeoutMs`)
 - ping: 2s
 
-ถ้า worker ไม่ตอบกลับภายใน timeout → RUV1502 (Worker Timeout)
+ถ้า TypeScript plugin worker หรือ hook ไม่ตอบกลับภายใน timeout ให้ตรวจ error ที่ source รายงาน โดย
+timeout ของ plugin host ใช้ `RUV1700`; ไม่ควรใช้ `RUV1502` เป็นรหัส timeout ปัจจุบัน
 
 ---
 
 ## Built-in Plugins (16 ตัว)
 
-Built-in plugins ทำงานใน Rust — ไม่ต้องเรียก JS runtime, ไม่มี IPC overhead แค่ระบุชื่อใน `plugins`
-array ของ config
+ตัวอย่างด้านล่างเป็น historical draft เท่านั้น Built-in plugin factory และ plugin worker bridge มี
+execution path ต่างกันตาม factory/hook; source ไม่รับรองว่าไม่มี IPC overhead หรือมี performance
+เท่ากันทุก plugin ให้ใช้ current production contract ด้านบนเป็นหลัก
 
 ### 1. `redirects` — URL Redirection
 
@@ -1533,14 +1535,14 @@ export default definePlugin<MyPluginOptions>('my-plugin', (options = {}) => {
 
 ### Plugin Response Limits
 
-| ขีดจำกัด                               | ค่า Default | Max      | Error   |
-| -------------------------------------- | ----------- | -------- | ------- |
-| Response body size (plugin middleware) | 32 MiB      | 256 MiB  | RUV1602 |
-| Hook timeout (onTransform)             | 30s         | 300s     | RUV1602 |
-| Hook timeout (onResolve)               | 5s          | 30s      | RUV1602 |
-| Worker count                           | 1           | 8        | RUV1602 |
-| Socket message size                    | 1 MiB       | 16 MiB   | RUV1503 |
-| Plugin name length                     | —           | 64 chars | RUV1601 |
+| ขีดจำกัด                               | ค่า Default | Max                              | Error        |
+| -------------------------------------- | ----------- | -------------------------------- | ------------ |
+| Response body size (plugin middleware) | 32 MiB      | 256 MiB                          | RUV1602      |
+| Hook timeout (onTransform)             | 30s         | 300s                             | RUV1602      |
+| Hook timeout (onResolve)               | 5s          | 30s                              | RUV1602      |
+| Worker count                           | 1           | 8                                | RUV1602      |
+| Socket message size                    | 1 MiB       | 16 MiB                           | RUV1503      |
+| Plugin name length                     | —           | source ไม่กำหนดเป็น public limit | ไม่ระบุ code |
 
 **การปรับค่า**:
 
@@ -2021,10 +2023,10 @@ export default definePlugin<S3Options>('s3-upload', (options) => ({
 | onResponse ไม่มีผล        | —                 | ต้อง return response object   | `return { response: { headers: {...} } }`                        |
 | Head ไม่แสดง              | —                 | Head contribution ไม่ถูกเรียก | ตรวจ `head` array syntax                                         |
 | Plugin ordering ผิด       | —                 | เข้าใจผิดเรื่อง priority      | onRequest → array order, onResponse → reverse                    |
-| Socket timeout            | RUV1502           | Plugin ทำงานนานเกิน 30s       | เพิ่ม `middleware.timeoutMs` หรือ optimize                       |
+| Socket timeout            | RUV1700           | Plugin hook ทำงานเกิน timeout | ตรวจ `middleware.timeoutMs` และลดงานใน hook                      |
 | Multiple plugins conflict | —                 | สอง plugin แก้ไขสิ่งเดียวกัน  | เปลี่ยนลำดับหรือ merge logic                                     |
 
-### RUV1601 — Plugin Config Invalid
+### RUV1602 — Plugin Config Shape Invalid
 
 เกิดเมื่อ plugin options มีค่าผิด:
 
@@ -2134,14 +2136,13 @@ hooks: {
 
 ## Error Codes (RUV1600-1699, RUV2000-2102)
 
-| Code    | Title                        | Source           | Fix                           |
-| ------- | ---------------------------- | ---------------- | ----------------------------- |
-| RUV1600 | Plugin boundary violation    | Plugin host      | Fix server/client boundary    |
-| RUV1601 | Plugin hook timeout          | Plugin host      | Reduce work or increase limit |
-| RUV1700 | Plugin hook failed           | Plugin runtime   | Inspect the hook error        |
-| RUV1701 | Plugin bridge/protocol error | Plugin runtime   | Inspect the plugin response   |
-| RUV2102 | Invalid plugin definition    | `definePlugin()` | Return a valid plugin object  |
-| RUV2103 | Font self-hosting warning    | `fonts()` plugin | Check the font URL/network    |
+| Code         | Title                               | Source           | Fix                                     |
+| ------------ | ----------------------------------- | ---------------- | --------------------------------------- |
+| RUV1007-1010 | Plugin boundary violation           | Graph/bundler    | Fix the reported server/client boundary |
+| RUV1700      | Plugin hook timeout or host failure | Plugin runtime   | Inspect the hook error and timeout      |
+| RUV1701      | Plugin bridge/protocol error        | Plugin runtime   | Inspect the plugin response             |
+| RUV2102      | Invalid plugin definition           | `definePlugin()` | Return a valid plugin object            |
+| RUV2103      | Font self-hosting warning           | `fonts()` plugin | Check the font URL/network              |
 
 ---
 

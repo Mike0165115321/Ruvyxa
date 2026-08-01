@@ -61,7 +61,7 @@ struct SourceSpan {
 
 ## Documented Error Catalog (source-confirmed entries)
 
-### RUV1000–1099: Boundary Violations
+### RUV1001–1099: Boundary Violations
 
 Fire when crossing server/client boundary illegally. Detected by the bundler during module graph
 analysis.
@@ -1432,7 +1432,7 @@ In production, errors return HTTP 500 or show `error.tsx` fallback. The overlay 
 | Slow page loads            | RUV1100 (SSR render slow)                        | Optimize component, reduce data fetching |
 | 404 for existing route     | Route not exported                               | Check route naming, file location        |
 | 500 on form submit         | RUV1500 (action error)                           | Check action code, add error handling    |
-| Plugin not running         | RUV1601 (config invalid)                         | Check plugin configuration               |
+| Plugin not running         | RUV1602 (plugin/config shape invalid)            | Check plugin configuration               |
 
 ### During `ruvyxa build`
 
@@ -1473,21 +1473,16 @@ In production, errors return HTTP 500 or show `error.tsx` fallback. The overlay 
 ```
 Range       Category          Where to look
 ──────────  ────────────────  ──────────────────────
-RUV1000     Boundary          03-server-client-components.md
+RUV1001     Route discovery   03-server-client-components.md
+RUV1007     Boundary          bundler boundary check
 RUV1010     Boundary          bundler boundary check
-RUV1100     SSR               render_pipeline.rs
-RUV1200     API / Port        render_pipeline.rs, port_binding.rs
-RUV1300     Build             compiler.mjs, render_pipeline.rs
-RUV1311     MDX               compiler.mjs
-RUV1400     Style             style.rs
-RUV1500     Render / SSG      render_pipeline.rs, worker-pool.mjs
-RUV1510     Static params     worker-pool.mjs
-RUV1550     PPR               render_pipeline.rs
-RUV1600     Config            config.rs, runtime_config.rs, config-renderer.mjs
-RUV1700     Plugin host       plugin_host.rs, worker_pool.rs
-RUV1800     Compiler          compiler.mjs
-RUV2000     Adapter           @ruvyxa/core/utils.ts
-RUV2102     Plugin def        @ruvyxa/core/plugin.ts
+RUV1101     SSR               ssr-renderer.mjs
+RUV1205     Prerender         prerender.rs
+RUV1400     Style             dev_server style path
+RUV1550     PPR               dev_server render path
+RUV1600-1603 Config            config renderer and CLI validation
+RUV1700-1701 Plugin host       middleware plugin bridge
+RUV2200-2203 Adapter           adapter runner
 RUV2200     Adapter build     runtime_config.rs, adapter-runner.mjs
 RUV3001     Database          15-official-packages.md
 RUV3100     Auth              15-official-packages.md
@@ -1588,7 +1583,7 @@ direction without requiring sensitive data.
 ## Error Code Ranges
 
 ```
-RUV1000-1099  →  Boundary / Graph      — server/client boundary, env leak, route discovery
+RUV1001-1099  →  Boundary / Graph      — server/client boundary, env leak, route discovery
 RUV1100-1199  →  SSR / Render           — React SSR, renderer discovery
 RUV1200-1299  →  API / Server Runtime   — API route, port binding, renderer
 RUV1300-1399  →  Bundle / Compilation   — hydration bundling, client route, MDX

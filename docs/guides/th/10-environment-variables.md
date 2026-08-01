@@ -788,28 +788,23 @@ function scanForEnvViolations(sourceCode: string, filePath: string): Violation[]
 
 ### Thresholds
 
-| Detection Method                             | Coverage                                    |
-| -------------------------------------------- | ------------------------------------------- |
-| Static AST scan                              | `process.env.X`, `import.meta.env.X` — 100% |
-| Dynamic access `process.env[X]`              | พบบางส่วน (แนะนำให้ใช้ static string)       |
-| String interpolation `env['X']`              | ครอบคลุม (ต้องเป็น string literal)          |
-| Re-exported vars `const db = process.env.DB` | 100% (trace ถึงต้นทาง)                      |
+| Detection Method                             | Coverage                                                    |
+| -------------------------------------------- | ----------------------------------------------------------- |
+| Static AST scan                              | Source-confirmed names only; no coverage percentage claimed |
+| Dynamic access `process.env[X]`              | พบบางส่วน (แนะนำให้ใช้ static string)                       |
+| String interpolation `env['X']`              | ครอบคลุม (ต้องเป็น string literal)                          |
+| Re-exported vars `const db = process.env.DB` | ไม่รับรอง coverage percentage                               |
 
 ---
 
 ## Allowed Client Variables — รายการทั้งหมด
 
-| ตัวแปร                     | ชนิด                                      | Example                     | ใช้ใน client |
-| -------------------------- | ----------------------------------------- | --------------------------- | ------------ |
-| `NODE_ENV`                 | `'development' \| 'production' \| 'test'` | `'production'`              | ✅           |
-| `RUVYXA_PUBLIC_*`          | `string`                                  | `'https://api.example.com'` | ✅           |
-| `PUBLIC_*`                 | `string`                                  | `'pk_test_xxxx'`            | ✅ (compat)  |
-| `NEXT_PUBLIC_*`            | `string`                                  | `'https://api.example.com'` | ✅ (compat)  |
-| `VITE_*`                   | `string`                                  | `'https://api.example.com'` | ✅ (compat)  |
-| `import.meta.env.MODE`     | `string`                                  | `'development'`             | ✅           |
-| `import.meta.env.DEV`      | `boolean`                                 | `true`                      | ✅           |
-| `import.meta.env.PROD`     | `boolean`                                 | `false`                     | ✅           |
-| `import.meta.env.BASE_URL` | `string`                                  | `'/'`                       | ✅           |
+| ตัวแปร                                | ชนิด                                      | Example                     | ใช้ใน client |
+| ------------------------------------- | ----------------------------------------- | --------------------------- | ------------ |
+| `NODE_ENV`                            | `'development' \| 'production' \| 'test'` | `'production'`              | ✅           |
+| `RUVYXA_PUBLIC_*`                     | `string`                                  | `'https://api.example.com'` | ✅           |
+| `PUBLIC_*`, `NEXT_PUBLIC_*`, `VITE_*` | ไม่ใช่ current alias                      | —                           | ❌           |
+| `import.meta.env.*`                   | ไม่ใช่ current API                        | —                           | ❌           |
 
 ---
 

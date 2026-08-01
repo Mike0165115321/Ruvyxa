@@ -24,7 +24,7 @@ Server (Ruvyxa)
     ├── 6. เรียก input.parse(value) — validate
     ├── 7. execute handler
     ├── 8. invalidate cache
-    ├── 9. publish realtime event (ถ้ามี)
+    ├── 9. publish WebSocket realtime event เมื่อใช้ `.realtime(...)`
     ├── 10. return result → JSON response
     ▼
 Client ได้ผลลัพธ์
@@ -499,7 +499,9 @@ fn allow(key: &str) -> bool {
 
 ## Real-time Actions
 
-Action สามารถ publish realtime events ผ่าน WebSocket/SSE ได้ทันทีหลัง execution สำเร็จ
+Action สามารถประกาศ realtime event ผ่าน WebSocket หลัง execution สำเร็จเมื่อใช้ `.realtime(...)` ตาม
+action API ปัจจุบัน เอกสารนี้ไม่รับรอง SSE เพราะ source ปัจจุบันไม่มี SSE endpoint และการส่ง event
+เป็นการส่งผ่าน runtime ไม่ใช่คำรับประกันเวลา delivery แบบทันที
 
 ### การใช้งาน
 
@@ -1121,8 +1123,9 @@ export function DisplayCount() {
 ## Contract ของ Action Builder
 
 Server-action API ที่รองรับคือ builder จาก `@ruvyxa/core/server` ซึ่งแยกการตัดสินใจเป็น 3 ส่วน:
-validation ของ input (เลือกใช้ได้), การ publish realtime (เลือกใช้ได้) และ server handler schema
-ต้องมีเพียงเมทอด `parse(value)` จึงไม่บังคับให้ใช้ validation library ใด library หนึ่ง
+validation ของ input (เลือกใช้ได้), การ publish WebSocket realtime event (เลือกใช้ได้) และ server
+handler schema ต้องมีเพียงเมทอด `parse(value)` จึงไม่บังคับให้ใช้ validation library ใด library
+หนึ่ง
 
 ```ts
 import { action } from '@ruvyxa/core/server'

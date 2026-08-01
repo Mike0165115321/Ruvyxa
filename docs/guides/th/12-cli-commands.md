@@ -543,10 +543,11 @@ ruvyxa plugin create --help
 
 ## Under the Hood: CLI Diagnostics
 
-All CLI commands are deeply integrated with the Ruvyxa Diagnostics Engine. For example, running
-`ruvyxa analyze` will perform AST scans across your project and emit `RUV1000` boundary errors if
-you illegally import a server module into a client component. The `ruvyxa doctor` command evaluates
-the integrity of your chosen deployment adapter and verifies platform capabilities.
+CLI commands แสดง diagnostics จาก route graph และ bundler ตัวอย่างเช่น `ruvyxa analyze` สามารถรายงาน
+รหัส boundary ที่ยืนยันจาก source ได้แก่ `RUV1007` (`server-only` เข้า client graph), `RUV1008`
+(private environment variable ใน client graph), `RUV1009` (`client-only` ถูกเรียกจาก server graph)
+และ `RUV1010` (โมดูลใน `server/` เข้า client graph) โดยรหัสที่ได้ขึ้นอยู่กับกฎที่ละเมิด ไม่ควรถือว่า
+ส่วน `ruvyxa doctor` ตรวจ adapter ที่เลือกและ capability ที่ adapter รายงาน
 
 ### Full CLI Capabilities
 

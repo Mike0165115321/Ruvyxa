@@ -552,7 +552,8 @@ const settings: RuvyxaConfig = {
   },
 
   // ─── Adapter ──────────────────────────────────────────────────
-  adapter: undefined, // node | bun | static | vercel | netlify | cloudflare | railway | render | firebase | aws
+  // Named adapters are selected with `ruvyxa build --adapter <name>`; config.adapter is an object.
+  adapter: undefined,
   adapterOptions: {},
   plugins: [],
 }
@@ -1171,7 +1172,8 @@ export default function HomePage() {
 }
 ```
 
-กดบันทึก (Save) เบราว์เซอร์จะทำการอัปเดตแบบทันทีทันใด นี่คือการทำงานของ HMR
+กดบันทึก (Save) ระบบจะส่ง HMR update เมื่อการเปลี่ยนแปลงอยู่ในเส้นทางที่รองรับ หากการเปลี่ยนแปลง
+กระทบ layout, route หรือ dependency ที่ติดตามอยู่ ระบบอาจทำ full reload ตาม HMR tracker
 
 ---
 
@@ -1198,8 +1200,8 @@ export default function AboutPage() {
 }
 ```
 
-เข้าไปที่ URL **http://localhost:3000/about**
-หน้าเพจใหม่จะทำงานทันทีโดยไม่ต้องทำการรีสตาร์ตเซิร์ฟเวอร์ใดๆ
+เข้าไปที่ URL **http://localhost:3000/about** หลัง dev server ประมวลผล route ใหม่แล้ว
+หน้าเพจจึงจะพร้อมใช้งาน การค้นพบ route ใหม่อาจทำให้เกิด reload หรือการ rebuild ตามสถานะของ watcher
 
 ---
 
@@ -1226,7 +1228,8 @@ export default function BlogList() {
 }
 ```
 
-เมื่อคุณเปิดเบราว์เซอร์ไปที่ `/blog` คุณจะเห็นหน้านี้ปรากฏขึ้นทันที
+เมื่อคุณเปิดเบราว์เซอร์ไปที่ `/blog` หลัง dev server ค้นพบและประมวลผลไฟล์แล้ว คุณจะเห็นหน้านี้
+ตามเส้นทางที่ route และ HMR tracker รองรับ
 
 ### 2. ดึงข้อมูล (Server Components)
 

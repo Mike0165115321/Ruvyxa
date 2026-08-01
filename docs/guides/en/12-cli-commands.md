@@ -560,10 +560,12 @@ Use command-specific help before putting a command in a script. In particular, `
 
 ## Under the Hood: CLI Diagnostics
 
-All CLI commands are deeply integrated with the Ruvyxa Diagnostics Engine. For example, running
-`ruvyxa analyze` will perform AST scans across your project and emit `RUV1000` boundary errors if
-you illegally import a server module into a client component. The `ruvyxa doctor` command evaluates
-the integrity of your chosen deployment adapter and verifies platform capabilities.
+CLI commands surface diagnostics from the route graph and bundler. For example, `ruvyxa analyze` can
+report the source-confirmed boundary codes `RUV1007` (`server-only` reachable from a client graph),
+`RUV1008` (private environment variable in a client graph), `RUV1009` (`client-only` reached from a
+server graph), and `RUV1010` (a `server/` module reached from a client graph). The exact code
+depends on the violated rule; the list above is the current boundary-code set used by the analyzer.
+The `ruvyxa doctor` command evaluates the selected deployment adapter and its reported capabilities.
 
 ### Full CLI Capabilities
 

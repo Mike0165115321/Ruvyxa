@@ -1111,6 +1111,10 @@ describe('POST /api/users', () => {
 
 ### Server-Sent Events (SSE)
 
+Ruvyxa does not provide a dedicated SSE API. This example uses the generic streamed `Response` body
+supported by the worker protocol and formats the chunks as SSE. Verify that the selected adapter and
+hosting proxy allow long-lived streaming responses; this is not a framework-wide delivery guarantee.
+
 ```ts
 // app/api/events/route.ts
 export async function GET() {
