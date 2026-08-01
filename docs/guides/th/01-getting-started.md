@@ -493,6 +493,7 @@ declare module '*.module.sass' {
 | `trace`       | `ruvyxa trace`       | ดู route manifest entry                               |
 | `bench`       | `ruvyxa bench`       | ทดสอบ route discovery + build                         |
 | `test:parity` | `ruvyxa test:parity` | เปรียบเทียบ routes dev/prod                           |
+| `plugin`      | `ruvyxa plugin`      | จัดการและสร้างโครงสร้างของ plugin                     |
 
 ---
 

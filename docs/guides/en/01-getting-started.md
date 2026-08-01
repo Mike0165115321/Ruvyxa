@@ -431,6 +431,7 @@ Every Ruvyxa project comes with these scripts:
 | `trace`       | `ruvyxa trace`       | `npx ruvyxa trace`       | Inspect one route-manifest entry                  |
 | `bench`       | `ruvyxa bench`       | `npx ruvyxa bench`       | Benchmark discovery, analysis, and build          |
 | `test:parity` | `ruvyxa test:parity` | `npx ruvyxa test:parity` | Compare dev/prod routes and smoke-render pages    |
+| `plugin`      | `ruvyxa plugin`      | `npx ruvyxa plugin`      | Manage and scaffold plugins                       |
 
 ### Dependencies
 
