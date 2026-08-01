@@ -502,7 +502,7 @@ other modules.
 All three approaches support Hot Module Replacement:
 
 1. **Edit** a `.css`, `.scss`, `.module.css`, or `.module.scss` file
-2. **Save** — the browser updates styles instantly
+2. **Save** — the development server attempts to update styles through its HMR path
 3. **No page refresh** — no state loss, no flash
 
 ### HMR Conditions
@@ -802,11 +802,11 @@ fn escape_style_end_tags(css) -> String:
 
 | Operation           | Overhead           | Notes                        |
 | ------------------- | ------------------ | ---------------------------- |
-| Sass compilation    | Per file, cached   | Grass Rust compiler — fast   |
-| CSS Module hashing  | Per class name     | FNV-1a 64-bit — ~ns per hash |
+| Sass compilation    | Per file, cached   | Rust-based compilation path  |
+| CSS Module hashing  | Per class name     | FNV-1a 64-bit deterministic hash |
 | Style collection    | Walk import graph  | Cached until invalidated     |
 | CSS minification    | O(n) over CSS size | Conservative — no AST        |
-| HMR style swap      | ~1ms               | WebSocket push + DOM update  |
+| HMR style swap      | Depends on file, browser, and connection | WebSocket push + DOM update |
 | File system watcher | Per changed path   | BTreeSet lookup              |
 
 ### CSS Module Overhead
@@ -823,7 +823,7 @@ CSS Modules add a small per-class overhead:
 There is no hard limit on CSS file size. However, large CSS files impact:
 
 - Style collection time (proportional to file count + size)
-- Bundle size (minification reduces ~30-50%)
+- Bundle size (depends on the input, imports, and minifier configuration; measure the build output)
 - Inline style tag size (inlined in HTML)
 
 For very large stylesheets (>100 KiB), consider:
@@ -945,7 +945,7 @@ cause caching issues and SSR hydration errors.
 | Print styles, third-party CSS        | `css.entries` config                 |
 | Tailwind utility classes             | Tailwind via `@import "tailwindcss"` |
 | Design system with tokens            | SCSS variables in partials           |
-| Micro-frontends or shared components | CSS Modules (guaranteed isolation)   |
+| Micro-frontends or shared components | CSS Modules (scoped class names reduce collisions) |
 
 ---
 
@@ -1116,25 +1116,26 @@ export function ThemeToggle() {
 }
 ```
 
-## Critical CSS Extraction
+## CSS collection and inlining
 
-For production, extract above-the-fold CSS for faster initial paint:
+Ruvyxa collects the stylesheets reached by the application imports and configured CSS entries, then
+places the collected stylesheet in a `style[data-ruvyxa-css]` element in rendered documents. This
+is stylesheet collection and inlining; it is not an above-the-fold critical-CSS extractor.
 
-```ts
-// ruvyxa.config.ts (conceptual — manual extraction pattern)
-export default config({
-  build: {
-    // CSS is inlined in <style> tags by default
-    // No additional config needed for critical CSS
-  },
-})
+```text
+imported CSS/SCSS + css.entries
+          │
+          ▼
+collect_styles() → preprocess, resolve imports, scope modules
+          │
+          ▼
+<style data-ruvyxa-css>…all collected CSS…</style>
 ```
 
-Ruvyxa inlines all CSS into `<style>` tags in the `<head>`, which means:
-
-- **No render-blocking CSS requests** — styles are available immediately
-- **No flash of unstyled content (FOUC)** — styles load with HTML
-- **Automatic critical CSS** — every page has exactly the styles it needs
+The resulting HTML does not establish a universal performance score, eliminate every possible
+FOUC, or guarantee that only visible-above-the-fold rules are included. If a project needs
+critical-CSS extraction, run and measure a separate, application-specific tool after verifying that
+it preserves the framework's style and hydration behavior.
 
 ## CSS Animation Performance
 

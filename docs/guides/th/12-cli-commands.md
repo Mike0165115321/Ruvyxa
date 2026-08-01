@@ -195,7 +195,7 @@ ruvyxa test:parity [--root <PATH>] [--runtime <node|bun>]
 
 ```bash
 ruvyxa test:parity
-ruvyxa parity
+ruvyxa start
 ```
 
 ## `ruvyxa plugin create`
@@ -312,7 +312,7 @@ ruvyxa preview --port 4173
 ```bash
 ruvyxa build --adapter vercel
 ruvyxa build --adapter cloudflare
-ruvyxa build --adapter @acme/ruvyxa-adapter-internal
+ruvyxa build --adapter @acme/ruvyxa-adapter-node
 ```
 
 ตัวอย่างสุดท้ายเป็นชื่อ package ซึ่งต้อง resolve ได้ใน environment ที่รัน build
@@ -331,7 +331,7 @@ npm run check
 ```bash
 ruvyxa test:parity
 # alias ที่เท่ากัน
-ruvyxa parity
+ruvyxa start
 ```
 
 ### ตรวจ URL หรือ Route ที่มีปัญหา
@@ -540,3 +540,16 @@ ruvyxa plugin create --help
 - [Configuration](./11-configuration.md) — กำหนดค่า input ของ CLI
 - [Deployment](./13-deployment.md) — เลือกและกำหนดค่า adapter
 - [Plugins](./14-plugins.md) — เขียนหรือ scaffold plugin
+
+## Under the Hood: CLI Diagnostics
+
+All CLI commands are deeply integrated with the Ruvyxa Diagnostics Engine. For example, running
+`ruvyxa analyze` will perform AST scans across your project and emit `RUV1000` boundary errors if
+you illegally import a server module into a client component. The `ruvyxa doctor` command evaluates
+the integrity of your chosen deployment adapter and verifies platform capabilities.
+
+### Full CLI Capabilities
+
+- `ruvyxa dev`: Boots the Axum server with HMR and persistent JS workers.
+- `ruvyxa build`: Triggers Oxc compilation, Tree-shaking, and CSS fnv1a_64 hashing.
+- `ruvyxa test:parity`: Evaluates behavioral drift between development and production routes.

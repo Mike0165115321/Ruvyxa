@@ -561,7 +561,7 @@ ISR Flow:
 
   Request #1 (t=0s):
     ┌─ Cache empty? → Render page → Store in cache → Serve
-    └─ Cache fresh? → Serve cached (instant)
+    └─ Cache fresh? → Serve cached response
 
   Request #2 (t=65s, TTL expired):
     ┌─ Cache stale? → Serve stale HTML immediately
@@ -574,7 +574,7 @@ ISR Flow:
 
 The cache uses a **stale-while-revalidate** pattern:
 
-- Within `revalidate` seconds: serve cached HTML (instant)
+- Within `revalidate` seconds: serve cached HTML
 - After `revalidate` seconds: serve stale HTML, re-render in background
 - Once re-render completes: update cache
 
@@ -1038,7 +1038,9 @@ If a page exports `getStaticParams` but reachable code contains `fetch(`, the ro
 
 ## Best Practices
 
-1. **Default to SSG.** Most pages can be static. Only add `revalidate` or SSR when needed.
+1. **Prefer SSG for eligible pages.** The framework's automatic detector still defaults to SSR
+   when a route is dynamic or cannot be proven static; choose SSG deliberately when the route and
+   its reachable dependencies are static.
 
 2. **Use ISR for content that changes.** Blog posts, docs, marketing pages — these are perfect for
    ISR.

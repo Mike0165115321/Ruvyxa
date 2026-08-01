@@ -426,11 +426,11 @@ export default function IsrPage() {
 เวลา        Event
 ──────────────────────────────────────────
 T+0s       Request 1 → render → cache
-T+10s      Request 2 → เสิร์ฟจาก cache (instant)
+T+10s      Request 2 → เสิร์ฟจาก cache
 T+45s      Request 3 → เสิร์ฟจาก cache
 T+70s      Request 4 → เสิร์ฟ cache (stale) + background refresh เริ่ม
 T+70.1s    background render → cache ใหม่
-T+75s      Request 5 → เสิร์ฟ cache ใหม่ (instant)
+T+75s      Request 5 → เสิร์ฟ cache ใหม่
 ```
 
 ### อัลกอริทึมละเอียด
@@ -451,7 +451,7 @@ request เข้ามาที่ /isr-page
     │         │
     ▼         ▼
  serve cache    เสิร์ฟ cache (stale)
- (instant)     + เริ่ม background job
+               + เริ่ม background job
                 เพื่อ render cache ใหม่
 ```
 
@@ -862,13 +862,13 @@ PPR shell:       /ppr-page → prerender/ppr-page/index.html + ppr-shell.json
 | PPR     | build + request | ✅ ต้องมี      | ✅ streaming | ✅ ดี  | product page, feeds   |
 | CSR     | browser         | ❌ ไม่ต้อง     | ✅ เต็มที่   | ❌ แย่ | admin, editor         |
 
-| กลยุทธ์ | TTFB                   | Time-to-Interactive | ข้อมูลที่ได้             |
-| ------- | ---------------------- | ------------------- | ------------------------ |
-| SSG     | instant (<1ms)         | instant             | data ตอน build           |
-| SSR     | request time-dependent | หลัง hydration      | data real-time           |
-| ISR     | instant (cache)        | instant (ถ้า cache) | data ตอน last revalidate |
-| PPR     | instant (shell)        | หลัง stream เสร็จ   | shell + streaming        |
-| CSR     | instant (shell)        | หลัง JS render      | data ตอน fetch           |
+| กลยุทธ์ | TTFB                                  | Time-to-Interactive   | ข้อมูลที่ได้        |
+| ------- | ------------------------------------- | --------------------- | ------------------- |
+| SSG     | ขึ้นกับ host/network                  | ขึ้นกับ client        | data ตอน build      |
+| SSR     | ขึ้นกับ request/runtime               | หลัง hydration        | data ตอน request    |
+| ISR     | ขึ้นกับ cache/refresh                 | ขึ้นกับ client        | data ตอน revalidate |
+| PPR     | shell ก่อน ส่วนที่เหลือขึ้นกับ stream | หลัง stream/hydration | shell + streaming   |
+| CSR     | shell จาก browser                     | หลัง JS render        | data ตอน fetch      |
 
 ---
 

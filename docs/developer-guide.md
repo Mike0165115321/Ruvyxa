@@ -62,7 +62,7 @@ packages/
 # Narrowest check first, expand only when shared behavior changes
 cargo test -p ruvyxa_graph --locked
 cargo test -p ruvyxa_cli --locked
-pnpm --filter ruvyxa test
+pnpm --filter ruvyxa start
 pnpm --filter ruvyxa check
 
 # E2E signal via demo

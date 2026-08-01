@@ -4,16 +4,18 @@ Every Ruvyxa project has a `ruvyxa.config.ts` file at its root. This file is you
 it tells the framework where your app lives, how to build it, how to render pages, and how to
 deploy.
 
-This chapter is the complete reference. Every field, every default, every validation rule, every
-Rust struct mapping.
+This chapter documents the configuration fields and validation rules currently exposed by the
+repository. When a field is not listed in the source-backed section, treat it as unsupported until
+the relevant type and Rust parser confirm it.
 
 ---
 
 ## What You Will Learn
 
 - The full config object structure
-- Every field with its TypeScript type, Rust type, default, validation, and behavior
-- Configuration validation rules (RUV1600-1602)
+- The supported fields with their TypeScript type, Rust mapping, defaults where resolved by source,
+  validation, and behavior
+- Configuration validation rules (RUV1600-RUV1603 in the current config path)
 - Rust `ProjectConfig` struct field mapping for every field
 - How to customize server, build, render, cache, image, security, middleware, and plugins
 - Plugin and adapter configuration
@@ -33,8 +35,8 @@ export default config({
 })
 ```
 
-The `config()` function provides autocomplete and validation. Unknown fields produce a type error
-and a runtime RUV1200 warning.
+The `config()` function provides autocomplete and validation. Unknown fields are rejected by the
+config renderer with `RUV1602`; they are not a runtime `RUV1200` warning.
 
 ### Config Loading Flow
 
@@ -145,7 +147,7 @@ type RuvyxaConfig = {
 
 ## Rust ProjectConfig Struct Mapping
 
-The full Rust struct lives at `crates/ruvyxa_cli/src/main.rs`:
+The full Rust config structs live in `crates/ruvyxa_cli/src/config.rs`:
 
 ```rust
 #[derive(Debug, Default, Deserialize)]
@@ -270,12 +272,12 @@ server: {
 } // custom
 ```
 
-| Property     | Value                                                                                                 |
-| ------------ | ----------------------------------------------------------------------------------------------------- |
-| TS type      | `number`                                                                                              |
-| Rust field   | `port: Option<u16>`                                                                                   |
-| Rust default | `None` -> renders as `3000`                                                                           |
-| Validation   | Must be between 1024 and 65535 (enforced by `u16` type; ports below 1024 require OS-level privileges) |
+| Property     | Value                                                                                                          |
+| ------------ | -------------------------------------------------------------------------------------------------------------- |
+| TS type      | `number`                                                                                                       |
+| Rust field   | `port: Option<u16>`                                                                                            |
+| Rust default | `None` -> renders as `3000`                                                                                    |
+| Validation   | Parsed as `u16`; the framework does not impose a 1024 minimum. Binding failures are reported by the OS/server. |
 
 ---
 
@@ -833,7 +835,7 @@ security: {
 | TS type           | `number`                                                                 |
 | Rust field        | `action_body_limit_bytes: Option<usize>`                                 |
 | Default           | not specified in code (validated by `validate_bounded_limit`)            |
-| Validation        | Must be > 0, max `MAX_ACTION_BODY_LIMIT_BYTES` (10,485,760 = 10 MB)      |
+| Validation        | Must be > 0, max `MAX_ACTION_BODY_LIMIT_BYTES` (16,777,216 = 16 MiB)     |
 | Error on 0        | `RUV1601: config field 'security.actionLimit' must be greater than zero` |
 | Error on too high | `RUV1602: config field 'security.actionLimit' must not exceed <max>`     |
 
@@ -1037,7 +1039,7 @@ adapter: 'vercel' // Deploy to Vercel
 adapter: 'netlify' // Deploy to Netlify
 adapter: 'node' // Any Node.js host
 adapter: 'static' // Static hosting
-adapter: '@scope/ruvyxa-adapter-deno' // Third-party adapter
+adapter: '@scope/ruvyxa-adapter-node' // Third-party adapter
 ```
 
 | Property           | Value                                                                                              |
@@ -1080,47 +1082,53 @@ Per-adapter options passed through to the adapter runner.
 
 ## Validation Rules — Complete Reference (Rust)
 
-### Error Codes RUV1600-RUV1699
+### Error Codes Used by the Current Config Path
 
-| Code    | Condition                  | Field                                     | Solution                  |
-| ------- | -------------------------- | ----------------------------------------- | ------------------------- |
-| RUV1601 | Invalid value              | Multiple fields                           | Check allowed values      |
-| RUV1602 | Value out of range         | Multiple fields                           | Adjust value within range |
-| RUV1603 | Unknown field              | Entire config                             | Check camelCase spelling  |
-| RUV1602 | Invalid config structure   | `plugins.name` duplicate or invalid field | Fix schema / plugin name  |
-| RUV1603 | Invalid adapter definition | Adapter missing valid `build(context)`    | Fix adapter contract      |
+The current config path emits `RUV1600` for config-loading failure, `RUV1601` for invalid values,
+`RUV1602` for invalid shape, unknown fields, and limit violations, and `RUV1603` for adapter
+definition/output failures. Do not infer that every number in the `RUV1600`-`RUV1699` range is
+implemented.
+
+| Code    | Condition                  | Field                                       | Solution                  |
+| ------- | -------------------------- | ------------------------------------------- | ------------------------- |
+| RUV1601 | Invalid value              | Multiple fields                             | Check allowed values      |
+| RUV1602 | Value out of range         | Multiple fields                             | Adjust value within range |
+| RUV1602 | Unknown field              | A config object contains an unsupported key | Check camelCase spelling  |
+| RUV1603 | Invalid config structure   | Adapter definition or output is invalid     | Fix the adapter contract  |
+| RUV1603 | Invalid adapter definition | Adapter missing valid `build(context)`      | Fix adapter contract      |
 
 ### Validation Matrix
 
-| Config Field                         | RUV1601     | RUV1602     | Notes                  |
-| ------------------------------------ | ----------- | ----------- | ---------------------- |
-| `appDir` empty/absolute              | ✅          | -           | relative path required |
-| `outDir` empty/absolute              | ✅          | -           | relative path required |
-| `server.port` 0                      | ✅          | ✅ (>65535) | 1024-65535             |
-| `server.host` invalid                | -           | ✅          | valid hostname/IP      |
-| `site.url` invalid                   | -           | ✅          | origin only            |
-| `site.sitemap.defaults.priority`     | -           | ✅ (0-1)    | float                  |
-| `build.parallelism` 0                | ✅          | ✅ (>64)    | 1-64                   |
-| `build.splitStrategy` invalid        | ✅          | -           | auto/route/vendor/all  |
-| `build.jsxRuntime` invalid           | ✅          | -           | automatic/classic      |
-| `build.esTarget` invalid             | ✅          | -           | es2020-esnext          |
-| `security.actionLimit` 0             | ✅          | ✅ (>10MB)  | 1B-10MB                |
-| `security.apiLimit` 0                | ✅          | ✅ (>50MB)  | 1B-50MB                |
-| `security.pluginLimit` 0             | ✅          | ✅ (>50MB)  | 1B-50MB                |
-| `security.maxBodySize` 0             | ✅          | ✅ (>100MB) | 1B-100MB               |
-| `security.trustedProxyIps[]` invalid | -           | ✅          | valid IP/CIDR          |
-| `security.actionRateLimit.max` 0     | ✅          | -           | ≥ 1                    |
-| `security.actionRateLimit.window` 0  | ✅          | -           | ≥ 1                    |
-| `middleware.workers` 0               | ✅          | ✅ (>8)     | 1-8                    |
-| `middleware.timeoutMs` 0             | ✅          | ✅ (>300s)  | 1ms-300s               |
-| `image.quality` out of range         | ✅ (0/100+) | -           | 1-100                  |
-| `image.avifQuality` out of range     | ✅ (0/100+) | -           | 1-100                  |
-| `image.sizes[]` 0                    | ✅          | ✅ (>10000) | 1-9999                 |
-| `image.formats` empty                | ✅          | -           | ≥ 1 format             |
-| `css.entries[]` absolute             | ✅          | -           | relative path          |
-| `cache.buildDir` absolute            | ✅          | -           | relative path          |
-| `adapter` unknown                    | ✅          | -           | See AdapterType        |
-| `plugins[].name` empty/duplicate     | ✅          | -           | unique, non-empty      |
+| Config Field                         | RUV1601     | RUV1602       | Notes                              |
+| ------------------------------------ | ----------- | ------------- | ---------------------------------- |
+| `appDir` empty/absolute              | ✅          | -             | relative path required             |
+| `outDir` empty/absolute              | ✅          | -             | relative path required             |
+| `server.port` outside `u16`          | ✅          | -             | Parsed as an unsigned 16-bit port  |
+| `server.host` invalid                | -           | ✅            | valid hostname/IP                  |
+| `site.url` invalid                   | -           | ✅            | origin only                        |
+| `site.sitemap.defaults.priority`     | -           | ✅ (0-1)      | float                              |
+| `build.workers` 0                    | ✅          | -             | must be greater than zero when set |
+| `build.split` invalid                | ✅          | -             | single/route/manual                |
+| `build.jsx` invalid                  | ✅          | -             | automatic/classic                  |
+| `build.target` invalid               | ✅          | -             | es2018-esnext                      |
+| `security.actionLimit` 0             | ✅          | ✅ (>16 MiB)  | 1B-16 MiB                          |
+| `security.apiLimit` 0                | ✅          | ✅ (>256 MiB) | 1B-256 MiB                         |
+| `security.pluginLimit` 0             | ✅          | ✅ (>256 MiB) | 1B-256 MiB                         |
+| `security.trustedProxyIps[]` invalid | -           | ✅            | valid IP/CIDR                      |
+| `security.actionRateLimit.max` 0     | ✅          | -             | ≥ 1                                |
+| `security.actionRateLimit.window` 0  | ✅          | -             | ≥ 1                                |
+| `middleware.workers` 0               | ✅          | ✅ (>8)       | 1-8                                |
+| `middleware.timeoutMs` 0             | ✅          | ✅ (>300s)    | 1ms-300s                           |
+| `image.quality` out of range         | ✅ (0/100+) | -             | WebP quality, 1-100                |
+| `image.optimize` invalid             | ✅          | -             | boolean                            |
+| `image.lossless` invalid             | ✅          | -             | boolean                            |
+| `image.keepOriginal` invalid         | ✅          | -             | boolean                            |
+| `image.variantWidths` invalid        | ✅          | -             | number array                       |
+| `image.workers` invalid              | ✅          | -             | number                             |
+| `css.entries[]` absolute             | ✅          | -             | relative path                      |
+| `cache.buildDir` absolute            | ✅          | -             | relative path                      |
+| `adapter` unknown                    | ✅          | -             | See AdapterType                    |
+| `plugins[].name` empty/duplicate     | ✅          | -             | unique, non-empty                  |
 
 ---
 
@@ -1163,21 +1171,21 @@ fn validate_paths(&self) -> anyhow::Result<()> {
 | `appDir`                          | Must exist, relative, non-empty        | RUV1601            | `RUV1601: appDir must be a project-relative path`                  |
 | `outDir`                          | Must be relative, non-empty            | RUV1601            | `RUV1601: outDir must be a project-relative path`                  |
 | `css.entries`                     | Each path relative, must exist         | RUV1601 / RUV1403  | `RUV1403: Configured CSS entry was not found`                      |
-| `server.port`                     | 1024-65535                             | CLI validation     | `port 80 is below minimum 1024`                                    |
+| `server.port`                     | Unsigned 16-bit value                  | Rust/OS bind       | Binding errors depend on the selected host and OS                  |
 | `image.quality`                   | 1-100                                  | Clamped by encoder | (no error, clamped)                                                |
 | `build.workers`                   | 0 or positive integer                  | RUV1601            | `build.workers must be greater than zero`                          |
 | `build.jsx`                       | `"automatic"` or `"classic"`           | RUV1601            | `build.jsxRuntime must be 'classic' or 'automatic'`                |
 | `build.target`                    | es2018, es2019, es2020, es2022, esnext | RUV1601            | `build.esTarget must be es2018, es2019, es2020, es2022, or esnext` |
 | `build.split`                     | `"single"`, `"route"`, or `"manual"`   | RUV1601            | `build.splitStrategy must be 'single', 'route', or 'manual'`       |
-| `security.actionLimit`            | > 0, max 10485760                      | RUV1601/1602       | `security.actionLimit must not exceed 10485760`                    |
-| `security.apiLimit`               | > 0, max 10485760                      | RUV1601/1602       | `security.apiLimit must not exceed 10485760`                       |
+| `security.actionLimit`            | > 0, max 16777216                      | RUV1601/1602       | `security.actionLimit must not exceed 16777216`                    |
+| `security.apiLimit`               | > 0, max 268435456                     | RUV1601/1602       | `security.apiLimit must not exceed 268435456`                      |
 | `security.pluginLimit`            | > 0, max 268435456                     | RUV1601/1602       | `security.pluginLimit must not exceed 268435456`                   |
 | `security.actionRateLimit.max`    | > 0                                    | RUV1601            | `security.actionRateLimit.max must be greater than zero`           |
 | `security.actionRateLimit.window` | > 0                                    | RUV1601            | `security.actionRateLimit.window must be greater than zero`        |
 | `security.trustedProxyIps`        | IPv4/IPv6 address or CIDR range        | RUV1602            | `RUV1602: trustedProxyIps contains invalid IP or CIDR range`       |
 | `middleware.workers`              | 1-MAX                                  | RUV1602            | `middleware.workers must be between 1 and <max>`                   |
 | `middleware.timeoutMs`            | 1-MAX                                  | RUV1602            | `middleware.timeoutMs must be between 1 and <max>`                 |
-| Unknown field                     | Not in struct                          | RUV1200            | `unknown config field "unknownField"`                              |
+| Unknown field                     | Not in struct                          | RUV1602            | `unknown config field "unknownField"`                              |
 | `appDir` not found                | Directory missing                      | RUV1001            | `App directory was not found`                                      |
 
 ---
@@ -1285,8 +1293,8 @@ Run `ruvyxa doctor` to validate your config against all rules:
    - Try sending a request larger than the limit
 
 3. **Image**
-   - Set `image.encoder.jpeg: 'guetzli'`
-   - Run `npm run build` → Observe the increased build time
+   - Set `image.quality`, `image.lossless`, or `image.variantWidths`
+   - Run `npm run build` and inspect the generated WebP assets
 
 4. **Middleware**
    - Enable CORS with origins `['https://example.com']`
@@ -1305,11 +1313,12 @@ Run `ruvyxa doctor` to validate your config against all rules:
 ## Summary
 
 - `ruvyxa.config.ts` is the central configuration file
-- `defineConfig()` provides type safety and auto-completion
-- Validation errors use codes RUV1600-RUV1699
+- `config()` provides type safety and auto-completion
+- Current config errors use RUV1600-RUV1603 as described in the validation section
 - Adapters can auto-detect from platform environment variables
-- 16 built-in plugins ready for use
-- Every field has a default value and validation
+- 16 built-in plugin builders are exported from `ruvyxa/plugins` in this release
+- Defaults and validation are documented only where the current type, renderer, or Rust parser
+  defines them
 - Backed by robust Rust validation
 - Use `npm run doctor` to inspect everything
 
@@ -1376,4 +1385,11 @@ adding an undocumented environment override.
 - [12-cli-commands.md](./12-cli-commands.md) -- CLI commands that consume this config
 - [13-deployment.md](./13-deployment.md) -- Deploy with adapter config
 - [14-plugins.md](./14-plugins.md) -- Configure plugins
-- [16-error-handling.md](./16-error-handling.md) -- Config error codes (RUV1600-1602)
+- [16-error-handling.md](./16-error-handling.md) -- Config error codes (RUV1600-RUV1603)
+
+## Diagnostics: Configuration Validation
+
+The `ruvyxa.config.ts` file is rendered to JSON and then parsed/validated by the CLI. The Rust
+config structs use `deny_unknown_fields`; an unsupported field such as `experimentalDocker` is
+rejected with the current config-renderer diagnostic (`RUV1602`). This prevents a typo from being
+silently treated as a supported setting.

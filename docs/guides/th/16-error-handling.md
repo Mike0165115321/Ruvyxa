@@ -3,8 +3,9 @@
 Ruvyxa ใช้ระบบ error codes แบบ `RUV####` เพื่อให้นักพัฒนาแก้ไขปัญหาได้รวดเร็ว error ทุกตัวมี code,
 ชื่อ, คำอธิบาย, และวิธีแก้ไขที่ชัดเจน
 
-ระบบ error codes ครอบคลุมตั้งแต่ build-time (boundary, config, compilation) ไปจนถึง runtime (server,
-worker, plugin, deploy)
+ระบบ error codes ที่บันทึกในหน้านี้ครอบคลุม code ที่ยืนยันจาก source ตั้งแต่ build-time (boundary,
+config, compilation) ไปจนถึง runtime (server, worker และ plugin) ไม่ได้หมายความว่า runtime error
+ทุกชนิดจะมี code สาธารณะถาวร
 
 ---
 
@@ -17,7 +18,7 @@ RUV1200-1299  →  API / Server Runtime   — API route, port binding, renderer
 RUV1300-1399  →  Bundle / Compilation   — hydration bundling, client route, MDX
 RUV1400-1499  →  Style                  — Tailwind, Sass, CSS entries
 RUV1500-1599  →  Worker / Static Params — render worker, actions, static params, PPR
-RUV1600-1699  →  Config / Adapter       — config loading, validation, range, build()
+RUV1600-1603  →  Config / Adapter       — config loading, validation, shape/limits, adapter build()
 RUV1700-1799  →  Plugin Bridge          — plugin hook timeout, protocol, worker pool
 RUV1800-1899  →  JS Runtime             — module resolution, Oxc transform, circular deps
 RUV2000-2200  →  Adapter / Plugin Def   — BuildContext, options, definePlugin, build hook
@@ -696,13 +697,13 @@ RUV1550: PPR render failed
 
 **วิธีแก้**: แก้ไขค่าฟิลด์ให้ถูกต้องตาม schema
 
-### RUV1602: ค่าฟิลด์ config เกินค่าสูงสุด
+### RUV1602: รูปแบบ ฟิลด์ หรือค่าของ config ไม่ถูกต้อง
 
-**Title**: Config field value exceeds maximum
+**Title**: Config shape, field, or limit is invalid
 
-**คำอธิบาย**: ค่าใน config field เกินขีดจำกัดสูงสุดที่อนุญาต
+**คำอธิบาย**: รูปแบบหรือชื่อ field ไม่รองรับ หรือค่าเกินขีดจำกัดที่ source กำหนด
 
-**Error text**: `RUV1602: Config field <field> value <value> exceeds maximum <max>`
+**Error text**: `RUV1602: Config field <field> is invalid, unknown, or exceeds the source limit`
 
 **วิธีแก้**: ปรับค่าให้อยู่ในช่วงที่อนุญาต
 
@@ -779,7 +780,7 @@ RUV1702: Worker pool script was not found
   Script: plugin-runtime.mjs
 
   The TypeScript plugin host runtime script is missing from
-  the ruvyxa package installation.
+  the ruvyxa start installation.
 
   Fix: Reinstall ruvyxa: npm install ruvyxa
 ```
@@ -1424,65 +1425,65 @@ ruvyxa trace /           # ดู route manifest entry ของ path ที่�
 
 ## ตาราง Error Codes — ทุก code
 
-| Code        | Title (Thai)                        | ช่วง              | Severity |
-| ----------- | ----------------------------------- | ----------------- | -------- |
-| **RUV1001** | ไม่พบไดเรกทอรี app                  | Boundary / Graph  | Error    |
-| **RUV1002** | Segment route dynamic ไม่ถูกต้อง    | Boundary / Graph  | Error    |
-| **RUV1003** | เส้นทาง route ขัดแย้งกัน            | Boundary / Graph  | Error    |
-| **RUV1004** | Page ไม่มี default export           | Boundary / Graph  | Error    |
-| **RUV1007** | โมดูล server-only ใน client graph   | Boundary / Graph  | Error    |
-| **RUV1008** | ตัวแปร env ส่วนบุคคลรั่วไหล         | Boundary / Graph  | Error    |
-| **RUV1009** | โมดูล client-only ใน server graph   | Boundary / Graph  | Error    |
-| **RUV1010** | ไฟล์ใน server/ ถึง client graph     | Boundary / Graph  | Error    |
-| **RUV1100** | React SSR ล้มเหลว                   | SSR / Render      | Error    |
-| **RUV1101** | SSR renderer ขาดพารามิเตอร์         | SSR / Render      | Error    |
-| **RUV1102** | ไม่พบ SSR renderer                  | SSR / Render      | Error    |
-| **RUV1200** | การเรียก API route ล้มเหลว          | API / Server      | Error    |
-| **RUV1201** | ไม่พบพอร์ตเซิร์ฟเวอร์ที่ว่าง        | API / Server      | Error    |
-| **RUV1202** | ไม่พบ API renderer                  | API / Server      | Error    |
-| **RUV1300** | Client hydration bundling ล้มเหลว   | Bundle / Compile  | Error    |
-| **RUV1303** | ไม่พบ client route                  | Bundle / Compile  | Error    |
-| **RUV1304** | Client bundle สำหรับ non-page route | Bundle / Compile  | Error    |
-| **RUV1311** | MDX compilation error               | Bundle / Compile  | Error    |
-| **RUV1312** | Frontmatter YAML error              | Bundle / Compile  | Error    |
-| **RUV1400** | Tailwind CSS compilation ล้มเหลว    | Style             | Error    |
-| **RUV1401** | ไม่พบ Tailwind CSS CLI              | Style             | Error    |
-| **RUV1402** | Sass compilation ล้มเหลว            | Style             | Error    |
-| **RUV1403** | ไม่พบ CSS entry ที่กำหนด            | Style             | Error    |
-| **RUV1404** | CSS entry ต้องอยู่ใน project root   | Style             | Error    |
-| **RUV1500** | SSG/action render ล้มเหลว           | Worker / Params   | Error    |
-| **RUV1501** | ไม่พบไฟล์ route action              | Worker / Params   | Error    |
-| **RUV1510** | Static params รูปแบบผิด             | Worker / Params   | Error    |
-| **RUV1511** | String shorthand ไม่ถูกต้อง         | Worker / Params   | Error    |
-| **RUV1512** | Static params entry ผิด             | Worker / Params   | Error    |
-| **RUV1513** | Static params cache duration ผิด    | Worker / Params   | Error    |
-| **RUV1550** | PPR render ล้มเหลว                  | Worker / Params   | Error    |
-| **RUV1600** | การโหลด config ล้มเหลว              | Config / Adapter  | Error    |
-| **RUV1601** | ค่าฟิลด์ config ไม่ถูกต้อง          | Config / Adapter  | Error    |
-| **RUV1602** | ค่าฟิลด์ config เกินค่าสูงสุด       | Config / Adapter  | Error    |
-| **RUV1603** | Adapter ต้องมี build()              | Config / Adapter  | Error    |
-| **RUV1700** | Plugin hook timeout / host หยุด     | Plugin Bridge     | Error    |
-| **RUV1701** | Plugin protocol error               | Plugin Bridge     | Error    |
-| **RUV1702** | ไม่พบ Worker pool script            | Plugin Bridge     | Error    |
-| **RUV1704** | Worker pool stream error            | Plugin Bridge     | Error    |
-| **RUV1801** | ไม่สามารถ resolve โมดูล             | JS Runtime        | Error    |
-| **RUV1802** | Oxc transform ล้มเหลว               | JS Runtime        | Error    |
-| **RUV1803** | Circular dependency                 | JS Runtime        | Error    |
-| **RUV1804** | JSX runtime ไม่ถูกต้อง              | JS Runtime        | Error    |
-| **RUV2000** | BuildContext validation ล้มเหลว     | Adapter / Plugin  | Error    |
-| **RUV2001** | ค่า options ของ adapter ไม่ถูกต้อง  | Adapter / Plugin  | Error    |
-| **RUV2102** | Plugin definition ไม่ถูกต้อง        | Adapter / Plugin  | Error    |
-| **RUV2200** | Adapter build hook ล้มเหลว          | Adapter / Plugin  | Error    |
-| **RUV3001** | Database operation error            | Official Packages | Error    |
-| **RUV3002** | Database adapter error              | Official Packages | Error    |
-| **RUV3003** | Database connection failed          | Official Packages | Error    |
-| **RUV3100** | Auth service error                  | Official Packages | Error    |
-| **RUV3101** | Auth request invalid                | Official Packages | Error    |
-| **RUV3102** | Too many authentication attempts    | Official Packages | Error    |
-| **RUV3103** | OAuth state invalid                 | Official Packages | Error    |
-| **RUV3104** | OAuth provider error                | Official Packages | Error    |
-| **RUV3105** | Production store error              | Official Packages | Error    |
-| **RUV3201** | Realtime error                      | Official Packages | Error    |
+| Code        | Title (Thai)                              | ช่วง              | Severity |
+| ----------- | ----------------------------------------- | ----------------- | -------- |
+| **RUV1001** | ไม่พบไดเรกทอรี app                        | Boundary / Graph  | Error    |
+| **RUV1002** | Segment route dynamic ไม่ถูกต้อง          | Boundary / Graph  | Error    |
+| **RUV1003** | เส้นทาง route ขัดแย้งกัน                  | Boundary / Graph  | Error    |
+| **RUV1004** | Page ไม่มี default export                 | Boundary / Graph  | Error    |
+| **RUV1007** | โมดูล server-only ใน client graph         | Boundary / Graph  | Error    |
+| **RUV1008** | ตัวแปร env ส่วนบุคคลรั่วไหล               | Boundary / Graph  | Error    |
+| **RUV1009** | โมดูล client-only ใน server graph         | Boundary / Graph  | Error    |
+| **RUV1010** | ไฟล์ใน server/ ถึง client graph           | Boundary / Graph  | Error    |
+| **RUV1100** | React SSR ล้มเหลว                         | SSR / Render      | Error    |
+| **RUV1101** | SSR renderer ขาดพารามิเตอร์               | SSR / Render      | Error    |
+| **RUV1102** | ไม่พบ SSR renderer                        | SSR / Render      | Error    |
+| **RUV1200** | การเรียก API route ล้มเหลว                | API / Server      | Error    |
+| **RUV1201** | ไม่พบพอร์ตเซิร์ฟเวอร์ที่ว่าง              | API / Server      | Error    |
+| **RUV1202** | ไม่พบ API renderer                        | API / Server      | Error    |
+| **RUV1300** | Client hydration bundling ล้มเหลว         | Bundle / Compile  | Error    |
+| **RUV1303** | ไม่พบ client route                        | Bundle / Compile  | Error    |
+| **RUV1304** | Client bundle สำหรับ non-page route       | Bundle / Compile  | Error    |
+| **RUV1311** | MDX compilation error                     | Bundle / Compile  | Error    |
+| **RUV1312** | Frontmatter YAML error                    | Bundle / Compile  | Error    |
+| **RUV1400** | Tailwind CSS compilation ล้มเหลว          | Style             | Error    |
+| **RUV1401** | ไม่พบ Tailwind CSS CLI                    | Style             | Error    |
+| **RUV1402** | Sass compilation ล้มเหลว                  | Style             | Error    |
+| **RUV1403** | ไม่พบ CSS entry ที่กำหนด                  | Style             | Error    |
+| **RUV1404** | CSS entry ต้องอยู่ใน project root         | Style             | Error    |
+| **RUV1500** | SSG/action render ล้มเหลว                 | Worker / Params   | Error    |
+| **RUV1501** | ไม่พบไฟล์ route action                    | Worker / Params   | Error    |
+| **RUV1510** | Static params รูปแบบผิด                   | Worker / Params   | Error    |
+| **RUV1511** | String shorthand ไม่ถูกต้อง               | Worker / Params   | Error    |
+| **RUV1512** | Static params entry ผิด                   | Worker / Params   | Error    |
+| **RUV1513** | Static params cache duration ผิด          | Worker / Params   | Error    |
+| **RUV1550** | PPR render ล้มเหลว                        | Worker / Params   | Error    |
+| **RUV1600** | การโหลด config ล้มเหลว                    | Config / Adapter  | Error    |
+| **RUV1601** | ค่าฟิลด์ config ไม่ถูกต้อง                | Config / Adapter  | Error    |
+| **RUV1602** | รูปแบบ ฟิลด์ หรือค่าของ config ไม่ถูกต้อง | Config / Adapter  | Error    |
+| **RUV1603** | Adapter ต้องมี build()                    | Config / Adapter  | Error    |
+| **RUV1700** | Plugin hook timeout / host หยุด           | Plugin Bridge     | Error    |
+| **RUV1701** | Plugin protocol error                     | Plugin Bridge     | Error    |
+| **RUV1702** | ไม่พบ Worker pool script                  | Plugin Bridge     | Error    |
+| **RUV1704** | Worker pool stream error                  | Plugin Bridge     | Error    |
+| **RUV1801** | ไม่สามารถ resolve โมดูล                   | JS Runtime        | Error    |
+| **RUV1802** | Oxc transform ล้มเหลว                     | JS Runtime        | Error    |
+| **RUV1803** | Circular dependency                       | JS Runtime        | Error    |
+| **RUV1804** | JSX runtime ไม่ถูกต้อง                    | JS Runtime        | Error    |
+| **RUV2000** | BuildContext validation ล้มเหลว           | Adapter / Plugin  | Error    |
+| **RUV2001** | ค่า options ของ adapter ไม่ถูกต้อง        | Adapter / Plugin  | Error    |
+| **RUV2102** | Plugin definition ไม่ถูกต้อง              | Adapter / Plugin  | Error    |
+| **RUV2200** | Adapter build hook ล้มเหลว                | Adapter / Plugin  | Error    |
+| **RUV3001** | Database operation error                  | Official Packages | Error    |
+| **RUV3002** | Database adapter error                    | Official Packages | Error    |
+| **RUV3003** | Database connection failed                | Official Packages | Error    |
+| **RUV3100** | Auth service error                        | Official Packages | Error    |
+| **RUV3101** | Auth request invalid                      | Official Packages | Error    |
+| **RUV3102** | Too many authentication attempts          | Official Packages | Error    |
+| **RUV3103** | OAuth state invalid                       | Official Packages | Error    |
+| **RUV3104** | OAuth provider error                      | Official Packages | Error    |
+| **RUV3105** | Production store error                    | Official Packages | Error    |
+| **RUV3201** | Realtime error                            | Official Packages | Error    |
 
 ---
 
@@ -1648,7 +1649,7 @@ export default config({
 
 // ❌ Bad — typos are not caught
 export default {
-  server: { port: '3000' }, // RUV1601 — string, not number
+  server: { port: '3000' }, // RUV1602 — shape/type mismatch
   build: { split: 'none' }, // RUV1601 — unknown value
 }
 ```
@@ -1686,7 +1687,7 @@ export default {
 | ---------------------------- | --------------------- | ---------------------------- |
 | Boundary violations reported | RUV1007-1010          | Restructure imports          |
 | Route conflicts reported     | RUV1003 (conflicting) | Rename conflicting files     |
-| Config validation errors     | RUV1600-1602          | Fix config file              |
+| Config validation errors     | RUV1600-1603          | Fix config file              |
 | SSG params missing           | RUV1510-1513          | Add/export `getStaticParams` |
 
 ### During Deployment
@@ -1718,12 +1719,12 @@ RUV1400     Style             style.rs
 RUV1500     Render / SSG      render_pipeline.rs, worker-pool.mjs
 RUV1510     Static params     worker-pool.mjs
 RUV1550     PPR               render_pipeline.rs
-RUV1600     Config            main.rs, config-renderer.mjs
+RUV1600     Config            config.rs, runtime_config.rs, config-renderer.mjs
 RUV1700     Plugin host       plugin_host.rs, worker_pool.rs
 RUV1800     Compiler          compiler.mjs
 RUV2000     Adapter           @ruvyxa/core/utils.ts
 RUV2102     Plugin def        @ruvyxa/core/plugin.ts
-RUV2200     Adapter build     main.rs, adapter-runner.mjs
+RUV2200     Adapter build     runtime_config.rs, adapter-runner.mjs
 RUV3001     Database          15-official-packages.md
 RUV3100     Auth              15-official-packages.md
 RUV3201     Realtime          15-official-packages.md
@@ -1731,26 +1732,26 @@ RUV3201     Realtime          15-official-packages.md
 
 ### File Locations
 
-| Error source            | File                                              |
-| ----------------------- | ------------------------------------------------- |
-| Bundler boundary checks | `crates/ruvyxa_bundler/src/boundary.rs`           |
-| Graph route validation  | `crates/ruvyxa_graph/src/lib.rs`                  |
-| Dev server rendering    | `crates/ruvyxa_dev_server/src/render_pipeline.rs` |
-| Worker pool             | `crates/ruvyxa_dev_server/src/worker_pool.rs`     |
-| Style compilation       | `crates/ruvyxa_dev_server/src/style.rs`           |
-| Plugin host             | `crates/ruvyxa_middleware/src/plugin_host.rs`     |
-| Config validation       | `crates/ruvyxa_cli/src/main.rs`                   |
-| Plugin bridge           | `crates/ruvyxa_dev_server/src/plugin_bridge.rs`   |
-| Plugin validation       | `packages/@ruvyxa/core/src/plugin.ts`             |
-| Compiler (JS)           | `packages/ruvyxa/runtime/compiler.mjs`            |
-| Config renderer (JS)    | `packages/ruvyxa/runtime/config-renderer.mjs`     |
-| Worker pool (JS)        | `packages/ruvyxa/runtime/worker-pool.mjs`         |
-| SSR renderer (JS)       | `packages/ruvyxa/runtime/ssr-renderer.mjs`        |
-| API renderer (JS)       | `packages/ruvyxa/runtime/api-renderer.mjs`        |
-| Auth errors             | `packages/@ruvyxa/auth/src/index.ts`              |
-| Database errors         | `packages/@ruvyxa/database/src/index.ts`          |
-| Realtime errors         | `packages/@ruvyxa/realtime/src/plugin.ts`         |
-| Adapter errors          | `packages/@ruvyxa/adapter-*/src/index.ts`         |
+| Error source            | File                                                                         |
+| ----------------------- | ---------------------------------------------------------------------------- |
+| Bundler boundary checks | `crates/ruvyxa_bundler/src/boundary.rs`                                      |
+| Graph route validation  | `crates/ruvyxa_graph/src/lib.rs`                                             |
+| Dev server rendering    | `crates/ruvyxa_dev_server/src/render_pipeline.rs`                            |
+| Worker pool             | `crates/ruvyxa_dev_server/src/worker_pool.rs`                                |
+| Style compilation       | `crates/ruvyxa_dev_server/src/style.rs`                                      |
+| Plugin host             | `crates/ruvyxa_middleware/src/plugin_host.rs`                                |
+| Config validation       | `crates/ruvyxa_cli/src/config.rs`, `crates/ruvyxa_cli/src/runtime_config.rs` |
+| Plugin bridge           | `crates/ruvyxa_dev_server/src/plugin_bridge.rs`                              |
+| Plugin validation       | `packages/@ruvyxa/core/src/plugin.ts`                                        |
+| Compiler (JS)           | `packages/ruvyxa/runtime/compiler.mjs`                                       |
+| Config renderer (JS)    | `packages/ruvyxa/runtime/config-renderer.mjs`                                |
+| Worker pool (JS)        | `packages/ruvyxa/runtime/worker-pool.mjs`                                    |
+| SSR renderer (JS)       | `packages/ruvyxa/runtime/ssr-renderer.mjs`                                   |
+| API renderer (JS)       | `packages/ruvyxa/runtime/api-renderer.mjs`                                   |
+| Auth errors             | `packages/@ruvyxa/auth/src/index.ts`                                         |
+| Database errors         | `packages/@ruvyxa/database/src/index.ts`                                     |
+| Realtime errors         | `packages/@ruvyxa/realtime/src/plugin.ts`                                    |
+| Adapter errors          | `packages/@ruvyxa/adapter-*/src/index.ts`                                    |
 
 ---
 

@@ -191,6 +191,7 @@ effects twice.
 ### Realtime Capability
 
 If a plugin declares `{"id": "realtime@1"}`, the descriptor exposes a `RealtimeDescriptor` with the
+capability/protocol identifier `realtime@1`; this is not a separately versioned plugin package.
 WebSocket path, heartbeat interval, and capacity. The dev server uses this to wire up realtime
 connections.
 

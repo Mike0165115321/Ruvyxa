@@ -512,14 +512,14 @@ fn local_composition(chars, start) -> Option<(usize, Vec<String>)> {
 
 Ruvyxa รองรับ Hot Module Replacement สำหรับ CSS ทุกแบบ:
 
-| วิธี                           | HMR                 | ประเภท                                      |
-| ------------------------------ | ------------------- | ------------------------------------------- |
-| Global CSS (.css)              | ✅ instant hot swap | CSS ถูกแทนที่ inline โดยไม่ต้อง reload หน้า |
-| SCSS (.scss)                   | ✅ instant hot swap | Compile → CSS → hot swap                    |
-| CSS Modules (.module.css)      | ✅ instant hot swap | Scope → replace                             |
-| SCSS Modules (.module.scss)    | ✅ instant hot swap | Compile → scope → replace                   |
-| import ใน component (.tsx/.ts) | ✅ instant hot swap | CSS changed → hot update                    |
-| style objects                  | ❌ ต้อง full reload | inline style ไม่มี hot path                 |
+| วิธี                           | HMR                 | ประเภท                                     |
+| ------------------------------ | ------------------- | ------------------------------------------ |
+| Global CSS (.css)              | ✅ HMR path         | CSS ถูกเก็บรวมและอัปเดตตาม dev-server path |
+| SCSS (.scss)                   | ✅ HMR path         | Compile → CSS → update ตาม HMR             |
+| CSS Modules (.module.css)      | ✅ HMR path         | Scope → update                             |
+| SCSS Modules (.module.scss)    | ✅ HMR path         | Compile → scope → update                   |
+| import ใน component (.tsx/.ts) | ✅ HMR path         | CSS changed → update ตาม HMR               |
+| style objects                  | ❌ ต้อง full reload | inline style ไม่มี hot path                |
 
 **กลไก HMR:** Ruvyxa ใช้ `hmr_tracker` ที่ watch ไฟล์ใน `app/` และ directories ที่เกี่ยวข้อง เมื่อ
 CSS เปลี่ยน:
@@ -1131,11 +1131,25 @@ body {
 
 ---
 
-## Critical CSS Extraction
+## การรวมและ Inline CSS
 
-ในกระบวนการ Build, Ruvyxa จะดึง CSS ส่วนสำคัญ (Critical CSS) ที่จำเป็นต่อการแสดงผล "เหนือขอบจอ
-(Above the fold)" ของทุกเพจ และฝัง (Inline) เข้าไปใน HTML ของหน้าเพจนั้น
-เพื่อให้เบราว์เซอร์เรนเดอร์ได้ทันทีโดยไม่ต้องรอโหลดไฟล์ `.css`
+Ruvyxa จะรวม stylesheet ที่ถูก import จาก application และที่ระบุใน `css.entries` จากนั้นใส่
+stylesheet ที่รวมแล้วไว้ใน element `style[data-ruvyxa-css]` ของเอกสารที่ render การทำงานนี้คือ
+การรวมและ inline stylesheet ไม่ใช่การวิเคราะห์ Critical CSS เฉพาะส่วนเหนือขอบจอ
+
+```text
+CSS/SCSS ที่ import + css.entries
+          │
+          ▼
+collect_styles() → preprocess, resolve import และ scope module
+          │
+          ▼
+<style data-ruvyxa-css>…CSS ที่รวมทั้งหมด…</style>
+```
+
+จึงไม่ควรสรุปว่า HTML จะมีเฉพาะกฎ CSS ที่มองเห็นอยู่ หรือรับประกัน FOUC/คะแนน performance แบบสากล
+หากต้องการ Critical-CSS extraction ให้ใช้เครื่องมือเฉพาะของ application แล้ววัดผลและ
+ตรวจสอบผลกระทบต่อ style collection กับ hydration แยกต่างหาก
 
 ---
 

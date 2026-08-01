@@ -1,3 +1,180 @@
+# Official Packages
+
+เอกสารนี้อธิบาย API ที่ export อยู่จริงใน first-party packages ของ repository ปัจจุบัน ตัวอย่างจะ
+ใช้เฉพาะ API ที่พบใน `src/` และ export map ของ package เท่านั้น
+
+## ขอบเขตของแต่ละ package
+
+| Package            | ฝั่ง Server        | ฝั่ง Browser              | หน้าที่                              |
+| ------------------ | ------------------ | ------------------------- | ------------------------------------ |
+| `@ruvyxa/auth`     | `@ruvyxa/auth`     | `@ruvyxa/auth/client`     | Session และ authentication providers |
+| `@ruvyxa/database` | `@ruvyxa/database` | ไม่มี                     | Adapter contract และ typed facade    |
+| `@ruvyxa/realtime` | `@ruvyxa/realtime` | `@ruvyxa/realtime/client` | WebSocket ที่ขับเคลื่อนด้วย action   |
+
+ห้าม import server entry เข้า client bundle ส่วน `/client` มีเฉพาะ browser helper ของ package นั้น
+
+## `@ruvyxa/auth`
+
+Auth runtime ต้องมี secret, origin, store, rate-limit store และ provider map อย่างชัดเจน ใน
+repository นี้มี OAuth helper สำหรับ Google และ GitHub ส่วน magic-link กับ WebAuthn เป็น provider
+interface ที่ application ต้อง implement เอง
+
+```ts
+import { config } from 'ruvyxa/config'
+import { createAuth, google, memoryAuthStore, memoryRateLimitStore } from '@ruvyxa/auth'
+
+const auth = createAuth({
+  secret: process.env.AUTH_SECRET!, // อย่างน้อย 32 ตัวอักษร
+  origin: 'http://localhost:3000',
+  store: memoryAuthStore({ development: true }),
+  rateLimitStore: memoryRateLimitStore({ development: true }),
+  providers: {
+    credentials: {
+      type: 'credentials',
+      async authorize(input) {
+        if (input.email === 'demo@example.com' && input.password === 'demo') {
+          return { id: 'demo', email: 'demo@example.com' }
+        }
+        return null
+      },
+    },
+    google: google({
+      clientId: process.env.GOOGLE_CLIENT_ID!,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+    }),
+  },
+})
+
+export default config({ plugins: [auth.plugin] })
+```
+
+`memoryAuthStore` และ `memoryRateLimitStore` ต้องรับ `{ development: true }` และใช้สำหรับ test หรือ
+development เท่านั้น production build จะตรวจว่า store เป็น durable store ส่วน option อื่นที่รองรับ
+ได้แก่ `basePath`, `session.ttlSeconds`, `session.rememberTtlSeconds`, `session.cookieName`,
+`session.secure`, `session.sameSite`, `rateLimit`, `clientIp` และ `onError`
+
+### Browser client
+
+```ts
+import { createAuthClient } from '@ruvyxa/auth/client'
+
+const authClient = createAuthClient({ basePath: '/__ruvyxa/auth' })
+await authClient.login('credentials', { email: 'demo@example.com', password: 'demo' })
+const session = await authClient.session()
+authClient.oauth('google', '/account')
+await authClient.logout()
+```
+
+Method ที่มีจริงคือ `login`, `logout`, `session` และ `oauth`; ไม่มี `signIn`, `signOut` หรือ hook
+ชื่อ `useRealtime` ใน package นี้
+
+## `@ruvyxa/database`
+
+Database facade รับ adapter หนึ่งตัว โดย built-in adapters ที่ export คือ `prismaAdapter` และ
+`dynamoAdapter` จาก package root
+
+```ts
+import { createDatabase, prismaAdapter } from '@ruvyxa/database'
+import { PrismaClient } from '@prisma/client'
+
+const prisma = new PrismaClient()
+export const db = createDatabase(prismaAdapter(prisma))
+
+const users = await db.users.findMany({
+  where: { active: true },
+  orderBy: { createdAt: 'desc' },
+  take: 20,
+})
+const user = await db.users.create({ data: { email: 'alice@example.com', active: true } })
+await db.users.update({ where: { id: 'user_123' }, data: { active: false } })
+```
+
+ปัจจุบันไม่มี export `@ruvyxa/database/prisma` หรือ `@ruvyxa/database/dynamodb` ตัว Dynamo adapter
+รับ `transport` และ map `tables` อย่างชัดเจน โดย transport อาจห่อ AWS SDK หรือ implementation
+อื่นที่ ทำตาม `execute(operation)` contract ส่วน custom adapter ตรวจสอบได้ด้วย
+`defineDatabaseAdapter`
+
+Database plugin ใช้ตรวจ private environment variables ระหว่าง build:
+
+```ts
+import { databasePlugin } from '@ruvyxa/database/plugin'
+
+databasePlugin({ requiredEnv: ['DATABASE_URL'] })
+```
+
+## `@ruvyxa/realtime`
+
+Realtime เป็น native capability ที่ขับเคลื่อนด้วย action ให้ลงทะเบียน root plugin และใช้
+`action.realtime()` จาก core plugin จะตรวจว่า target ที่เลือกมี Node/Bun WebSocket runtime แบบ
+long-lived ได้หรือไม่ ไม่ได้ export server API ชื่อ `createRealtime()` หรือ `publish()`
+
+```ts
+import { config } from 'ruvyxa/config'
+import { realtime } from '@ruvyxa/realtime'
+
+export default config({ plugins: [realtime()] })
+```
+
+```ts
+import { action } from '@ruvyxa/core/server'
+
+export const sendMessage = action
+  .input({
+    parse(value: unknown) {
+      if (!value || typeof value !== 'object') throw new Error('Invalid message')
+      return value as { text: string }
+    },
+  })
+  .realtime('chat:general')
+  .handler(async ({ input }) => ({ ok: true, text: input.text }))
+```
+
+### Browser client
+
+```ts
+import { createRealtimeClient } from '@ruvyxa/realtime/client'
+
+const client = createRealtimeClient({ url: '/__ruvyxa/realtime' })
+const unsubscribe = client.subscribe('chat:general', (event) => {
+  if (event.type === 'action') console.log(event.action, event.invalidated)
+})
+// ภายหลัง: unsubscribe(); client.close()
+```
+
+Client รองรับ `subscribe`, `subscribeRoute` และ `close` พร้อม reconnect ที่มีขอบเขต หาก adapter ไม่
+สามารถให้ runtime แบบ long-lived ได้ plugin จะ reject ตอน build completion
+
+## Versioning
+
+source tree นี้ใช้ release version เดียวกันสำหรับ first-party packages manifest ที่ commit อยู่
+ปัจจุบันระบุ `1.0.25` สำหรับ `ruvyxa`, `@ruvyxa/auth`, `@ruvyxa/database`, `@ruvyxa/realtime` และ
+first-party adapter packages ทั้งหมด Built-in plugins ไม่ได้แยก package และไม่มี version แยก จึง
+ติดตาม version ของ package `ruvyxa`
+
+`realtime@1` เป็น native capability/protocol identifier ไม่ใช่ package version
+
+## ขอบเขตของข้ออ้าง
+
+พฤติกรรมของ provider, ข้อจำกัดของ platform, credential และ deployment health เป็นข้อมูลภายนอก ต้อง
+ตรวจสอบกับเอกสาร provider และ artifact ที่ adapter สร้างขึ้น เอกสารนี้ไม่ได้อ้าง benchmark, ROI,
+พันธมิตร หรือการ deploy production อัตโนมัติ
+
+---
+
+## Production contract and retained detail
+
+The section above is the current, source-backed contract for this release. The original long-form
+draft is retained below to preserve instructional context and audit history. It is non-normative: do
+not copy its API snippets or capability claims unless they are revalidated against the current
+source and package export map. This boundary is intentional so the document can retain its original
+depth without presenting unsupported historical design as production behavior.
+
+### Thai package draft — historical draft (non-normative)
+
+> **คำเตือน archive:** เนื้อหาด้านล่างเก็บไว้เพื่อประวัติเท่านั้น ไม่ใช่ package API ปัจจุบัน
+> ตัวอย่างอาจเก่าหรือไม่รองรับ และห้ามนำไปใช้เป็น code จริง production contract
+> ด้านบนเป็นแหล่งอ้างอิงหลัก
+
 # Official Packages: Auth, Database, Realtime
 
 Ruvyxa มี 3 official packages ที่ทำงานร่วมกับเฟรมเวิร์กได้อย่างลื่นไหล:

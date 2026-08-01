@@ -1,3 +1,126 @@
+# Deployment Adapters
+
+Deployment adapters convert the framework build output into artifacts for a target runtime. The
+contract and selection flow below are the implementation contract in this repository; platform
+deployment commands remain the responsibility of the platform or the project CI pipeline.
+
+## Adapter contract
+
+The shared contract is exported by `@ruvyxa/core`:
+
+```ts
+interface Adapter {
+  name: string
+  target: string
+  supports?: readonly string[]
+  build(ctx: BuildContext): AdapterOutput | Promise<AdapterOutput>
+}
+```
+
+`build()` returns an `AdapterOutput` containing the target, runtime metadata, and artifact
+descriptors. An artifact can be a function, static site, or generated file. Adapters receive the
+validated build context; they do not receive an invented `adapt(options)` contract.
+
+## Selection and build flow
+
+1. `ruvyxa doctor --adapter <name>` can inspect adapter compatibility.
+2. `ruvyxa build --adapter <name>` selects an adapter explicitly and invokes its `build()` hook.
+3. The bundled `runtime/adapter-runner.mjs` resolves built-in short names (or a valid npm package
+   name), validates the route strategies against `supports`, and materializes the returned
+   artifacts.
+4. `ruvyxa start` and `ruvyxa preview` serve an existing production build; they do not perform the
+   adapter build step.
+
+The CLI also accepts an adapter configured by the project configuration. Automatic platform
+selection is a fallback in the runtime runner, not dependency scanning of `package.json`.
+
+## Built-in adapter names
+
+The repository currently ships these ten first-party adapter packages:
+
+| Name | Package |
+| --- | --- |
+| `node` | `@ruvyxa/adapter-node` |
+| `bun` | `@ruvyxa/adapter-bun` |
+| `static` | `@ruvyxa/adapter-static` |
+| `vercel` | `@ruvyxa/adapter-vercel` |
+| `netlify` | `@ruvyxa/adapter-netlify` |
+| `cloudflare` | `@ruvyxa/adapter-cloudflare` |
+| `railway` | `@ruvyxa/adapter-railway` |
+| `render` | `@ruvyxa/adapter-render` |
+| `firebase` | `@ruvyxa/adapter-firebase` |
+| `aws` | `@ruvyxa/adapter-aws` |
+
+The authoritative capability list is each adapter's `supports` field. It is a declaration used by
+the runner; successful local compilation does not prove that a provider-side deployment will meet
+all runtime requirements.
+
+## Representative artifact layouts
+
+The exact output is adapter-specific. Two source-backed examples are:
+
+### Node
+
+`@ruvyxa/adapter-node` emits under `.ruvyxa/deploy/node/`:
+
+```text
+server/index.mjs
+public/                 # optional prerendered site
+start.mjs
+README.md
+```
+
+The generated standalone server uses `node:http` and honors `PORT` and `HOST`. It can be copied to
+a Node-compatible host, Docker image, PM2, systemd, or a PaaS; the adapter itself does not deploy
+the artifact.
+
+### Static
+
+`@ruvyxa/adapter-static` emits a static-site artifact in `static/` by default, or in the validated
+relative `outputDir` supplied to `staticAdapter`. It supports only `ssg` and `csr`, because a pure
+static host cannot execute server routes.
+
+### AWS Amplify Hosting
+
+`@ruvyxa/adapter-aws` can emit `.amplify-hosting/` project artifacts, including a static directory,
+the `compute/default` handler, and `deploy-manifest.json`. Its static artifact explicitly excludes
+`isr` and `ppr`; the adapter's declared capabilities and the provider's runtime behavior must be
+verified together.
+
+## Static parameters
+
+Static generation uses the framework's `getStaticParams`/`staticParams` route metadata. The
+framework does not expose a `getStaticPaths()` API in the current source tree.
+
+## Docker and custom deployment
+
+There is no native Docker adapter in the built-in list. Use the Node or Bun adapter, copy its
+generated deployment directory into an image, and run the generated server according to that
+adapter's README. A custom adapter must implement the `Adapter` contract and return valid
+`AdapterOutput` artifacts; the runner does not provide a deployment control plane, blue-green swap,
+or production rollback service.
+
+## Source of truth
+
+- `packages/@ruvyxa/core/src/types.ts` — adapter and artifact types
+- `packages/ruvyxa/runtime/adapter-runner.mjs` — name resolution and runner flow
+- `packages/@ruvyxa/adapter-*/src/index.ts` — adapter capabilities and artifacts
+- `crates/ruvyxa_cli/src/main.rs` — CLI commands and adapter option
+
+---
+
+## Production contract and retained detail
+
+The section above is the current, source-backed contract for this release. The original long-form
+draft is retained below to preserve instructional context and audit history. It is non-normative:
+do not copy its API snippets or capability claims unless they are revalidated against the current
+source and package export map. This boundary is intentional so the document can retain its original
+depth without presenting unsupported historical design as production behavior.
+
+### Deployment adapter draft — historical draft (non-normative)
+
+> **Archive warning:** The material below is retained for history only. It is not the current adapter contract; examples may be stale or unsupported and must not be copied as working commands. The source-backed contract above is authoritative.
+
 # Deployment Adapters · อาดาปเตอร์สำหรับการปรับใช้
 
 **Scope**: Platform adapter packages (`@ruvyxa/adapter-*`)

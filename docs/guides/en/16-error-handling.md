@@ -1,15 +1,16 @@
 # Error Handling
 
-Ruvyxa speaks a common language when something goes wrong: `RUV####` codes. Every error — missing
-config field, crashed worker, server-client boundary violation, plugin timeout — has unique code,
-clear explanation, suggested fix, and exact file location.
+Ruvyxa uses `RUV####` diagnostics for many framework failures. A diagnostic may include a code,
+explanation, suggested fix, and source context; the exact fields and code depend on the subsystem.
+This guide documents source-confirmed codes and does not claim that every possible runtime error has
+a stable public code or a fixed file location.
 
 ---
 
 ## What You Will Learn
 
 - Error code format and how to read diagnostic output
-- Complete error catalog RUV1000-3201 organized by range
+- Source-confirmed error catalog entries organized by range
 - Error boundaries (`error.tsx`) — component signature, hierarchy, `reset()`
 - `not-found.tsx` — nearest-boundary resolution, programmatic `notFound()`
 - `loading.tsx` — Suspense fallback integration
@@ -58,7 +59,7 @@ struct SourceSpan {
 
 ---
 
-## Complete Error Catalog
+## Documented Error Catalog (source-confirmed entries)
 
 ### RUV1000–1099: Boundary Violations
 
@@ -610,14 +611,14 @@ RUV1550: PPR render failed
 
 ---
 
-### RUV1600–1699: Config Errors
+### RUV1600–RUV1603: Config Errors Documented by Current Source
 
-| Code    | Title                               | Cause                                   | Fix                                      |
-| ------- | ----------------------------------- | --------------------------------------- | ---------------------------------------- |
-| RUV1600 | Config load failure                 | Config file threw or returned error     | Check config syntax, run `ruvyxa doctor` |
-| RUV1601 | Config field invalid                | Config field has invalid value          | Fix the field value                      |
-| RUV1602 | Config field exceeds maximum        | Config field value above allowed limit  | Reduce value                             |
-| RUV1603 | Adapter must provide build function | `config.adapter` missing `build` method | Ensure adapter exports `build(context)`  |
+| Code    | Title                                         | Cause                                                 | Fix                                      |
+| ------- | --------------------------------------------- | ----------------------------------------------------- | ---------------------------------------- |
+| RUV1600 | Config load failure                           | Config file threw or returned error                   | Check config syntax, run `ruvyxa doctor` |
+| RUV1601 | Config field invalid                          | Config field has invalid value                        | Fix the field value                      |
+| RUV1602 | Config shape, unknown field, or limit invalid | Unsupported shape/field or value above a source limit | Correct the config                       |
+| RUV1603 | Adapter must provide build function           | `config.adapter` missing `build` method               | Ensure adapter exports `build(context)`  |
 
 #### RUV1600 — Config load failure
 
@@ -631,25 +632,25 @@ RUV1600: Config load failure
        run `ruvyxa doctor` for diagnostics.
 ```
 
-**Source**: `crates/ruvyxa_cli/src/main.rs:1115`, `packages/ruvyxa/runtime/config-renderer.mjs:60`
+**Source**: `crates/ruvyxa_cli/src/runtime_config.rs`, `packages/ruvyxa/runtime/config-renderer.mjs`
 
 #### RUV1601 — Config field invalid
 
 ```
-RUV1601: Config field `server.port` must be greater than zero
+RUV1601: Config field `security.actionLimit` must be greater than zero
 
-  Field: server.port
-  Value: -1
+  Field: security.actionLimit
+  Value: 0
 
   Fix: Provide a positive value for the field.
 ```
 
-**Source**: `crates/ruvyxa_cli/src/main.rs:595`, `packages/ruvyxa/runtime/config-renderer.mjs:16`
+**Source**: `crates/ruvyxa_cli/src/config.rs`, `packages/ruvyxa/runtime/config-renderer.mjs`
 
-#### RUV1602 — Config field exceeds maximum
+#### RUV1602 — Config shape, unknown field, or limit invalid
 
 ```
-RUV1602: Config field `security.pluginLimit` must not exceed 10485760 bytes
+RUV1602: Config field `security.pluginLimit` must not exceed 268435456 bytes
 
   Field: security.pluginLimit
   Value: 99999999
@@ -657,7 +658,7 @@ RUV1602: Config field `security.pluginLimit` must not exceed 10485760 bytes
   Fix: Reduce the value to within the allowed limit.
 ```
 
-**Source**: `crates/ruvyxa_cli/src/main.rs:609`, `packages/ruvyxa/runtime/config-renderer.mjs:335`
+**Source**: `crates/ruvyxa_cli/src/config.rs`, `packages/ruvyxa/runtime/config-renderer.mjs`
 
 #### RUV1603 — Adapter must provide build function
 
@@ -751,7 +752,7 @@ RUV1702: Worker pool script was not found
   Script: plugin-runtime.mjs
 
   The TypeScript plugin host runtime script is missing from
-  the ruvyxa package installation.
+  the ruvyxa start installation.
 
   Fix: Reinstall ruvyxa: npm install ruvyxa
 ```
@@ -903,7 +904,7 @@ RUV2200: Adapter build hook failed
        a misconfiguration or platform issue.
 ```
 
-**Source**: `crates/ruvyxa_cli/src/main.rs:1212`
+**Source**: `crates/ruvyxa_cli/src/runtime_config.rs`, `packages/ruvyxa/runtime/adapter-runner.mjs`
 
 ---
 
@@ -1344,7 +1345,7 @@ export default config({
 
 // ❌ Bad — typos are not caught
 export default {
-  server: { port: '3000' }, // RUV1601 — string, not number
+  server: { port: '3000' }, // RUV1602 — shape/type mismatch
   build: { split: 'none' }, // RUV1601 — unknown value
 }
 ```
@@ -1450,7 +1451,7 @@ In production, errors return HTTP 500 or show `error.tsx` fallback. The overlay 
 | ---------------------------- | --------------------- | ---------------------------- |
 | Boundary violations reported | RUV1007-1010          | Restructure imports          |
 | Route conflicts reported     | RUV1003 (conflicting) | Rename conflicting files     |
-| Config validation errors     | RUV1600-1602          | Fix config file              |
+| Config validation errors     | RUV1600-1603          | Fix config file              |
 | SSG params missing           | RUV1510-1513          | Add/export `getStaticParams` |
 
 ### During Deployment
@@ -1482,12 +1483,12 @@ RUV1400     Style             style.rs
 RUV1500     Render / SSG      render_pipeline.rs, worker-pool.mjs
 RUV1510     Static params     worker-pool.mjs
 RUV1550     PPR               render_pipeline.rs
-RUV1600     Config            main.rs, config-renderer.mjs
+RUV1600     Config            config.rs, runtime_config.rs, config-renderer.mjs
 RUV1700     Plugin host       plugin_host.rs, worker_pool.rs
 RUV1800     Compiler          compiler.mjs
 RUV2000     Adapter           @ruvyxa/core/utils.ts
 RUV2102     Plugin def        @ruvyxa/core/plugin.ts
-RUV2200     Adapter build     main.rs, adapter-runner.mjs
+RUV2200     Adapter build     runtime_config.rs, adapter-runner.mjs
 RUV3001     Database          15-official-packages.md
 RUV3100     Auth              15-official-packages.md
 RUV3201     Realtime          15-official-packages.md
@@ -1495,26 +1496,26 @@ RUV3201     Realtime          15-official-packages.md
 
 ### File Locations
 
-| Error source            | File                                              |
-| ----------------------- | ------------------------------------------------- |
-| Bundler boundary checks | `crates/ruvyxa_bundler/src/boundary.rs`           |
-| Graph route validation  | `crates/ruvyxa_graph/src/lib.rs`                  |
-| Dev server rendering    | `crates/ruvyxa_dev_server/src/render_pipeline.rs` |
-| Worker pool             | `crates/ruvyxa_dev_server/src/worker_pool.rs`     |
-| Style compilation       | `crates/ruvyxa_dev_server/src/style.rs`           |
-| Plugin host             | `crates/ruvyxa_middleware/src/plugin_host.rs`     |
-| Config validation       | `crates/ruvyxa_cli/src/main.rs`                   |
-| Plugin bridge           | `crates/ruvyxa_dev_server/src/plugin_bridge.rs`   |
-| Plugin validation       | `packages/@ruvyxa/core/src/plugin.ts`             |
-| Compiler (JS)           | `packages/ruvyxa/runtime/compiler.mjs`            |
-| Config renderer (JS)    | `packages/ruvyxa/runtime/config-renderer.mjs`     |
-| Worker pool (JS)        | `packages/ruvyxa/runtime/worker-pool.mjs`         |
-| SSR renderer (JS)       | `packages/ruvyxa/runtime/ssr-renderer.mjs`        |
-| API renderer (JS)       | `packages/ruvyxa/runtime/api-renderer.mjs`        |
-| Auth errors             | `packages/@ruvyxa/auth/src/index.ts`              |
-| Database errors         | `packages/@ruvyxa/database/src/index.ts`          |
-| Realtime errors         | `packages/@ruvyxa/realtime/src/plugin.ts`         |
-| Adapter errors          | `packages/@ruvyxa/adapter-*/src/index.ts`         |
+| Error source            | File                                                                         |
+| ----------------------- | ---------------------------------------------------------------------------- |
+| Bundler boundary checks | `crates/ruvyxa_bundler/src/boundary.rs`                                      |
+| Graph route validation  | `crates/ruvyxa_graph/src/lib.rs`                                             |
+| Dev server rendering    | `crates/ruvyxa_dev_server/src/render_pipeline.rs`                            |
+| Worker pool             | `crates/ruvyxa_dev_server/src/worker_pool.rs`                                |
+| Style compilation       | `crates/ruvyxa_dev_server/src/style.rs`                                      |
+| Plugin host             | `crates/ruvyxa_middleware/src/plugin_host.rs`                                |
+| Config validation       | `crates/ruvyxa_cli/src/config.rs`, `crates/ruvyxa_cli/src/runtime_config.rs` |
+| Plugin bridge           | `crates/ruvyxa_dev_server/src/plugin_bridge.rs`                              |
+| Plugin validation       | `packages/@ruvyxa/core/src/plugin.ts`                                        |
+| Compiler (JS)           | `packages/ruvyxa/runtime/compiler.mjs`                                       |
+| Config renderer (JS)    | `packages/ruvyxa/runtime/config-renderer.mjs`                                |
+| Worker pool (JS)        | `packages/ruvyxa/runtime/worker-pool.mjs`                                    |
+| SSR renderer (JS)       | `packages/ruvyxa/runtime/ssr-renderer.mjs`                                   |
+| API renderer (JS)       | `packages/ruvyxa/runtime/api-renderer.mjs`                                   |
+| Auth errors             | `packages/@ruvyxa/auth/src/index.ts`                                         |
+| Database errors         | `packages/@ruvyxa/database/src/index.ts`                                     |
+| Realtime errors         | `packages/@ruvyxa/realtime/src/plugin.ts`                                    |
+| Adapter errors          | `packages/@ruvyxa/adapter-*/src/index.ts`                                    |
 
 ---
 
@@ -1849,7 +1850,7 @@ boundary diagnostics ตั้งใจให้ชี้ source location แล
   (RUV1007, RUV1009, RUV1010)
 - **[05-data-loading-cache.md](./05-data-loading-cache.md)** — Static params (RUV1510-1513)
 - **[10-environment-variables.md](./10-environment-variables.md)** — Fix RUV1008 leaks
-- **[11-configuration.md](./11-configuration.md)** — Fix config errors (RUV1600-1602)
+- **[11-configuration.md](./11-configuration.md)** — Fix config errors (RUV1600-RUV1603)
 - **[13-deployment.md](./13-deployment.md)** — Fix deploy errors (RUV2000, RUV2001, RUV2200)
 - **[14-plugins.md](./14-plugins.md)** — Fix plugin errors (RUV1700, RUV1701, RUV2102)
 - **[15-official-packages.md](./15-official-packages.md)** — Fix auth/database/realtime errors

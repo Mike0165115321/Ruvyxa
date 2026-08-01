@@ -1,3 +1,120 @@
+# Plugins
+
+หน้านี้แยก current implementation contract ของ plugin ออกจาก historical examples ที่เก็บไว้เพื่อ
+รักษาความยาวและบริบทเดิม การอ้างว่า production support ได้ต้องตรวจจาก source และ type จริงของ plugin
+bridge
+
+## Production contract
+
+### Built-in exports ปัจจุบัน
+
+first-party export อยู่ที่ ruvyxa/plugins และ source ปัจจุบันมี builder 16 ตัว:
+
+```ts
+redirects
+headers
+observability
+securityHeaders
+cacheRules
+pwa
+sitemap
+robots
+feed
+searchIndex
+contentEngine
+openApi
+alias
+bundleBudget
+requireEnv
+fonts
+```
+
+Built-in plugin ไม่ได้แยก package version ของตัวเอง manifest ของ first-party packages ใน repository
+ปัจจุบันใช้ release version 1.0.25 ส่วน realtime@1 เป็น native capability/protocol identifier ไม่ใช่
+version ของ plugin แยกต่างหาก
+
+### การลงทะเบียนและ config
+
+```ts
+import { config } from 'ruvyxa/config'
+import { redirects, headers, observability, securityHeaders, cacheRules } from 'ruvyxa/plugins'
+
+export default config({
+  plugins: [
+    redirects([{ source: '/old-page', destination: '/new-page', permanent: true }]),
+    headers([{ source: '/api/*', headers: { 'cache-control': 'no-store' } }]),
+    observability(),
+    securityHeaders(),
+    cacheRules([{ source: '/assets/*', browser: 'public, max-age=3600' }]),
+  ],
+})
+```
+
+จุดเข้าของ configuration คือ config() ไม่ใช่ defineConfig() route pattern ใช้ exact match, *, หรือ
+trailing prefix wildcard ตาม factory นั้น ๆ implementation จะ validate rule shape, header, path และ
+option ของ plugin ในช่วง register/build ตามที่ source กำหนด
+
+### Lifecycle hooks
+
+plugin bridge มี build hooks (onStart, onResolve, onLoad, onTransform, onComplete), HTTP hooks
+(onRequest, onResponse, route), dev file-change hooks, diagnostics report และ native capability
+claim payload ที่แน่นอนอยู่ใน packages/@ruvyxa/core/src/plugin.ts และ types.ts ไม่ควรเดา shape
+จากตัวอย่างของ hook อื่น
+
+Build hook ทำงานผ่าน TypeScript plugin worker bridge ส่วน HTTP hook ถูกเรียกโดย middleware bridge
+รอบ request/response hook มี timeout default 30 วินาที และ config ได้สูงสุด 300 วินาที timeout เป็น
+RUV1700 และ protocol/response ที่ผิดรูปแบบเป็น RUV1701
+
+### พฤติกรรมที่ source รองรับ
+
+- redirects: ส่ง response 307 หรือ 308 และ reject destination ที่เสี่ยง open redirect
+- headers: ตั้ง response headers ตาม route ที่ match
+- observability: เพิ่ม request ID, trace context, Server-Timing และ structured timing log ได้
+  duration ที่วัดได้เป็นข้อมูลของ workload ไม่ใช่ benchmark กลาง
+- securityHeaders: ใส่ security policy ตาม option; CSP ต้องออกแบบให้เหมาะกับ application
+- cacheRules: ตั้ง browser/CDN cache policy และ Vary โดยไม่อ้าง distributed cache coherence
+- pwa, sitemap, robots, feed, searchIndex และ contentEngine: สร้าง build artifacts จาก input ที่
+  validate แล้ว
+- openApi: สร้าง OpenAPI document จาก operations ที่ application ระบุ
+- alias: ลงทะเบียน module-resolution aliases
+- bundleBudget: ตรวจ bundle-size limit ที่ตั้งไว้ source ไม่ได้ให้ performance target กลางหรือ RUV
+  code เฉพาะสำหรับ budget failure ทุกแบบ
+- requireEnv: ตรวจ environment variables ที่จำเป็นตอน build
+- fonts: fetch และ self-host Google Fonts stylesheet เมื่อ build environment อนุญาต ต้องตรวจ
+  generated assets และ provider availability ใน CI
+
+### การตรวจ production
+
+```bash
+ruvyxa check
+ruvyxa analyze
+ruvyxa build
+```
+
+Production review ควรบันทึก plugin ที่เลือก, config, generated artifacts, environment variables,
+target adapter และ workload measurement เอกสารนี้ไม่อ้าง latency, throughput, bundle-size, ROI,
+พันธมิตร หรือการ promotion/deployment แบบอัตโนมัติ
+
+## Source of truth
+
+- packages/ruvyxa/src/plugins.ts
+- packages/@ruvyxa/core/src/plugin.ts
+- crates/ruvyxa_middleware/src
+- packages/@ruvyxa/core/package.json
+
+---
+
+## Retained detailed draft
+
+เนื้อหาฉบับยาวเดิมเก็บไว้เพื่อรักษาบริบทและความยาวเท่านั้น เป็น non-normative historical draft
+ต้องตรวจ API, option, payload, metric และข้อจำกัด provider กับ source ปัจจุบันก่อนนำไปใช้จริง
+
+### Thai plugin draft — historical draft (non-normative)
+
+> **คำเตือน archive:** เนื้อหาด้านล่างเก็บไว้เพื่อประวัติเท่านั้น ไม่ใช่ plugin contract ปัจจุบัน
+> ตัวอย่างอาจเก่าหรือไม่รองรับ และห้ามนำไปใช้เป็น code จริง production contract
+> ด้านบนเป็นแหล่งอ้างอิงหลัก
+
 ## สิ่งที่คุณจะได้เรียนรู้ (What You Will Learn)
 
 - Plugin architecture and socket registry

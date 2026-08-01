@@ -4,7 +4,8 @@ Welcome to Ruvyxa — a full-stack framework that puts developer experience firs
 building a marketing site, a SaaS dashboard, a blog, or an API backend, Ruvyxa gives you the tools
 to ship fast without sacrificing control.
 
-This guide walks you from zero to your first running app in about 10 minutes.
+This guide walks you from project creation to your first running app. The exact time depends on the
+machine, package-manager cache, and project changes.
 
 ---
 
@@ -351,9 +352,11 @@ Config validation fires these errors:
 }
 ```
 
-### `ruvyxa-env.d.ts`
+### `ruvyxa-env.d.ts` (optional TypeScript declaration)
 
-Create `app/ruvyxa-env.d.ts` for type-safe CSS modules and env vars:
+Create `app/ruvyxa-env.d.ts` for optional project-local TypeScript declarations. The runtime reads
+public values through `process.env.RUVYXA_PUBLIC_*`; Ruvyxa does not provide a Vite-style
+`import.meta.env` compatibility layer.
 
 ```ts
 declare module '*.css' {
@@ -361,20 +364,18 @@ declare module '*.css' {
   export default content
 }
 
-interface ImportMetaEnv {
-  RUVYXA_PUBLIC_APP_NAME: string
-  RUVYXA_PUBLIC_API_URL: string
-}
-
-interface ImportMeta {
-  readonly env: ImportMetaEnv
+declare namespace NodeJS {
+  interface ProcessEnv {
+    readonly RUVYXA_PUBLIC_APP_NAME?: string
+    readonly RUVYXA_PUBLIC_API_URL?: string
+  }
 }
 ```
 
 This enables:
 
 - Type-safe CSS module imports: `import styles from './styles.module.css'`
-- Type-safe public env vars: `import.meta.env.RUVYXA_PUBLIC_APP_NAME`
+- Type-safe public env vars: `process.env.RUVYXA_PUBLIC_APP_NAME`
 - Autocompletion in editors
 
 ---
@@ -477,7 +478,7 @@ Every Ruvyxa project comes with these scripts:
 | `--runtime` | `node\|bun`           | Auto         | JavaScript runtime      |
 
 Known adapter names: `node`, `bun`, `static`, `vercel`, `netlify`, `cloudflare`, `railway`,
-`render`, `firebase`, `aws` or package name like `@scope/ruvyxa-adapter-deno`.
+`render`, `firebase`, `aws` or package name like `@scope/ruvyxa-adapter-node`.
 
 ### ruvyxa check
 
@@ -704,7 +705,8 @@ export default function AboutPage() {
 }
 ```
 
-Visit **http://localhost:3000/about**. The new page works instantly — no restart needed.
+Visit **http://localhost:3000/about**. When the development server's HMR path applies, the page
+updates without a full process restart; verify the terminal output if a change requires a rebuild.
 
 ---
 
@@ -941,7 +943,7 @@ export async function createRuvyxaApp(
 
 ---
 
-## Your First 10 Minutes
+## Your First Working Session
 
 Here is a mini-plan to get familiar:
 
@@ -1002,7 +1004,7 @@ export default function BlogPost({ params }: { params: { slug: string } }) {
 | `RUV2200` | Adapter build failed               | Adapter runtime error                                | Inspect adapter                                    |
 | `RUV2202` | Strategy not supported             | Adapter doesn't support render strategy              | Change strategy or adapter                         |
 | `RUV2203` | Adapter package missing            | Adapter package not found                            | `npm install @ruvyxa/adapter-*`                    |
-| `RUV9999` | Internal error                     | Compiler internal error                              | Report a bug                                       |
+| `—`       | Internal framework error           | No stable public code is assigned in this summary    | Capture the full diagnostic and report a bug       |
 
 ---
 
@@ -1086,7 +1088,7 @@ Check:
 | `RUV2200` | Build error                        | General build failure                                 |
 | `RUV2202` | Unsupported strategy for adapter   | Route strategy not supported by selected adapter      |
 | `RUV2203` | Missing package                    | Required dependency not found                         |
-| `RUV9999` | Internal error                     | Unclassified error (dev only)                         |
+| `—`       | Internal framework error           | Code depends on the failing subsystem                |
 
 ---
 

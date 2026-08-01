@@ -1,5 +1,225 @@
 # การโหลดข้อมูลและ Cache
 
+Ruvyxa มี server-side cache แบบ in-memory ที่มี TTL, stale-while-revalidate (SWR), LRU eviction และ
+error isolation ส่วน `loader(handler)` เป็น server loader ที่รับ context ของ route และใช้
+`cache(key)` ภายใน handler ได้
+
+## API ที่มีอยู่จริง
+
+```ts
+import { cache, cacheStats, invalidateCache, loader } from '@ruvyxa/core/server'
+```
+
+```ts
+interface LoaderContext {
+  params: Record<string, string>
+  request: Request
+  cache: typeof cache
+}
+
+type LoaderHandler<TResult> = (ctx: LoaderContext) => TResult | Promise<TResult>
+
+interface Loader<TResult> {
+  (ctx?: Partial<LoaderContext>): Promise<TResult>
+  ruvyxa: { kind: 'loader' }
+}
+
+function loader<TResult>(handler: LoaderHandler<TResult>): Loader<TResult>
+function cache(key: string): CacheBuilder
+function invalidateCache(keyOrPrefix?: string): void
+function cacheStats(): { size: number; maxEntries: number }
+```
+
+`ruvyxa/server` เป็น subpath ของ package `ruvyxa` ที่ re-export server API เดียวกัน หากใช้ package
+ระดับ core ให้ import จาก `@ruvyxa/core/server`
+
+## Server Loader
+
+`loader(handler)` รับ context object ไม่ใช่ builder ที่เรียก `.key().ttl().get()`:
+
+```tsx
+import { loader } from 'ruvyxa/server'
+
+export const getProducts = loader(async ({ params, cache }) => {
+  const category = params.category ?? 'all'
+  return cache(`products:${category}`)
+    .ttl('5m')
+    .swr('1m')
+    .get(async () => {
+      const response = await fetch('https://api.example.com/products')
+      if (!response.ok) throw new Error(`API failed: ${response.status}`)
+      return response.json()
+    })
+})
+```
+
+เรียก loader ได้ด้วย context บางส่วน เช่น `getProducts({ params: { category: 'books' } })` โดย
+`params`, `request` และ `cache` ที่ไม่ส่งมาจะได้รับค่า default จาก runtime
+
+ถ้า key ขึ้นกับ argument ของฟังก์ชัน ให้สร้าง key อย่างชัดเจนด้วย `cache(key)`:
+
+```ts
+import { cache } from 'ruvyxa/server'
+
+export const getUser = (userId: string) =>
+  cache(`user:profile:${userId}`)
+    .ttl('5m')
+    .swr('1m')
+    .get(() => fetchUser(userId))
+```
+
+## Cache Builder
+
+```ts
+interface CacheBuilder {
+  ttl(value: string): CacheBuilder
+  swr(value: string): CacheBuilder
+  get<T>(producer: () => T | Promise<T>): Promise<T>
+}
+```
+
+ตัวอย่าง:
+
+```ts
+const users = await cache('users:all')
+  .ttl('30s')
+  .swr('10s')
+  .get(() => db.users.findMany())
+```
+
+TTL รองรับรูปแบบ `ms`, `s`, `m`, `h` และ `d` เช่น `500ms`, `30s`, `5m`, `1h`, `1d` ค่าเริ่มต้น คือ
+60 วินาที และค่าที่ไม่ตรงรูปแบบหรือเกิน safe integer จะทำให้เกิด `TypeError`
+
+SWR ทำงานโดยให้ค่า stale กลับระหว่างที่ producer refresh แบบ background เมื่อหมดทั้ง TTL และ SWR
+แล้ว request ถัดไปจะเรียก producer ใหม่ หาก producer ล้มเหลวระหว่างที่มี stale value ระบบสามารถคืน
+stale value ได้ ส่วน cache miss ที่ไม่มีค่าเดิมจะส่ง error กลับ
+
+## Cache Key และ Invalidation
+
+เลือก key ให้รวมทุก input ที่มีผลต่อผลลัพธ์ โดยเฉพาะ user หรือ tenant dimension:
+
+```ts
+cache('products:featured')
+cache(`tenant:${tenantId}:settings`)
+cache(`user:${userId}:profile`)
+```
+
+`invalidateCache(keyOrPrefix)` จะลบ key ที่ตรงกันหรือมี prefix ตามรูปแบบ `key:` และการไม่ส่ง
+argument จะลบ cache ทั้งหมด:
+
+```ts
+import { invalidateCache } from 'ruvyxa/server'
+
+invalidateCache('products:featured')
+invalidateCache('products') // products และ products:*
+invalidateCache() // ลบทั้งหมด
+```
+
+ใน server action ใช้ `invalidate` จาก context ได้:
+
+```ts
+import { action } from 'ruvyxa/server'
+
+export const createProduct = action
+  .input({
+    parse(value: unknown) {
+      if (!value || typeof value !== 'object') throw new Error('invalid input')
+      return value as { name: string }
+    },
+  })
+  .handler(async ({ input, invalidate }) => {
+    const product = await db.products.create({ data: { name: input.name } })
+    invalidate('products')
+    return product
+  })
+```
+
+## ขอบเขตของ Cache
+
+cache store เป็น in-memory singleton ต่อ process/worker และมีเพดาน 1,024 entries พร้อม LRU eviction
+ค่าเหล่านี้เป็น implementation detail ของ core ไม่ใช่ distributed cache:
+
+- worker แต่ละตัวมี cache ของตัวเอง
+- การเขียนบน worker หนึ่งไม่ทำให้ worker อื่นเห็นค่าใหม่ทันที
+- อย่า cache ข้อมูล user-specific ด้วย key ที่ไม่มี user/tenant dimension
+- ไม่มี `RedisCacheProvider`, `revalidateTag` หรือ `revalidatePath` ใน package API ปัจจุบัน
+
+ถ้าต้องการ external cache ให้เขียน integration ของ application เองที่ boundary ของ data access และ
+กำหนด serialization, TTL, invalidation และ failure behavior ให้ชัดเจน เอกสารนี้ไม่อ้างว่ามี adapter
+Redis/Memcached ของ Ruvyxa ในตัว
+
+ตรวจสถิติ local cache ได้ด้วย:
+
+```ts
+import { cacheStats } from 'ruvyxa/server'
+
+const stats = cacheStats()
+console.log(stats.size, stats.maxEntries)
+```
+
+## Client Loader Hook
+
+`useRuvyxaLoader` อยู่ใน `@ruvyxa/react` และใช้โหลดข้อมูลจาก browser; มันไม่ใช่ server cache
+provider:
+
+```tsx
+'use client'
+
+import { useRuvyxaLoader } from '@ruvyxa/react'
+
+export function ProductList() {
+  const { data, loading, error, refetch } = useRuvyxaLoader(
+    async () => {
+      const response = await fetch('/api/products')
+      if (!response.ok) throw new Error(`request failed: ${response.status}`)
+      return response.json() as Promise<Array<{ id: string; name: string }>>
+    },
+    { deps: [] },
+  )
+
+  if (loading) return <p>กำลังโหลด...</p>
+  if (error) return <p>{error.message}</p>
+  return <button onClick={refetch}>{data?.length ?? 0} รายการ</button>
+}
+```
+
+`enabled` ใช้ปิดการ fetch ชั่วคราว และ `deps` ใช้กำหนดค่าที่ทำให้ hook refetch เมื่อเปลี่ยน อย่าใส่
+object ใหม่ทุก render ใน `deps` หากไม่ต้องการ refetch ทุกครั้ง
+
+## พฤติกรรมที่ควรตรวจสอบก่อนใช้งานจริง
+
+- เลือก TTL/SWR ตามความสดของข้อมูล ไม่ใช่ตามตัวเลข performance ที่คาดเดา
+- ทดสอบ producer failure ทั้งกรณีมีและไม่มี stale value
+- ทดสอบหลาย worker หากระบบต้องการ cache coherence ข้าม process
+- ห้ามใส่ secret หรือข้อมูลส่วนตัวลงใน key ที่แสดงใน log หรือ diagnostics
+- ใช้ `ruvyxa trace` และ `ruvyxa analyze` ตรวจ flow รอบ cache; ไม่มี cache-inspection CLI เฉพาะ
+
+## สรุป
+
+1. ใช้ `loader(handler)` สำหรับ server loader ที่รับ context
+2. ใช้ `cache(key).ttl().swr().get()` สำหรับ cache producer
+3. ใช้ `invalidateCache()` หรือ `invalidate()` ใน action สำหรับ invalidation
+4. Cache เป็น in-memory ต่อ worker และไม่ใช่ distributed Redis/Memcached provider
+5. วัดผลบน workload จริงด้วย `ruvyxa bench` แทนการใช้ค่า latency สำเร็จรูปในเอกสาร
+
+---
+
+## Production contract and retained detail
+
+The section above is the current, source-backed contract for this release. The original long-form
+draft is retained below to preserve instructional context and audit history. It is non-normative: do
+not copy its API snippets or capability claims unless they are revalidated against the current
+source and package export map. This boundary is intentional so the document can retain its original
+depth without presenting unsupported historical design as production behavior.
+
+### Thai cache draft — historical draft (non-normative)
+
+> **คำเตือน archive:** เนื้อหาด้านล่างเก็บไว้เพื่อประวัติเท่านั้น ไม่ใช่ cache API ปัจจุบัน
+> ตัวอย่างอาจเก่าหรือไม่รองรับ และห้ามนำไปใช้เป็น code จริง production contract
+> ด้านบนเป็นแหล่งอ้างอิงหลัก
+
+# การโหลดข้อมูลและ Cache
+
 Ruvyxa มีระบบ cache ในตัวสองชั้น: **server-side cache** (`cache(key).ttl().swr().get()`)
 สำหรับลดการเรียกข้อมูลซ้ำบนเซิร์ฟเวอร์ และ **client-side hook** (`useRuvyxaLoader()`)
 สำหรับจัดการสถานะการโหลดข้อมูลฝั่งเบราว์เซอร์ การออกแบบนี้ครอบคลุมตั้งแต่การป้องกัน cache stampede,
@@ -7,20 +227,25 @@ LRU eviction, ไปจนถึงการป้องกัน race condition
 
 ---
 
-## Type Definitions
+## Type Definitions ที่มีอยู่จริง
 
 ```ts
 // @ruvyxa/core/server
-export function cache<T>(
-  fn: () => Promise<T>,
-  tags: string[],
-  options?: { ttl?: string | number },
-): () => Promise<T>
+export function loader<TResult>(handler: LoaderHandler<TResult>): Loader<TResult>
+export function cache(key: string): CacheBuilder
+export function invalidateCache(keyOrPrefix?: string): void
+export function cacheStats(): { size: number; maxEntries: number }
 
-export function revalidateTag(tag: string): void
-
-export function revalidatePath(path: string, type?: 'page' | 'layout'): void
+interface CacheBuilder {
+  ttl(value: string): CacheBuilder
+  swr(value: string): CacheBuilder
+  get<T>(producer: () => T | Promise<T>): Promise<T>
+}
 ```
+
+`loader(handler)` เป็น callable loader ส่วน `cache(key)` เป็น builder แยกกัน ไม่มี chain API แบบ
+`loader().key().ttl().get()` และไม่มี export `revalidateTag` หรือ `revalidatePath` ใน server entry
+ปัจจุบัน
 
 ---
 
@@ -857,43 +1082,42 @@ export const getTenantSettings = cache(
 
 ## External Cache Integration
 
-หากต้องการใช้ Redis หรือ Memcached แทน Memory Cache คุณสามารถทำได้ด้วย `CacheProvider`:
+cache ในตัวเป็น in-memory ต่อ worker และ repository ไม่ได้ export `CacheProvider`, Redis adapter
+หรือ Memcached adapter ให้ config โดยตรง หาก application ต้องใช้ external cache ให้ห่อไว้ที่
+data-access boundary ของ application เอง และกำหนด serialization, TTL, invalidation, failure behavior
+และ tenant key isolation ให้ชัดเจน ตัวอย่างนี้เป็น pseudocode ของ application ไม่ใช่ Ruvyxa API:
 
-```tsx
-// ruvyxa.config.ts
-import { RedisCacheProvider } from '@ruvyxa/cache-redis'
-
-export default config({
-  cache: {
-    provider: new RedisCacheProvider({ url: process.env.REDIS_URL }),
-  },
-})
+```ts
+async function getFromApplicationCache<T>(key: string, producer: () => Promise<T>): Promise<T> {
+  // เรียก client ของ provider ที่ application เลือกเอง
+  const cached = await applicationCache.get<T>(key)
+  if (cached !== undefined) return cached
+  const value = await producer()
+  await applicationCache.set(key, value, { ttlSeconds: 300 })
+  return value
+}
 ```
 
-เมื่อใช้ External Cache:
-
-- `cache()` จะทำการ serialize ข้อมูลเป็น JSON อัตโนมัติ
-- `revalidateTag` จะทำงานข้ามเซิร์ฟเวอร์ (Distributed Cache) ได้
-- ระวัง: ไม่สามารถแคช Functions หรือ Object ที่ไม่มีโครงสร้างแบบ JSON (เช่น Date หรือ Map) ได้
+ไม่ควรสรุปว่า cache ภายนอกจะทำงานข้าม process หรือ serialize object ทุกชนิดได้จนกว่าจะตรวจ contract
+ของ provider ที่ application เลือกเอง
 
 ---
 
-## Middleware-Based Cache Invalidation
+## การ invalidate cache ใน server code
 
-คุณสามารถ Invalidate Cache ภายใน Middleware ได้ ตัวอย่างเช่น เมื่อมีการเปลี่ยนภาษา:
+ใช้ `invalidateCache` จาก server entry เมื่อข้อมูลเปลี่ยนแปลง โดยเลือก exact key หรือ prefix ให้
+ตรงกับ key ที่สร้างไว้:
 
 ```ts
-// middleware.ts
-import { revalidatePath } from '@ruvyxa/core/server'
+import { invalidateCache } from 'ruvyxa/server'
 
-export function middleware(request: Request) {
-  const lang = request.headers.get('accept-language')
-
-  if (lang === 'th' && request.url.includes('/en/')) {
-    revalidatePath('/') // เคลียร์แคชทุกเส้นทาง
-  }
-}
+invalidateCache('products:featured') // exact key
+invalidateCache('tenant:acme:') // exact key หรือ key ที่ขึ้นต้นด้วย prefix นี้
+invalidateCache() // clear cache ของ worker ปัจจุบัน
 ```
+
+การ invalidate นี้ไม่ใช่ distributed invalidation และไม่ควรอ้างว่าเคลียร์ cache ของทุก worker
+หรือทุก instance โดยอัตโนมัติ
 
 ---
 

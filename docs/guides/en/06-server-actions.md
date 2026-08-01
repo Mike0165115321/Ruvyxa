@@ -119,7 +119,7 @@ interface CreateTodoInput {
   text: string
 }
 
-export const createTodo = action()
+export const createTodo = action
   .input({
     parse(value: unknown): CreateTodoInput {
       if (typeof value !== 'object' || value === null) throw new Error('Expected object')
@@ -477,7 +477,7 @@ fn forwarded_client_ip(config, headers) → Option<IpAddr>:
 Actions can publish realtime events after successful execution:
 
 ```ts
-export const createTodo = action()
+export const createTodo = action
   .input({
     parse(value: unknown) {
       /* ... */
@@ -491,7 +491,7 @@ export const createTodo = action()
   })
 
 // Or specify custom channels
-export const notify = action()
+export const notify = action
   .input({
     parse(value: unknown) {
       /* ... */
@@ -610,7 +610,7 @@ interface CreateInput {
   text: string
 }
 
-export const createTodo = action()
+export const createTodo = action
   .input({
     parse(value: unknown): CreateInput {
       if (typeof value !== 'object' || value === null) throw new Error('Invalid body')
@@ -633,7 +633,7 @@ interface ToggleInput {
   id: number
 }
 
-export const toggleTodo = action()
+export const toggleTodo = action
   .input({
     parse(value: unknown): ToggleInput {
       if (typeof value !== 'object' || value === null) throw new Error('Invalid body')
@@ -650,7 +650,7 @@ export const toggleTodo = action()
 
 // --- Delete ---
 
-export const deleteTodo = action()
+export const deleteTodo = action
   .input({
     parse(value: unknown): ToggleInput {
       if (typeof value !== 'object' || value === null) throw new Error('Invalid body')
@@ -739,11 +739,11 @@ Key fields in `ServerConfig` that control action behavior:
 
 | Operation                  | Overhead                  |
 | -------------------------- | ------------------------- |
-| Security checks            | ~0.05ms                   |
+| Security checks            | Depends on request/configuration |
 | Body parsing (JSON)        | Payload-size-dependent    |
 | Body parsing (URL-encoded) | Payload-size-dependent    |
 | Rate limiter check         | O(1) average              |
-| Worker dispatch            | ~1ms (IPC to Node worker) |
+| Worker dispatch            | Depends on the selected runtime and worker state |
 | Handler execution          | User-defined              |
 
 ---
@@ -825,7 +825,7 @@ export function UploadForm() {
 // app/upload/action.ts
 import { action } from 'ruvyxa/server'
 
-export const uploadFile = action()
+export const uploadFile = action
   .input({
     parse(value: unknown) {
       if (typeof value !== 'object' || value === null) throw new Error('Invalid')
@@ -857,7 +857,7 @@ export default config({
 Call one action from another:
 
 ```ts
-export const createUser = action()
+export const createUser = action
   .input({
     parse(value: unknown) {
       if (typeof value !== 'object' || value === null) throw new Error('Invalid')
@@ -882,7 +882,7 @@ export const createUser = action()
     return { ok: true, userId }
   })
 
-export const sendWelcomeEmail = action()
+export const sendWelcomeEmail = action
   .input({
     parse(value: unknown) {
       if (typeof value !== 'object' || value === null) throw new Error('Invalid')
@@ -901,7 +901,7 @@ export const sendWelcomeEmail = action()
 Use the `user` context field from middleware:
 
 ```ts
-export const deleteAccount = action()
+export const deleteAccount = action
   .input({
     parse(value: unknown) {
       if (typeof value !== 'object' || value === null) throw new Error('Invalid')
@@ -1003,7 +1003,7 @@ describe('createTodo', () => {
 ### Structured Error Responses
 
 ```ts
-export const updateProfile = action()
+export const updateProfile = action
   .input({
     parse(value: unknown) {
       if (typeof value !== 'object' || value === null) throw new Error('Invalid')
@@ -1032,7 +1032,7 @@ export const updateProfile = action()
 ### Retry Logic
 
 ```ts
-export const processPayment = action()
+export const processPayment = action
   .input({
     parse(value: unknown) {
       if (typeof value !== 'object' || value === null) throw new Error('Invalid')
@@ -1086,7 +1086,7 @@ import { action } from 'ruvyxa/server'
 // In-memory counter (replace with DB in real app)
 let count = 0
 
-export const increment = action()
+export const increment = action
   .input({ parse: () => ({}) })
   .handler(async ({ invalidate }) => {
     count++
@@ -1094,7 +1094,7 @@ export const increment = action()
     return { count }
   })
 
-export const reset = action()
+export const reset = action
   .input({ parse: () => ({}) })
   .handler(async ({ invalidate }) => {
     count = 0

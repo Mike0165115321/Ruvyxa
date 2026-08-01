@@ -1,3 +1,195 @@
+# Markdown, MDX, Images, and Metadata
+
+This guide describes the current content compiler, the build-time image optimizer, and the
+metadata APIs that are present in the repository.
+
+## Markdown and MDX routes
+
+Create `page.md` or `page.mdx` under the app directory:
+
+```md
+---
+title: About Us
+description: A short page description
+---
+
+## Mission
+
+Markdown content is compiled into a route component.
+```
+
+The content compiler in `crates/ruvyxa_bundler/src/content.rs`:
+
+1. Splits optional YAML frontmatter from the body.
+2. Validates the frontmatter as a YAML mapping.
+3. Parses Markdown or MDX.
+4. Collects Markdown heading metadata.
+5. Emits an ESM module that follows the normal TypeScript/JSX pipeline.
+
+Errors are `RUV1310` for unsupported content extensions or Markdown parse failures, `RUV1311` for
+MDX parse failures, and `RUV1312` for invalid or unclosed frontmatter.
+
+## Generated content exports
+
+Unless the source already declares the same named export, the compiler supplies:
+
+```ts
+export const frontmatter = { /* YAML mapping */ }
+export const meta = frontmatter
+export const headings = [{ depth: 2, text: 'Mission', slug: 'mission' }]
+export const contentFormat = 'md' // or 'mdx'
+```
+
+An MDX file may define its own `frontmatter`, `meta`, `headings`, or `contentFormat` export. The
+compiler checks the source export tokens so commented text and string literals do not suppress the
+generated export.
+
+## MDX ESM and components
+
+MDX can contain ESM declarations and JSX. Keep imports and exports valid for the server/client
+boundary of the route:
+
+```mdx
+import { Image } from '@ruvyxa/react'
+
+export const meta = {
+  title: 'Gallery',
+  description: 'A gallery page',
+}
+
+# Gallery
+
+<Image src="/images/hero.jpg" width={1200} height={800} alt="A landscape" />
+```
+
+## Build-time image optimization
+
+The current CLI image optimizer converts public PNG/JPEG assets to WebP. It keeps the original by
+default so existing public URLs remain valid, and can emit responsive WebP variants for configured
+widths. It does not expose the previously documented mozjpeg, oxipng, guetzli, cwebp, libaom, or
+AVIF encoder selection API.
+
+```ts
+// ruvyxa.config.ts
+export default config({
+  image: {
+    optimize: true,
+    quality: 82,
+    lossless: false,
+    keepOriginal: true,
+    variantWidths: [640, 750, 828, 1080, 1200, 1920, 2048, 3840],
+    workers: 0, // zero uses the image optimizer's default worker count
+  },
+})
+```
+
+The option names are `optimize`, `quality`, `lossless`, `keepOriginal`, `variantWidths`, and
+`workers`. The optimizer writes the converted asset under the build assets directory and records
+its source, dimensions, byte counts, cache status, and variants in the image manifest.
+
+`@ruvyxa/react`'s `<Image>` component rewrites local PNG/JPEG URLs to the generated WebP URL. It can
+also produce a `srcSet` from the shared responsive widths. Remote URLs, already-WebP URLs, and
+explicit `unoptimized` images are not rewritten by the local build optimizer.
+
+```tsx
+import { Image } from '@ruvyxa/react'
+
+export function Hero() {
+  return (
+    <Image
+      src="/images/hero.jpg"
+      width={1200}
+      height={800}
+      alt="A landscape"
+      sizes="100vw"
+      priority
+    />
+  )
+}
+```
+
+`alt` is required. `fill` is available when the parent establishes the required positioning
+context. A custom `loader` or `unoptimized` opts out of local URL rewriting.
+
+## Metadata
+
+Routes can export a static `meta` object or a `MetaFactory` from `@ruvyxa/react`:
+
+```tsx
+import type { Meta, MetaFactory } from '@ruvyxa/react'
+
+export const meta: Meta = {
+  title: 'Home',
+  description: 'Home page',
+  canonical: 'https://example.com/',
+  type: 'website',
+}
+
+export const articleMeta: MetaFactory = ({ params }) => ({
+  title: params.slug,
+  type: 'article',
+})
+```
+
+The route `meta` export is composed from ancestor layout to page, with the more specific value
+winning. Supported fields include `title`, `titleTemplate`, `description`, `canonical`, `robots`,
+`noindex`, `lang`, `alternates`, `image`, `imageAlt`, `siteName`, `type`, `locale`, and `card`.
+
+For metadata rendered inside a component, use `<Seo>`:
+
+```tsx
+import { Seo } from '@ruvyxa/react'
+
+export function ArticleSeo() {
+  return (
+    <Seo
+      title="Article"
+      description="Article description"
+      type="article"
+      article={{ type: 'Article', publishedAt: '2026-01-01' }}
+      jsonLd={{ '@type': 'WebPage', name: 'Article' }}
+    />
+  )
+}
+```
+
+Do not set the same metadata field through both the route `meta` export and `<Seo>` unless the
+intentional precedence is understood.
+
+## Verification
+
+```bash
+ruvyxa check
+ruvyxa analyze
+ruvyxa build
+```
+
+Verify generated WebP paths and the image manifest after a build. Do not use undocumented encoder
+names or universal compression/latency percentages as acceptance criteria; measure the actual
+assets and workload if optimization results matter.
+
+## Source of truth
+
+- `crates/ruvyxa_bundler/src/content.rs`
+- `crates/ruvyxa_cli/src/image_optimizer.rs`
+- `packages/@ruvyxa/react/src/image.tsx`
+- `packages/@ruvyxa/react/src/meta.ts`
+- `packages/@ruvyxa/react/src/seo.tsx`
+
+---
+
+## Production contract and retained detail
+
+The section above is the current, source-backed contract for this release. The original long-form
+draft is retained below to preserve instructional context and audit history. It is non-normative:
+do not copy its API snippets or capability claims unless they are revalidated against the current
+source and package export map. This boundary is intentional so the document can retain its original
+depth without presenting unsupported historical design as production behavior.
+
+### English content/image draft — historical draft (non-normative)
+
+> **Archive warning:** The material below is retained for history only. It is not the current content/image contract; examples may be stale or unsupported and must not be copied as working code. The source-backed contract above is authoritative.
+
 # Markdown, MDX, Images & Metadata
 
 Ruvyxa treats `page.md` and `page.mdx` as first-class route components -- no separate compile step,
@@ -757,112 +949,54 @@ generated WebP (48 KB). Use <Image> from @ruvyxa/react.
 
 ---
 
-## Image Optimization (Build-Time) — Full Pipeline
+## Image Optimization (Build-Time) — Source-verified pipeline
 
-### Pipeline Diagram
+The current implementation intentionally has one build-time output contract: public PNG/JPEG files
+are converted to WebP. It is not a general encoder framework and it does not expose AVIF or named
+encoder selection.
 
-```
-Build Start
-    │
-    ▼
-┌──────────────────────────────────────────┐
-│ Phase 1: Discovery                       │
-│  • glob public/images/**/*.{jpg,png,gif} │
-│  • scan imports/references in source     │
-│  • filter out SVG, animated GIF          │
-│  • group by source file                  │
-└────────────────┬─────────────────────────┘
-                 ▼
-┌──────────────────────────────────────────┐
-│ Phase 2: Decode & Metadata               │
-│  • sharp().metadata()                    │
-│  • strip EXIF orientation                │
-│  • auto-rotate using EXIF                │
-│  • compute entropy score                 │
-└────────────────┬─────────────────────────┘
-                 ▼
-┌──────────────────────────────────────────┐
-│ Phase 3: Resize                          │
-│  • for each size in config.sizes[]       │
-│  • sharp().resize(width, fit='outside')  │
-│  • lanczos3 kernel                       │
-│  • preserve aspect ratio                 │
-└────────────────┬─────────────────────────┘
-                 ▼
-┌──────────────────────────────────────────┐
-│ Phase 4: Encode                          │
-│  ┌──────────────┬────────────┬──────────┐│
-│  │ Original     │ Encoder    │ Config   ││
-│  ├──────────────┼────────────┼──────────┤│
-│  │ JPEG → WebP │ cwebp      │ q=80     ││
-│  │ JPEG → AVIF │ libaom-av1 │ q=65     ││
-│  │ JPEG → JPEG │ mozjpeg    │ q=80,p   ││
-│  │ PNG  → WebP │ cwebp      │ q=80     ││
-│  │ PNG  → AVIF │ libaom-av1 │ q=65     ││
-│  │ PNG  → PNG  │ oxipng     │ o=3      ││
-│  │ JPEG premium│ guetzli    │ q=85     ││
-│  └──────────────┴────────────┴──────────┘│
-└────────────────┬─────────────────────────┘
-                 ▼
-┌──────────────────────────────────────────┐
-│ Phase 5: Hash & Write                    │
-│  • blake3-256(content)                   │
-│  • filename: {name}.{hash8}-{size}w.webp │
-│  • write → .ruvyxa/assets/images/        │
-│  • generate manifest.json                │
-│  • generate placeholder blur             │
-└──────────────────────────────────────────┘
+```text
+Build
+  │
+  ├─ discover public assets
+  ├─ validate paths and avoid output collisions
+  ├─ read PNG/JPEG bytes and dimensions
+  ├─ encode one WebP using image.quality/lossless
+  ├─ optionally emit configured narrower WebP variants
+  ├─ keep the original when image.keepOriginal is true
+  └─ record source, dimensions, byte counts, cache status, and variants
+     in the image manifest
 ```
 
-### Encoder Parameters (Rust)
+The source-backed configuration is:
 
-#### mozjpeg (JPEG → JPEG)
-
-```rust
-struct MozJPEGParams {
-    quality: u8,           // 0-100, default: 80
-    progressive: bool,     // default: true
-    optimize_coding: bool, // default: true
-    smooth: u8,           // 0-100, default: 0
-    dct_method: DCTMethod, // Integer | Float
-    trellis_quant: bool,   // default: true
-    trellis_pass: bool,    // default: true
-    overshoot_deringing: bool, // default: true
-}
+```ts
+export default config({
+  image: {
+    optimize: true,
+    quality: 82,
+    lossless: false,
+    keepOriginal: true,
+    variantWidths: [640, 750, 828, 1080, 1200, 1920, 2048, 3840],
+    workers: 0,
+  },
+})
 ```
 
-#### oxipng (PNG → PNG) — Lossless
+`workers: 0` uses the optimizer's default worker calculation. `quality` is clamped to the
+supported 1–100 range, and `lossless` selects the WebP lossless path. The optimizer's cache key
+includes the source content and relevant options, so a changed source or option does not reuse an
+old encoded result.
 
-```rust
-struct OxiPNGParams {
-    level: u8,             // 0-6, default: 3
-    interlace: bool,       // default: false
-    strip: StripMeta,      // Safe | All | None
-    alpha: AlphaHandling,  // Preserve | Remove | Unpremultiply
-    deflate: DeflateAlgo,  // Zlib | Zopfli
-}
-```
+The `<Image>` component uses the generated WebP URL for local PNG/JPEG sources. It creates a
+responsive `srcSet` from the shared device-width list when the intrinsic width and `sizes` allow it.
+Remote URLs, already-WebP URLs, custom loaders, and `unoptimized` images remain outside the local
+build rewrite path.
 
-| Level | Behavior                        |
-| ----- | ------------------------------- |
-| 0     | no optimization                 |
-| 1     | basic filter + zlib             |
-| 2     | + row filter trials             |
-| 3     | + exhaustive filter trials      |
-| 4     | + zopfli (slow)                 |
-| 5     | + full zopfli                   |
-| 6     | maximum compression (very slow) |
-
-#### guetzli (JPEG — Premium Quality)
-
-```rust
-struct GuetzliParams {
-    quality: f32, // >= 84.0, default 85.0
-}
-```
-
-> **Note:** Guetzli provides the smallest JPEG files but requires significant memory (300MB per 1MP)
-> and time. Enabled only via `image.premium: true`.
+There is no supported `image.formats`, `avifQuality`, `image.encoder`, `mozjpeg`, `oxipng`,
+`guetzli`, `cwebp`, or `libaom` configuration in this release. A project that needs another format
+must produce and serve that asset through its own build or image service and should verify the
+resulting URLs independently.
 
 ---
 
@@ -870,12 +1004,12 @@ struct GuetzliParams {
 
 | Feature             | `<img>` Tag                         | `<Image>` Component (`@ruvyxa/react`)            |
 | ------------------- | ----------------------------------- | ------------------------------------------------ |
-| Lazy Loading        | Browser native (`loading="lazy"`)   | Intersection Observer fallback + native lazy     |
-| Blur Placeholder    | ❌ No                               | ✅ Yes (Auto-generated base64 blur)              |
-| Responsive `srcset` | ❌ Manual configuration             | ✅ Auto-generated based on device widths         |
-| Format Negotiation  | ❌ No (`<picture>` needed manually) | ✅ Auto (WebP/AVIF depending on browser support) |
-| Preloading          | ❌ Manual `<link rel="preload">`    | ✅ Built-in with `priority={true}`               |
-| Layout Shift Guard  | ❌ Must provide explicit w/h        | ✅ Auto-inferred dimensions during build         |
+| Lazy Loading        | Browser native (`loading="lazy"`)   | Browser-native loading with `priority` override |
+| Blur Placeholder    | ❌ No                               | ❌ No built-in blur-placeholder API              |
+| Responsive `srcset` | Manual configuration               | Generated from configured device widths         |
+| Format Negotiation  | Manual `<picture>`/`srcSet`        | Local build output is WebP; use `Picture` for art direction |
+| Preloading          | Manual `<link rel="preload">`     | `priority` changes loading/fetch priority        |
+| Layout Shift Guard  | Provide dimensions                 | `width`/`height` or a positioned `fill` parent  |
 
 ---
 
@@ -1101,13 +1235,13 @@ Output:
 | Condition                 | Message                                             |
 | ------------------------- | --------------------------------------------------- |
 | Extension not .md or .mdx | `RUV1310: unsupported content extension for <path>` |
-| .md GFM parse failure     | `RUV1310: Markdown parse error: <details>`          |
+| .md GFM parse failure     | `RUV1310: Markdown parse error: &lt;details&gt;`     |
 
 ### RUV1311
 
 | Condition          | Message                                                    |
 | ------------------ | ---------------------------------------------------------- |
-| .mdx parse failure | `RUV1311: MDX parse error: <details>`                      |
+| .mdx parse failure | `RUV1311: MDX parse error: &lt;details&gt;`                 |
 | Invalid ESM syntax | `MdxSignal::Eof("incomplete or invalid JS module syntax")` |
 
 ### RUV1312
@@ -1115,7 +1249,7 @@ Output:
 | Condition            | Message                                                               |
 | -------------------- | --------------------------------------------------------------------- |
 | Unclosed frontmatter | `RUV1312: frontmatter starts with '---' but has no closing delimiter` |
-| Invalid YAML         | `RUV1312: invalid YAML frontmatter: <details>`                        |
+| Invalid YAML         | `RUV1312: invalid YAML frontmatter: &lt;details&gt;`                   |
 | Non-mapping          | `RUV1312: frontmatter must be a YAML mapping`                         |
 
 ---

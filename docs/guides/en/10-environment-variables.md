@@ -1,8 +1,42 @@
 # Environment Variables
 
-Every app needs configuration that changes between environments: API keys, database URLs, feature
-flags. Ruvyxa gives you a clean, secure system for managing environment variables -- with one hard
-rule: **secrets stay on the server**.
+This page separates the source-backed environment-variable contract from a retained historical
+draft. Secrets must remain server-only; a `RUVYXA_PUBLIC_` value is public by definition and must
+not contain credentials.
+
+## Production contract
+
+The current repository contract is:
+
+- `crates/ruvyxa_dev_server/src/env_file.rs` reads `.env`, then `.env.local`; the later file wins.
+  The repository does not implement the `.env.production`, `.env.development`, or `.env.test` load
+  matrix described by the older draft below.
+- Only statically named `process.env.NAME` and `process.env["NAME"]`/`process.env['NAME']` reads are
+  recorded by the bundler scanner. Dynamic keys such as `process.env[name]` are not statically
+  known.
+- In a client-reachable module, `NODE_ENV` and names beginning with `RUVYXA_PUBLIC_` are allowed;
+  other statically known names produce the RUV1008 private-environment diagnostic.
+- `import.meta.env`, `PUBLIC_*`, `NEXT_PUBLIC_*`, and `VITE_*` are not public-variable aliases in
+  the current source contract. Use `process.env.RUVYXA_PUBLIC_*` for values intended for browser
+  code.
+- `requireEnv` validates required variables during the build; it does not expose private values to
+  the browser and does not replace provider/runtime secret management.
+
+Verify the actual variables and generated bundle for the selected build. No static scanner can prove
+that a dynamically computed name or an externally injected value is safe.
+
+Source of truth: `crates/ruvyxa_dev_server/src/env_file.rs`, `crates/ruvyxa_bundler/src/ast.rs`,
+`crates/ruvyxa_bundler/src/boundary.rs`, `packages/ruvyxa/runtime/compiler.mjs`, and
+`packages/ruvyxa/src/plugins.ts`.
+
+---
+
+## Historical draft (non-normative)
+
+> **Archive warning:** Everything below this line is retained for instructional context and audit
+> history. It is not the current environment-variable contract. Do not copy its load-order tables,
+> compatibility prefixes, `import.meta.env` examples, coverage percentages, or scanner pseudocode as
+> production behavior. The source-backed contract above is authoritative.
 
 ---
 
@@ -16,7 +50,7 @@ rule: **secrets stay on the server**.
 - Build-time inlining and dead-code elimination
 - requireEnv plugin for startup validation
 - Security best practices and .gitignore patterns
-- CI/CD adapter-specific env configuration
+- CI/CD adapter-node env configuration
 
 ---
 

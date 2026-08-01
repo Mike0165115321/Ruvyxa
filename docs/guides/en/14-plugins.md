@@ -1,5 +1,126 @@
 # Plugins
 
+Ruvyxa plugins are lifecycle extensions registered through the public plugin API. This page
+separates the current implementation contract from retained historical examples so a build or
+production review can trace each claim to source.
+
+## Production contract
+
+### Current built-in exports
+
+The first-party package export is ruvyxa/plugins. The current source exports these 16 builders:
+
+```ts
+redirects
+headers
+observability
+securityHeaders
+cacheRules
+pwa
+sitemap
+robots
+feed
+searchIndex
+contentEngine
+openApi
+alias
+bundleBudget
+requireEnv
+fonts
+```
+
+These are built-in plugin factories, not separately versioned packages. The checked-in first-party
+package manifests use release version 1.0.25; realtime@1 is a native capability/protocol identifier,
+not a plugin package version.
+
+### Configuration and registration
+
+```ts
+import { config } from 'ruvyxa/config'
+import { redirects, headers, observability, securityHeaders, cacheRules } from 'ruvyxa/plugins'
+
+export default config({
+  plugins: [
+    redirects([{ source: '/old-page', destination: '/new-page', permanent: true }]),
+    headers([{ source: '/api/*', headers: { 'cache-control': 'no-store' } }]),
+    observability(),
+    securityHeaders(),
+    cacheRules([{ source: '/assets/*', browser: 'public, max-age=3600' }]),
+  ],
+})
+```
+
+The configuration entry point is config(). Route patterns use exact matches, *, or a trailing prefix
+wildcard according to the factory. The implementation validates rule shapes, header values, paths,
+and plugin-specific options at registration/build time.
+
+### Lifecycle hooks
+
+The public plugin bridge includes build hooks (onStart, onResolve, onLoad, onTransform, onComplete),
+HTTP hooks (onRequest, onResponse, route), development file-change hooks, diagnostics reporting, and
+native capability claims. The exact payload types are defined in packages/@ruvyxa/core/src/plugin.ts
+and packages/@ruvyxa/core/src/types.ts; do not infer a payload shape from an example belonging to
+another hook.
+
+Build hooks run through the TypeScript plugin worker bridge. HTTP hooks are invoked by the
+middleware bridge around request/response handling. A plugin hook has a default timeout of 30
+seconds and a maximum configured timeout of 300 seconds; timeout is reported as RUV1700 and
+malformed plugin protocol/response data as RUV1701.
+
+### Source-backed behavior by builder
+
+- redirects: emits 307 or 308 responses and rejects unsafe destination forms.
+- headers: sets configured response headers for matching routes.
+- observability: can add request IDs, trace context, Server-Timing, and structured timing logs;
+  measured duration is workload data, not a benchmark guarantee.
+- securityHeaders: applies configured response security policy; application-specific CSP choices
+  remain the owner's responsibility.
+- cacheRules: writes browser/CDN cache policy and Vary values without claiming cache coherence.
+- pwa, sitemap, robots, feed, searchIndex, and contentEngine: emit build artifacts from validated
+  project inputs.
+- openApi: emits a validated OpenAPI document from explicitly supplied operations.
+- alias: registers module-resolution aliases.
+- bundleBudget: checks configured bundle-size limits; the source does not define a universal
+  performance target or a dedicated RUV error code for every budget failure.
+- requireEnv: validates required environment variables during build.
+- fonts: fetches and self-hosts configured Google Fonts stylesheets when the build environment
+  permits the request; verify generated assets and provider availability in CI.
+
+### Production verification
+
+```bash
+ruvyxa check
+ruvyxa analyze
+ruvyxa build
+```
+
+For a production review, record the selected plugins, configuration inputs, generated artifacts,
+environment variables, target adapter, and workload measurements. The repository does not claim
+universal latency, throughput, bundle-size, ROI, partner commitments, or deployment promotion.
+
+## Source of truth
+
+- packages/ruvyxa/src/plugins.ts
+- packages/@ruvyxa/core/src/plugin.ts
+- crates/ruvyxa_middleware/src
+- packages/@ruvyxa/core/package.json
+
+---
+
+## Retained detailed draft
+
+The original long-form plugin guide is retained for context and audit history only. It is
+non-normative; revalidate every API, option, payload, metric, and provider statement against the
+current source before using it in a production project.
+
+### English plugin draft — historical draft (non-normative)
+
+> **Archive warning:** The material below is retained for history only. It is not the current plugin
+> contract; examples may be stale or unsupported and must not be copied as working code. The
+> source-backed contract above is authoritative.
+
+# Plugins
+
 Ruvyxa plugins tap into framework lifecycle — module resolution, server startup, build completion.
 Enforce security headers, generate sitemaps, add middleware, or build custom integrations. The
 plugin system gives hooks for every phase.

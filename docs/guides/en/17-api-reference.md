@@ -2,8 +2,8 @@
 
 **Ruvyxa 1.0**
 
-Complete reference for the `@ruvyxa/react`, `@ruvyxa/core`, and related packages. Covers every
-exported component, hook, function, type, and constant.
+Reference for the public exports documented from `@ruvyxa/react`, `@ruvyxa/core`, and related
+packages. Confirm any API not listed here against the package export map and generated type files.
 
 ---
 

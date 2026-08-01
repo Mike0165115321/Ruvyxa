@@ -1,5 +1,171 @@
 # Data Loading and Caching
 
+Ruvyxa provides an in-memory, LRU-bounded server cache with TTL, stale-while-revalidate (SWR),
+periodic cleanup, and producer-error isolation. The cache is process-local: each Node/Bun worker has
+its own entries.
+
+## Production API
+
+The examples in this section are the current public contract. They are based on
+packages/@ruvyxa/core/src/server.ts and the ruvyxa/server re-export.
+
+### Loader and cache types
+
+~~~ts
+export interface LoaderContext {
+  params: Record<string, string>
+  request: Request
+  cache: typeof cache
+}
+
+export type LoaderHandler<TResult> = (ctx: LoaderContext) => TResult | Promise<TResult>
+
+export interface Loader<TResult> {
+  (ctx?: Partial<LoaderContext>): Promise<TResult>
+  ruvyxa: { kind: 'loader' }
+}
+
+export function loader<TResult>(handler: LoaderHandler<TResult>): Loader<TResult>
+
+export interface CacheBuilder {
+  ttl(value: string): CacheBuilder
+  swr(value: string): CacheBuilder
+  get<T>(producer: () => T | Promise<T>): Promise<T>
+}
+
+export function cache(key: string): CacheBuilder
+export function invalidateCache(keyOrPrefix?: string): void
+export function cacheStats(): { size: number; maxEntries: number }
+~~~
+
+### Server loader with an explicit cache key
+
+~~~tsx
+import { loader } from 'ruvyxa/server'
+
+export const getUser = loader(async ({ params, cache }) => {
+  const userId = params.userId ?? 'unknown'
+  return cache('user:profile:' + userId)
+    .ttl('5m')
+    .swr('1m')
+    .get(async () => {
+      const response = await fetch('https://api.example.com/users/' + userId)
+      if (!response.ok) throw new Error('user lookup failed: ' + response.status)
+      return response.json() as Promise<{ id: string; name: string }>
+    })
+})
+~~~
+
+For a function whose argument is not supplied through loader context, build the key explicitly:
+
+~~~ts
+import { cache } from 'ruvyxa/server'
+
+export const getUserById = (userId: string) =>
+  cache('user:profile:' + userId)
+    .ttl('5m')
+    .swr('1m')
+    .get(() => fetchUser(userId))
+~~~
+
+loader(handler) is a callable loader. It is not a chainable builder and does not expose
+.key(), .ttl(), .swr(), or .get() methods.
+
+### TTL, SWR, and cache keys
+
+TTL accepts a positive string such as 500ms, 30s, 5m, 1h, or 1d; the default is 60 seconds. A
+malformed or unsafe duration throws the invalid-cache-duration error.
+
+When .get() is called on a fresh entry, the value is returned immediately. During the SWR window, the
+stale value is returned while at most one background refresh is started for that key. After the SWR
+window, the producer runs synchronously for the next request. If a producer fails while a stale entry
+exists, the stale value may be returned; a miss with no prior value propagates the producer error.
+
+Choose keys that include every input affecting the result:
+
+~~~ts
+cache('products:featured')
+cache('tenant:' + tenantId + ':settings')
+cache('user:' + userId + ':profile')
+~~~
+
+### Invalidation and actions
+
+~~~ts
+import { invalidateCache } from 'ruvyxa/server'
+
+invalidateCache('user:profile:42')
+invalidateCache('user:profile') // exact key and keys beginning with user:profile:
+invalidateCache()                 // clear this worker cache
+~~~
+
+invalidateCache returns void. In an action handler, use the invalidate function from ActionContext:
+
+~~~ts
+import { action } from 'ruvyxa/server'
+
+export const updateProfile = action
+  .input({
+    parse(value: unknown) {
+      if (!value || typeof value !== 'object') throw new Error('invalid input')
+      return value as { userId: string; name: string }
+    },
+  })
+  .handler(async ({ input, invalidate }) => {
+    await db.users.update({ where: { id: input.userId }, data: { name: input.name } })
+    invalidate('user:profile:' + input.userId)
+    return { ok: true }
+  })
+~~~
+
+### Cache limits, observability, and deployment
+
+The built-in store is bounded to 1,024 entries and uses LRU eviction. A timer prunes entries that
+have passed the full stale window. cacheStats() reports the current entry count and the configured
+maximum. These are local process metrics, not a distributed cache or a cross-worker coherence layer.
+
+For multiple workers, use an application-owned external cache at the data-access boundary. Define its
+serialization, TTL, invalidation, failure, and key-isolation behavior explicitly; Ruvyxa does not
+export a Redis/Memcached provider or a cache-aside API.
+
+### Browser loader hook
+
+~~~tsx
+'use client'
+import { useRuvyxaLoader } from '@ruvyxa/react'
+
+export function UserPanel() {
+  const result = useRuvyxaLoader(
+    () => fetch('/api/user').then((response) => response.json() as Promise<{ name: string }>),
+    { deps: [] },
+  )
+  if (result.loading) return <p>Loading...</p>
+  if (result.error) return <p>{result.error.message}</p>
+  return <button onClick={result.refetch}>{result.data?.name}</button>
+}
+~~~
+
+This hook manages browser loading state; it does not make the server cache shared or durable.
+
+## Verification
+
+Use ruvyxa check, ruvyxa analyze, and ruvyxa trace <route> to verify the surrounding route. Use
+ruvyxa bench for workload-specific measurements. The repository does not establish universal latency,
+throughput, ROI, or deployment timelines.
+
+---
+
+## Retained detail
+
+The following long-form draft is retained for context and audit history only. It is non-normative:
+revalidate each API example against the current source before using it.
+
+### English cache draft — historical draft (non-normative)
+
+> **Archive warning:** The material below is retained for history only. It is not the current cache API; examples may be stale or unsupported and must not be copied as working code. The source-backed contract above is authoritative.
+
+# Data Loading and Caching
+
 Ruvyxa provides a built-in caching layer for server-side data. Use it to reduce database load, speed
 up responses, and keep data fresh. The cache is an in-memory, LRU-bounded store with
 stale-while-revalidate semantics and error isolation.
@@ -134,15 +300,19 @@ export default async function ProfilePage({ params }: { params: { id: string } }
 }
 ```
 
-### Loader Accepted Formats
+### Loader and cache entry points
 
-Loaders accept both a handler argument at construction time and arguments at call time:
+The public loader is created with its handler. The handler receives loader context, and the returned
+loader is callable. Caching is explicit through the separate `cache(key)` builder:
 
-| Pattern                                   | Cache Key  | Description                    |
-| ----------------------------------------- | ---------- | ------------------------------ |
-| `loader().get(async (id: string) => ...)` | `key:arg1` | Arguments appended to base key |
-| `loader().get(async () => ...)`           | `key`      | No arguments, single value     |
-| `loader(ctx => ...)` (direct)             | N/A        | No caching, bare execution     |
+| Pattern | Behavior |
+| --- | --- |
+| `loader(async (ctx) => value)` | Creates a callable loader with the framework loader marker. |
+| `cache('resource:key').get(producer)` | Reads or produces one value in the process-local cache. |
+| `cache('resource:key').ttl('5m').swr('1m').get(producer)` | Adds fresh and stale windows to that cache entry. |
+
+`loader()` is not a chainable cache builder. It does not expose `.key()`, `.ttl()`, `.swr()`, or
+`.get()`; use `cache(key)` when the application needs an explicit data-cache entry.
 
 ---
 
@@ -151,14 +321,13 @@ Loaders accept both a handler argument at construction time and arguments at cal
 ### Basic Syntax
 
 ```ts
-loader()
-  .key('resource:scope') // Unique cache key
-  .ttl('5m') // How long until stale
-  .swr('1m') // Stale-while-revalidate window
-  .get(async (...args) => {
-    // Your fetch logic here
-    return data
-  })
+import { cache } from 'ruvyxa/server'
+
+const getResource = () =>
+  cache('resource:scope')
+    .ttl('5m')
+    .swr('1m')
+    .get(async () => fetchResource())
 ```
 
 ### TTL (Time-To-Live)
@@ -908,23 +1077,26 @@ console.log(`Cache ratio: ${hits}/${hits + misses}`)
 
 ## Integration with ISR and SSG
 
-For ISR pages, coordinate cache TTL with revalidation interval:
+An ISR route and the process-local data cache are separate mechanisms. If both are used, document
+their windows as independent values and test the resulting request behavior; matching two numbers
+does not make either cache distributed or transactional.
 
 ```ts
 // app/blog/[slug]/page.tsx
 export const revalidate = 300 // ISR: revalidate every 5 minutes
 
-// In your loader, set matching TTL
-export const getBlogPost = loader()
-  .key('blog:post')
-  .ttl('5m') // matches ISR revalidate
-  .swr('1m') // serve stale while revalidating
-  .get(async (slug: string) => {
+// In the data-access function, choose a key that includes every input.
+export const getBlogPost = (slug: string) =>
+  cache('blog:post:' + slug)
+    .ttl('5m')
+    .swr('1m')
+    .get(async () => {
     return await db.query('SELECT * FROM posts WHERE slug = ?', [slug])
-  })
+    })
 ```
 
-This ensures both the page cache and data cache have aligned expiration windows.
+The key must include `slug`; otherwise different posts would share one cache entry. The example
+does not claim that the page cache and data cache expire at the same moment.
 
 ## Thundering Herd Prevention
 

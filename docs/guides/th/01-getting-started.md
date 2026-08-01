@@ -366,9 +366,10 @@ export interface ImageConfig {
 }
 ```
 
-### `ruvyxa-env.d.ts`
+### `ruvyxa-env.d.ts` (optional TypeScript declaration)
 
-สร้างไฟล์ `app/ruvyxa-env.d.ts` สำหรับ Type-safe CSS modules และ Environment Variables:
+สร้างไฟล์ `app/ruvyxa-env.d.ts` สำหรับ declaration ของ project ตามต้องการ runtime อ่านค่าที่ public
+ผ่าน `process.env.RUVYXA_PUBLIC_*`; Ruvyxa ไม่มี compatibility layer แบบ Vite ของ `import.meta.env`
 
 ```ts
 declare module '*.css' {
@@ -376,20 +377,18 @@ declare module '*.css' {
   export default content
 }
 
-interface ImportMetaEnv {
-  RUVYXA_PUBLIC_APP_NAME: string
-  RUVYXA_PUBLIC_API_URL: string
-}
-
-interface ImportMeta {
-  readonly env: ImportMetaEnv
+declare namespace NodeJS {
+  interface ProcessEnv {
+    readonly RUVYXA_PUBLIC_APP_NAME?: string
+    readonly RUVYXA_PUBLIC_API_URL?: string
+  }
 }
 ```
 
 ช่วยให้คุณได้ความสามารถ:
 
 - การ Import Type-safe CSS module: `import styles from './styles.module.css'`
-- Type-safe สำหรับ Public env vars: `import.meta.env.RUVYXA_PUBLIC_APP_NAME`
+- Type-safe สำหรับ Public env vars: `process.env.RUVYXA_PUBLIC_APP_NAME`
 - Autocompletion ในโปรแกรม Editor
 
 ---
@@ -570,9 +569,9 @@ export default config(settings)
 | `security.pluginLimit`            | ≤ 268,435,456 bytes                       | RUV1602    |
 | `security.actionRateLimit.max`    | 1 - 10,000                                | RUV1601    |
 | `security.actionRateLimit.window` | 1 - 86,400 seconds                        | RUV1601    |
-| `build.jsxRuntime`                | `classic` หรือ `automatic` เท่านั้น       | RUV1601    |
-| `build.esTarget`                  | `es2018` ถึง `esnext` เท่านั้น            | RUV1601    |
-| `build.splitStrategy`             | `single`, `route`, หรือ `manual`          | RUV1601    |
+| `build.jsx`                       | `classic` หรือ `automatic` เท่านั้น       | RUV1601    |
+| `build.target`                    | `es2018` ถึง `esnext` เท่านั้น            | RUV1601    |
+| `build.split`                     | `single`, `route`, หรือ `manual`          | RUV1601    |
 | `middleware.workers`              | 1 - 8                                     | RUV1602    |
 | `middleware.timeoutMs`            | 1 - 300,000                               | RUV1602    |
 | `security.trustedProxyIps`        | ต้องเป็น IP address หรือ CIDR range       | RUV1602    |
@@ -582,27 +581,15 @@ export default config(settings)
 
 ## ruvyxa-env.d.ts — TypeScript declarations
 
-ไฟล์นี้ถูกสร้างโดยอัตโนมัติใน `.ruvyxa/` เพื่อให้ TypeScript รู้จัก env vars และ module declarations
-ที่ Ruvyxa สร้าง:
+ไฟล์นี้เป็น declaration ที่ project สร้างเองได้ตามต้องการ ไม่ได้ถูกสร้างโดย Ruvyxa อัตโนมัติ runtime
+อ่านค่า public ผ่าน `process.env.RUVYXA_PUBLIC_*` และไม่มี `import.meta.env` compatibility layer:
 
 ```ts
-/// <reference types="ruvyxa/types" />
-
 declare namespace NodeJS {
   interface ProcessEnv {
-    RUVYXA_SITE_URL?: string
-    RUVYXA_PUBLIC_APP_NAME?: string
-    RUVYXA_PUBLIC_APP_DESCRIPTION?: string
-    RUVYXA_RUNTIME?: 'node' | 'bun'
-    [key: `RUVYXA_PUBLIC_${string}`]: string | undefined
+    readonly RUVYXA_PUBLIC_APP_NAME?: string
+    readonly RUVYXA_PUBLIC_APP_DESCRIPTION?: string
   }
-}
-
-declare module '*.md' {
-  import type { MDXContent } from 'ruvyxa/mdx'
-  const content: MDXContent
-  export { metadata } from '*.md'
-  export default content
 }
 
 declare module '*.mdx' {
@@ -711,7 +698,7 @@ declare module '*.module.sass' {
 | `--runtime` | `node\|bun`           | อัตโนมัติ    | JavaScript runtime        |
 
 Adapter names ที่รู้จัก: `node`, `bun`, `static`, `vercel`, `netlify`, `cloudflare`, `railway`,
-`render`, `firebase`, `aws` หรือ package name เช่น `@scope/ruvyxa-adapter-deno`
+`render`, `firebase`, `aws` หรือ package name เช่น `@scope/ruvyxa-adapter-node`
 
 ### ruvyxa check
 
@@ -1038,7 +1025,7 @@ Ruvyxa ใช้ **Radix Tree** (compressed trie) สำหรับการจ
 | `RUV2200` | Adapter build failed               | Adapter runtime error                                           | ตรวจสอบ adapter                                                |
 | `RUV2202` | Strategy not supported             | Adapter ไม่รองรับ render strategy                               | เปลี่ยน strategy หรือ adapter                                  |
 | `RUV2203` | Adapter package missing            | ไม่พบ adapter package                                           | `npm install @ruvyxa/adapter-*`                                |
-| `RUV9999` | Internal error                     | Compiler internal error                                         | รายงาน bug                                                     |
+| `—`       | Internal framework error           | Code ขึ้นกับ subsystem ที่ล้มเหลว                               | เก็บ diagnostic เต็มรูปแบบและรายงาน bug                        |
 
 ---
 
@@ -1450,7 +1437,7 @@ export async function createRuvyxaApp(
 
 ---
 
-## Your First 10 Minutes (10 นาทีแรกของคุณ)
+## Your First Working Session (ช่วงเริ่มต้นใช้งาน)
 
 แผนแบบย่อให้คุณคุ้นเคยกับ Ruvyxa:
 

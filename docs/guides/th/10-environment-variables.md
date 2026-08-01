@@ -1,8 +1,39 @@
 # Environment Variables ใน Ruvyxa
 
-Ruvyxa จัดการ environment variables อย่างปลอดภัย — แยกตัวแปร client-side (สาธารณะ) ออกจาก
-server-side (ส่วนตัว) โดยอัตโนมัติ ป้องกัน secrets รั่วไหลไปยังเบราว์เซอร์ พร้อม TypeScript
-declarations, prefix detection algorithm, client scanner, และ validation full pipeline
+หน้านี้แยก environment-variable contract ที่ตรวจจาก source จริงออกจาก historical draft ที่เก็บไว้
+เพื่อรักษาความยาวและบริบทเดิม Secret ต้องอยู่ฝั่ง server; ค่า `RUVYXA_PUBLIC_` ถือเป็น public โดย
+ความหมายและห้ามใส่ credential
+
+## Production contract
+
+contract ปัจจุบันของ repository คือ:
+
+- `crates/ruvyxa_dev_server/src/env_file.rs` อ่าน `.env` แล้ว `.env.local` โดยไฟล์หลังชนะไฟล์ก่อน
+  ไม่มี load matrix ของ `.env.production`, `.env.development` หรือ `.env.test` แบบใน draft เดิม
+- bundler scanner บันทึกเฉพาะ `process.env.NAME` และ `process.env["NAME"]`/`process.env['NAME']`
+  ที่ระบุชื่อแบบ static; `process.env[name]` ไม่ใช่ชื่อที่ scanner รู้ได้ล่วงหน้า
+- ใน module ที่ client เข้าถึงได้ อนุญาต `NODE_ENV` และชื่อที่ขึ้นต้นด้วย `RUVYXA_PUBLIC_` เท่านั้น
+  ชื่อ static อื่นจะทำให้เกิด diagnostic RUV1008
+- `import.meta.env`, `PUBLIC_*`, `NEXT_PUBLIC_*` และ `VITE_*` ไม่ใช่ public-variable alias ที่มีใน
+  source ปัจจุบัน ถ้าต้องการให้ browser เห็นให้ใช้ `process.env.RUVYXA_PUBLIC_*`
+- `requireEnv` ตรวจตัวแปรที่จำเป็นตอน build แต่ไม่เปิดเผย private value ให้ browser และไม่แทนที่
+  secret management ของ provider/runtime
+
+ต้องตรวจ variable และ generated bundle ของ build ที่เลือกจริง เพราะ static scanner ไม่สามารถรับรอง
+ชื่อที่คำนวณแบบ dynamic หรือค่าที่ inject จากระบบภายนอกได้
+
+Source of truth: `crates/ruvyxa_dev_server/src/env_file.rs`, `crates/ruvyxa_bundler/src/ast.rs`,
+`crates/ruvyxa_bundler/src/boundary.rs`, `packages/ruvyxa/runtime/compiler.mjs` และ
+`packages/ruvyxa/src/plugins.ts`
+
+---
+
+## Historical draft (non-normative)
+
+> **คำเตือน archive:** ทุกอย่างหลังบรรทัดนี้เก็บไว้เพื่อบริบทและประวัติการตรวจสอบเท่านั้น ไม่ใช่
+> environment-variable contract ปัจจุบัน ห้ามคัดลอกตาราง load order, compatibility prefix, ตัวอย่าง
+> `import.meta.env`, ตัวเลข coverage หรือ scanner pseudocode ไปใช้เป็น production behavior
+> โดยไม่ตรวจ source ใหม่ contract ที่อยู่ด้านบนเป็นแหล่งอ้างอิงหลัก
 
 ---
 
@@ -1164,9 +1195,9 @@ Thumbs.db
 
 ```ts
 // ruvyxa.config.ts
-import { defineConfig } from 'ruvyxa/config'
+import { config } from 'ruvyxa/config'
 
-export default defineConfig({
+export default config({
   plugins: [
     {
       name: 'requireEnv',

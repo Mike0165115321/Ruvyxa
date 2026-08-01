@@ -9,9 +9,9 @@ middleware, plugins, ไปจนถึง deployment adapters
 ## สิ่งที่คุณจะได้เรียนรู้ (What You Will Learn)
 
 - โครงสร้างของ config object แบบเต็ม
-- ทุก field พร้อมระบุ TypeScript type, Rust type, ค่าเริ่มต้น (default), การตรวจสอบ (validation)
-  และพฤติกรรม
-- กฎการตรวจสอบความถูกต้องของ Configuration (RUV1600-1602)
+- field ที่ source รองรับ พร้อม TypeScript type, Rust mapping, default ที่ source resolve ให้,
+  validation และพฤติกรรม
+- กฎการตรวจสอบความถูกต้องของ Configuration (RUV1600-RUV1603 ใน config path ปัจจุบัน)
 - การจับคู่ field กับโครงสร้าง Rust `ProjectConfig` สำหรับทุก field
 - วิธีปรับแต่งเซิร์ฟเวอร์, build, render, cache, image, security, middleware, และ plugins
 - การคอนฟิก Plugin และ Adapter
@@ -32,7 +32,7 @@ export default config({
 ```
 
 ฟังก์ชัน `config()` ช่วยให้มี autocomplete และตรวจสอบความถูกต้อง (validation)
-ฟิลด์ที่ไม่รู้จักจะเกิด type error และ runtime warning `RUV1200`
+ฟิลด์ที่ไม่รู้จักจะถูกปฏิเสธโดย config renderer ด้วย `RUV1602` ไม่ใช่ runtime warning `RUV1200`
 
 ### ลำดับการโหลด Config
 
@@ -143,7 +143,7 @@ type RuvyxaConfig = {
 
 ## โครงสร้าง Rust ProjectConfig Struct Mapping
 
-โครงสร้าง Rust แบบเต็มอยู่ที่ `crates/ruvyxa_cli/src/main.rs`:
+โครงสร้าง Rust ของ config อยู่ที่ `crates/ruvyxa_cli/src/config.rs`:
 
 ```rust
 #[derive(Debug, Default, Deserialize)]
@@ -242,10 +242,10 @@ server: {
 }
 ```
 
-| Field  | TS Type  | Default     | Validation | Error   | Behavior                                                            |
-| ------ | -------- | ----------- | ---------- | ------- | ------------------------------------------------------------------- |
-| `host` | `string` | `localhost` | Valid IP   | RUV1602 | bind host                                                           |
-| `port` | `number` | `3000`      | 1024-65535 | RUV1602 | ถ้าใช้งานอยู่ CLI จะแจ้งเตือน RUV1201 เว้นแต่จะระบุ port = 0 (สุ่ม) |
+| Field  | TS Type  | Default     | Validation                                        | Error                        | Behavior                                          |
+| ------ | -------- | ----------- | ------------------------------------------------- | ---------------------------- | ------------------------------------------------- |
+| `host` | `string` | `localhost` | ส่งต่อให้ server/OS bind                          | ขึ้นกับ bind                 | ค่า host ไม่ได้ถูก validate เป็น IP โดย framework |
+| `port` | `number` | `3000`      | parse เป็น `u16` ไม่มี minimum 1024 จาก framework | RUV1201 เมื่อ bind ไม่สำเร็จ | การ bind ที่ผิดพลาดขึ้นกับ OS/server              |
 
 ---
 
@@ -355,7 +355,8 @@ image: {
 }
 ```
 
-ควบคุมกระบวนการ Build-time Image Optimization ผ่านไลบรารี Sharp:
+ควบคุมกระบวนการ Build-time Image Optimization ผ่าน Rust image decoder และ WebP encoder ของ
+repository:
 
 - ถ้ากำหนด `optimize: false` คอมโพเนนต์ `<Image>` จะถูกแปลงกลับเป็น `<img loading="lazy">` ธรรมดา
 - ภาพจะถูกปรับขนาดตามอาร์เรย์ `variantWidths` สำหรับทำแอตทริบิวต์ `srcset`
@@ -375,8 +376,8 @@ security: {
 
 ควบคุม Body size parsers ที่ฝั่ง Server (เพื่อป้องกัน DDOS จาก Payload มหาศาล):
 
-- RUV1602 จะถูกโยนขึ้นมา (throw) หากระบุเกินขีดจำกัดสูงสุด: `actionLimit > 10MB`, `apiLimit > 50MB`,
-  `pluginLimit > 256MB`
+- RUV1602 จะถูกโยนขึ้นมา (throw) หากระบุเกินขีดจำกัดสูงสุด: `actionLimit > 16 MiB`,
+  `apiLimit > 256 MiB`, `pluginLimit > 256 MiB`
 
 ---
 
@@ -478,67 +479,70 @@ export default config({
 ruvyxa doctor --config
 ```
 
-จะพ่นรายละเอียดของการตั้งค่า และเช็ค RUV16xx ให้อย่างสมบูรณ์
+จะพ่นรายละเอียดของการตั้งค่าและเช็ค RUV16xx ตามกฎที่มีอยู่ใน source; อย่าถือว่าฟิลด์ที่ไม่ได้อยู่ใน
+type หรือ parser เป็น configuration ที่รองรับ
 
 ## Validation Rules — Complete Reference (Rust)
 
-### รหัส Error RUV1600-RUV1699
+### รหัส Error ที่ใช้ใน Config Path ปัจจุบัน
 
-| Code    | เงื่อนไข                       | ฟิลด์                                     | วิธีแก้                   |
-| ------- | ------------------------------ | ----------------------------------------- | ------------------------- |
-| RUV1601 | ค่าไม่ถูกต้อง (invalid)        | หลายฟิลด์                                 | ตรวจค่าตามที่กำหนด        |
-| RUV1602 | ค่าเกินขีดจำกัด (out of range) | หลายฟิลด์                                 | ปรับค่าให้อยู่ในช่วง      |
-| RUV1603 | ฟิลด์ไม่รู้จัก (unknown field) | ทั้ง config                               | ตรวจ camelCase            |
-| RUV1602 | config มีโครงสร้างไม่ถูกต้อง   | plugins.name ซ้ำหรือ field ไม่ถูกต้อง     | แก้ schema และชื่อ plugin |
-| RUV1603 | adapter definition ไม่ถูกต้อง  | adapter ไม่มี `build(context)` ที่ถูกต้อง | แก้ adapter contract      |
+config path ปัจจุบันใช้ `RUV1600` เมื่อโหลด config ไม่สำเร็จ, `RUV1601` เมื่อค่าไม่ถูกต้อง,
+`RUV1602` เมื่อ shape/unknown field/limit ไม่ถูกต้อง และ `RUV1603` เมื่อ adapter definition หรือ
+adapter output ไม่ถูกต้อง ไม่ควรอนุมานว่าเลขทุกตัวในช่วง `RUV1600`-`RUV1699` ถูก implement แล้ว
+
+| Code    | เงื่อนไข                             | ฟิลด์                                                    | วิธีแก้                   |
+| ------- | ------------------------------------ | -------------------------------------------------------- | ------------------------- |
+| RUV1601 | ค่าไม่ถูกต้อง (invalid)              | หลายฟิลด์                                                | ตรวจค่าตามที่กำหนด        |
+| RUV1602 | ค่าเกินขีดจำกัด (out of range)       | หลายฟิลด์                                                | ปรับค่าให้อยู่ในช่วง      |
+| RUV1602 | ฟิลด์ไม่รู้จัก (unknown field)       | ทั้ง config                                              | ตรวจ camelCase            |
+| RUV1602 | config มีโครงสร้างไม่ถูกต้อง         | plugins.name ซ้ำหรือ field ไม่ถูกต้อง                    | แก้ schema และชื่อ plugin |
+| RUV1603 | adapter definition/output ไม่ถูกต้อง | adapter ไม่มี `build(context)` หรือคืน output ไม่ถูกต้อง | แก้ adapter contract      |
 
 ### Validation Matrix
 
-| Config Field | RUV1601 | RUV1602 | หมายเหตุ | | ------------------------------------ | -----------
-| ---------------- | ------- | ---------------------- | | `appDir` empty/absolute | ✅ | - | ✅ |
-relative path required | | `outDir` empty/absolute | ✅ | - | ✅ | relative path required | |
-`server.port` 0 | ✅ | ✅ (ถ้า > 65535) | ✅ | 1024-65535 | | `server.host` invalid | - | ✅ | ✅ |
-valid hostname/IP | | `site.url` invalid | - | ✅ | ✅ | origin เท่านั้น | |
-`site.sitemap.defaults.priority` | - | ✅ (0-1) | ✅ | float | | `build.parallelism` 0 | ✅ | ✅
-(ถ้า > 64) | ✅ | 1-64 | | `build.splitStrategy` invalid | ✅ | - | ✅ | auto/route/vendor/all | |
-`build.jsxRuntime` invalid | ✅ | - | ✅ | automatic/classic | | `build.esTarget` invalid | ✅ | - |
-✅ | es2020-esnext | | `security.actionLimit` 0 | ✅ | ✅ (>10MB) | ✅ | 1B-10MB | |
-`security.apiLimit` 0 | ✅ | ✅ (>50MB) | ✅ | 1B-50MB | | `security.pluginLimit` 0 | ✅ | ✅
-(>50MB) | ✅ | 1B-50MB | | `security.maxBodySize` 0 | ✅ | ✅ (>100MB) | ✅ | 1B-100MB | |
-`security.trustedProxyIps[]` invalid | - | ✅ | ✅ | valid IP/CIDR | |
-`security.actionRateLimit.max` 0 | ✅ | - | ✅ | ≥ 1 | | `security.actionRateLimit.window` 0 | ✅
-| - | ✅ | ≥ 1 | | `middleware.workers` 0 | ✅ | ✅ (>8) | ✅ | 1-8 | | `middleware.timeoutMs` 0 |
-✅ | ✅ (>300s) | ✅ | 1ms-300s | | `image.quality` out of range | ✅ (0/100+) | - | ✅ | 1-100 | |
-`image.avifQuality` out of range | ✅ (0/100+) | - | ✅ | 1-100 | | `image.sizes[]` 0 | ✅ | ✅
-(>10000) | ✅ | 1-9999 | | `image.formats` empty | ✅ | - | ✅ | ≥ 1 format | | `css.entries[]`
-absolute | ✅ | - | ✅ | relative path | | `cache.buildDir` absolute | ✅ | - | ✅ | relative path |
-| `adapter` unknown | ✅ | - | ✅ | ดู AdapterType | | `plugins[].name` empty/duplicate | ✅ | - |
-✅ | unique, non-empty |
+| Config Field                                        | RUV1601 | RUV1602            | หมายเหตุ                       |
+| --------------------------------------------------- | ------- | ------------------ | ------------------------------ |
+| `appDir` หรือ `outDir` ว่าง/absolute                | ✅      | -                  | ต้องเป็น project-relative path |
+| `server.port` เป็น 0                                | ✅      | ✅ เมื่อเกิน 65535 | ตรวจช่วงพอร์ต                  |
+| `server.host` ไม่ถูกต้อง                            | -       | ✅                 | hostname/IP                    |
+| `site.url` ไม่ถูกต้อง                               | -       | ✅                 | ต้องเป็น origin                |
+| `site.sitemap.defaults.priority`                    | -       | ✅                 | ค่า 0 ถึง 1                    |
+| `build.workers` เป็น 0                              | ✅      | -                  | เมื่อระบุค่าต้องมากกว่า 0      |
+| `build.split` ไม่ถูกต้อง                            | ✅      | -                  | `single`, `route`, `manual`    |
+| `build.jsx` ไม่ถูกต้อง                              | ✅      | -                  | `automatic`, `classic`         |
+| `build.target` ไม่ถูกต้อง                           | ✅      | -                  | `es2018` ถึง `esnext`          |
+| `security.actionLimit`, `apiLimit` เป็น 0/เกินเพดาน | ✅      | ✅                 | ใช้เพดานจาก source             |
+| `security.pluginLimit` เป็น 0/เกินเพดาน             | ✅      | ✅                 | สูงสุด 268435456 bytes         |
+| `security.trustedProxyIps[]` ไม่ถูกต้อง             | -       | ✅                 | IP หรือ CIDR                   |
+| `security.actionRateLimit.max/window` เป็น 0        | ✅      | -                  | ต้องมากกว่า 0                  |
+| `middleware.workers/timeoutMs` อยู่นอกช่วง          | -       | ✅                 | จำกัดตาม middleware source     |
+| `image.quality` นอกช่วง 1-100                       | ✅      | -                  | ตรวจ image config              |
+| `css.entries[]` เป็น absolute path                  | ✅      | -                  | ต้องอยู่ใต้ project root       |
 
 ---
 
 ## Troubleshooting — ทุก Error และวิธีแก้
 
-| Error Code | ปัญหา                      | สาเหตุ                                  | วิธีแก้                                   |
-| ---------- | -------------------------- | --------------------------------------- | ----------------------------------------- |
-| RUV1601    | Config field invalid       | ค่าไม่ถูกต้อง (0, empty, absolute path) | ตรวจค่าที่กำหนดในตาราง                    |
-| RUV1602    | Config value out of range  | ค่าเกินขีดจำกัด                         | ปรับค่าให้อยู่ในช่วง                      |
-| RUV1603    | Unknown field              | พิมพ์ชื่อฟิลด์ผิด                       | ตรวจ camelCase (`appDir` ไม่ใช่ `appdir`) |
-| RUV1602    | Invalid config structure   | plugin ชื่อซ้ำหรือชนิดข้อมูลไม่ถูกต้อง  | ตรวจ schema และชื่อ plugin                |
-| RUV1603    | Invalid adapter definition | adapter contract ไม่ถูกต้อง             | ตรวจ `build(context)` และผลลัพธ์          |
+| Error Code | ปัญหา                             | สาเหตุ                                  | วิธีแก้                                   |
+| ---------- | --------------------------------- | --------------------------------------- | ----------------------------------------- |
+| RUV1601    | Config field invalid              | ค่าไม่ถูกต้อง (0, empty, absolute path) | ตรวจค่าที่กำหนดในตาราง                    |
+| RUV1602    | Config value out of range         | ค่าเกินขีดจำกัด                         | ปรับค่าให้อยู่ในช่วง                      |
+| RUV1602    | Unknown field                     | พิมพ์ชื่อฟิลด์ผิด                       | ตรวจ camelCase (`appDir` ไม่ใช่ `appdir`) |
+| RUV1602    | Invalid config structure          | plugin ชื่อซ้ำหรือชนิดข้อมูลไม่ถูกต้อง  | ตรวจ schema และชื่อ plugin                |
+| RUV1603    | Invalid adapter definition/output | adapter contract ไม่ถูกต้อง             | ตรวจ `build(context)` และผลลัพธ์          |
 
-| ปัญหาทั่วไป                    | สาเหตุ                     | วิธีแก้                                                       |
-| ------------------------------ | -------------------------- | ------------------------------------------------------------- |
-| Config ไม่ถูกโหลด              | syntax error ในไฟล์        | ตรวจ `defineConfig()` และ `,`                                 |
-| `site.url` error               | URL ไม่ใช่ origin          | ใช้เฉพาะ origin (`https://x.com` ไม่ใช่ `https://x.com/path`) |
-| Port ถูกใช้                    | port ซ้ำ                   | เปลี่ยน `server.port`                                         |
-| Unknown field                  | camelCase ผิด              | `sourcemap` ไม่ใช่ `sourceMap`                                |
-| Plugin ไม่ทำงาน                | ชื่อ plugin ไม่ถูกต้อง     | ตรวจชื่อในตาราง                                               |
-| Adapter auto-detect ผิด        | env var ไม่ตั้ง            | ใช้ `adapter: 'name'` explicit                                |
-| CSS entries ไม่ inject         | path ผิด                   | ตรวจว่า path มีอยู่จริง                                       |
-| Image optimization ไม่ได้      | encoder ไม่รองรับไฟล์      | ตรวจตาราง encoder                                             |
-| Security headers ไม่มา         | `headers: false`           | ตั้ง `headers: true`                                          |
-| middleware rate limit ไม่ work | ไม่ได้กำหนด `max`/`window` | เพิ่ม rate config                                             |
+| ปัญหาทั่วไป                    | สาเหตุ                                             | วิธีแก้                                                       |
+| ------------------------------ | -------------------------------------------------- | ------------------------------------------------------------- |
+| Config ไม่ถูกโหลด              | syntax error ในไฟล์                                | ตรวจ `config()` และ `,`                                       |
+| `site.url` error               | URL ไม่ใช่ origin                                  | ใช้เฉพาะ origin (`https://x.com` ไม่ใช่ `https://x.com/path`) |
+| Port ถูกใช้                    | port ซ้ำ                                           | เปลี่ยน `server.port`                                         |
+| Unknown field                  | camelCase ผิด                                      | `sourcemap` ไม่ใช่ `sourceMap`                                |
+| Plugin ไม่ทำงาน                | ชื่อ plugin ไม่ถูกต้อง                             | ตรวจชื่อในตาราง                                               |
+| Adapter auto-detect ผิด        | env var ไม่ตั้ง                                    | ใช้ `adapter: 'name'` explicit                                |
+| CSS entries ไม่ inject         | path ผิด                                           | ตรวจว่า path มีอยู่จริง                                       |
+| Image optimization ไม่ได้      | image option ไม่ถูกต้องหรือ source ไม่ใช่ PNG/JPEG | ตรวจ `image.optimize`, `image.quality` และ build output       |
+| Security headers ไม่มา         | `headers: false`                                   | ตั้ง `headers: true`                                          |
+| middleware rate limit ไม่ work | ไม่ได้กำหนด `max`/`window`                         | เพิ่ม rate config                                             |
 
 ### Debug Config
 
@@ -567,8 +571,8 @@ RUVYXA_DEBUG=plugin ruvyxa dev
    - ทดลองส่ง request ใหญ่เกิน limit
 
 3. **Image**
-   - ตั้งค่า `image.encoder.jpeg: 'guetzli'`
-   - `npm run build` → สังเกตเวลาที่เพิ่มขึ้น
+   - ตั้งค่า `image.quality`, `image.lossless` หรือ `image.variantWidths`
+   - `npm run build` แล้วตรวจ WebP assets ที่สร้างขึ้น
 
 4. **Middleware**
    - เปิด CORS ด้วย origins แค่ `['https://example.com']`
@@ -587,11 +591,11 @@ RUVYXA_DEBUG=plugin ruvyxa dev
 ## สรุป
 
 - `ruvyxa.config.ts` = ศูนย์รวม config
-- `defineConfig()` = type safety + auto-complete
-- validation code: RUV1600-RUV1699
+- `config()` = type safety + auto-complete
+- config path ปัจจุบันใช้ RUV1600-RUV1603 ตาม validation section
 - adapter auto-detect จาก platform env vars
 - plugins 16 ตัวพร้อมใช้
-- ทุกฟิลด์มี default + validation
+- ระบุ default และ validation เฉพาะจุดที่ type, renderer หรือ Rust parser ปัจจุบันกำหนด
 - Rust backend validation ที่ robust
 - `npm run doctor` ตรวจสอบทุกอย่าง
 
@@ -648,3 +652,9 @@ npm run check
 configuration validation บังคับ positive bounded limits เช่น action/API payload limits และค่า
 trusted-proxy IP/CIDR ที่ถูกต้อง หากค่าถูกปฏิเสธให้แก้ field นั้น ไม่ควรเพิ่ม environment override
 ที่ เอกสารไม่ได้รองรับ
+
+## Diagnostics: Configuration Validation
+
+ไฟล์ `ruvyxa.config.ts` จะถูก render เป็น JSON แล้ว CLI จึง parse และ validate ต่อ โดย struct ของ
+config ฝั่ง Rust ใช้ `deny_unknown_fields`; field ที่ไม่รองรับ เช่น `experimentalDocker` จะถูก
+ปฏิเสธด้วย diagnostic ของ config renderer (`RUV1602`) ทำให้ typo ไม่ถูกมองว่าเป็น setting ที่รองรับ

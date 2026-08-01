@@ -1,3 +1,167 @@
+# Deployment
+
+Ruvyxa ทำการ build application output และเมื่อเลือก adapter จะเปลี่ยน output เป็น artifact สำหรับ
+platform นั้น adapter ไม่ได้ทำการ deploy, health-gated promotion หรือ production rollback ให้เอง
+
+## Flow ของ build และการ serve
+
+```bash
+ruvyxa check
+ruvyxa doctor --adapter node
+ruvyxa build --adapter node
+ruvyxa start       # serve build ที่มีอยู่แล้ว
+ruvyxa preview     # ตรวจดู build ในเครื่อง
+```
+
+`start` และ `preview` serve build ที่สร้างเสร็จแล้ว ไม่ได้หมายถึง build + stage + health-check +
+swap ในคำสั่งเดียว ระหว่าง build CLI จะเขียน staging output แล้ว rename เข้าที่ และพยายามคืน
+framework output เดิมถ้า commit ล้มเหลว นี่เป็นกลไกความปลอดภัยของ local build ไม่ใช่ production
+deployment service
+
+## Adapter ที่มีใน repository
+
+| Name         | Package                      |
+| ------------ | ---------------------------- |
+| `node`       | `@ruvyxa/adapter-node`       |
+| `bun`        | `@ruvyxa/adapter-bun`        |
+| `static`     | `@ruvyxa/adapter-static`     |
+| `vercel`     | `@ruvyxa/adapter-vercel`     |
+| `netlify`    | `@ruvyxa/adapter-netlify`    |
+| `cloudflare` | `@ruvyxa/adapter-cloudflare` |
+| `railway`    | `@ruvyxa/adapter-railway`    |
+| `render`     | `@ruvyxa/adapter-render`     |
+| `firebase`   | `@ruvyxa/adapter-firebase`   |
+| `aws`        | `@ruvyxa/adapter-aws`        |
+
+เลือกได้จาก CLI หรือ project config runtime runner อาจใช้ platform detection เป็น fallback แต่การมี
+dependency อยู่ใน `package.json` อย่างเดียวไม่ใช่ selection contract ที่รับรองไว้
+
+## ตัวอย่าง Adapter
+
+```ts
+// ruvyxa.config.ts
+import { config } from 'ruvyxa/config'
+import { nodeAdapter } from '@ruvyxa/adapter-node'
+
+export default config({ adapter: nodeAdapter() })
+```
+
+contract ของ adapter คือ `build(ctx) -> AdapterOutput` และ capability ที่ตรวจสอบได้มาจาก field
+`supports` ของ adapter ที่เลือก ค่า capability ไม่ใช่หลักฐานว่า provider ได้ทดสอบทุกข้อจำกัด เช่น
+ISR/PPR, filesystem, WebSocket หรือ cold start กับทุก application แล้ว
+
+### Node
+
+`@ruvyxa/adapter-node` สร้าง output ใต้ `.ruvyxa/deploy/node/`:
+
+```text
+server/index.mjs
+public/                 # หน้าที่ prerender อาจมีหรือไม่มีก็ได้
+start.mjs
+README.md
+```
+
+```bash
+node .ruvyxa/deploy/node/server/index.mjs
+```
+
+server ที่สร้างขึ้นรองรับ `PORT` และ `HOST` และนำไปใช้กับ Node host, container, PM2, systemd หรือ
+PaaS ได้ แต่ adapter ไม่ได้ deploy ไป provider ให้
+
+### Static
+
+`@ruvyxa/adapter-static` สร้าง static-site artifact ที่ `static/` เป็นค่าเริ่มต้น หรือใช้
+`outputDir` แบบ relative ที่ผ่านการ validate รองรับ `ssg` และ `csr` เท่านั้นเพราะ static host รัน
+SSR, ISR, PPR หรือ API route ไม่ได้ Dynamic SSG ใช้ metadata `getStaticParams`/`staticParams`
+
+```bash
+ruvyxa build --adapter static
+# publish artifact .ruvyxa/deploy/static/ ตาม output ของ adapter
+```
+
+### AWS Amplify Hosting
+
+AWS adapter สามารถสร้าง project output `.amplify-hosting/` ซึ่งมี static site, handler ที่
+`compute/default` และ `deploy-manifest.json` โดย static artifact จะ exclude `isr` และ `ppr` ต้อง
+ตรวจ manifest ที่สร้างและ runtime ของ Amplify ก่อน deploy จริง
+
+### Cloud และ serverless targets
+
+Vercel, Netlify, Cloudflare, Firebase, Railway, Render และ Bun มี first-party adapter ของตัวเอง
+รายละเอียด artifact และข้อจำกัดอยู่ใน `src/index.ts` และ README ที่สร้างจาก package นั้น อย่าอนุมาน
+behavior ของ platform จากชื่อ package ให้ตรวจ artifact และข้อจำกัดของ provider จริง
+
+## Docker
+
+Docker ไม่ใช่ built-in adapter แยก ให้ build ด้วย Node หรือ Bun แล้ว copy server ที่สร้างลง image:
+
+```dockerfile
+FROM node:22-alpine
+WORKDIR /app
+COPY .ruvyxa/deploy/node/ .
+EXPOSE 3000
+CMD ["node", "server/index.mjs"]
+```
+
+เลือก base image/runtime ให้ตรง artifact และทดสอบ image ใน environment เป้าหมาย ไม่มี benchmark ใน
+repository ที่รับรอง image size หรือ throughput แบบ universal
+
+## CI ตัวอย่าง
+
+CI ควร validate และ build artifact ส่วนการ deploy เป็นขั้นตอนแยกตาม provider:
+
+```yaml
+steps:
+  - run: pnpm install --frozen-lockfile
+  - run: pnpm exec ruvyxa check
+  - run: pnpm exec ruvyxa doctor --adapter node
+  - run: pnpm exec ruvyxa build --adapter node
+  - uses: actions/upload-artifact@v4
+    with:
+      name: ruvyxa-node-build
+      path: .ruvyxa/
+```
+
+## การตรวจสอบและ performance
+
+ใช้ `ruvyxa analyze` ตรวจ bundle และ `ruvyxa bench` วัดผลบน application/deployment จริง หากบันทึก
+ผลลัพธ์ควรระบุ workload, hardware, adapter และ sample size เสมอ repository ไม่มี target สากลสำหรับ
+TTFB, throughput, bundle size, image size, ROI หรือ timeline
+
+## Troubleshooting
+
+| อาการ                   | ตรวจสอบก่อน                                                                       |
+| ----------------------- | --------------------------------------------------------------------------------- |
+| หา adapter ไม่เจอ       | ตรวจ name/package และรัน `ruvyxa doctor --adapter <name>`                         |
+| Strategy ไม่รองรับ      | เทียบ route strategy กับ field `supports` ของ adapter                             |
+| Static route หาย        | ตรวจว่าเป็น `ssg`/`csr` และ dynamic route export `getStaticParams`/`staticParams` |
+| output ไม่ถูก serve     | รัน `build` ก่อน เพราะ `start`/`preview` ไม่ได้สร้าง build                        |
+| Realtime build ล้มเหลว  | ใช้ target Node/Bun แบบ long-lived; realtime plugin จะ reject target ที่ไม่รองรับ |
+| Provider deploy ล้มเหลว | ตรวจ artifact และ provider logs เพราะอยู่นอกขั้นตอน adapter build                 |
+
+## Source of truth
+
+- `packages/ruvyxa/runtime/adapter-runner.mjs`
+- `packages/@ruvyxa/core/src/types.ts`
+- `packages/@ruvyxa/adapter-*/src/index.ts`
+- `crates/ruvyxa_cli/src/main.rs`
+
+---
+
+## Production contract and retained detail
+
+The section above is the current, source-backed contract for this release. The original long-form
+draft is retained below to preserve instructional context and audit history. It is non-normative: do
+not copy its API snippets or capability claims unless they are revalidated against the current
+source and package export map. This boundary is intentional so the document can retain its original
+depth without presenting unsupported historical design as production behavior.
+
+### Thai deployment draft — historical draft (non-normative)
+
+> **คำเตือน archive:** เนื้อหาด้านล่างเก็บไว้เพื่อประวัติเท่านั้น ไม่ใช่ deployment contract
+> ปัจจุบัน คำสั่ง provider behavior และ benchmark ไม่ใช่คำรับรอง production contract
+> ด้านบนเป็นแหล่งอ้างอิงหลัก
+
 ## สิ่งที่คุณจะได้เรียนรู้ (What You Will Learn)
 
 - Complete `.ruvyxa/` build output structure

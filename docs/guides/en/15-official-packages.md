@@ -1,5 +1,187 @@
 # Official Packages
 
+This guide documents the public APIs currently exported by the first-party packages in this
+repository. Examples are intentionally limited to APIs present in `src/` and the package export
+maps.
+
+## Package boundaries
+
+| Package            | Server entry       | Browser entry             | Main responsibility                         |
+| ------------------ | ------------------ | ------------------------- | ------------------------------------------- |
+| `@ruvyxa/auth`     | `@ruvyxa/auth`     | `@ruvyxa/auth/client`     | Sessions and provider-driven authentication |
+| `@ruvyxa/database` | `@ruvyxa/database` | None                      | Database adapter contract and typed facade  |
+| `@ruvyxa/realtime` | `@ruvyxa/realtime` | `@ruvyxa/realtime/client` | Action-driven WebSocket capability          |
+
+The server entries must not be imported into a client bundle. The browser-safe `/client` entries
+contain only the corresponding browser helpers.
+
+## `@ruvyxa/auth`
+
+The auth runtime requires an application secret, canonical origin, durable stores in production, and
+an explicit provider map. Built-in OAuth helpers are Google and GitHub; magic-link and WebAuthn are
+provider interfaces that the application supplies.
+
+```ts
+import { config } from 'ruvyxa/config'
+import { createAuth, google, memoryAuthStore, memoryRateLimitStore } from '@ruvyxa/auth'
+
+const auth = createAuth({
+  secret: process.env.AUTH_SECRET!, // at least 32 characters
+  origin: 'http://localhost:3000',
+  store: memoryAuthStore({ development: true }),
+  rateLimitStore: memoryRateLimitStore({ development: true }),
+  providers: {
+    credentials: {
+      type: 'credentials',
+      async authorize(input) {
+        if (input.email === 'demo@example.com' && input.password === 'demo') {
+          return { id: 'demo', email: 'demo@example.com' }
+        }
+        return null
+      },
+    },
+    google: google({
+      clientId: process.env.GOOGLE_CLIENT_ID!,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+    }),
+  },
+})
+
+export default config({ plugins: [auth.plugin] })
+```
+
+`memoryAuthStore` and `memoryRateLimitStore` require `{ development: true }` and are for tests or
+development. A production build validates that both stores are durable. The options supported by
+`createAuth` include `basePath`, `session.ttlSeconds`, `session.rememberTtlSeconds`,
+`session.cookieName`, `session.secure`, `session.sameSite`, `rateLimit`, `clientIp`, and `onError`.
+
+### Browser client
+
+```ts
+import { createAuthClient } from '@ruvyxa/auth/client'
+
+const authClient = createAuthClient({ basePath: '/__ruvyxa/auth' })
+await authClient.login('credentials', { email: 'demo@example.com', password: 'demo' })
+const session = await authClient.session()
+authClient.oauth('google', '/account')
+await authClient.logout()
+```
+
+The client methods are `login`, `logout`, `session`, and `oauth`; there is no `useRealtime` or
+`signIn` API in this package.
+
+## `@ruvyxa/database`
+
+The database package exposes one facade over one adapter. The public built-in adapters are
+`prismaAdapter` and `dynamoAdapter`, both imported from the package root.
+
+```ts
+import { createDatabase, prismaAdapter } from '@ruvyxa/database'
+import { PrismaClient } from '@prisma/client'
+
+const prisma = new PrismaClient()
+export const db = createDatabase(prismaAdapter(prisma))
+
+const users = await db.users.findMany({
+  where: { active: true },
+  orderBy: { createdAt: 'desc' },
+  take: 20,
+})
+const user = await db.users.create({ data: { email: 'alice@example.com', active: true } })
+await db.users.update({ where: { id: 'user_123' }, data: { active: false } })
+```
+
+There is no `@ruvyxa/database/prisma` or `@ruvyxa/database/dynamodb` export in the current package
+map. The Dynamo adapter accepts an explicit `transport` and model-to-table `tables` map; the
+transport can wrap an AWS SDK client or another implementation of the `execute(operation)` contract.
+Custom implementations can be validated with `defineDatabaseAdapter`.
+
+The database plugin is separate from the adapter facade and validates private required environment
+variables during build:
+
+```ts
+import { databasePlugin } from '@ruvyxa/database/plugin'
+
+databasePlugin({ requiredEnv: ['DATABASE_URL'] })
+```
+
+## `@ruvyxa/realtime`
+
+Realtime is an action-driven native capability. Register the root plugin and mark actions with the
+core `action.realtime()` builder. The plugin validates that the selected build target can provide a
+long-lived Node/Bun WebSocket runtime; it does not expose a server `createRealtime()` or `publish()`
+API.
+
+```ts
+import { config } from 'ruvyxa/config'
+import { realtime } from '@ruvyxa/realtime'
+
+export default config({ plugins: [realtime()] })
+```
+
+```ts
+import { action } from '@ruvyxa/core/server'
+
+export const sendMessage = action
+  .input({
+    parse(value: unknown) {
+      if (!value || typeof value !== 'object') throw new Error('Invalid message')
+      return value as { text: string }
+    },
+  })
+  .realtime('chat:general')
+  .handler(async ({ input }) => ({ ok: true, text: input.text }))
+```
+
+### Browser client
+
+```ts
+import { createRealtimeClient } from '@ruvyxa/realtime/client'
+
+const client = createRealtimeClient({ url: '/__ruvyxa/realtime' })
+const unsubscribe = client.subscribe('chat:general', (event) => {
+  if (event.type === 'action') console.log(event.action, event.invalidated)
+})
+// Later: unsubscribe(); client.close()
+```
+
+The client supports `subscribe`, `subscribeRoute`, and `close`, with bounded reconnect behavior.
+Platform adapters that cannot provide the required long-lived runtime reject the realtime plugin at
+build completion.
+
+## Versioning
+
+This source tree uses one repository release version for the first-party packages. The checked-in
+package manifests currently report `1.0.25` for `ruvyxa`, `@ruvyxa/auth`, `@ruvyxa/database`,
+`@ruvyxa/realtime`, and the first-party adapter packages. Built-in plugins are not separately
+versioned or split into independent plugin versions; they follow the `ruvyxa` package version.
+
+`realtime@1` is a native capability/protocol identifier, not a package version.
+
+## Evidence and limits
+
+Provider behavior, platform limits, credentials, and deployment health are external concerns. Verify
+them against the provider documentation and the generated adapter artifacts for the chosen target;
+this guide does not claim a benchmark, ROI, partner commitment, or automatic production deployment.
+
+---
+
+## Production contract and retained detail
+
+The section above is the current, source-backed contract for this release. The original long-form
+draft is retained below to preserve instructional context and audit history. It is non-normative: do
+not copy its API snippets or capability claims unless they are revalidated against the current
+source and package export map. This boundary is intentional so the document can retain its original
+depth without presenting unsupported historical design as production behavior.
+
+### English package draft — historical draft (non-normative)
+
+> **Archive warning:** The material below is retained for history only. It is not the current
+> package API; examples may be stale or unsupported and must not be copied as working code. The
+> source-backed contract above is authoritative.
+
+# Official Packages
+
 Ruvyxa ships three official packages solving common full-stack problems: authentication, databases,
 real-time communication. Each follows the same design philosophy — server-first, typed APIs,
 zero-config defaults, and plugin integration.

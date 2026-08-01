@@ -705,9 +705,9 @@ export async function GET() {
 | ------------------------------- | -------------------------------- |
 | Route matching                  | O(path depth) — Radix trie       |
 | Body buffering (up to apiLimit) | Memory proportional to body size |
-| Handler dispatch                | ~1ms (IPC to Node worker)        |
-| Response streaming              | Negligible per chunk             |
-| Security headers                | ~0.01ms                          |
+| Handler dispatch                | Depends on the selected runtime and worker state |
+| Response streaming              | Depends on the response and network            |
+| Security headers                | Added by the request pipeline when configured  |
 
 ### Comparison: API Route vs Direct Handler
 
@@ -718,7 +718,7 @@ export async function GET() {
 | Middleware       | Automatic         | Manual         |
 | Routing          | File-system based | Manual         |
 | Streaming        | Full support      | Full support   |
-| Worker dispatch  | Yes (~1ms)        | Native         |
+| Worker dispatch  | Yes, runtime-dependent | Native      |
 
 ---
 

@@ -20,7 +20,7 @@ npm run dev        # → http://localhost:3000
 
 | If you are…               | Start here                                                                                                           |
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| **New to frameworks**     | [Getting Started](guides/en/01-getting-started.md) — zero to running app in 10 min                                   |
+| **New to frameworks**     | [Getting Started](guides/en/01-getting-started.md) — from project creation to a running app                          |
 | **React developer**       | [Routing](guides/en/02-routing.md) then [Rendering](guides/en/04-rendering-strategies.md)                            |
 | **From Next.js**          | [Routing mental model](guides/en/02-routing.md) + [Server/Client boundary](guides/en/03-server-client-components.md) |
 | **Framework contributor** | [Developer Guide](developer-guide.md)                                                                                |
@@ -42,7 +42,7 @@ npm run dev        # → http://localhost:3000
 | 08  | [Styling](guides/en/08-styling.md)                                     | 🟢    | Global CSS, SCSS/Sass, CSS Modules, HMR, `css.entries` config                                       |
 | 09  | [Markdown, MDX & Images](guides/en/09-markdown-mdx-images.md)          | 🟢    | Content pages, frontmatter, MDX components, Image optimization, SEO                                 |
 | 10  | [Environment Variables](guides/en/10-environment-variables.md)         | 🟢    | `.env` files, `RUVYXA_PUBLIC_*` prefix, server-only secrets, TypeScript declarations                |
-| 11  | [Configuration](guides/en/11-configuration.md)                         | 🔴    | Complete `ruvyxa.config.ts` reference, every field, default, validation rule                        |
+| 11  | [Configuration](guides/en/11-configuration.md)                         | 🔴    | `ruvyxa.config.ts` fields, defaults, validation, and source-backed examples                         |
 | 12  | [CLI Commands](guides/en/12-cli-commands.md)                           | 🟢    | All 13 commands, options, example output, exit codes                                                |
 | 13  | [Deployment](guides/en/13-deployment.md)                               | 🟢    | Build output, adapters, all platforms, production checklist, CI/CD                                  |
 | 14  | [Plugins](guides/en/14-plugins.md)                                     | 🔴    | 16 built-in plugins, custom plugin API, hooks, lifecycle                                            |
@@ -103,9 +103,9 @@ npm run dev        # → http://localhost:3000
 | `ruvyxa`            | CLI + runtime bridge      | Re-exports `@ruvyxa/core` subpaths + runtime scripts + plugins                               |
 | `@ruvyxa/core`      | Config types, server APIs | `config()`, `loader`, `cache`, `action`, `definePlugin`                                      |
 | `@ruvyxa/react`     | React integration         | `Link`, `Image`, `Seo`, `useRouter`, `useRuvyxaLoader`, `notFound`                           |
-| `@ruvyxa/auth`      | Authentication            | `createAuth`, `createAuthClient`, session stores, OAuth providers                            |
-| `@ruvyxa/database`  | Database facade           | `createDatabase`, Prisma/DynamoDB/custom adapters                                            |
-| `@ruvyxa/realtime`  | WebSocket transport       | `realtimeClient`, `useRealtime`, action channel subscriptions                                |
+| `@ruvyxa/auth`      | Authentication            | `createAuth`, stores, Google/GitHub providers; `createAuthClient` from `/client`             |
+| `@ruvyxa/database`  | Database facade           | `createDatabase`, `prismaAdapter`, `dynamoAdapter`, custom adapters                          |
+| `@ruvyxa/realtime`  | Action-driven WebSocket   | `realtime`; `createRealtimeClient` from `/client`                                            |
 | `@ruvyxa/adapter-*` | Platform deploy           | 10 adapters (vercel, netlify, cloudflare, node, bun, static, aws, firebase, railway, render) |
 | `@ruvyxa/cli-*`     | Native binaries           | 5 platform binaries (darwin-arm64, linux-arm64, linux-x64, win32-arm64, win32-x64)           |
 | `create-ruvyxa`     | Project scaffold          | `create-ruvyxa` CLI, 4 starter templates                                                     |
@@ -117,7 +117,8 @@ npm run dev        # → http://localhost:3000
 - **[Getting Started](guides/en/01-getting-started.md)** — start here
 - **[Routing](guides/en/02-routing.md)** — understand the file-system router
 - **[CLI Commands](guides/en/12-cli-commands.md)** — full command reference
-- **[Configuration](guides/en/11-configuration.md)** — complete config reference
+- **[Configuration](guides/en/11-configuration.md)** — config fields, defaults, validation, and
+  examples
 - **[Error Codes](architecture/diagnostics.md)** — RUV#### code catalog
 - **[Developer Guide](developer-guide.md)** — contributing to the framework
 

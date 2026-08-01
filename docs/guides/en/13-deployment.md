@@ -1,5 +1,184 @@
 # Deployment
 
+Ruvyxa builds application output and, when selected, converts it into a platform-specific artifact.
+The adapter does not deploy to a provider, run a health-gated promotion, or provide production
+rollback orchestration.
+
+## Build and serve flow
+
+```bash
+# Validate the project and inspect a target
+ruvyxa check
+ruvyxa doctor --adapter node
+
+# Build the framework output and invoke the selected adapter
+ruvyxa build --adapter node
+
+# Serve an existing production build
+ruvyxa start
+# Or inspect it locally
+ruvyxa preview
+```
+
+`start` and `preview` serve an existing build. They do not mean “build, stage, health-check, and
+swap”. The CLI's build commit writes staging output, renames it into place, and restores the
+previous framework output if that commit fails; this is a local build-safety mechanism, not a
+production deployment service.
+
+## Adapter selection
+
+The repository ships these first-party adapter names:
+
+| Name         | Package                      |
+| ------------ | ---------------------------- |
+| `node`       | `@ruvyxa/adapter-node`       |
+| `bun`        | `@ruvyxa/adapter-bun`        |
+| `static`     | `@ruvyxa/adapter-static`     |
+| `vercel`     | `@ruvyxa/adapter-vercel`     |
+| `netlify`    | `@ruvyxa/adapter-netlify`    |
+| `cloudflare` | `@ruvyxa/adapter-cloudflare` |
+| `railway`    | `@ruvyxa/adapter-railway`    |
+| `render`     | `@ruvyxa/adapter-render`     |
+| `firebase`   | `@ruvyxa/adapter-firebase`   |
+| `aws`        | `@ruvyxa/adapter-aws`        |
+
+Selection can be explicit on the CLI or configured in the project. The runtime runner may use
+platform detection as a fallback, but dependency presence alone is not the documented selection
+contract.
+
+## Adapter examples
+
+```ts
+// ruvyxa.config.ts
+import { config } from 'ruvyxa/config'
+import { nodeAdapter } from '@ruvyxa/adapter-node'
+
+export default config({ adapter: nodeAdapter() })
+```
+
+The framework adapter contract is `build(ctx) -> AdapterOutput`. The authoritative capabilities are
+the selected adapter's `supports` field. A declared capability is a compatibility check; it is not
+evidence that a provider's limits or cache semantics have been tested for every application.
+
+### Node
+
+`@ruvyxa/adapter-node` emits under `.ruvyxa/deploy/node/`:
+
+```text
+server/index.mjs
+public/                 # optional prerendered pages
+start.mjs
+README.md
+```
+
+Run the standalone server with:
+
+```bash
+node .ruvyxa/deploy/node/server/index.mjs
+```
+
+It honors `PORT` and `HOST`. The generated output is suitable for a Node host, a container, PM2,
+systemd, or a PaaS; the adapter does not perform the final provider deployment.
+
+### Static
+
+`@ruvyxa/adapter-static` emits a static-site artifact in `static/` by default, or in the validated
+relative `outputDir`. It supports `ssg` and `csr`; a static host cannot execute SSR, ISR, PPR, or
+API routes. Dynamic SSG routes use the framework's `getStaticParams`/`staticParams` metadata.
+
+```bash
+ruvyxa build --adapter static
+# publish the generated .ruvyxa/deploy/static/ artifact according to the adapter output
+```
+
+### AWS Amplify Hosting
+
+The AWS adapter can emit `.amplify-hosting/` project output, including the static site, the
+`compute/default` handler, and `deploy-manifest.json`. Its static artifact excludes `isr` and `ppr`.
+Verify the generated manifest and the current Amplify runtime before deployment.
+
+### Cloud and serverless targets
+
+Vercel, Netlify, Cloudflare, Firebase, Railway, Render, and Bun have first-party adapter packages.
+Their exact artifact layout and provider constraints are defined in each package's `src/index.ts`
+and generated README. Do not infer a platform's ISR/PPR, filesystem, WebSocket, or cold-start
+behavior from the package name; inspect the adapter output and provider limits.
+
+## Docker
+
+Docker is not a separate built-in adapter. Build with the Node or Bun adapter and copy the generated
+server into the image:
+
+```dockerfile
+FROM node:22-alpine
+WORKDIR /app
+COPY .ruvyxa/deploy/node/ .
+EXPOSE 3000
+CMD ["node", "server/index.mjs"]
+```
+
+Choose the base image and runtime version for the generated artifact and test the image in the
+target environment. No repository benchmark establishes a universal image size or throughput.
+
+## CI example
+
+CI should validate and build the artifact; deployment is a separate provider-specific step:
+
+```yaml
+steps:
+  - run: pnpm install --frozen-lockfile
+  - run: pnpm exec ruvyxa check
+  - run: pnpm exec ruvyxa doctor --adapter node
+  - run: pnpm exec ruvyxa build --adapter node
+  - uses: actions/upload-artifact@v4
+    with:
+      name: ruvyxa-node-build
+      path: .ruvyxa/
+```
+
+## Verification and performance
+
+Use `ruvyxa analyze` for bundle inspection and `ruvyxa bench` for measurements on the actual
+application and deployment shape. The repository does not provide universal targets for TTFB,
+throughput, bundle size, image size, ROI, or timeline; record workload, hardware, adapter, and
+sample size with any project-specific result.
+
+## Troubleshooting
+
+| Symptom                     | First verification                                                                           |
+| --------------------------- | -------------------------------------------------------------------------------------------- |
+| Adapter not found           | Check the selected name and package installation; run `ruvyxa doctor --adapter <name>`.      |
+| Strategy unsupported        | Compare the route strategy with the adapter's `supports` field.                              |
+| Static route missing        | Confirm the route is `ssg`/`csr` and dynamic routes expose `getStaticParams`/`staticParams`. |
+| Output is not served        | Run `build` first; `start` and `preview` do not create a build.                              |
+| Realtime build failure      | Use a long-lived Node/Bun target; the native realtime plugin rejects unsupported targets.    |
+| Provider deployment failure | Inspect the generated artifact and provider logs; this is outside the adapter build step.    |
+
+## Source of truth
+
+- `packages/ruvyxa/runtime/adapter-runner.mjs`
+- `packages/@ruvyxa/core/src/types.ts`
+- `packages/@ruvyxa/adapter-*/src/index.ts`
+- `crates/ruvyxa_cli/src/main.rs`
+
+---
+
+## Production contract and retained detail
+
+The section above is the current, source-backed contract for this release. The original long-form
+draft is retained below to preserve instructional context and audit history. It is non-normative: do
+not copy its API snippets or capability claims unless they are revalidated against the current
+source and package export map. This boundary is intentional so the document can retain its original
+depth without presenting unsupported historical design as production behavior.
+
+### English deployment draft — historical draft (non-normative)
+
+> **Archive warning:** The material below is retained for history only. It is not the current
+> deployment contract; provider behavior, commands, and benchmarks shown there are not promises. The
+> source-backed contract above is authoritative.
+
+# Deployment
+
 Build once, deploy anywhere. Ruvyxa adapter system translates single build output into
 platform-native artifacts — serverless functions, edge workers, static sites, or standalone servers
 — without changing application code.

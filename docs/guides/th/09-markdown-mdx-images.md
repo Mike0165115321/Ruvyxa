@@ -1,3 +1,192 @@
+# Markdown, MDX, Images และ Metadata
+
+เอกสารนี้อธิบาย content compiler, image optimizer ตอน build และ metadata API ที่มีอยู่จริงใน
+repository ปัจจุบัน
+
+## Markdown และ MDX routes
+
+สร้าง `page.md` หรือ `page.mdx` ใต้ app directory:
+
+```md
+---
+title: About Us
+description: คำอธิบายสั้นของหน้า
+---
+
+## Mission
+
+เนื้อหา Markdown จะถูก compile เป็น route component
+```
+
+content compiler ใน `crates/ruvyxa_bundler/src/content.rs` จะ:
+
+1. แยก YAML frontmatter ออกจาก body ถ้ามี
+2. ตรวจว่า frontmatter เป็น YAML mapping
+3. parse Markdown หรือ MDX
+4. เก็บ metadata ของ heading ใน Markdown
+5. สร้าง ESM module แล้วส่งต่อเข้า TypeScript/JSX pipeline ปกติ
+
+Error ที่เกี่ยวข้องคือ `RUV1310` สำหรับ extension ที่ไม่รองรับหรือ Markdown parse failure, `RUV1311`
+สำหรับ MDX parse failure และ `RUV1312` สำหรับ frontmatter ที่ผิดรูปแบบหรือปิดไม่ครบ
+
+## Generated content exports
+
+ถ้า source ไม่ได้ประกาศ named export ชื่อเดียวกัน compiler จะสร้าง export เหล่านี้:
+
+```ts
+export const frontmatter = {/* YAML mapping */}
+export const meta = frontmatter
+export const headings = [{ depth: 2, text: 'Mission', slug: 'mission' }]
+export const contentFormat = 'md' // หรือ 'mdx'
+```
+
+MDX สามารถประกาศ `frontmatter`, `meta`, `headings` หรือ `contentFormat` เองได้ compiler ตรวจ token
+ของ export จึงไม่ถือว่า comment หรือ string literal เป็น export จริง
+
+## MDX ESM และ component
+
+```mdx
+import { Image } from '@ruvyxa/react'
+
+export const meta = {
+  title: 'Gallery',
+  description: 'หน้ารูปภาพ',
+}
+
+# Gallery
+
+<Image src="/images/hero.jpg" width={1200} height={800} alt="ภูเขาและท้องฟ้า" />
+```
+
+ต้องรักษา server/client boundary ของ route และ import component จาก package ที่มีอยู่จริง
+
+## Image optimization ตอน build
+
+CLI image optimizer ปัจจุบันแปลง public PNG/JPEG เป็น WebP จะเก็บไฟล์ต้นฉบับไว้เป็นค่าเริ่มต้นเพื่อ
+รักษา public URL เดิม และสร้าง responsive WebP variants ตาม width ที่กำหนดได้ ไม่มี API สำหรับเลือก
+encoder `mozjpeg`, `oxipng`, `guetzli`, `cwebp`, `libaom` หรือ AVIF ตามเอกสารรุ่นเก่า
+
+```ts
+// ruvyxa.config.ts
+export default config({
+  image: {
+    optimize: true,
+    quality: 82,
+    lossless: false,
+    keepOriginal: true,
+    variantWidths: [640, 750, 828, 1080, 1200, 1920, 2048, 3840],
+    workers: 0, // ศูนย์ใช้ค่า worker default ของ optimizer
+  },
+})
+```
+
+ชื่อ option ที่รองรับคือ `optimize`, `quality`, `lossless`, `keepOriginal`, `variantWidths` และ
+`workers` optimizer จะสร้าง asset ใน build assets directory และบันทึก source, dimensions, byte
+counts, cache status และ variants ใน image manifest
+
+`<Image>` จาก `@ruvyxa/react` จะ rewrite local PNG/JPEG URL เป็น WebP URL ที่ build สร้าง และสร้าง
+`srcSet` จาก responsive widths ที่ใช้ร่วมกับ optimizer ส่วน remote URL, WebP ที่มีอยู่แล้ว และรูปที่
+กำหนด `unoptimized` จะไม่ถูก rewrite โดย local optimizer
+
+```tsx
+import { Image } from '@ruvyxa/react'
+
+export function Hero() {
+  return (
+    <Image
+      src="/images/hero.jpg"
+      width={1200}
+      height={800}
+      alt="ภูเขาและท้องฟ้า"
+      sizes="100vw"
+      priority
+    />
+  )
+}
+```
+
+`alt` เป็น required prop และ `fill` ใช้ได้เมื่อ parent มี positioning context ที่เหมาะสม custom
+`loader` หรือ `unoptimized` จะ opt out จาก local URL rewriting
+
+## Metadata
+
+Route export `meta` แบบ object หรือ `MetaFactory` จาก `@ruvyxa/react` ได้:
+
+```tsx
+import type { Meta, MetaFactory } from '@ruvyxa/react'
+
+export const meta: Meta = {
+  title: 'หน้าแรก',
+  description: 'คำอธิบายหน้าแรก',
+  canonical: 'https://example.com/',
+  type: 'website',
+}
+
+export const articleMeta: MetaFactory = ({ params }) => ({
+  title: params.slug,
+  type: 'article',
+})
+```
+
+Route `meta` จะถูก compose จาก layout ที่อยู่ด้านบนลงมาถึง page โดยค่าที่ specific กว่าจะชนะ field
+ที่รองรับ ได้แก่ `title`, `titleTemplate`, `description`, `canonical`, `robots`, `noindex`, `lang`,
+`alternates`, `image`, `imageAlt`, `siteName`, `type`, `locale` และ `card`
+
+ถ้าต้องการ metadata ใน component ให้ใช้ `<Seo>`:
+
+```tsx
+import { Seo } from '@ruvyxa/react'
+
+export function ArticleSeo() {
+  return (
+    <Seo
+      title="Article"
+      description="คำอธิบายบทความ"
+      type="article"
+      article={{ type: 'Article', publishedAt: '2026-01-01' }}
+      jsonLd={{ '@type': 'WebPage', name: 'Article' }}
+    />
+  )
+}
+```
+
+อย่ากำหนด field เดียวกันผ่านทั้ง route `meta` และ `<Seo>` หากยังไม่ได้ตั้งใจควบคุม precedence
+
+## การตรวจสอบ
+
+```bash
+ruvyxa check
+ruvyxa analyze
+ruvyxa build
+```
+
+หลัง build ให้ตรวจ WebP paths และ image manifest ที่สร้างขึ้น ห้ามใช้ชื่อ encoder ที่ไม่มีใน source
+หรือใช้เปอร์เซ็นต์ compression/latency แบบ universal เป็นเกณฑ์รับรองผล
+
+## Source of truth
+
+- `crates/ruvyxa_bundler/src/content.rs`
+- `crates/ruvyxa_cli/src/image_optimizer.rs`
+- `packages/@ruvyxa/react/src/image.tsx`
+- `packages/@ruvyxa/react/src/meta.ts`
+- `packages/@ruvyxa/react/src/seo.tsx`
+
+---
+
+## Production contract and retained detail
+
+The section above is the current, source-backed contract for this release. The original long-form
+draft is retained below to preserve instructional context and audit history. It is non-normative: do
+not copy its API snippets or capability claims unless they are revalidated against the current
+source and package export map. This boundary is intentional so the document can retain its original
+depth without presenting unsupported historical design as production behavior.
+
+### Thai content/image draft — historical draft (non-normative)
+
+> **คำเตือน archive:** เนื้อหาด้านล่างเก็บไว้เพื่อประวัติเท่านั้น ไม่ใช่ content/image contract
+> ปัจจุบัน ตัวอย่างอาจเก่าหรือไม่รองรับ และห้ามนำไปใช้เป็น code จริง production contract
+> ด้านบนเป็นแหล่งอ้างอิงหลัก
+
 # สร้าง Content Pages ด้วย Markdown, MDX และ Image
 
 Ruvyxa รองรับการสร้างหน้าเนื้อหา (content pages) ด้วยไฟล์ Markdown (`.md`) และ MDX (`.page.mdx`)

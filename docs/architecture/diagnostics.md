@@ -229,11 +229,16 @@ Key behavior:
 | RUV1500 | SSG render failed                                               | dev_server        |
 | RUV1501 | Route action file was not found                                 | dev_server        |
 | RUV1550 | PPR render failed                                               | dev_server        |
+| RUV1600 | Config load failure                                              | cli/config         |
+| RUV1601 | Config value or path is invalid                                  | cli/config         |
+| RUV1602 | Config shape, unknown field, or configured limit is invalid      | cli/config         |
+| RUV1603 | Adapter definition or output is invalid                          | cli/config/runtime |
 | RUV1702 | Worker pool script was not found                                | dev_server        |
-| RUV9999 | Sensitive compiler detail (generic fallback)                    | dev_server        |
+| RUV1101 | SSR renderer arguments are missing                               | runtime/SSR       |
 
-Codes are string constants (`&'static str`), not enum variants — any crate can emit any code without
-touching the diagnostics crate.
+This is a source-confirmed catalog of the codes documented by this architecture page, not a promise
+that every runtime or package code is listed. Codes are string constants (`&'static str`), not enum
+variants — any crate can emit a code without touching the diagnostics crate.
 
 ---
 

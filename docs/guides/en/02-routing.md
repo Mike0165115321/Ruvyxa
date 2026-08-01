@@ -545,7 +545,7 @@ export interface Meta {
    * A level's own `title` is never formatted by its own template.
    */
   titleTemplate?: string
-  /** Meta description. Required for a perfect Lighthouse SEO score. */
+  /** Optional description emitted as the document description metadata. */
   description?: string
   /** Absolute canonical URL for this document. */
   canonical?: string

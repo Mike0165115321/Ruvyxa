@@ -540,7 +540,6 @@ Ruvyxa ตรวจจับการอ่าน private env vars ใน client
 
 ```tsx
 // ✅ ใช้ได้ใน client:
-console.log(import.meta.env.RUVYXA_PUBLIC_APP_NAME)
 console.log(process.env.RUVYXA_PUBLIC_APP_NAME)
 
 // ❌ Error ใน client:
@@ -652,12 +651,12 @@ fn private_env_reads(source: &str) -> Vec<String> {
 
 ### ตัวแปรสภาพแวดล้อมที่อนุญาตให้ใช้ใน Client Code
 
-| ตัวแปร                            | ใช้ใน client ได้ไหม? | หมายเหตุ                                  |
-| --------------------------------- | -------------------- | ----------------------------------------- |
-| `process.env.RUVYXA_PUBLIC_*`     | ✅ ได้               | ตัวแปรใดๆ ที่ขึ้นต้นด้วย `RUVYXA_PUBLIC_` |
-| `process.env.NODE_ENV`            | ✅ ได้               | ปลอดภัยเสมอ (ถูกแทนที่ตอน build time)     |
-| `process.env.*` (อื่นๆ)           | ❌ ไม่ได้            | ทำให้เกิด `RUV1008`                       |
-| `import.meta.env.RUVYXA_PUBLIC_*` | ✅ ได้               | ตัวแปร public ในรูปแบบของ Vite            |
+| ตัวแปร                        | ใช้ใน client ได้ไหม? | หมายเหตุ                                                      |
+| ----------------------------- | -------------------- | ------------------------------------------------------------- |
+| `process.env.RUVYXA_PUBLIC_*` | ✅ ได้               | ตัวแปรใดๆ ที่ขึ้นต้นด้วย `RUVYXA_PUBLIC_`                     |
+| `process.env.NODE_ENV`        | ✅ ได้               | ปลอดภัยเสมอ (ถูกแทนที่ตอน build time)                         |
+| `process.env.*` (อื่นๆ)       | ❌ ไม่ได้            | ทำให้เกิด `RUV1008`                                           |
+| `import.meta.env.*`           | ❌ ไม่ได้            | ไม่ใช่ contract ปัจจุบัน ให้ใช้ `process.env.RUVYXA_PUBLIC_*` |
 
 ### RUV1008 Error
 

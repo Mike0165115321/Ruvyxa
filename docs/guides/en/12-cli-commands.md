@@ -201,7 +201,7 @@ check used by `ruvyxa check`.
 
 ```bash
 ruvyxa test:parity
-ruvyxa parity
+ruvyxa start
 ```
 
 ## `ruvyxa plugin create`
@@ -313,7 +313,7 @@ ruvyxa preview --port 4173
 ```
 
 If a route strategy is not supported by the platform adapter, the build reports that
-incompatibility. See [Deployment](./13-deployment.md) for adapter-specific output and hosting steps.
+incompatibility. See [Deployment](./13-deployment.md) for adapter-node output and hosting steps.
 
 ### Build for a Hosting Adapter Without Editing Config
 
@@ -322,7 +322,7 @@ incompatibility. See [Deployment](./13-deployment.md) for adapter-specific outpu
 ```bash
 ruvyxa build --adapter vercel
 ruvyxa build --adapter cloudflare
-ruvyxa build --adapter @acme/ruvyxa-adapter-internal
+ruvyxa build --adapter @acme/ruvyxa-adapter-node
 ```
 
 The last form is a package name; it must be resolvable by the adapter runner in the project
@@ -342,7 +342,7 @@ and render parity flow. To run just the parity portion:
 ```bash
 ruvyxa test:parity
 # equivalent alias
-ruvyxa parity
+ruvyxa start
 ```
 
 ### Inspect Routes Before Debugging a URL
@@ -557,3 +557,16 @@ Use command-specific help before putting a command in a script. In particular, `
 - [Configuration](./11-configuration.md) — configure the CLI's project inputs.
 - [Deployment](./13-deployment.md) — select and configure an adapter.
 - [Plugins](./14-plugins.md) — write or scaffold a plugin.
+
+## Under the Hood: CLI Diagnostics
+
+All CLI commands are deeply integrated with the Ruvyxa Diagnostics Engine. For example, running
+`ruvyxa analyze` will perform AST scans across your project and emit `RUV1000` boundary errors if
+you illegally import a server module into a client component. The `ruvyxa doctor` command evaluates
+the integrity of your chosen deployment adapter and verifies platform capabilities.
+
+### Full CLI Capabilities
+
+- `ruvyxa dev`: Boots the Axum server with HMR and persistent JS workers.
+- `ruvyxa build`: Triggers Oxc compilation, Tree-shaking, and CSS fnv1a_64 hashing.
+- `ruvyxa test:parity`: Evaluates behavioral drift between development and production routes.

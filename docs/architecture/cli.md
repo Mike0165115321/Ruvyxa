@@ -150,8 +150,8 @@ auto-detection reads 6 env vars (VERCEL, NETLIFY, CF_PAGES, RAILWAY_PROJECT_ID, 
 12. **Commit staging** — `commit_staged_build_outputs()`:
     - Backup existing output → rename staging → remove backup (with Windows retry)
 13. **Plugin complete** — `TypeScriptPluginBuildSession::run_complete(out_dir, manifest)`
-14. **Adapter runner** (if adapter configured or detected) — `run_adapter_runner()` spawns
-    `adapter-runner.mjs` which produces artifact reports
+14. **Adapter runner** (if an adapter is selected) — `run_adapter_runner()` invokes
+    `adapter-runner.mjs`, which resolves the adapter and materializes artifact reports
 
 ## Module Resolution & Bundler
 

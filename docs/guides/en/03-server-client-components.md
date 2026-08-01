@@ -89,7 +89,7 @@ import "client-only" // RUV1009: Client-only module in server graph
 
 // ❌ No private env vars in reachable code
 process.env.DATABASE_URL // Fine if in server only
-import.meta.env.RUVYXA_PUBLIC_API_URL // Fine — public prefix
+process.env.RUVYXA_PUBLIC_API_URL // Public only when the value is safe to expose
 ```
 
 ### Client Components
@@ -509,7 +509,7 @@ fn private_env_reads(source: &str) -> Vec<String> {
 | `process.env.RUVYXA_PUBLIC_*`     | ✅ Yes             | Any variable prefixed with `RUVYXA_PUBLIC_` |
 | `process.env.NODE_ENV`            | ✅ Yes             | Always safe (replaced at build time)        |
 | `process.env.*` (any other)       | ❌ No              | Fires `RUV1008`                             |
-| `import.meta.env.RUVYXA_PUBLIC_*` | ✅ Yes             | Vite-style public env vars                  |
+| `import.meta.env.*`              | ❌ No              | Not a current Ruvyxa contract; use `process.env.RUVYXA_PUBLIC_*` |
 
 ### RUV1008 Error
 

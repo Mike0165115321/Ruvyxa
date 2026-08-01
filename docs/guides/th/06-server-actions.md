@@ -830,7 +830,7 @@ pub(crate) fn action_file_for(route: &RouteEntry) -> Option<PathBuf> {
 คุณสามารถเรียกใช้ action อื่นภายใน action ได้ (Composition) เพื่อนำโค้ดกลับมาใช้ใหม่:
 
 ```ts
-export const createUser = action()
+export const createUser = action
   .input({
     parse(value: unknown) {
       if (typeof value !== 'object' || value === null) throw new Error('Invalid')
@@ -855,7 +855,7 @@ export const createUser = action()
     return { ok: true, userId }
   })
 
-export const sendWelcomeEmail = action()
+export const sendWelcomeEmail = action
   .input({
     parse(value: unknown) {
       if (typeof value !== 'object' || value === null) throw new Error('Invalid')
@@ -874,7 +874,7 @@ export const sendWelcomeEmail = action()
 คุณสามารถใช้ฟิลด์ `user` จาก context ที่ได้จาก middleware เพื่อป้องกัน action:
 
 ```ts
-export const deleteAccount = action()
+export const deleteAccount = action
   .input({
     parse(value: unknown) {
       if (typeof value !== 'object' || value === null) throw new Error('Invalid')
@@ -976,7 +976,7 @@ describe('createTodo', () => {
 ### Structured Error Responses (การคืนค่า Error แบบโครงสร้าง)
 
 ```ts
-export const updateProfile = action()
+export const updateProfile = action
   .input({
     parse(value: unknown) {
       if (typeof value !== 'object' || value === null) throw new Error('Invalid')
@@ -1005,7 +1005,7 @@ export const updateProfile = action()
 ### Retry Logic (การลองใหม่)
 
 ```ts
-export const processPayment = action()
+export const processPayment = action
   .input({
     parse(value: unknown) {
       if (typeof value !== 'object' || value === null) throw new Error('Invalid')
@@ -1059,21 +1059,17 @@ import { action } from 'ruvyxa/server'
 // เก็บค่าใน memory (แอปจริงควรใช้ Database)
 let count = 0
 
-export const increment = action()
-  .input({ parse: () => ({}) })
-  .handler(async ({ invalidate }) => {
-    count++
-    invalidate('counter:value')
-    return { count }
-  })
+export const increment = action.input({ parse: () => ({}) }).handler(async ({ invalidate }) => {
+  count++
+  invalidate('counter:value')
+  return { count }
+})
 
-export const reset = action()
-  .input({ parse: () => ({}) })
-  .handler(async ({ invalidate }) => {
-    count = 0
-    invalidate('counter:value')
-    return { count }
-  })
+export const reset = action.input({ parse: () => ({}) }).handler(async ({ invalidate }) => {
+  count = 0
+  invalidate('counter:value')
+  return { count }
+})
 ```
 
 **ขั้นตอนที่ 2:** สร้างไฟล์ `app/counter/page.tsx`:
