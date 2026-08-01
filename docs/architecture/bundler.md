@@ -175,6 +175,44 @@ Resolution order:
 3. Deep import (`react/jsx-runtime`) → `node_modules/package/` resolution
 4. Built-in → stub map
 
+### Source scanning (`ast`)
+
+`ast::parse_module()` is the crate's only JavaScript byte scanner, and every stage that needs facts
+about a source file goes through it — the resolver's graph walk, the compiler's transform plan,
+chunking, the server/client boundary check, and `ruvyxa_graph`'s route validation. `ast` also
+exports the primitives (`regex_can_start`, `skip_regex_literal`) that `boundary.rs` reuses, so no
+stage carries a private copy.
+
+That consolidation is deliberate. A scanner that does not classify `/` correctly reads `/["']/` as a
+division followed by an unterminated string, and the string skip then swallows the rest of the file:
+imports after that point vanish from the dependency graph, `server-only` stops tripping RUV1007, and
+a page's default export becomes invisible to validation. Each stage that owned a scanner had to
+rediscover that rule; sharing one implementation means it is fixed in one place.
+
+The scanner tracks the last token-ending byte to tell a regex literal from a division, skips
+comments and strings, and walks template literals so `${…}` interpolations are scanned as code.
+Every helper it delegates to is bounded to the range being scanned, so an interpolation's scan
+cannot read into the surrounding literal text.
+
+### Incremental graph cache
+
+`IncrementalGraphCache` persists resolved dependency edges to `graph-manifest.json` so an unchanged
+module skips import extraction and resolution on the next build. Reuse is gated on a blake3 content
+hash of the current source, so a timestamp-preserving edit cannot return stale edges.
+
+An entry stores the resolved paths **and** the specifier-to-path alias map they were resolved
+through. Both or neither: the linker consults a module's alias map before matching by path suffix,
+and an alias like `~/components/Button` shares no suffix with its target, so reusing the paths alone
+made a warm build emit an unresolved `import … from "~/components/Button"` and omit the target
+module. Entries that cannot supply both are resolved fresh.
+
+`MANIFEST_VERSION` is a constant identity and is not bumped when the entry format grows. A
+hand-maintained counter fails silently when someone forgets it, so compatibility lives in the entry
+format instead: fields added later are `Option`, which keeps "absent" distinguishable from "empty".
+A reader declines to reuse an entry that predates a field it needs, and the fresh resolve rewrites
+that entry complete — so an older cache self-heals one module at a time instead of being discarded
+wholesale.
+
 ---
 
 ## Compilation

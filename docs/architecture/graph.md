@@ -249,12 +249,28 @@ This lets `ruvyxa.config.ts` set `render.strategy: "ssg"` for all routes.
 extension probing and `index.*` conventions. This feeds both the rendering strategy detector and the
 boundary validator.
 
-The import scanner (`import_specifiers()`) handles:
+Import edges come from `ruvyxa_bundler::ast::parse_module()` — the same scanner the bundler resolves
+its dependency graph with. This crate deliberately owns no scanner of its own: when it had one,
+`check` walked a slightly different module set than `build` bundled, so a page could validate clean
+and still miss a dependency in the output. The shared scanner handles:
 
-- Static `import` statements
-- `import()` dynamic expressions
-- `require()` calls
-- Strips strings, comments, and template literals during analysis
+- Static `import` statements, including declarations split across lines
+- `import()` dynamic expressions and `require()` calls
+- `export … from` re-exports and bare side-effect imports
+- Type-only `import type` forms, which are excluded because they leave no runtime edge
+- Strings, comments, regex literals, and template literals — with `${…}` interpolations scanned as
+  code, so `${require("server-only")}` is still an edge
+
+### Edge memoization
+
+`collect_relative_graph()` is called once per route and once per layout in each route's chain, so a
+layout or shared component reachable from many routes would otherwise be read and scanned once per
+route. `ModuleEdges` memoizes the resolved edges of each file across those walks.
+
+It caches **edges, not reachable sets**. The BFS still runs per entry, so every caller receives
+exactly the set it would have computed alone; only the file read and scan are shared. Caching whole
+reachable sets would be wrong here — a second walk arriving at an already-visited module would
+short-circuit and return a partial graph.
 
 ## Source File → URL Mapping
 
