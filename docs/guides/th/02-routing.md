@@ -14,6 +14,29 @@ tree) สำหรับจับคู่ URL กับ route ด้วยค�
 
 ---
 
+## Mental Model
+
+ทุกๆ ไฟล์ที่อยู่ในโฟลเดอร์ `app/` และตั้งชื่อตามรูปแบบที่กำหนดจะกลายเป็น Route
+โดยโครงสร้างโฟลเดอร์จะเป็นตัวกำหนด URL
+
+```
+app/
+├── page.tsx                → /
+├── layout.tsx              → root layout (ครอบทุกหน้า)
+├── about/
+│   ├── page.tsx            → /about
+│   └── layout.tsx          → /about layout
+├── blog/
+│   ├── page.tsx            → /blog
+│   └── [slug]/
+│       └── page.tsx        → /blog/:slug
+└── api/
+    └── hello/
+        └── route.ts        → /api/hello (GET, POST, ฯลฯ)
+```
+
+---
+
 ## File Conventions
 
 Ruvyxa จับคู่ไฟล์พิเศษในโฟลเดอร์ app/:
@@ -931,6 +954,53 @@ Response:
 
 ---
 
+## Route Manifest (Build Output)
+
+Route manifest ตัวเต็มจะถูกเขียนตอน build และมีข้อมูลดังนี้:
+
+```json
+{
+  "appDir": "app",
+  "routes": [
+    {
+      "id": "/",
+      "path": "/",
+      "kind": "page",
+      "file": "app/page.tsx",
+      "layoutChain": ["app/layout.tsx"],
+      "serverModules": ["app/actions.ts"],
+      "clientModules": ["app/client.tsx"],
+      "runtime": "node",
+      "render": {
+        "strategy": "ssg",
+        "revalidate": null,
+        "hasStaticParams": false,
+        "staticPaths": [],
+        "hasDynamicSlots": false,
+        "hydrate": true,
+        "hydration": "load"
+      }
+    }
+  ]
+}
+```
+
+### Route Entry Schema
+
+| Field           | Type                           | Description                                    |
+| --------------- | ------------------------------ | ---------------------------------------------- |
+| `id`            | `string`                       | Identifier ของ route ที่อ่านง่าย               |
+| `path`          | `string`                       | รูปแบบ URL (เช่น `/blog/[slug]`)               |
+| `kind`          | `"page" \| "api"`              | ประเภทของ Route                                |
+| `file`          | `string`                       | Path ของไฟล์ Source โค้ด                       |
+| `layoutChain`   | `string[]`                     | ไฟล์ layout บรรพบุรุษเรียงตามลำดับ             |
+| `serverModules` | `string[]`                     | Server-only modules (`server.ts`, `action.ts`) |
+| `clientModules` | `string[]`                     | Client entry modules                           |
+| `runtime`       | `"node" \| "edge" \| "static"` | Runtime target                                 |
+| `render`        | `RenderMeta`                   | Rendering strategy metadata                    |
+
+---
+
 ## Route Validation (RUV1100-1199)
 
 Ruvyxa ตรวจสอบ routes โดยอัตโนมัติ:
@@ -1048,6 +1118,80 @@ import { useRouter } from '@ruvyxa/react'
 // ถูก: ใช้ชื่ออื่น
 // app/[actionId]/page.tsx
 ```
+
+---
+
+## Performance Characteristics
+
+| กระบวนการ           | ความซับซ้อน (Complexity)               | คำอธิบาย                                             |
+| ------------------- | -------------------------------------- | ---------------------------------------------------- |
+| Route discovery     | `O(n)` เมื่อ `n` = จำนวนไฟล์ใน `app/`  | ท่องโฟลเดอร์แบบ Recursive เพียงครั้งเดียว            |
+| Route matching      | `O(r)` เมื่อ `r` = จำนวน route ทั้งหมด | สแกนแบบ Linear ตาม Regex ที่คอมไพล์แล้ว              |
+| Specificity sort    | `O(r log r)`                           | ทำครั้งเดียวตอน build/discovery                      |
+| Compiled regex size | `O(s)` เมื่อ `s` = segments ต่อ route  | มี capture group หนึ่งอันสำหรับแต่ละ dynamic segment |
+| Manifest JSON size  | `O(r)`                                 | เพิ่มขึ้นตามสัดส่วนของจำนวน route                    |
+
+---
+
+## Security Implications
+
+### การป้องกัน Path Traversal
+
+ฟังก์ชัน `canonicalRoutePath` ปฏิเสธค่าต่อไปนี้:
+
+- Segments ว่าง
+- Segments ของการท่อง path แบบ `.` และ `..`
+- เครื่องหมายสแลชที่ถูก encode (`%2F`, `%5C`)
+- Control characters (U+0000–U+001F, U+007F–U+009F)
+
+### ความปลอดภัยของ URL Decoding
+
+Segments จะถูก decode เพียงแค่ครั้งเดียวด้วย `decodeURIComponent` path ที่ถูก double-encoded
+จะถูกจับได้และปฏิเสธ ป้องกันช่องโหว่ path traversal จากการใช้ `%252F` encoding
+
+### ความปลอดภัยของ Link
+
+คอมโพเนนต์ `<Link>` ขัดขวางเฉพาะการนำทางที่เป็น `http:`/`https:` และเป็น same-origin ลิงก์ภายนอก,
+`mailto:`, `tel:`, และการดาวน์โหลดต่างๆ จะปล่อยผ่าน
+
+---
+
+## ลองทำดู
+
+สร้างโครงสร้าง route เหล่านี้และลองเข้าชม URL แต่ละอันดู:
+
+```
+app/
+├── page.tsx
+├── blog/
+│   ├── page.tsx
+│   └── [slug]/
+│       └── page.tsx
+├── docs/
+│   └── [...path]/
+│       └── page.tsx
+└── (shop)/
+    ├── layout.tsx
+    ├── products/
+    │   └── page.tsx
+    └── cart/
+        └── page.tsx
+```
+
+Routes ที่ควรจะได้:
+
+```
+/                  → app/page.tsx
+/blog              → app/blog/page.tsx
+/blog/my-post      → app/blog/[slug]/page.tsx
+/docs              → app/docs/[...path]/page.tsx
+/docs/guide        → app/docs/[...path]/page.tsx
+/docs/guide/routing → app/docs/[...path]/page.tsx
+/products          → app/(shop)/products/page.tsx
+/cart              → app/(shop)/cart/page.tsx
+```
+
+รันคำสั่ง `npm run routes` เพื่อตรวจสอบ
 
 ---
 

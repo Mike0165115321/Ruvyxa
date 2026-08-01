@@ -76,6 +76,62 @@ Rule of thumb: anything with `.local` in the name stays out of your repository. 
 
 ---
 
+## Prefix Detection Algorithm — Under the Hood
+
+Ruvyxa uses this algorithm to determine which env vars are safe to send to the client:
+
+```ts
+function isClientAccessible(varName: string): boolean {
+  // Step 1: Special cases
+  if (varName === 'NODE_ENV') return true
+  if (varName === 'RUVYXA_RUNTIME') return false // server-only runtime info
+
+  // Step 2: Prefix check
+  if (varName.startsWith('RUVYXA_PUBLIC_')) return true
+
+  // Step 3: Explicit allowlist (Ruvyxa internal)
+  const ALLOWED_CLIENT_PREFIXES = [
+    'NEXT_PUBLIC_', // Next.js compatibility
+    'PUBLIC_', // SvelteKit compatibility
+    'VITE_', // Vite compatibility
+  ]
+  if (ALLOWED_CLIENT_PREFIXES.some((prefix) => varName.startsWith(prefix))) {
+    return true
+  }
+
+  // Step 4: Everything else is server-only
+  return false
+}
+
+function collectClientEnvVars(allVars: Record<string, string>): Record<string, string> {
+  const clientVars: Record<string, string> = {}
+
+  for (const [key, value] of Object.entries(allVars)) {
+    if (isClientAccessible(key)) {
+      clientVars[key] = value
+    }
+  }
+
+  return clientVars
+}
+```
+
+### Live Example
+
+```bash
+# Input env vars
+RUVYXA_PUBLIC_API_URL=https://api.example.com    → client ✅
+RUVYXA_PUBLIC_GA_ID=G-XXXXXXXXXX                 → client ✅
+NODE_ENV=development                             → client ✅ (special)
+DATABASE_URL=postgres://localhost/db             → server-only ❌
+AUTH_SECRET=sk-xxxx                              → server-only ❌
+STRIPE_API_KEY=sk_live_xxxxx                     → server-only ❌
+MY_APP_SECRET=secret                             → server-only ❌
+PUBLIC_STRIPE_KEY=pk_test_xxxxx                  → client ✅ (Vite compat)
+```
+
+---
+
 ## Public vs Private Variables
 
 This is the most important concept.
@@ -249,6 +305,275 @@ export const sendNewsletter = action(async (formData: FormData) => {
   const apiKey = process.env.SENDGRID_API_KEY
   // ... send email
 })
+```
+
+---
+
+## process.env vs import.meta.env — Differences
+
+| Feature                             | `process.env`                                    | `import.meta.env`                |
+| ----------------------------------- | ------------------------------------------------ | -------------------------------- |
+| Runtime                             | Node.js (server) + Browser (client, public only) | ESM (both server and client)     |
+| Server Components                   | ✅                                               | ✅                               |
+| Client Components                   | ✅ (only RUVYXA_PUBLIC_*)                        | ✅ (only RUVYXA_PUBLIC_*)        |
+| Type Safety                         | `NodeJS.ProcessEnv` interface                    | `ImportMetaEnv` interface        |
+| Auto-complete                       | ✅ if declarations exist                         | ✅ if declarations exist         |
+| Build-time replacement              | ✅ Ruvyxa replaces at build time                 | ✅ Ruvyxa replaces at build time |
+| Dynamic access (`process.env[var]`) | ✅ (but not recommended)                         | ❌ (must be static string)       |
+| Tree-shaking                        | ✅                                               | ✅ Better (static analysis)      |
+
+### Comparison Example
+
+```tsx
+// Server Component — Both are fine
+export default function ServerPage() {
+  // process.env (Node.js style)
+  console.log(process.env.RUVYXA_PUBLIC_API_URL)
+  console.log(process.env.DATABASE_URL) // ✅ server-only
+
+  // import.meta.env (ESM style)
+  console.log(import.meta.env.RUVYXA_PUBLIC_API_URL)
+  console.log(import.meta.env.DATABASE_URL) // ✅ server-only
+  console.log(import.meta.env.MODE) // 'development' | 'production'
+
+  return <div>Server Component</div>
+}
+```
+
+```tsx
+// Client Component
+'use client'
+
+export default function ClientPage() {
+  // process.env — Only RUVYXA_PUBLIC_* + NODE_ENV
+  console.log(process.env.RUVYXA_PUBLIC_API_URL) // ✅
+  console.log(process.env.NODE_ENV) // ✅
+  console.log(process.env.DATABASE_URL) // ❌ RUV1008
+
+  // import.meta.env — Only public variables
+  console.log(import.meta.env.RUVYXA_PUBLIC_API_URL) // ✅
+  console.log(import.meta.env.MODE) // ✅
+  console.log(import.meta.env.DATABASE_URL) // ❌ RUV1008
+
+  return <div>Client Component</div>
+}
+```
+
+---
+
+## Public Variables (`RUVYXA_PUBLIC_*`) — Deep Dive
+
+### Variables Safe for Client
+
+| Variable                              | Example Value               | Usage                  |
+| ------------------------------------- | --------------------------- | ---------------------- |
+| `RUVYXA_PUBLIC_API_URL`               | `https://api.example.com`   | API endpoint           |
+| `RUVYXA_PUBLIC_SITE_URL`              | `https://example.com`       | Site URL               |
+| `RUVYXA_PUBLIC_GA_ID`                 | `G-XXXXXXXXXX`              | Google Analytics ID    |
+| `RUVYXA_PUBLIC_SENTRY_DSN`            | `https://xxx@sentry.io/xxx` | Sentry DSN (public)    |
+| `RUVYXA_PUBLIC_GTM_ID`                | `GTM-XXXXXXX`               | Google Tag Manager     |
+| `RUVYXA_PUBLIC_STRIPE_KEY`            | `pk_live_xxxxx`             | Stripe publishable key |
+| `RUVYXA_PUBLIC_ALGOLIA_ID`            | `XXXXX`                     | Algolia app ID         |
+| `RUVYXA_PUBLIC_MAPBOX_TOKEN`          | `pk.xxxxx`                  | Mapbox public token    |
+| `RUVYXA_PUBLIC_POSTHOG_KEY`           | `phc_xxxxx`                 | PostHog public key     |
+| `RUVYXA_PUBLIC_CLERK_PUBLISHABLE_KEY` | `pk_test_xxxxx`             | Clerk auth key         |
+| `RUVYXA_PUBLIC_VERCEL_ANALYTICS_ID`   | `xxxxx`                     | Vercel Analytics       |
+| `RUVYXA_PUBLIC_ENVIRONMENT`           | `production`                | Custom env flag        |
+
+### TypeScript Declarations (All Public)
+
+```ts
+// ruvyxa-env.d.ts
+declare namespace NodeJS {
+  interface ProcessEnv {
+    // Public — client-safe
+    RUVYXA_PUBLIC_API_URL: string
+    RUVYXA_PUBLIC_SITE_URL: string
+    RUVYXA_PUBLIC_GA_ID: string
+    RUVYXA_PUBLIC_GTM_ID: string
+    RUVYXA_PUBLIC_SENTRY_DSN: string
+    RUVYXA_PUBLIC_STRIPE_KEY: string
+    RUVYXA_PUBLIC_ENVIRONMENT: 'development' | 'staging' | 'production'
+  }
+}
+```
+
+### Usage in Client Components
+
+```tsx
+'use client'
+
+export default function AnalyticsProvider({ children }: { children: React.ReactNode }) {
+  const gaId = process.env.RUVYXA_PUBLIC_GA_ID
+  const gtmId = process.env.RUVYXA_PUBLIC_GTM_ID
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && gaId) {
+      // Load Google Analytics
+      const script = document.createElement('script')
+      script.src = `https://www.googletagmanager.com/gtag/js?id=${gaId}`
+      script.async = true
+      document.head.appendChild(script)
+
+      window.dataLayer = window.dataLayer || []
+      function gtag(...args: unknown[]) {
+        window.dataLayer.push(args)
+      }
+      gtag('js', new Date())
+      gtag('config', gaId)
+    }
+  }, [gaId])
+
+  return <>{children}</>
+}
+```
+
+---
+
+## Private Variables (Server-Only) — Deep Dive
+
+### Variables Strictly Prohibited on Client
+
+| Category       | Examples                                                | Risk of Leak            |
+| -------------- | ------------------------------------------------------- | ----------------------- |
+| Database       | `DATABASE_URL`, `MONGODB_URI`, `PGHOST`                 | Data loss or breach     |
+| Authentication | `AUTH_SECRET`, `JWT_SECRET`, `AUTH_GOOGLE_SECRET`       | Session hijacking       |
+| API Keys       | `STRIPE_API_KEY`, `OPENAI_API_KEY`, `AWS_ACCESS_KEY_ID` | Financial loss, attacks |
+| Encryption     | `ENCRYPTION_KEY`, `SALT`                                | Data decryption         |
+| Infrastructure | `REDIS_URL`, `SQS_QUEUE_URL`, `CLOUDAMQP_URL`           | Infrastructure attacks  |
+| Email          | `SMTP_PASS`, `SENDGRID_API_KEY`                         | Email spoofing/spam     |
+
+### How to Safely Use Private Variables
+
+#### ✅ Server Component (Safe)
+
+```tsx
+// app/dashboard/page.tsx — Server Component
+import { PrismaClient } from '@prisma/client'
+
+const prisma = new PrismaClient({
+  datasources: {
+    db: {
+      url: process.env.DATABASE_URL, // ✅ Safe
+    },
+  },
+})
+
+export default async function Dashboard() {
+  const users = await prisma.user.findMany()
+  return <div>Users: {users.length}</div>
+}
+```
+
+#### ✅ API Route (Safe)
+
+```ts
+// app/api/chat/route.ts
+import OpenAI from 'openai'
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY, // ✅ Safe
+})
+
+export async function POST(req: Request) {
+  // ...
+}
+```
+
+#### ❌ Client Component (Unsafe -> RUV1008)
+
+```tsx
+'use client'
+
+export default function ClientComponent() {
+  // ❌ Will throw RUV1008 Environment Boundary Violation
+  const apiKey = process.env.OPENAI_API_KEY
+  return <div>{apiKey}</div>
+}
+```
+
+---
+
+## RUV1008 Error — Environment Boundary Violation
+
+If you reference a private environment variable in a Client Component, Ruvyxa's compiler will block
+the build:
+
+```
+RUV1008: Environment Boundary Violation
+  └─ In client component: app/components/ChatBox.tsx
+  └─ Private environment variable accessed: process.env.OPENAI_API_KEY
+
+Client components are shipped to the browser. Accessing private variables
+would leak your secrets to users.
+
+To fix:
+  1. If this is a public variable, prefix it: RUVYXA_PUBLIC_OPENAI_API_KEY
+  2. If this is a secret, move the logic to a Server Component or Server Action.
+```
+
+---
+
+## Client Scanner — RUV1008 Detection Mechanism
+
+Ruvyxa uses Oxc to statically analyze AST during compilation:
+
+1. Identify files starting with `"use client"` or `'use client'`
+2. Scan for AST nodes matching:
+   - `MemberExpression`: `process.env.XXX`
+   - `MemberExpression`: `import.meta.env.XXX`
+   - Destructuring: `const { XXX } = process.env`
+3. Evaluate the identifier `XXX`
+4. Pass it to `isClientAccessible(XXX)`
+5. If it returns `false`, throw RUV1008.
+
+Because this is statically analyzed, dynamic access like `process.env[getVarName()]` is strictly
+blocked in Client Components to prevent runtime leaks.
+
+---
+
+## Allowed Client Variables — Full List
+
+The following environment variables are allowed in Client Components implicitly or natively:
+
+- `NODE_ENV` — `development`, `production`, `test`
+- `RUVYXA_PUBLIC_*` — Any variable starting with this prefix
+- `NEXT_PUBLIC_*` — Next.js compatibility fallback
+- `PUBLIC_*` — SvelteKit compatibility fallback
+- `VITE_*` — Vite compatibility fallback
+- `import.meta.env.MODE` — 'development' | 'production'
+- `import.meta.env.DEV` — boolean
+- `import.meta.env.PROD` — boolean
+- `import.meta.env.SSR` — boolean
+
+---
+
+## Runtime Environment Variables
+
+Docker deployments require variables to be supplied at runtime (not build time).
+
+```dockerfile
+# Dockerfile
+ENV PORT=3000
+CMD ["npm", "run", "start"]
+```
+
+**Rule of Thumb:**
+
+- `RUVYXA_PUBLIC_*`: Baked in at **build time**. If changed, you must rebuild.
+- `DATABASE_URL` (Server-only): Read dynamically at **runtime**. You can change it without
+  rebuilding.
+
+If you absolutely need dynamic public variables at runtime, you must expose them through an API
+route and fetch them on the client:
+
+```ts
+// app/api/config/route.ts
+export function GET() {
+  return Response.json({
+    theme: process.env.DYNAMIC_THEME_COLOR || 'blue',
+  })
+}
 ```
 
 ---
@@ -490,6 +815,86 @@ runner (`runtime/adapter-runner.mjs`) reads `RUVYXA_RUNTIME` to select the JavaS
 
 ---
 
+## Platform Detection — Environment Variables
+
+Ruvyxa provides built-in variables to detect the current deployment platform:
+
+```ts
+if (process.env.VERCEL) {
+  console.log('Running on Vercel!')
+} else if (process.env.NETLIFY) {
+  console.log('Running on Netlify!')
+} else if (process.env.CLOUDFLARE_PAGES) {
+  console.log('Running on Cloudflare!')
+}
+```
+
+These are automatically populated by the respective deployment environments.
+
+---
+
+## Production Deployment — Environment Variable Setup
+
+When deploying your Ruvyxa app:
+
+1. **Do not commit `.env` or `.env.local`**. Add them to `.gitignore`.
+2. **Vercel/Netlify**: Add your variables in their web dashboards (Settings -> Environment
+   Variables).
+3. **Docker**: Pass them using `docker run -e DATABASE_URL=...` or Docker Compose.
+4. **CI/CD**: Add them to GitHub Secrets / GitLab CI Variables.
+
+---
+
+## `ruvyxa doctor` — Inspecting Environment Variables
+
+You can use the `doctor` command to verify which environment variables Ruvyxa has loaded and how
+they are classified:
+
+```bash
+npm run doctor -- --env
+```
+
+Output:
+
+```
+🩺 Ruvyxa Doctor - Environment Variable Report
+
+Loaded from: .env, .env.local
+
+Public Variables (Client-safe):
+  ✅ RUVYXA_PUBLIC_API_URL
+  ✅ RUVYXA_PUBLIC_GA_ID
+
+Private Variables (Server-only):
+  🔒 DATABASE_URL
+  🔒 AUTH_SECRET
+  🔒 STRIPE_SECRET_KEY
+
+System Variables:
+  ℹ️ NODE_ENV = development
+  ℹ️ RUVYXA_RUNTIME = node
+```
+
+---
+
+## CI/CD Integration
+
+If your CI pipeline runs `ruvyxa build` (e.g. GitHub Actions), it needs access to all
+`RUVYXA_PUBLIC_*` variables so they can be baked into the bundle.
+
+```yaml
+# .github/workflows/build.yml
+steps:
+  - name: Build
+    run: npm run build
+    env:
+      RUVYXA_PUBLIC_API_URL: ${{ secrets.RUVYXA_PUBLIC_API_URL }}
+      # Server-only variables like DATABASE_URL are not strictly needed
+      # for the build step unless a plugin strictly requires them.
+```
+
+---
+
 ## Troubleshooting
 
 | Symptom                             | Likely cause                    | Fix                                                   |
@@ -590,6 +995,29 @@ export function Analytics() {
   return <Script src={`https://www.googletagmanager.com/gtag/js?id=${gaId}`} />
 }
 ```
+
+---
+
+## Try It Yourself
+
+1. Add `RUVYXA_PUBLIC_TEST=hello` to `.env`
+2. Add `SECRET_TEST=world` to `.env`
+3. Inside `app/page.tsx`, `console.log` both variables. (It will work on the server console).
+4. Inside a Client Component (`'use client'`), `console.log(process.env.SECRET_TEST)`.
+5. Observe the `RUV1008` error in your terminal.
+6. Change the console log to `process.env.RUVYXA_PUBLIC_TEST`. It will work in the browser console.
+
+---
+
+## Summary
+
+- Use `.env`, `.env.local`, `.env.development`, `.env.production` for managing environment
+  variables.
+- Prefix with `RUVYXA_PUBLIC_` to expose variables to the browser.
+- **Server Components** can access all variables.
+- **Client Components** can only access public variables (enforced by RUV1008).
+- Public variables are baked in at build time; private variables are read at runtime.
+- Never commit private secrets to version control.
 
 ---
 

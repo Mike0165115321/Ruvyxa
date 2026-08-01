@@ -623,6 +623,43 @@ fn resolve_style_import(root, base_dir, specifier, tsconfig) → Option<PathBuf>
 
 ---
 
+## Style Objects (CSS-in-JS)
+
+Ruvyxa provides an optional styling solution for those who prefer CSS-in-JS, but without the runtime
+overhead.
+
+```tsx
+import { css } from '@ruvyxa/core/style'
+
+const styles = {
+  container: css({
+    display: 'flex',
+    padding: '20px',
+    backgroundColor: 'var(--bg)',
+    '&:hover': {
+      backgroundColor: 'var(--bg-hover)',
+    },
+  }),
+  title: css({
+    fontSize: '24px',
+    fontWeight: 'bold',
+  }),
+}
+
+export default function Component() {
+  return (
+    <div className={styles.container}>
+      <h1 className={styles.title}>Hello</h1>
+    </div>
+  )
+}
+```
+
+These `css()` calls are statically extracted and compiled into regular CSS during build. They have
+zero runtime cost.
+
+---
+
 ## CSS Ordering
 
 ### Within Entry
@@ -817,6 +854,61 @@ For very large stylesheets (>100 KiB), consider:
 | **`@import` with media queries**         | Preserved: `@import url("print.css") print;`                       |
 | **UTF-8 BOM in CSS**                     | Tolerated — Rust `fs::read_to_string` handles it                   |
 | **Sass `@forward`**                      | Supported — grass forwards rules from partials                     |
+
+---
+
+## Full Example: Shop
+
+Here is how you might combine different styling approaches in a real application:
+
+```tsx
+// app/layout.tsx
+import './global.css' // Base reset, fonts, CSS variables
+
+export default function RootLayout({ children }) {
+  return (
+    <html>
+      <body className="bg-gray-100 text-gray-900">
+        {' '}
+        {/* Tailwind for utility */}
+        {children}
+      </body>
+    </html>
+  )
+}
+```
+
+```tsx
+// app/products/ProductCard.tsx
+import styles from './ProductCard.module.scss' // SCSS Modules for complex component styles
+
+export function ProductCard({ title, price }) {
+  return (
+    <div className={styles.card}>
+      <h3 className={styles.title}>{title}</h3>
+      <p className="font-bold text-lg">{price} THB</p> {/* Tailwind for one-offs */}
+    </div>
+  )
+}
+```
+
+---
+
+## Under the Hood: Reproducible Class Names
+
+When using CSS Modules, class names are generated deterministically based on the file path and local
+class name. This ensures they are identical across different machines and builds, preventing
+hydration mismatches.
+
+Algorithm:
+
+1. Canonicalize the relative path (e.g. `app/components/Button.module.css`)
+2. Hash the path using xxHash64
+3. Combine: `[local-name]_[hash:5]`
+4. Result: `btn_a7f3b`
+
+This avoids the problem where different build environments generate different hashes, which can
+cause caching issues and SSR hydration errors.
 
 ---
 

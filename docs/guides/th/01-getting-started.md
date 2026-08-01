@@ -201,6 +201,199 @@ my-empty/
 
 ---
 
+## Config File Reference
+
+### `ruvyxa.config.ts`
+
+```ts
+import { config, type RuvyxaConfig } from 'ruvyxa/config'
+
+const settings: RuvyxaConfig = {
+  appDir: 'app',
+  outDir: '.ruvyxa',
+  server: {
+    host: 'localhost',
+    port: 3000,
+  },
+  build: {
+    minify: true,
+    map: false,
+    treeShake: true,
+    split: 'route',
+    workers: 4,
+  },
+  cache: {
+    routes: true,
+    css: true,
+  },
+  debug: {
+    overlay: true,
+  },
+  image: {
+    optimize: true,
+    quality: 82,
+    lossless: false,
+    workers: 0,
+  },
+}
+
+export default config(settings)
+```
+
+### `RuvyxaConfig` Type — ทุกฟิลด์
+
+```ts
+export interface RuvyxaConfig {
+  appDir?: string // @default 'app'
+  outDir?: string // @default '.ruvyxa'
+  runtime?: 'node' | 'bun' | 'edge' | 'static' // @default 'node'
+  react?: boolean // @default true
+  typescript?: {
+    strict?: boolean // @default true
+  }
+  css?: {
+    entries?: string[] // ไฟล์ CSS/โฟลเดอร์ Global เพิ่มเติม
+  }
+  server?: {
+    port?: number // @default 3000
+    host?: string // @default 'localhost'
+  }
+  build?: {
+    minify?: boolean // @default true
+    map?: boolean // @default false
+    treeShake?: boolean // @default true
+    split?: 'single' | 'route' | 'manual' // @default 'route'
+    workers?: number // @default จำนวน CPU ที่มี
+    jsx?: 'classic' | 'automatic' // @default 'automatic'
+    target?: 'es2018' | 'es2019' | 'es2020' | 'es2022' | 'esnext' // @default 'es2022'
+    manifest?: boolean // @default true
+    warm?: boolean // Precompile dev route modules
+    prerenderCache?: boolean // @default true
+  }
+  render?: RenderConfig
+  debug?: {
+    overlay?: boolean // @default true
+    traces?: boolean // @default false
+  }
+  image?: ImageConfig
+  security?: {
+    actionLimit?: number // @default 1048576 (1MB)
+    apiLimit?: number // @default 10485760 (10MB)
+    pluginLimit?: number // @default 33554432 (32MB) @maximum 268435456
+    actionRateLimit?: {
+      max?: number // @default 600
+      window?: number // @default 60 (วินาที)
+    }
+    sameOrigin?: boolean // @default false
+    fetchMeta?: boolean // @default false
+    trustedProxyIps?: string[]
+    headers?: boolean // @default true
+  }
+  cache?: {
+    routes?: boolean // @default true
+    css?: boolean // @default true
+    dir?: string // ไดเรกทอรีสำหรับ Compile-cache แบบแชร์
+  }
+  site?: SiteConfig
+  middleware?: MiddlewareConfig
+  adapter?: Adapter
+  adapterOptions?: Record<string, unknown>
+  plugins?: RuvyxaPlugin[]
+}
+```
+
+### `RenderConfig`
+
+```ts
+export interface RenderConfig {
+  strategy?: 'ssr' | 'ssg' | 'isr' | 'csr' | 'ppr' // @default 'ssr'
+  revalidate?: number // @default 60
+}
+```
+
+### `ImageConfig`
+
+```ts
+export interface ImageConfig {
+  optimize?: boolean // @default true — แปลง PNG/JPEG เป็น WebP
+  quality?: number // @default 82 — 1-100
+  lossless?: boolean // @default false
+  keepOriginal?: boolean // @default true
+  variantWidths?: number[] // @default [640, 750, 828, 1080, 1200, 1920, 2048, 3840]
+  workers?: number // @default 0 (auto)
+}
+```
+
+### การตรวจสอบ Config (`RUV1601` / `RUV1602`)
+
+เมื่อตรวจสอบ Config อาจพบ Error ดังนี้:
+
+| Code      | เงื่อนไข                  | ข้อความอธิบาย                                                                      |
+| --------- | ------------------------- | ---------------------------------------------------------------------------------- |
+| `RUV1601` | Field ต้อง > 0            | `config field 'build.workers' must be greater than zero`                           |
+| `RUV1601` | Field ห้ามว่างเปล่า       | `config field 'appDir' must not be empty`                                          |
+| `RUV1601` | Path ต้องอ้างอิงจากโปรเจค | `config field 'cache.dir' must be a project-relative path inside the project root` |
+| `RUV1601` | ค่า Enum ไม่ถูกต้อง       | `build.jsxRuntime must be 'classic' or 'automatic', got 'other'`                   |
+| `RUV1601` | Target ไม่ถูกต้อง         | `build.esTarget must be es2018, es2019, es2020, es2022, or esnext, got 'other'`    |
+| `RUV1601` | Split ไม่ถูกต้อง          | `build.splitStrategy must be 'single', 'route', or 'manual', got 'other'`          |
+| `RUV1602` | Field เกินค่าสูงสุด       | `config field 'security.pluginLimit' must not exceed 268435456 bytes`              |
+| `RUV1602` | IP หรือ CIDR range ผิด    | `config field 'security.trustedProxyIps' contains invalid IP or CIDR range 'xyz'`  |
+| `RUV1602` | ช่วง Workers ผิด          | `config field 'middleware.workers' must be between 1 and 8`                        |
+| `RUV1602` | ช่วง Timeout ผิด          | `config field 'middleware.timeoutMs' must be between 1 and 300000`                 |
+
+---
+
+## TypeScript Configuration
+
+### `tsconfig.json`
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "paths": {
+      "~/*": ["./*"]
+    }
+  },
+  "include": ["app", "ruvyxa.config.ts"]
+}
+```
+
+### `ruvyxa-env.d.ts`
+
+สร้างไฟล์ `app/ruvyxa-env.d.ts` สำหรับ Type-safe CSS modules และ Environment Variables:
+
+```ts
+declare module '*.css' {
+  const content: Record<string, string>
+  export default content
+}
+
+interface ImportMetaEnv {
+  RUVYXA_PUBLIC_APP_NAME: string
+  RUVYXA_PUBLIC_API_URL: string
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv
+}
+```
+
+ช่วยให้คุณได้ความสามารถ:
+
+- การ Import Type-safe CSS module: `import styles from './styles.module.css'`
+- Type-safe สำหรับ Public env vars: `import.meta.env.RUVYXA_PUBLIC_APP_NAME`
+- Autocompletion ในโปรแกรม Editor
+
+---
+
 ## เนื้อหา .gitignore แบบเต็ม
 
 ```gitignore
@@ -973,6 +1166,279 @@ rm -rf node_modules yarn.lock && yarn install
 | **Directive**     | คำสั่ง 'use client' หรือ 'use server' ที่บอก bundler     |
 | **Radix Trie**    | data structure สำหรับ route matching                     |
 | **Meta**          | Metadata export สำหรับ SEO: title, description, OG       |
+
+---
+
+## การแก้ไขครั้งแรกของคุณ (Your First Edit)
+
+เปิดไฟล์ `app/page.tsx`:
+
+```tsx
+export default function HomePage() {
+  return (
+    <main>
+      <h1>Hello, Ruvyxa!</h1>
+      <p>This is my first app.</p>
+    </main>
+  )
+}
+```
+
+กดบันทึก (Save) เบราว์เซอร์จะทำการอัปเดตแบบทันทีทันใด นี่คือการทำงานของ HMR
+
+---
+
+## การเพิ่มหน้าเพจที่สอง (Adding a Second Page)
+
+สร้างโฟลเดอร์และไฟล์ใหม่:
+
+```
+app/
+  about/
+    page.tsx
+```
+
+เขียนโค้ดลงไปใน `app/about/page.tsx`:
+
+```tsx
+export default function AboutPage() {
+  return (
+    <main>
+      <h1>About Us</h1>
+      <p>We make web frameworks.</p>
+    </main>
+  )
+}
+```
+
+เข้าไปที่ URL **http://localhost:3000/about**
+หน้าเพจใหม่จะทำงานทันทีโดยไม่ต้องทำการรีสตาร์ตเซิร์ฟเวอร์ใดๆ
+
+---
+
+## Starter Templates ทั้ง 4 รูปแบบ (The 4 Starter Templates)
+
+### minimal
+
+โครงสร้าง Skeleton คลีนๆ ที่มีหน้าเพจ 1 หน้าและ Root Layout หนึ่งอัน
+เป็นจุดเริ่มต้นที่ดีที่สุดของทุกๆ โปรเจค
+
+```
+my-app/
+├── app/
+│   ├── layout.tsx
+│   ├── page.tsx
+│   └── globals.css
+├── public/
+├── ruvyxa.config.ts
+├── tsconfig.json
+└── package.json
+```
+
+### blog
+
+แอปบล็อกพลัง MDX พร้อม:
+
+- `app/blog/[slug]/page.tsx` — บทความที่ใช้ `staticParams` ทำ SSG
+- แท็ก และหน้าหมวดหมู่
+- ตัวผลิต RSS feed
+- Syntax-highlight สำหรับ Code block
+
+```
+my-blog/
+├── app/
+│   ├── layout.tsx
+│   ├── page.tsx
+│   ├── about/page.tsx
+│   └── blog/
+│       ├── page.tsx
+│       └── [slug]/page.tsx
+├── public/
+└── ...
+```
+
+### crud
+
+Full-stack CRUD แอป:
+
+- `app/tasks/server.ts` — เข้าถึงข้อมูลจากฝั่ง Server เท่านั้น
+- `app/tasks/action.ts` — Server Actions สำหรับทำ Mutation (createTask, toggleTask, deleteTask)
+- มี Form validation และ Error display
+
+```
+my-crud/
+├── app/
+│   ├── layout.tsx
+│   ├── page.tsx
+│   ├── about/page.tsx
+│   └── tasks/
+│       ├── page.tsx
+│       ├── server.ts
+│       └── action.ts
+├── public/
+└── ...
+```
+
+### api-backend
+
+Pure API backend ล้วนๆ:
+
+- มีแต่ `route.ts` เท่านั้น
+- ไม่มี Client Components
+- เตรียม Adapter ที่คอนฟิก Node/Bun ล่วงหน้า
+- มี endpoints ตัวอย่าง: CRUD, webhooks, streaming
+
+```
+my-api/
+├── app/
+│   ├── layout.tsx
+│   ├── page.tsx
+│   └── api/
+│       ├── health/route.ts
+│       └── items/
+│           ├── route.ts
+│           ├── store.ts
+│           └── [id]/route.ts
+├── public/
+└── ...
+```
+
+---
+
+## Full API: `createRuvyxaApp`
+
+```ts
+export interface CreateRuvyxaOptions {
+  template?: 'minimal' | 'blog' | 'crud' | 'api-backend' // @default 'minimal'
+}
+
+export async function createRuvyxaApp(
+  targetDir: string,
+  options?: CreateRuvyxaOptions,
+): Promise<void>
+```
+
+### ข้อผิดพลาดที่รายงาน
+
+| สาเหตุ                 | ข้อความ Error                                                                     |
+| ---------------------- | --------------------------------------------------------------------------------- |
+| No target dir          | `Project directory name is required.`                                             |
+| Empty name             | `Project directory name must not be empty.`                                       |
+| Whitespace padding     | `Project directory name must not start or end with whitespace.`                   |
+| Invalid template       | `Unknown starter template "foo". Choose one of: minimal, blog, crud, api-backend` |
+| Invalid chars          | `Directory names cannot contain: < > : " \| ? *`                                  |
+| Windows reserved name  | `This name is reserved or unsafe on Windows.`                                     |
+| Name too long (>128)   | `Maximum is 128 characters.`                                                      |
+| Starts with `.` or `-` | `Project name "..." should not start with "." or "-".`                            |
+| Non-empty target dir   | `Directory "..." already exists and is not empty.`                                |
+| Permission denied      | `Cannot write to "...". Permission denied.`                                       |
+| Missing template       | `Template directory was not found.`                                               |
+| Template incomplete    | `Template is incomplete. Missing required files:`                                 |
+| Copy failure           | `Failed to create project at "...".`                                              |
+
+---
+
+## Your First 10 Minutes (10 นาทีแรกของคุณ)
+
+แผนแบบย่อให้คุณคุ้นเคยกับ Ruvyxa:
+
+1. **`npm create ruvyxa@latest playtime`** — สร้างโปรเจค minimal scaffold
+2. **`cd playtime && npm run dev`** — รันเซิร์ฟเวอร์
+3. แก้ไข `app/page.tsx` — เปลี่ยนข้อความบน heading
+4. สร้าง `app/hello/page.tsx` — เขียน Component ง่ายๆ
+5. สร้าง `app/blog/[slug]/page.tsx` — ทดสอบ Dynamic Routing:
+
+```tsx
+export default function BlogPost({ params }: { params: { slug: string } }) {
+  return <h1>Post: {params.slug}</h1>
+}
+```
+
+6. เข้า URL `/blog/hello-world` — ดู slug ว่าขึ้นปกติไหม
+7. รัน `npm run routes` — ตรวจสอบตาราง Route table
+8. รัน `npm run doctor` — เพื่อเช็คว่ามีปัญหาใดซ่อนอยู่หรือไม่
+
+---
+
+## Security Implications
+
+### Environment Variables
+
+- ตัวแปร `RUVYXA_PUBLIC_*` สามารถใช้ในฝั่ง Client ได้อย่างปลอดภัย
+- การอ้างอิง `process.env.*` ใดๆ ที่ไม่ใช่ public ใน Client โค้ดจะทำให้เกิด Error `RUV1008`
+- ตัวแปร Environment ฝั่ง Server ต้องอยู่ใน Server Components, API routes หรือ Actions เท่านั้น
+
+### Payload Limits
+
+| จำนวนจำกัด           | ค่าเริ่มต้น        | Config key             |
+| -------------------- | ------------------ | ---------------------- |
+| Server action body   | 1 MB               | `security.actionLimit` |
+| API route body       | 10 MB              | `security.apiLimit`    |
+| Plugin response body | 32 MB (max 256 MB) | `security.pluginLimit` |
+
+### Rate Limiting
+
+```ts
+// ruvyxa.config.ts
+security: {
+  actionRateLimit: {
+    max: 600,     // requests per window
+    window: 60,   // window in seconds
+  }
+}
+```
+
+---
+
+## Your First 10 Minutes (10 นาทีแรกของคุณ)
+
+แผนแบบย่อให้คุณคุ้นเคยกับ Ruvyxa:
+
+1. **`npm create ruvyxa@latest playtime`** — สร้างโปรเจค minimal scaffold
+2. **`cd playtime && npm run dev`** — รันเซิร์ฟเวอร์
+3. แก้ไข `app/page.tsx` — เปลี่ยนข้อความบน heading
+4. สร้าง `app/hello/page.tsx` — เขียน Component ง่ายๆ
+5. สร้าง `app/blog/[slug]/page.tsx` — ทดสอบ Dynamic Routing:
+
+```tsx
+export default function BlogPost({ params }: { params: { slug: string } }) {
+  return <h1>Post: {params.slug}</h1>
+}
+```
+
+6. เข้า URL `/blog/hello-world` — ดู slug ว่าขึ้นปกติไหม
+7. รัน `npm run routes` — ตรวจสอบตาราง Route table
+8. รัน `npm run doctor` — เพื่อเช็คว่ามีปัญหาใดซ่อนอยู่หรือไม่
+
+---
+
+## Security Implications
+
+### Environment Variables
+
+- ตัวแปร `RUVYXA_PUBLIC_*` สามารถใช้ในฝั่ง Client ได้อย่างปลอดภัย
+- การอ้างอิง `process.env.*` ใดๆ ที่ไม่ใช่ public ใน Client โค้ดจะทำให้เกิด Error `RUV1008`
+- ตัวแปร Environment ฝั่ง Server ต้องอยู่ใน Server Components, API routes หรือ Actions เท่านั้น
+
+### Payload Limits
+
+| จำนวนจำกัด           | ค่าเริ่มต้น        | Config key             |
+| -------------------- | ------------------ | ---------------------- |
+| Server action body   | 1 MB               | `security.actionLimit` |
+| API route body       | 10 MB              | `security.apiLimit`    |
+| Plugin response body | 32 MB (max 256 MB) | `security.pluginLimit` |
+
+### Rate Limiting
+
+```ts
+// ruvyxa.config.ts
+security: {
+  actionRateLimit: {
+    max: 600,     // requests per window
+    window: 60,   // window in seconds
+  }
+}
+```
 
 ---
 

@@ -752,6 +752,119 @@ export async function GET() {
 
 ---
 
+## HTTP Query Parameters
+
+```tsx
+// app/api/products/route.ts
+export function GET({ request }: { request: Request }) {
+  const url = new URL(request.url)
+  const category = url.searchParams.get('category')
+  const inStock = url.searchParams.get('inStock')
+  const page = parseInt(url.searchParams.get('page') ?? '1', 10)
+  const limit = parseInt(url.searchParams.get('limit') ?? '20', 10)
+
+  // pagination
+  const start = (page - 1) * limit
+  const result = products
+    .filter((p) => !category || p.category === category)
+    .filter((p) => inStock === null || p.inStock === (inStock === 'true'))
+    .slice(start, start + limit)
+
+  return Response.json({
+    data: result,
+    page,
+    limit,
+    total: products.length,
+  })
+}
+```
+
+---
+
+## Under the Hood: API Route Execution
+
+```
+Request → /api/products
+    │
+    └── router.find(path)
+        │
+        ├── if no route found → 404
+        │
+        ├── if route is a page → use render API? (No)
+        │   (API routes must be route.ts, not page.tsx)
+        │
+        ├── if route is an API → find route.ts
+        │
+        ├── worker_pool.render_api()
+        │   ├── serialize request → WorkerRequest::Api
+        │   │   { route_file, method, request_path,
+        │   │     headers, header_pairs, body, body_base64,
+        │   │     stream_response, params }
+        │   ├── worker selects export function by method
+        │   ├── if no export → return 405
+        │   ├── execute handler
+        │   └── return WorkerApiResponse
+        │
+        └── render_api_pooled()
+            ├── if !ok → RUV1200 diagnostic
+            ├── streamed_body? → streaming body
+            ├── headers → append to response
+            └── security_headers → final response
+```
+
+### Worker Pool Timeouts
+
+| Context    | Default Timeout     | Environment Variable       |
+| ---------- | ------------------- | -------------------------- |
+| Dev server | 30,000 ms (30s)     | `RUVYXA_WORKER_TIMEOUT_MS` |
+| Build      | 300,000 ms (5 mins) | `RUVYXA_WORKER_TIMEOUT_MS` |
+
+A timeout of 0 or an invalid value will be reset to the default value.
+
+**Concurrency per worker:** A single worker can handle concurrent requests up to
+`RUVYXA_WORKER_MAX_CONCURRENCY` (default: number of cores bounded to 2–8). Rendering consumes CPU,
+and each execution holds a React tree, a compiled bundle, and a response buffer. If a massive burst
+is received concurrently, it may exhaust the heap or cause CPU thrashing, leading to a timeout that
+looks like a hung request. Excess requests are queued and processed sequentially as slots become
+available.
+
+---
+
+## Routing Integration
+
+```
+app/
+  api/
+    route.ts          ← API route at /api
+    users/
+      route.ts        ← API route at /api/users
+      [id]/
+        route.ts      ← API route at /api/users/123
+    blog/
+      [slug]/
+        route.ts      ← API route at /api/blog/hello-world
+  products/
+    page.tsx          ← Page route at /products (UI)
+    route.ts          ← API route at /products (data) — can co-exist with page.tsx
+```
+
+`route.ts` can co-exist with `page.tsx` in the same directory — Ruvyxa handles this automatically.
+
+---
+
+## Under the Hood: Route Kind Detection
+
+Ruvyxa determines whether a route is an API route or a page route based on:
+
+- File named `route.ts` → API route
+- File named `page.tsx` → page route
+- If both exist → route supports both (API + page)
+
+Only page routes support server actions (RUV1501 is returned if an action is called on a route
+without `action.ts`).
+
+---
+
 ## Best Practices
 
 1. **One file per resource.** `todos/route.ts` for all `/api/todos` handlers, `todos/[id]/route.ts`

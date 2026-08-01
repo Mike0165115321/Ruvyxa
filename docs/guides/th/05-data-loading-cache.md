@@ -7,6 +7,23 @@ LRU eviction, ไปจนถึงการป้องกัน race condition
 
 ---
 
+## Type Definitions
+
+```ts
+// @ruvyxa/core/server
+export function cache<T>(
+  fn: () => Promise<T>,
+  tags: string[],
+  options?: { ttl?: string | number },
+): () => Promise<T>
+
+export function revalidateTag(tag: string): void
+
+export function revalidatePath(path: string, type?: 'page' | 'layout'): void
+```
+
+---
+
 ## Server Loaders
 
 `loader` คือฟังก์ชันที่รันบนเซิร์ฟเวอร์เท่านั้น สามารถเข้าถึง database โดยตรง, API keys ส่วนตัว,
@@ -684,6 +701,16 @@ function parseTtl(value: string): number {
 
 ---
 
+## Error Codes
+
+| รหัสข้อผิดพลาด | คำอธิบาย                           | วิธีแก้ไข                                   |
+| -------------- | ---------------------------------- | ------------------------------------------- |
+| `RUV2001`      | `ttl` format ไม่ถูกต้อง            | ตรวจสอบการสะกด เช่น `'60s'`, `'1h'`         |
+| `RUV2002`      | ใช้ `revalidateTag` ใน Client Code | ย้ายไปเรียกใช้ใน Server Action/API          |
+| `RUV2003`      | Circular dependency ใน loaders     | ปรับโครงสร้างข้อมูลที่ดึงมาเพื่อลดวงจร loop |
+
+---
+
 ## ข้อผิดพลาดทั่วไป (Troubleshooting)
 
 | ปัญหา                           | สาเหตุ                              | วิธีแก้                                                            |
@@ -747,6 +774,230 @@ function parseTtl(value: string): number {
 5. **ไม่ cache ข้อมูลเฉพาะ user** — profile, cart, session ใช้ per-user key เช่น `cart:user:123`
 6. **ตั้ง deps ให้ถูกต้อง** — ถ้าไม่เปลี่ยน, ใช้ `[]`, ถ้าต้องการ refetch, ใส่ค่าที่ monitor
 7. **ใช้ enabled สำหรับ conditional fetch** — ไม่ต้องเช็คเงื่อนไขใน loader function
+
+---
+
+## Performance Characteristics
+
+| กระบวนการ            | ความซับซ้อน | หมายเหตุ                                 |
+| -------------------- | ----------- | ---------------------------------------- |
+| `cache(fn)` lookup   | `O(1)`      | Map lookup ผ่าน memory เร็วมาก           |
+| `revalidateTag`      | `O(k)`      | เมื่อ `k` = จำนวน entries ที่มี tag นั้น |
+| `revalidatePath`     | `O(p)`      | เมื่อ `p` = จำนวน entries ภายใต้ path    |
+| GC (Garbage Collect) | `O(n)`      | ทำงานบน background thread แยกต่างหาก     |
+
+การทำ Caching แทบจะไม่มี overhead ในเชิงของ CPU แต่อาจใช้หน่วยความจำเพิ่มขึ้นหากมีการแคช response
+ขนาดใหญ่
+
+---
+
+## Security Considerations
+
+### การรั่วไหลของข้อมูลระหว่าง Tenant (Cross-Tenant Data Leaks)
+
+ฟังก์ชัน `cache()` เก็บข้อมูลแชร์กันในระดับ **Process** หากคุณแคชข้อมูลที่ผูกกับ user-specific (เช่น
+ตะกร้าสินค้า หรือ หน้าโปรไฟล์) ให้มั่นใจว่าได้รวม User ID เป็นส่วนหนึ่งของ arguments หรือ tag
+เพื่อหลีกเลี่ยงการแสดงข้อมูลของ User A ให้ User B เห็น
+
+```tsx
+// ❌ ไม่ปลอดภัย: ทุกคนจะเห็นโปรไฟล์ของผู้ใช้คนแรก
+const getProfile = cache(async () => db.profile.find(), ['profile'])
+
+// ✅ ปลอดภัย: โปรไฟล์ถูกแยกตาม user ID
+const getProfile = cache(async (userId: string) => db.profile.find(userId), ['profile'])
+```
+
+---
+
+## Advanced Loader Patterns
+
+### การดึงข้อมูลแบบคู่ขนาน (Parallel Data Fetching)
+
+คุณสามารถเรียกใช้ loaders หลายตัวพร้อมกันโดยไม่ต้องรอตัวใดตัวหนึ่งเสร็จก่อน:
+
+```tsx
+export default async function Dashboard() {
+  // เริ่มดึงข้อมูลพร้อมกัน
+  const usersPromise = getUsers()
+  const statsPromise = getStats()
+
+  // รอจนกว่าจะเสร็จทั้งหมด
+  const [users, stats] = await Promise.all([usersPromise, statsPromise])
+
+  return <DashboardView users={users} stats={stats} />
+}
+```
+
+---
+
+## Multi-Tenant Caching
+
+ในแอปพลิเคชันแบบ Multi-Tenant คุณสามารถป้องกันแคชชนกันได้โดยรวม Tenant ID ไว้ใน Cache Key และ Tags
+เสมอ:
+
+```tsx
+import { cache } from '@ruvyxa/core/server'
+
+export const getTenantSettings = cache(
+  async (tenantId: string) => {
+    return db.settings.findByTenant(tenantId)
+  },
+  ['settings'], // ❌ ไม่ดี: อาจทำให้ invalidate ของ tenant อื่น
+)
+
+export const getTenantSettings = cache(
+  async (tenantId: string) => {
+    return db.settings.findByTenant(tenantId)
+  },
+  (tenantId) => [`settings:${tenantId}`], // ✅ ปลอดภัย: tag แยกตาม tenant
+)
+```
+
+---
+
+## External Cache Integration
+
+หากต้องการใช้ Redis หรือ Memcached แทน Memory Cache คุณสามารถทำได้ด้วย `CacheProvider`:
+
+```tsx
+// ruvyxa.config.ts
+import { RedisCacheProvider } from '@ruvyxa/cache-redis'
+
+export default config({
+  cache: {
+    provider: new RedisCacheProvider({ url: process.env.REDIS_URL }),
+  },
+})
+```
+
+เมื่อใช้ External Cache:
+
+- `cache()` จะทำการ serialize ข้อมูลเป็น JSON อัตโนมัติ
+- `revalidateTag` จะทำงานข้ามเซิร์ฟเวอร์ (Distributed Cache) ได้
+- ระวัง: ไม่สามารถแคช Functions หรือ Object ที่ไม่มีโครงสร้างแบบ JSON (เช่น Date หรือ Map) ได้
+
+---
+
+## Middleware-Based Cache Invalidation
+
+คุณสามารถ Invalidate Cache ภายใน Middleware ได้ ตัวอย่างเช่น เมื่อมีการเปลี่ยนภาษา:
+
+```ts
+// middleware.ts
+import { revalidatePath } from '@ruvyxa/core/server'
+
+export function middleware(request: Request) {
+  const lang = request.headers.get('accept-language')
+
+  if (lang === 'th' && request.url.includes('/en/')) {
+    revalidatePath('/') // เคลียร์แคชทุกเส้นทาง
+  }
+}
+```
+
+---
+
+## Cache Warmup Strategies
+
+การทำให้ข้อมูลถูกแคชไว้ล่วงหน้า (Warmup) มีประโยชน์มากสำหรับเพจที่มีผู้เข้าชมบ่อย
+สามารถทำได้ผ่านสคริปต์ตอนเริ่มเซิร์ฟเวอร์:
+
+```ts
+// server.ts (หรือ entrypoint ของเซิร์ฟเวอร์)
+import { getTopProducts } from './app/loaders'
+
+async function warmup() {
+  console.log('Warming up cache...')
+  await getTopProducts() // โหลดขึ้น Memory ทันที
+}
+
+warmup()
+```
+
+---
+
+## Cache Debugging
+
+Ruvyxa มีเครื่องมือในการตรวจสอบสถานะแคช (Cache Hits / Misses) ในโหมดพัฒนา:
+
+```bash
+# รันโหมดพัฒนาพร้อมดู Cache Logs
+RUVYXA_DEBUG_CACHE=1 npm run dev
+```
+
+คุณจะเห็น Logs ลักษณะนี้ใน Terminal:
+
+```
+[CACHE HIT]   tags: ['products'] time: 0.1ms
+[CACHE MISS]  tags: ['user:123'] time: 145ms
+[INVALIDATE]  tags: ['products']
+```
+
+---
+
+## Integration with ISR and SSG
+
+`cache()` ทำงานร่วมกับ ISR และ SSG ได้อย่างสมบูรณ์แบบ:
+
+- **SSG**: ข้อมูลที่ถูก `cache()` ตอน Build จะถูกแช่แข็งไว้ใน Static HTML
+- **ISR**: เมื่อถึงรอบ revalidate ข้อมูลจะดึงผ่านตัว `cache()` อีกครั้ง
+
+หากทั้งคู่มี TTL (`revalidate` ใน Page และ `ttl` ใน `cache()`):
+
+- เพจจะถูก Rebuild ตามเวลาของ **Page `revalidate`**
+- แต่ข้อมูลภายในหน้าจะถูก Re-fetch ใหม่ก็ต่อเมื่อ **`cache()` TTL** หมดอายุลงด้วย
+
+---
+
+## Thundering Herd Prevention
+
+Ruvyxa แก้ปัญหา "Thundering Herd" (รุมดึงข้อมูลพร้อมกันเมื่อแคชหมดอายุ) ให้อัตโนมัติ:
+
+- หากมีผู้ใช้ 1,000 คนเข้าหน้าเดียวกันตอนที่แคชหมด
+- Ruvyxa จะส่ง Query เข้าฐานข้อมูลเพียงแค่ **ครั้งเดียว** (Promise Deduplication)
+- ผู้ใช้อีก 999 คนจะรอและได้รับผลลัพธ์จาก Request เดียวกันนี้
+
+---
+
+## ลองทำดู
+
+มาลองสร้าง Loader อย่างง่ายพร้อมการ Cache ดู:
+
+**1. สร้างไฟล์ `app/products/loader.ts`**
+
+```ts
+import { cache } from '@ruvyxa/core/server'
+
+export const getProduct = cache(
+  async (id: string) => {
+    console.log('--- Fetching from DB ---')
+    const res = await fetch(`https://dummyjson.com/products/${id}`)
+    return res.json()
+  },
+  ['product'],
+  { ttl: '10s' },
+)
+```
+
+**2. สร้างหน้าเพจ `app/products/[id]/page.tsx`**
+
+```tsx
+import { getProduct } from './loader'
+
+export default async function Page({ params }) {
+  const product = await getProduct(params.id)
+
+  return (
+    <div>
+      <h1>{product.title}</h1>
+      <p>{product.description}</p>
+    </div>
+  )
+}
+```
+
+ลองรีเฟรชหน้าเบราว์เซอร์ติดกัน 5 ครั้ง คุณจะเห็น `--- Fetching from DB ---`
+โผล่ในเซิร์ฟเวอร์เพียงครั้งเดียว!
 
 ---
 

@@ -786,6 +786,441 @@ action.ts)
 
 ---
 
+## Webhook Handling
+
+Webhooks มักต้องการรับข้อมูลดิบ (raw body) เพื่อใช้ตรวจสอบ signature:
+
+```ts
+// app/api/webhooks/stripe/route.ts
+import { verifySignature } from './stripe-utils'
+
+export async function POST({ request }: { request: Request }) {
+  // รับข้อมูลดิบ (raw text) แทน JSON
+  const bodyText = await request.text()
+  const signature = request.headers.get('stripe-signature')
+
+  if (!signature || !verifySignature(bodyText, signature)) {
+    return Response.json({ error: 'Invalid signature' }, { status: 400 })
+  }
+
+  const event = JSON.parse(bodyText)
+
+  if (event.type === 'payment_intent.succeeded') {
+    await updateOrderStatus(event.data.object.id, 'paid')
+  }
+
+  return Response.json({ received: true })
+}
+```
+
+## Rate Limiting API Routes
+
+คุณสามารถใช้ Middleware สำหรับ Rate Limiting API เส้นทางใดเส้นทางหนึ่ง:
+
+```ts
+// ruvyxa.config.ts
+export default config({
+  middleware: {
+    builtin: {
+      rateLimit: {
+        routes: ['/api/*'],
+        max: 100, // 100 requests
+        window: 60, // per 60 seconds
+        strategy: 'ip',
+      },
+    },
+  },
+})
+```
+
+สำหรับการจัดการแบบละเอียดภายใน route handler:
+
+```ts
+// app/api/send-email/route.ts
+const rateLimits = new Map<string, { count: number; resetAt: number }>()
+
+export async function POST({ request }: { request: Request }) {
+  const ip = request.headers.get('x-forwarded-for') || 'unknown'
+  const now = Date.now()
+  const limit = rateLimits.get(ip)
+
+  if (limit && limit.resetAt > now) {
+    if (limit.count >= 5) {
+      return Response.json({ error: 'Too many requests' }, { status: 429 })
+    }
+    limit.count++
+  } else {
+    rateLimits.set(ip, { count: 1, resetAt: now + 60000 })
+  }
+
+  // ส่งอีเมล...
+  return Response.json({ ok: true })
+}
+```
+
+## Authentication Patterns
+
+การจัดการ Auth ใน API Route:
+
+```ts
+// app/api/user/profile/route.ts
+export async function GET({ request }: { request: Request }) {
+  const authHeader = request.headers.get('Authorization')
+  if (!authHeader?.startsWith('Bearer ')) {
+    return Response.json({ error: 'Missing token' }, { status: 401 })
+  }
+
+  const token = authHeader.split(' ')[1]
+  const user = await verifyToken(token)
+
+  if (!user) {
+    return Response.json({ error: 'Invalid token' }, { status: 401 })
+  }
+
+  return Response.json({ profile: user })
+}
+```
+
+อีกรูปแบบคือใช้ Session Cookie:
+
+```ts
+export async function GET({ request }: { request: Request }) {
+  const sessionId = request.headers
+    .get('cookie')
+    ?.split('; ')
+    .find((c) => c.startsWith('session='))
+    ?.split('=')[1]
+    ?.trim()
+
+  if (!sessionId) {
+    return Response.json({ error: 'Not authenticated' }, { status: 401 })
+  }
+
+  const session = await db.query('SELECT * FROM sessions WHERE id = ?', [sessionId])
+  if (!session || session.expiresAt < Date.now()) {
+    return Response.json({ error: 'Session expired' }, { status: 401 })
+  }
+
+  return Response.json({ user: session.user })
+}
+```
+
+## Testing API Routes
+
+คุณสามารถทดสอบ API handlers แยกส่วน (isolation) ได้:
+
+```ts
+// tests/api/users.test.ts
+import { GET, POST } from '../../app/api/users/route'
+
+describe('GET /api/users', () => {
+  it('returns user list', async () => {
+    const response = await GET({
+      request: new Request('http://localhost/api/users'),
+      params: {},
+    })
+    expect(response.status).toBe(200)
+    const data = await response.json()
+    expect(Array.isArray(data)).toBe(true)
+  })
+})
+
+describe('POST /api/users', () => {
+  it('creates a user', async () => {
+    const response = await POST({
+      request: new Request('http://localhost/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Test', email: 'test@example.com' }),
+      }),
+      params: {},
+    })
+    expect(response.status).toBe(201)
+  })
+
+  it('rejects invalid input', async () => {
+    const response = await POST({
+      request: new Request('http://localhost/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      }),
+      params: {},
+    })
+    expect(response.status).toBe(400)
+  })
+})
+```
+
+## Advanced Streaming Patterns
+
+### Server-Sent Events (SSE)
+
+```ts
+// app/api/events/route.ts
+export async function GET() {
+  const stream = new ReadableStream({
+    start(controller) {
+      // ส่งข้อมูลใหม่ทุกๆ 5 วินาที
+      const interval = setInterval(() => {
+        const data = JSON.stringify({ time: new Date().toISOString(), value: Math.random() })
+        controller.enqueue(new TextEncoder().encode(`data: ${data}\n\n`))
+      }, 5000)
+
+      // ล้างข้อมูลเมื่อยกเลิกการเชื่อมต่อ
+      controller.signal?.addEventListener('abort', () => {
+        clearInterval(interval)
+      })
+    },
+  })
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    },
+  })
+}
+```
+
+### Streaming JSON Arrays ขนาดใหญ่
+
+```ts
+// app/api/large-dataset/route.ts
+export async function GET() {
+  const stream = new ReadableStream({
+    async start(controller) {
+      const encoder = new TextEncoder()
+      controller.enqueue(encoder.encode('['))
+
+      const cursor = db.queryStream('SELECT * FROM large_table')
+      let first = true
+
+      for await (const row of cursor) {
+        if (!first) controller.enqueue(encoder.encode(','))
+        controller.enqueue(encoder.encode(JSON.stringify(row)))
+        first = false
+      }
+
+      controller.enqueue(encoder.encode(']'))
+      controller.close()
+    },
+  })
+
+  return new Response(stream, {
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+```
+
+### Progress Streaming
+
+```ts
+// app/api/progress/route.ts
+export async function GET() {
+  const stream = new ReadableStream({
+    async start(controller) {
+      const encoder = new TextEncoder()
+      const total = 100
+
+      for (let i = 0; i <= total; i += 10) {
+        controller.enqueue(encoder.encode(JSON.stringify({ progress: i, total }) + '\n'))
+        await new Promise((r) => setTimeout(r, 500))
+      }
+
+      controller.enqueue(encoder.encode(JSON.stringify({ done: true }) + '\n'))
+      controller.close()
+    },
+  })
+
+  return new Response(stream, {
+    headers: { 'Content-Type': 'application/x-ndjson' },
+  })
+}
+```
+
+## Error Handling Patterns
+
+### Unified Error Handler (ตัวจัดการข้อผิดพลาดแบบรวมศูนย์)
+
+```ts
+function apiError(status: number, message: string, details?: string[]) {
+  return Response.json({ error: message, ...(details ? { details } : {}) }, { status })
+}
+
+export async function GET() {
+  try {
+    const data = await riskyOperation()
+    return Response.json(data)
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      return apiError(404, error.message)
+    }
+    if (error instanceof ValidationError) {
+      return apiError(422, 'Validation failed', error.details)
+    }
+    console.error('Unhandled error:', error)
+    return apiError(500, 'Internal server error')
+  }
+}
+```
+
+### Idempotency Middleware
+
+```ts
+const processedIds = new Set<string>()
+
+export async function POST({ request }: { request: Request }) {
+  const idempotencyKey = request.headers.get('Idempotency-Key')
+  if (!idempotencyKey) {
+    return Response.json({ error: 'Idempotency-Key header required' }, { status: 400 })
+  }
+
+  if (processedIds.has(idempotencyKey)) {
+    return Response.json({ error: 'Request already processed' }, { status: 409 })
+  }
+
+  processedIds.add(idempotencyKey)
+  // ประมวลผล request...
+  return Response.json({ ok: true }, { status: 201 })
+}
+```
+
+## CORS Configuration
+
+หาก API ถูกเรียกใช้งานจากต่างโดเมน (Cross-Origin) จะต้องตั้งค่า CORS headers:
+
+```ts
+// ruvyxa.config.ts
+export default config({
+  middleware: {
+    builtin: {
+      cors: {
+        origins: ['https://myapp.com', 'https://admin.myapp.com'],
+        methods: ['GET', 'POST', 'PUT', 'DELETE'],
+        headers: ['Content-Type', 'Authorization'],
+        credentials: true,
+        maxAge: 86400,
+      },
+    },
+  },
+})
+```
+
+การตั้งค่า CORS ด้วยตัวเอง (Manual CORS) ใน API route:
+
+```ts
+export async function OPTIONS({ request }: { request: Request }) {
+  return new Response(null, {
+    headers: {
+      'Access-Control-Allow-Origin': request.headers.get('origin') || '*',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Access-Control-Max-Age': '86400',
+    },
+  })
+}
+
+export async function GET({ request }: { request: Request }) {
+  const origin = request.headers.get('origin') || '*'
+  const data = await getData()
+  return Response.json(data, {
+    headers: { 'Access-Control-Allow-Origin': origin },
+  })
+}
+```
+
+## Environment Variables
+
+การเรียกใช้ Environment Variables บน Server สำหรับ API Route:
+
+```ts
+export async function GET() {
+  return Response.json({
+    // Private: มองเห็นได้เฉพาะใน Server-side
+    databaseUrl: process.env.DATABASE_URL?.slice(0, 10) + '...',
+    // Public: ตัวแปรที่นำหน้าด้วย RUVYXA_PUBLIC_ สามารถใช้ได้ในฝั่ง Client
+    publicApiUrl: process.env.RUVYXA_PUBLIC_API_URL,
+  })
+}
+```
+
+---
+
+## ลองทำดู
+
+มาลองสร้างระบบ Note API แบบง่ายๆ
+
+**ขั้นตอนที่ 1:** สร้างไฟล์ `app/api/notes/route.ts`:
+
+```ts
+// In-memory store (แอปจริงควรใช้ Database)
+interface Note {
+  id: number
+  title: string
+  body: string
+}
+let notes: Note[] = []
+let nextId = 1
+
+export async function GET() {
+  return Response.json(notes)
+}
+
+export async function POST({ request }: { request: Request }) {
+  const body = await request.json()
+  if (typeof body.title !== 'string') {
+    return Response.json({ error: 'title is required' }, { status: 400 })
+  }
+
+  const note: Note = { id: nextId++, title: body.title, body: body.body ?? '' }
+  notes.push(note)
+  return Response.json(note, { status: 201 })
+}
+```
+
+**ขั้นตอนที่ 2:** สร้างไฟล์ `app/api/notes/[id]/route.ts`:
+
+```ts
+interface Note {
+  id: number
+  title: string
+  body: string
+}
+let notes: Note[] = [] // ที่เก็บเดียวกัน (แอปจริงใช้ DB)
+
+export async function GET({ params }: { params: { id: string } }) {
+  const note = notes.find((n) => n.id === Number(params.id))
+  if (!note) return Response.json({ error: 'Not found' }, { status: 404 })
+  return Response.json(note)
+}
+
+export async function DELETE({ params }: { params: { id: string } }) {
+  const idx = notes.findIndex((n) => n.id === Number(params.id))
+  if (idx === -1) return Response.json({ error: 'Not found' }, { status: 404 })
+  notes.splice(idx, 1)
+  return Response.json({ ok: true })
+}
+```
+
+**ขั้นตอนที่ 3:** ทดสอบด้วยคำสั่ง curl:
+
+```bash
+curl http://localhost:3000/api/notes
+# → []
+
+curl -X POST http://localhost:3000/api/notes \
+  -H "Content-Type: application/json" \
+  -d '{"title": "My Note", "body": "Hello world"}'
+# → {"id":1,"title":"My Note","body":"Hello world"}
+
+curl http://localhost:3000/api/notes/1
+# → {"id":1,"title":"My Note","body":"Hello world"}
+```
+
+---
+
 ## สิ่งที่ API Route รับและคืนจริง
 
 API entry คือ `route.ts` หรือ `route.js` runtime จะหา named export ที่ตรงกับ HTTP method

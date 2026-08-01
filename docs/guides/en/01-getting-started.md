@@ -456,6 +456,70 @@ Every Ruvyxa project comes with these scripts:
 
 ---
 
+## All CLI flags
+
+### ruvyxa dev / start / preview
+
+| Flag        | Type        | Default                 | Description            |
+| ----------- | ----------- | ----------------------- | ---------------------- |
+| `--root`    | `path`      | `.`                     | Project root directory |
+| `--host`    | `string`    | From config (localhost) | Host to bind           |
+| `--port`    | `number`    | From config (3000)      | Port to listen on      |
+| `--runtime` | `node\|bun` | Auto                    | JavaScript runtime     |
+
+### ruvyxa build
+
+| Flag        | Type                  | Default      | Description             |
+| ----------- | --------------------- | ------------ | ----------------------- |
+| `--root`    | `path`                | `.`          | Project root            |
+| `--target`  | `production\|preview` | `production` | Build target            |
+| `--adapter` | `string`              | —            | Adapter name or package |
+| `--runtime` | `node\|bun`           | Auto         | JavaScript runtime      |
+
+Known adapter names: `node`, `bun`, `static`, `vercel`, `netlify`, `cloudflare`, `railway`,
+`render`, `firebase`, `aws` or package name like `@scope/ruvyxa-adapter-deno`.
+
+### ruvyxa check
+
+| Flag        | Type        | Default | Description        |
+| ----------- | ----------- | ------- | ------------------ |
+| `--root`    | `path`      | `.`     | Project root       |
+| `--runtime` | `node\|bun` | Auto    | JavaScript runtime |
+
+### ruvyxa analyze
+
+| Flag        | Type                       | Default | Description          |
+| ----------- | -------------------------- | ------- | -------------------- |
+| `--root`    | `path`                     | `.`     | Project root         |
+| `--runtime` | `node\|bun`                | Auto    | JavaScript runtime   |
+| `--format`  | `auto\|human\|json\|sarif` | `auto`  | Report format        |
+| `--output`  | `path`                     | —       | Write output to file |
+
+### ruvyxa doctor
+
+| Flag        | Type                  | Default | Description        |
+| ----------- | --------------------- | ------- | ------------------ |
+| `--root`    | `path`                | `.`     | Project root       |
+| `--target`  | `production\|preview` | —       | Production target  |
+| `--adapter` | `string`              | —       | Inspect adapter    |
+| `--runtime` | `node\|bun`           | Auto    | JavaScript runtime |
+| `--json`    | —                     | —       | Report as JSON     |
+
+### ruvyxa trace
+
+| Flag     | Type     | Default  | Description           |
+| -------- | -------- | -------- | --------------------- |
+| `--root` | `path`   | `.`      | Project root          |
+| `--path` | `string` | Required | Route path to inspect |
+
+### ruvyxa bench
+
+| Flag     | Type   | Default | Description  |
+| -------- | ------ | ------- | ------------ |
+| `--root` | `path` | `.`     | Project root |
+
+---
+
 ## Running the Dev Server
 
 ```bash
@@ -529,6 +593,72 @@ Example output:
 | `ruvyxa.config.ts`              | Full server restart                                                     |
 | `app/` route file added/removed | Route re-scan + page reload                                             |
 | `public/` assets                | No HMR needed — assets served directly                                  |
+
+---
+
+## Dev Server Startup Sequence (Diagram)
+
+```
+ruvyxa dev
+    │
+    ▼
+┌─────────────┐
+│ Config Load │← ruvyxa.config.ts + env
+└──────┬──────┘
+       ▼
+┌─────────────┐
+│ Port Scan   │← fallback if port is in use
+└──────┬──────┘
+       ▼
+┌─────────────┐
+│ Route Scan  │← WalkDir app/ + validate
+└──────┬──────┘
+       ▼
+┌─────────────┐
+│ Server Init │← Router + workers + watcher
+└──────┬──────┘
+       ▼
+┌─────────────┐
+│ Ready       │← HMR listening
+└─────────────┘
+```
+
+---
+
+## HMR — Hot Module Replacement
+
+When you edit a file, Ruvyxa sends a WebSocket message to the browser:
+
+### HMR event types
+
+| Event type     | Trigger                    | Action                            |
+| -------------- | -------------------------- | --------------------------------- |
+| `route-change` | Route file created/deleted | Route table reload + page refresh |
+| `page-update`  | Edit page component        | Hot-replace component, no refresh |
+| `style-update` | Edit CSS/SCSS              | Inject stylesheet, no refresh     |
+| `full-reload`  | Config or layout changed   | Full page reload                  |
+
+HMR works via:
+
+1. File watcher (notify crate) detects changes
+2. HMR tracker summarizes the event type
+3. WebSocket broadcasts event to the browser
+4. Browser runtime handles the hot update
+
+---
+
+## Under the Hood: Radix Trie Routing
+
+Ruvyxa uses a **Radix Tree** (compressed trie) to match URLs to routes:
+
+1. Route paths are converted to trie nodes
+2. Static segments match exactly
+3. Dynamic segment `[param]` matches any single-level value
+4. Catch-all `[...param]` matches all remaining segments
+5. Optional catch-all `[[...param]]` matches all remaining segments or nothing at all
+6. Priority: static > dynamic > catch-all > optional
+
+Radix Router implementation is found in `crates/ruvyxa_dev_server/src/router.rs`.
 
 ---
 
@@ -718,6 +848,49 @@ export default function BlogPost({ params }: { params: { slug: string } }) {
 6. Visit `/blog/hello-world` — see the slug appear
 7. Run `npm run routes` — see the route table
 8. Run `npm run doctor` — check for any issues
+
+---
+
+## Error Codes
+
+| Code      | Meaning                            | Cause                                                | Solution                                           |
+| --------- | ---------------------------------- | ---------------------------------------------------- | -------------------------------------------------- |
+| `RUV1001` | App directory not found            | Missing app/ folder                                  | Create app/ or configure appDir                    |
+| `RUV1002` | Invalid dynamic route segment      | Wrong dynamic segment syntax or catch-all not at end | Use `[name]` not `:name`; put catch-all at the end |
+| `RUV1003` | Conflicting route paths            | Two files match the same URL shape                   | Use `npm run routes` to find duplicates            |
+| `RUV1004` | Page missing default export        | page.tsx missing `export default`                    | Add `export default function Page() {}`            |
+| `RUV1007` | Server-only module in client graph | Client component imports `server-only` module        | Move import to a server component                  |
+| `RUV1008` | Private env var in client graph    | Client component uses `process.env.PRIVATE`          | Use `process.env.RUVYXA_PUBLIC_*` instead          |
+| `RUV1009` | Client-only module in server graph | Server component imports `client-only` module        | Relocate browser-only code                         |
+| `RUV1010` | Server directory reached by client | Client imports from server/ directory                | Move shared code outside of server/                |
+| `RUV1100` | React SSR failed                   | Server-side render error                             | Check stack trace in console                       |
+| `RUV1102` | SSR renderer not found             | Build output is missing server handler               | Re-run `npm run build`                             |
+| `RUV1200` | API route execution failed         | `route.ts` runtime error                             | Review error message                               |
+| `RUV1201` | No available server port           | No port available to bind                            | Specify `--port` or stop processes using the port  |
+| `RUV1202` | API renderer was not found         | Runtime renderer is not ready                        | Install/verify runtime dependencies                |
+| `RUV1205` | Prerender path conflict            | Static path conflicts with build output              | Change outDir                                      |
+| `RUV1300` | Client hydration bundling failed   | Build client bundle error                            | Check compiler output                              |
+| `RUV1303` | Client route not found             | Requested client bundle for missing route            | Check route path                                   |
+| `RUV1304` | Client bundle for non-page route   | Requested client bundle for API route                | Apply only to page routes                          |
+| `RUV1400` | Tailwind CSS compilation failed    | Tailwind CLI error                                   | Verify Tailwind config                             |
+| `RUV1401` | Tailwind CLI not found             | Missing Tailwind dependency                          | `npm install tailwindcss`                          |
+| `RUV1402` | Sass compilation failed            | .scss file syntax error                              | Check SCSS files                                   |
+| `RUV1403` | CSS entry not found                | CSS file specified in config doesn't exist           | Verify paths                                       |
+| `RUV1404` | CSS entry outside project root     | CSS entry path is outside project                    | Use relative paths inside project                  |
+| `RUV1500` | SSG/ISR render failed              | Static generation error                              | Check error detail                                 |
+| `RUV1501` | Route action not found             | Missing action.ts in route                           | Create action.ts                                   |
+| `RUV1550` | PPR render failed                  | PPR streaming error                                  | Check error detail                                 |
+| `RUV1600` | Config validation error            | ruvyxa.config.ts format is invalid                   | Run `ruvyxa doctor`                                |
+| `RUV1601` | Config value out of range          | Field value out of acceptable range                  | Adjust value range                                 |
+| `RUV1602` | Config value exceeds maximum       | Field value exceeds limits                           | Reduce value                                       |
+| `RUV1700` | TypeScript plugin error            | Plugin runtime error                                 | Inspect plugin code                                |
+| `RUV1701` | TypeScript plugin protocol error   | Plugin returned invalid payload                      | Verify plugin implementation                       |
+| `RUV1702` | Worker pool script not found       | Missing runtime script                               | Re-run `npm run build`                             |
+| `RUV1704` | Worker pool error                  | Worker crashed                                       | Review worker logs                                 |
+| `RUV2200` | Adapter build failed               | Adapter runtime error                                | Inspect adapter                                    |
+| `RUV2202` | Strategy not supported             | Adapter doesn't support render strategy              | Change strategy or adapter                         |
+| `RUV2203` | Adapter package missing            | Adapter package not found                            | `npm install @ruvyxa/adapter-*`                    |
+| `RUV9999` | Internal error                     | Compiler internal error                              | Report a bug                                       |
 
 ---
 

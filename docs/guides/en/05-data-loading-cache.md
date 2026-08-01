@@ -554,6 +554,32 @@ worker process has its own independent cache. This means:
 
 ---
 
+## Under the Hood: parseTtl Algorithm
+
+```tsx
+function parseTtl(value: string): number {
+  // regex: ^(\d+)\s*(ms|s|m|h|d)$
+  const match = value.match(/^(\d+)\s*(ms|s|m|h|d)$/)
+  if (!match) throw invalidCacheDuration(value)
+
+  const amount = Number(match[1])
+  if (!Number.isSafeInteger(amount) || amount <= 0) throw invalidCacheDuration(value)
+
+  const multiplier = match[2] === 'ms' ? 1
+                   : match[2] === 's'  ? 1000
+                   : match[2] === 'm'  ? 60_000
+                   : match[2] === 'h'  ? 3_600_000
+                   : match[2] === 'd'  ? 86_400_000
+
+  const duration = amount * multiplier
+  if (!Number.isSafeInteger(duration)) throw invalidCacheDuration(value)
+
+  return duration   // Returns in milliseconds
+}
+```
+
+---
+
 ## Performance Characteristics
 
 | Operation                   | Complexity                                | Overhead                          |

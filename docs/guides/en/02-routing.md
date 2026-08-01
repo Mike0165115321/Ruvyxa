@@ -219,6 +219,40 @@ matcher.
 
 ---
 
+## Optional Catch-All [[...slug]]
+
+Similar to catch-all routes, but matches even if the segment is omitted:
+
+```
+app/
+  [[...slug]]/
+    page.tsx   → /, /a, /a/b, /a/b/c
+```
+
+```tsx
+export default function Page({ params }: { params: { slug?: string[] } }) {
+  return (
+    <main>
+      <h1>slug: {params.slug?.join('/') ?? '(home)'}</h1>
+    </main>
+  )
+}
+```
+
+| URL      | params.slug       | Match?                  |
+| -------- | ----------------- | ----------------------- |
+| `/`      | `undefined`       | ✅ (Unlike `[...slug]`) |
+| `/docs`  | `["docs"]`        | ✅                      |
+| `/a/b/c` | `["a", "b", "c"]` | ✅                      |
+
+Optional catch-all routes are ideal for:
+
+- A home page with multi-level routing
+- Documentation viewers
+- File browser UI
+
+---
+
 ## Matching Algorithm (Radix Trie Implementation)
 
 Ruvyxa's router uses a segment-based regex matcher, not a radix trie. Each route pattern is compiled
@@ -714,48 +748,43 @@ Route groups are useful for:
 
 ---
 
-## Ignored Folders
+## Private Folders and Parallel Slots
 
-Folders starting with `_` or `@` are **ignored** by the router.
+### Private folders (_prefix)
+
+Ruvyxa ignores folders prefixed with `_` and does not treat them as routes:
+
+| Prefix           | Examples                        | Reason                                        |
+| ---------------- | ------------------------------- | --------------------------------------------- |
+| `_` (underscore) | `app/_components/`, `app/_lib/` | Private folders for utilities                 |
+| `@` (at sign)    | `app/@modal/`, `app/@sidebar/`  | Reserved for future features (parallel slots) |
+
+`app/_components/Button.tsx` → No route is generated, can be imported and used safely.
+
+```tsx
+// app/page.tsx
+import Button from './_components/Button' // ✅ Safe to import
+
+export default function Page() {
+  return <Button>Click</Button>
+}
+```
+
+### Parallel slots (@prefix)
+
+`@` is reserved for future features — currently unused but reserved for:
+
+- Parallel routes (similar to Next.js)
+- Modal/sidebar slots
+- Dashboard widgets
+
+If you use `@` in a folder name, that folder will be **ignored** and will not generate a route:
 
 ```
 app/
-├── _components/     ← ignored (put shared components here)
-│   └── Header.tsx
-├── @shared/         ← ignored (put shared utilities here)
-│   └── utils.ts
-└── page.tsx         ← still /
-```
-
-### Private Folders (`_` prefix)
-
-The `_` prefix creates a **private folder**. Files inside `_components/`, `_utils/`, `_lib/` are:
-
-- **Not routable** — ignored by file-system walker
-- **Not included** in route manifests
-- **Safe for colocation** — keep shared components, types, utilities in the same `app/` subtree
-
-The walker filter in Rust:
-
-```rust
-.filter_entry(|entry| {
-    let name = entry.file_name().to_string_lossy();
-    !name.starts_with('_') && !name.starts_with('@')
-})
-```
-
-### Parallel Slots (`@` prefix)
-
-The `@` prefix is also **ignored** by the router. Unlike Next.js, Ruvyxa does not use `@` for
-parallel routing slots. `@` prefixed folders function identically to `_` private folders:
-
-```
-app/
-├── @modal/           ← ignored (no parallel slot behavior)
-│   └── dialog.tsx
-├── @feed/            ← ignored
-│   └── feed.tsx
-└── page.tsx
+  @modal/           ← Ignored (future feature)
+  @sidebar/         ← Ignored (future feature)
+  page.tsx          ← /
 ```
 
 ---
@@ -1142,6 +1171,31 @@ Run `npm run routes` to see the resolved route table:
 │ /api/hello                           │ app/api/hello/   │ api      │
 │                                      │   route.ts       │          │
 └──────────────────────────────────────┴──────────────────┴──────────┘
+```
+
+---
+
+## Route Parameters — Special Characters
+
+Dynamic segment names are strictly limited to `[a-zA-Z0-9_]`:
+
+```
+✅  app/blog/[slug]/page.tsx
+✅  app/product/[productId]/page.tsx
+✅  app/user/[user_name]/page.tsx
+❌  app/blog/[my-slug]/page.tsx      ← Hyphen not allowed
+❌  app/blog/[slug!]/page.tsx        ← Special characters not allowed
+❌  app/blog/[my.slug]/page.tsx      ← Dot not allowed
+❌  app/blog/[123]/page.tsx          ← Numbers only not allowed
+```
+
+### Slug encoding
+
+URL-decoded values are automatically passed into `params`:
+
+```
+URL: /blog/hello%20world
+params.slug = "hello world"   ← URL decoded
 ```
 
 ---

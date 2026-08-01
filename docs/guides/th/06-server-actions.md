@@ -819,6 +819,309 @@ pub(crate) fn action_file_for(route: &RouteEntry) -> Option<PathBuf> {
 
 ---
 
+## File Uploads via Actions
+
+คุณสามารถอัปโหลดไฟล์ผ่าน Server Actions ได้โดยใช้ `FormData` แต่ Ruvyxa รองรับ `application/json`
+เป็นหลักสำหรับ actions ดังนั้นหากต้องการอัปโหลดไฟล์ขนาดใหญ่ แนะนำให้ใช้ **API Routes** จะเหมาะสมกว่า
+หรือแปลงไฟล์เป็น Base64 ก่อนส่งผ่าน action
+
+## Action Composition
+
+คุณสามารถเรียกใช้ action อื่นภายใน action ได้ (Composition) เพื่อนำโค้ดกลับมาใช้ใหม่:
+
+```ts
+export const createUser = action()
+  .input({
+    parse(value: unknown) {
+      if (typeof value !== 'object' || value === null) throw new Error('Invalid')
+      const data = value as Record<string, unknown>
+      return { email: data.email as string, name: data.name as string }
+    },
+  })
+  .handler(async ({ input, invalidate }) => {
+    const userId = await db.query('INSERT INTO users (email, name) VALUES (?, ?)', [
+      input.email,
+      input.name,
+    ])
+
+    // เรียกใช้ action อื่นเพื่อส่งอีเมล
+    await sendWelcomeEmail.handler({
+      input: { userId, email: input.email },
+      invalidate,
+      request: new Request('http://localhost/'),
+    })
+
+    invalidate('users:list')
+    return { ok: true, userId }
+  })
+
+export const sendWelcomeEmail = action()
+  .input({
+    parse(value: unknown) {
+      if (typeof value !== 'object' || value === null) throw new Error('Invalid')
+      const data = value as Record<string, unknown>
+      return { userId: data.userId as number, email: data.email as string }
+    },
+  })
+  .handler(async ({ input }) => {
+    await emailService.sendWelcome(input.email, input.userId)
+    return { ok: true }
+  })
+```
+
+## Auth-Guarded Actions
+
+คุณสามารถใช้ฟิลด์ `user` จาก context ที่ได้จาก middleware เพื่อป้องกัน action:
+
+```ts
+export const deleteAccount = action()
+  .input({
+    parse(value: unknown) {
+      if (typeof value !== 'object' || value === null) throw new Error('Invalid')
+      return value as { confirm: boolean }
+    },
+  })
+  .handler(async ({ input, user, invalidate }) => {
+    if (!user) {
+      throw new Error('Authentication required')
+    }
+    if (!input.confirm) {
+      throw new Error('Must confirm deletion')
+    }
+
+    await db.query('DELETE FROM users WHERE id = ?', [(user as { id: number }).id])
+    invalidate('user:*')
+    invalidate('dashboard:*')
+    return { ok: true }
+  })
+```
+
+## Optimistic Updates Pattern
+
+ใช้ actions ร่วมกับ client-side state เพื่อทำ optimistic UI:
+
+```tsx
+'use client'
+
+import { useState, useTransition } from 'react'
+
+export function LikeButton({ postId, initialLikes }: { postId: number; initialLikes: number }) {
+  const [likes, setLikes] = useState(initialLikes)
+  const [isPending, startTransition] = useTransition()
+
+  function handleLike() {
+    // อัปเดต UI ทันที (Optimistic)
+    setLikes((l) => l + 1)
+
+    startTransition(async () => {
+      const res = await fetch('/__ruvyxa/action?path=/posts&name=likePost', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ postId }),
+      })
+
+      if (!res.ok) {
+        // ย้อนกลับถ้ามีข้อผิดพลาด
+        setLikes((l) => l - 1)
+      }
+    })
+  }
+
+  return (
+    <button onClick={handleLike} disabled={isPending}>
+      {likes} {isPending ? '...' : '♥'}
+    </button>
+  )
+}
+```
+
+## Testing Actions
+
+การทดสอบ actions สามารถทำได้โดยตรง:
+
+```ts
+// tests/actions.test.ts
+import { createTodo } from '../app/todos/action'
+
+describe('createTodo', () => {
+  it('creates a todo with valid input', async () => {
+    const result = await createTodo.handler({
+      input: { text: 'Test todo' },
+      invalidate: (key: string) => {
+        /* mock */
+      },
+      request: new Request('http://localhost/', {
+        method: 'POST',
+        body: JSON.stringify({ text: 'Test todo' }),
+      }),
+    })
+
+    expect(result).toEqual({ ok: true, id: expect.any(Number) })
+  })
+
+  it('rejects empty text', async () => {
+    await expect(
+      createTodo.handler({
+        input: { text: '' },
+        invalidate: () => {},
+        request: new Request('http://localhost/'),
+      }),
+    ).rejects.toThrow('text is required')
+  })
+})
+```
+
+## Action Error Handling Patterns
+
+### Structured Error Responses (การคืนค่า Error แบบโครงสร้าง)
+
+```ts
+export const updateProfile = action()
+  .input({
+    parse(value: unknown) {
+      if (typeof value !== 'object' || value === null) throw new Error('Invalid')
+      const data = value as Record<string, unknown>
+      const errors: string[] = []
+      if (typeof data.name !== 'string') errors.push('name is required')
+      if (data.age !== undefined && (typeof data.age !== 'number' || data.age < 0)) {
+        errors.push('age must be a positive number')
+      }
+      if (errors.length > 0) throw new Error(errors.join('; '))
+      return { name: data.name, age: data.age as number | undefined }
+    },
+  })
+  .handler(async ({ input, invalidate }) => {
+    try {
+      await db.query('UPDATE users SET name = ? WHERE id = ?', [input.name, userId])
+      invalidate('user:profile:' + userId)
+      return { ok: true }
+    } catch (dbError) {
+      console.error('Database error:', dbError)
+      return { ok: false, error: 'Failed to update profile' }
+    }
+  })
+```
+
+### Retry Logic (การลองใหม่)
+
+```ts
+export const processPayment = action()
+  .input({
+    parse(value: unknown) {
+      if (typeof value !== 'object' || value === null) throw new Error('Invalid')
+      return value as { orderId: number; amount: number }
+    },
+  })
+  .handler(async ({ input, invalidate }) => {
+    let lastError: Error | null = null
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const result = await paymentGateway.charge(input.amount)
+        invalidate('order:' + input.orderId)
+        invalidate('dashboard:stats')
+        return { ok: true, transactionId: result.id }
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error))
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt)))
+      }
+    }
+    return { ok: false, error: lastError.message }
+  })
+```
+
+## Actions vs API Routes Comparison
+
+| คุณสมบัติ          | Actions                                     | API Routes                                   |
+| ------------------ | ------------------------------------------- | -------------------------------------------- |
+| วัตถุประสงค์หลัก   | การเปลี่ยนเเปลงข้อมูล (Mutations)           | HTTP endpoint สำหรับใช้งานทั่วไป             |
+| HTTP methods       | POST เท่านั้น                               | GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS |
+| CSRF protection    | อัตโนมัติ (same-origin + fetch-meta)        | ต้องจัดการเอง                                |
+| Rate limiting      | อัตโนมัติ (600/60s)                         | ต้องจัดการเอง (ผ่าน middleware)              |
+| ขนาด Body          | ค่าเริ่มต้น 1 MiB (สูงสุด 16 MiB)           | ค่าเริ่มต้น 10 MiB (สูงสุด 256 MiB)          |
+| Input validation   | มีในตัว `parse()`                           | ต้องจัดการเอง                                |
+| Cache invalidation | มีในตัว `invalidate()`                      | ต้องจัดการเอง                                |
+| Realtime events    | มีในตัว `.realtime()`                       | ต้องใช้ WebSocket ทำเอง                      |
+| รูปแบบ Response    | JSON เท่านั้น                               | รูปแบบใดก็ได้                                |
+| Streaming          | ไม่รองรับ                                   | รองรับ ReadableStream เต็มรูปแบบ             |
+| การเชื่อมกับ Form  | ใช้ HTML `action="/__ruvyxa/action?...` ได้ | ต้องใช้ fetch ด้วยตัวเอง                     |
+
+---
+
+## ลองทำดู
+
+ลองสร้างแอปนับเลข (Counter) ง่ายๆ ด้วย Server Action
+
+**ขั้นตอนที่ 1:** สร้างไฟล์ `app/counter/action.ts`:
+
+```ts
+import { action } from 'ruvyxa/server'
+
+// เก็บค่าใน memory (แอปจริงควรใช้ Database)
+let count = 0
+
+export const increment = action()
+  .input({ parse: () => ({}) })
+  .handler(async ({ invalidate }) => {
+    count++
+    invalidate('counter:value')
+    return { count }
+  })
+
+export const reset = action()
+  .input({ parse: () => ({}) })
+  .handler(async ({ invalidate }) => {
+    count = 0
+    invalidate('counter:value')
+    return { count }
+  })
+```
+
+**ขั้นตอนที่ 2:** สร้างไฟล์ `app/counter/page.tsx`:
+
+```tsx
+// หน้านี้ใช้ HTML forms — ไม่ต้องใช้ JS ก็ทำงานได้
+export default function CounterPage() {
+  return (
+    <main>
+      <h1>Counter</h1>
+      <form
+        method="post"
+        action="/__ruvyxa/action?path=/counter&name=increment"
+        style={{ display: 'inline' }}
+      >
+        <button type="submit">+1</button>
+      </form>
+      <form
+        method="post"
+        action="/__ruvyxa/action?path=/counter&name=reset"
+        style={{ display: 'inline' }}
+      >
+        <button type="submit">Reset</button>
+      </form>
+    </main>
+  )
+}
+```
+
+**ขั้นตอนที่ 3:** เข้าไปที่ `/counter` แล้วลองกดปุ่มดู
+
+**ขั้นตอนที่ 4 (เพิ่มเติม):** เพิ่ม Client component เพื่อดึงข้อมูลมาแสดง:
+
+```tsx
+'use client'
+
+import { useRuvyxaLoader } from '@ruvyxa/react'
+
+export function DisplayCount() {
+  const { data, loading } = useRuvyxaLoader(() => fetch('/api/counter').then((r) => r.json()))
+
+  if (loading) return <p>กำลังโหลด...</p>
+  return <p>Count: {data?.count ?? 0}</p>
+}
+```
+
+---
+
 ## Contract ของ Action Builder
 
 Server-action API ที่รองรับคือ builder จาก `@ruvyxa/core/server` ซึ่งแยกการตัดสินใจเป็น 3 ส่วน:

@@ -7,6 +7,119 @@ AST node lowering, 512-entry LRU cache, image optimization (oxipng/mozjpeg/guetz
 
 ---
 
+## What You Will Learn
+
+- Markdown routing: การใช้ไฟล์ `page.md` และ `page.mdx` เป็นไฟล์ Route
+- การแปลงและตรวจสอบ YAML frontmatter (RUV1312)
+- การใช้ MDX ESM blocks, รูปแบบ JSX expressions, และ inline components
+- การประกาศ Auto-exports อัตโนมัติ: `frontmatter`, `meta`, `headings`, `contentFormat`
+- การจัดการซ้ำซ้อน (ESM deduplication): ข้าม auto-exports เมื่อไฟล์ MDX มีการ export เอาไว้แล้ว
+- AST node lowering: กระบวนการแปลง Markdown AST node เป็น `React.createElement` ทุก node
+- Content cache: กลไกแคช LRU ขนาด 512-entry พร้อมการแฮช (hashing) แบบ blake3
+- คอมโพเนนต์ `<Image>`: รูปแบบ Props อย่างสมบูรณ์
+- ระบบจัดการรูปภาพ Image optimization: แปลงเป็น WebP และจัดการ Responsive variants
+- คอมโพเนนต์ `<Seo>` และ JSON-LD structured data
+- อัลกอริทึมในการควบรวม `meta` export เข้ากับ Layout meta
+- รหัสข้อผิดพลาด (Error codes): RUV1310, RUV1311, RUV1312
+- แนวทางการแก้ไขปัญหาทั่วไปอย่างสมบูรณ์
+
+---
+
+## Markdown Pages: `page.md`
+
+สร้างไฟล์ที่ตำแหน่ง `app/about/page.md`:
+
+```markdown
+---
+title: About Us
+description: What makes Ruvyxa tick
+---
+
+## Our Mission
+
+We believe web frameworks should be **fast**, **simple**, and **fun**.
+```
+
+เข้าไปที่หน้าเว็บ `/about` -- Ruvyxa จะทำการเรนเดอร์เนื้อหาภายใต้ Root layout
+ให้คุณโดยไม่ต้องเขียนโค้ดเพิ่มเลย
+
+### How It Works
+
+กลไกจัดการ Content อยู่ที่ `crates/ruvyxa_bundler/src/content.rs` ซึ่งมีฟังก์ชัน
+`compile_content_module()` คอยจัดการกระบวนการต่างๆ:
+
+1. **split_frontmatter()** -- ลบ BOM, ค้นหา `---` ขั้นบรรทัดเพื่อแยก YAML ออกจากตัวเนื้อหา คืนค่า
+   `(Option<String>, String)`
+2. **parse_frontmatter()** -- แปลงข้อมูล YAML ผ่าน `serde_yaml_ng::from_str()` คืนค่า
+   `serde_json::Value` (ต้องเป็นรูปแบบ Mapping เท่านั้น) ข้อผิดพลาด: RUV1312
+3. **markdown::to_mdast()** -- ประมวลผล GFM (`.md`) หรือ MDX (`.mdx`) ให้กลายเป็น AST tree
+4. **collect_ast_headings()** -- วนซ้ำโครงสร้าง AST และดึงข้อมูล `{depth, text, slug}` ของทุก
+   Heading
+5. **collect_definitions()** -- รวบรวมตำแหน่งที่อ้างอิงลิงก์ `[label]: url` ไปไว้ที่ BTreeMap
+6. **render_children()** หรือ **render_node()** -- วนซ้ำแบบ Recursive AST พ่นข้อความของคำสั่ง
+   `React.createElement()` ออกมา
+7. **module_source()** -- ประกอบร่างโมดูล ESM สุดท้าย ได้แก่ `import React`, คำสั่ง auto-exports,
+   และ default component
+
+```
+                  +-----------------------------+
+page.md (raw)     |  ---                        |
+                  |  title: About Us            |
+                  |  ---                        |
+                  |                             |
+                  |  ## Our Mission             |
+                  |  We believe...              |
+                  +------+----------------------+
+                         |
+                         v
+   +-------------------------------------------------------+
+   | compile_content_module()                               |
+   |  1. split_frontmatter -> (Option<YAML>, body)          |
+   |  2. parse_frontmatter -> serde_yaml_ng::Value          |
+   |  3. markdown::to_mdast -> GFM AST                      |
+   |  4. collect_ast_headings -> [{depth, text, slug}]      |
+   |  5. render_children -> walk AST -> createElement calls  |
+   |  6. module_source -> assemble ESM module                |
+   +------+------------------------------------------------+
+          |
+          v
+   +-------------------------------------------------------+
+   | Generated ESM module                                   |
+   |                                                        |
+   | import React from "react";                             |
+   | export const frontmatter = {"title":"..."};             |
+   | export const meta = frontmatter;                       |
+   | export const headings = [...];                         |
+   | export const contentFormat = "md";                     |
+   | export default function RuvyxaContentPage() {          |
+   |   return React.createElement("article", {              |
+   |     className: "ruvyxa-content",                       |
+   |     "data-content-format": "md"                        |
+   |   }, ...children...);                                  |
+   | }                                                      |
+   +------+------------------------------------------------+
+          |
+          v
+   +-------------------------------------------------------+
+   | Oxc compiler pipeline (same as page.tsx)                |
+   | resolve -> compile -> boundary check -> link -> minify  |
+   +-------------------------------------------------------+
+```
+
+ผลลัพธ์ที่ได้จากการประมวลผลถูกห่อหุ้มในรูปแบบ `<article className="ruvyxa-content">` ส่วนคุณสมบัติ
+`data-content-format` จะเป็นตัวจำแนกระหว่าง `.md` กับ `.mdx`
+
+---
+
+## ขั้นตอนถัดไป
+
+- **[10-environment-variables.md](./10-environment-variables.md)** — จัดการ Public/Private Env
+- **[03-server-client-components.md](./03-server-client-components.md)** — หากต้องการเรียก Component
+  ภายใน MDX
+- **[08-styling.md](./08-styling.md)** — จัดรูปแบบเอกสาร Markdown
+
+---
+
 ## ภาพรวมระบบ MDX
 
 Ruvyxa ใช้ MDX compiler แบบ full pipeline เพื่อแปลง `.page.mdx` และ `.md` เป็น React components
@@ -1982,6 +2095,15 @@ RUVYXA_DEBUG=* ruvyxa dev
 - Build-time encoders: mozjpeg, oxipng, guetzli, cwebp, libaom (AVIF)
 - SEO: <Meta> (OG, Twitter), <Seo> (JSON-LD: Article, BreadcrumbList, Organization, FAQ)
 - ตรวจสอบ: `ruvyxa analyze`, `run trace`
+
+---
+
+## ขั้นตอนถัดไป
+
+- **[10-environment-variables.md](./10-environment-variables.md)** — จัดการ Public/Private Env
+- **[03-server-client-components.md](./03-server-client-components.md)** — หากต้องการเรียก Component
+  ภายใน MDX
+- **[08-styling.md](./08-styling.md)** — จัดรูปแบบเอกสาร Markdown
 
 ---
 

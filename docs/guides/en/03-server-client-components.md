@@ -311,6 +311,53 @@ elements get JavaScript only where needed.
 
 ---
 
+## Props Must Be JSON-serializable
+
+When passing props from a server component to a client component:
+
+```tsx
+// Valid: string, number, boolean, object, array, null
+<ClientCard
+  title="Product"          // string ✓
+  price={299}             // number ✓
+  inStock={true}          // boolean ✓
+  tags={['new', 'sale']}  // array ✓
+  metadata={{ sku: 'A001' }} // object ✓
+  description={null}      // null ✓
+/>
+
+// Invalid:
+<ClientCard
+  onClick={() => {}}      // function ✗ — RUV1007
+  date={new Date()}       // Date ✗ — not serializable
+  regex={/pattern/}       // RegExp ✗
+  style={{ display }}     // CSSStyleDeclaration ✗
+/>
+```
+
+### Accepted JSON-serializable types
+
+| Type             | Serializable? | Notes                              |
+| ---------------- | ------------- | ---------------------------------- |
+| `string`         | ✅            |                                    |
+| `number`         | ✅            | Includes NaN, Infinity             |
+| `boolean`        | ✅            |                                    |
+| `null`           | ✅            |                                    |
+| `object` (plain) | ✅            |                                    |
+| `array`          | ✅            |                                    |
+| `undefined`      | ❌            | Errors if used as a top-level prop |
+| `function`       | ❌            | RUV1007                            |
+| `Date`           | ❌            | Use string instead                 |
+| `RegExp`         | ❌            | Use string pattern instead         |
+| `Symbol`         | ❌            |                                    |
+| `BigInt`         | ❌            |                                    |
+| `Map`, `Set`     | ❌            | Use object/array instead           |
+| `Promise`        | ❌            |                                    |
+| `ReactElement`   | ✅            | Only if children are serializable  |
+| cyclic reference | ❌            | Causes stack overflow              |
+
+---
+
 ## The Client Boundary
 
 When you add `'use client'` to a file, **everything it imports that contains components also ships
@@ -849,6 +896,85 @@ shipped for the post list itself.
 
 ---
 
+## Module Graph Collection
+
+Ruvyxa uses `collect_relative_graph()` to find the entire dependency tree:
+
+### Algorithm
+
+In `crates/ruvyxa_graph/src/lib.rs:532-559`:
+
+```
+1. Start from entry file
+2. Normalize path (canonical)
+3. BFS traversal:
+   a. Mark current file as visited
+   b. Read source code
+   c. Find all import specifiers
+   d. Filter for relative imports (starts with .)
+   e. Resolve relative import → full path
+   f. If not visited → add to queue
+4. Return a set of all reachable files
+```
+
+### Resolver: resolve_relative_import
+
+In `crates/ruvyxa_graph/src/lib.rs:651-673`:
+
+```
+% Resolution order:
+1. exact path
+2. + .ts
+3. + .tsx
+4. + .js
+5. + .jsx
+6. + .md
+7. + .mdx
+8. /index.ts
+9. /index.tsx
+10. /index.js
+11. /index.jsx
+12. /index.md
+13. /index.mdx
+```
+
+---
+
+## Valid Module-level Exports
+
+### Server component
+
+```tsx
+export default function Page(props: PageProps): React.ReactElement
+export async function Page(props: PageProps): Promise<React.ReactElement>
+export const meta: Meta | MetaFactory
+export const revalidate: number // ISR TTL
+export const ppr: boolean // PPR opt-in
+export function getStaticParams(): StaticParamsResult
+export const hydrate: 'load' | 'idle' | 'visible' | false
+```
+
+### Client component
+
+```tsx
+'use client'
+export default function Page(props: PageProps): React.ReactElement
+export const meta: Meta | MetaFactory
+export const hydrate: 'load' | 'idle' | 'visible' | false
+```
+
+### API route
+
+```ts
+export function GET(request: Request, context: { params: RouteParams }): Promise<Response>
+export function POST(request: Request, context: { params: RouteParams }): Promise<Response>
+export function PUT(request: Request, context: { params: RouteParams }): Promise<Response>
+export function DELETE(request: Request, context: { params: RouteParams }): Promise<Response>
+export function PATCH(request: Request, context: { params: RouteParams }): Promise<Response>
+```
+
+---
+
 ## Boundary Validation Is Based on Reachability
 
 The important distinction is not a component's filename; it is whether the module is reachable from
@@ -904,6 +1030,120 @@ npm run check
 Start from the file named by the diagnostic, then inspect its relative imports. The analyzer caches
 those import edges across routes, but the result is still evaluated for each route that reaches the
 module. This is why moving a shared helper can affect more than one page.
+
+---
+
+## Troubleshooting
+
+### "RUV1008: Server-only hook"
+
+```tsx
+// Incorrect:
+export default function Page() {
+  const [x, setX] = useState(0) // ← RUV1008
+  return <button onClick={() => setX(1)}>...</button>
+}
+
+// Correct: Add 'use client'
+;('use client')
+export default function Page() {
+  const [x, setX] = useState(0)
+  return <button onClick={() => setX(1)}>...</button>
+}
+```
+
+### "RUV1007: Client boundary violation"
+
+```tsx
+'use client'
+import { db } from './database' // ← database uses 'server-only'
+// → RUV1007
+
+// Solution:
+// 1. Create an API route that queries the database
+// 2. Have the client component fetch from that API
+```
+
+```tsx
+// Solution: Create an API route
+// app/api/users/route.ts
+import { db } from '../database' // server-only is OK in route.ts
+
+export async function GET() {
+  const users = await db.query('SELECT * FROM users')
+  return Response.json(users)
+}
+
+// client component
+;('use client')
+export default function UsersList() {
+  const [users, setUsers] = useState([])
+
+  useEffect(() => {
+    fetch('/api/users')
+      .then((r) => r.json())
+      .then(setUsers)
+  }, [])
+
+  return (
+    <div>
+      {users.map((u) => (
+        <p key={u.id}>{u.name}</p>
+      ))}
+    </div>
+  )
+}
+```
+
+### Client Component Cannot Import Server Component
+
+```tsx
+// Incorrect:
+'use client'
+import ServerComponent from './ServerComponent' // ← Can import, but...
+// ServerComponent will be bundled as client code → might throw an error
+
+// Correct: Pass as children
+;('use client')
+export default function Client({ children }: { children: React.ReactNode }) {
+  return <div className="card">{children}</div>
+}
+```
+
+### onClick Does Not Work
+
+```tsx
+// Incorrect: (server component)
+export default function Page() {
+  return <button onClick={() => alert('Hello')}>Click</button>
+  // JS is not sent to the browser, onClick is dropped
+}
+
+// Correct:
+;('use client')
+export default function Page() {
+  return <button onClick={() => alert('Hello')}>Click</button>
+}
+```
+
+### Client Component Cannot Be Async
+
+```tsx
+// Incorrect:
+'use client'
+export default async function Page() {
+  // client component cannot be async
+}
+
+// Correct:
+;('use client')
+export default function Page() {
+  const [data, setData] = useState(null)
+  useEffect(() => {
+    fetchData().then(setData)
+  }, [])
+}
+```
 
 ---
 

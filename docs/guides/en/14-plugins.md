@@ -920,6 +920,221 @@ Invalid fonts produce a warning.
 
 ---
 
+## New Hooks System (v0.5+)
+
+Ruvyxa has 2 hook systems — Build Hooks (for build time) and HTTP Hooks (for runtime)
+
+### build.onStart
+
+Called when build starts — use for initialization and checking conditions:
+
+```typescript
+type BuildOnStart = (ctx: {
+  root: string // Project root directory
+  outDir: string // Output directory (.ruvyxa)
+  config: Record<string, any> // Full config object
+  env: Record<string, string> // Environment variables snapshot
+}) => void | Promise<void>
+```
+
+**Example**: Check Node.js version
+
+```ts
+build: {
+  onStart({ root, config }) {
+    const nodeMajor = parseInt(process.versions.node, 10);
+    if (nodeMajor < 20) {
+      throw new Error('Node.js 20+ required');
+    }
+    console.log(`Building ${config.site?.name || 'app'} from ${root}`);
+  },
+}
+```
+
+### build.onResolve
+
+Modify module resolution — edit import paths:
+
+```typescript
+type BuildOnResolve = (ctx: {
+  source: string // Import source: './Button', 'react', etc.
+  importer: string // File ที่ import
+  resolve: (id: string) => string | null // Default resolver
+}) => string | null | undefined // Return resolved path หรือ null
+```
+
+**Example**: Replace moment with dayjs
+
+```ts
+build: {
+  onResolve({ source, resolve }) {
+    if (source === 'moment') {
+      return resolve('dayjs');
+    }
+    // Remember to return undefined if no modifications are needed
+  },
+}
+```
+
+### build.onTransform
+
+Transform source code before bundling:
+
+```typescript
+type BuildOnTransform = (ctx: {
+  code: string // Source code
+  id: string // Module path
+  resolve: (id: string) => string // Resolver
+}) => { code: string; map?: string } | undefined | void
+```
+
+**Example**: Remove console.log in production
+
+```ts
+build: {
+  onTransform({ code, id }) {
+    if (process.env.NODE_ENV === 'production' && id.endsWith('.tsx')) {
+      return {
+        code: code.replace(/console\.\w+\([^)]*\)/g, '/* removed */'),
+      };
+    }
+  },
+}
+```
+
+### build.onComplete
+
+Called when build completes — use for reporting, cleanup:
+
+```typescript
+type BuildOnComplete = (ctx: {
+  duration: number // Build duration (ms)
+  routes: number // Number of routes
+  assets: { count: number; size: number } // Asset stats
+  manifest: RouteManifest // Route manifest
+  diagnostics: Diagnostic[] // Warnings/errors
+}) => void | Promise<void>
+```
+
+**Example**: Notify Slack when build completes
+
+```ts
+build: {
+  async onComplete({ duration, routes, diagnostics }) {
+    const errors = diagnostics.filter(d => d.severity === 'error');
+    if (errors.length > 0) {
+      await fetch(process.env.SLACK_WEBHOOK!, {
+        method: 'POST',
+        body: JSON.stringify({
+          text: `Build failed: ${errors.length} errors in ${duration}ms`,
+        }),
+      });
+    }
+  },
+}
+```
+
+### http.onRequest
+
+Modify request before reaching route handler:
+
+```typescript
+type HttpOnRequest = (ctx: {
+  request: {
+    method: string
+    url: string
+    headers: Record<string, string>
+    body?: any
+  }
+  params: Record<string, string> // Route params
+}) => {
+  request?: Partial<PluginHttpRequest> // Modify request
+  response?: PluginHttpResponse // Or respond immediately
+} | void
+```
+
+**Example**: Rate limiting
+
+```ts
+http: {
+  onRequest({ request }) {
+    const ip = request.headers['x-forwarded-for'] || 'unknown';
+    const key = `rate:${ip}`;
+    // Check rate limit...
+    if (isRateLimited(key)) {
+      return {
+        response: { status: 429, body: 'Too Many Requests' },
+      };
+    }
+  },
+}
+```
+
+### http.onResponse
+
+Modify response before sending back to client:
+
+```typescript
+type HttpOnResponse = (ctx: { request: PluginHttpRequest; response: PluginHttpResponse }) => {
+  response?: Partial<PluginHttpResponse>
+} | void
+```
+
+**Example**: Add custom headers
+
+```ts
+http: {
+  onResponse({ response }) {
+    return {
+      response: {
+        headers: {
+          ...response.headers,
+          'X-Powered-By': 'Ruvyxa',
+          'X-Response-Time': `${Date.now() - start}ms`,
+        },
+      },
+    };
+  },
+}
+```
+
+### Hooks Legacy (v0.4)
+
+Legacy hooks are still supported — `definePlugin`:
+
+```typescript
+type LegacyHookResolveId = (ctx: {
+  source: string
+  importer: string
+  resolve: (id: string) => string | null
+}) => string | null | undefined
+
+type LegacyHookTransform = (ctx: {
+  code: string
+  id: string
+  resolve: (id: string) => string
+}) => { code: string; map?: string } | undefined
+
+type LegacyHookBuildStart = (ctx: {
+  root: string
+  outDir: string
+  config: Record<string, any>
+}) => void
+
+type LegacyHookBuildEnd = (ctx: { manifest: RouteManifest; diagnostics: Diagnostic[] }) => void
+
+type LegacyHookServerStart = (ctx: { config: ServerConfig }) => void
+type LegacyHookServerEnd = (ctx: {}) => void
+
+type LegacyHookMiddleware = (ctx: {
+  request: PluginHttpRequest
+  response: PluginHttpResponse
+  next: () => Promise<void>
+}) => Promise<PluginHttpRequestResult | void>
+```
+
+---
+
 ## Creating Custom Plugins
 
 ### `definePlugin()` API
@@ -1326,6 +1541,185 @@ export default function seoValidatorPlugin(options: SeoValidatorOptions = {}): R
 
 ---
 
+## Plugin Examples - 5 Examples
+
+### 1. Request Logger
+
+```ts
+import { definePlugin } from 'ruvyxa/plugins'
+
+interface LoggerOptions {
+  format?: 'json' | 'text'
+  logHeaders?: boolean
+}
+
+export default definePlugin<LoggerOptions>('request-logger', (options = {}) => ({
+  name: 'request-logger',
+
+  http: {
+    onRequest(ctx) {
+      ctx.request.headers['x-request-start'] = Date.now().toString()
+    },
+
+    onResponse(ctx) {
+      const start = parseInt(ctx.request.headers['x-request-start'] || '0')
+      const duration = Date.now() - start
+      const { method, url } = ctx.request
+      const { status } = ctx.response
+
+      if (options.format === 'json') {
+        console.log(JSON.stringify({ method, url, status, duration }))
+      } else {
+        console.log(`${method} ${url} → ${status} (${duration}ms)`)
+      }
+
+      if (options.logHeaders) {
+        console.log('Request headers:', ctx.request.headers)
+      }
+    },
+  },
+}))
+```
+
+### 2. Env Validator
+
+```ts
+import { definePlugin } from 'ruvyxa/plugins'
+
+interface EnvOptions {
+  required: string[]
+  prefix?: string
+  strict?: boolean
+}
+
+export default definePlugin<EnvOptions>('env-validator', (options) => ({
+  name: 'env-validator',
+
+  build: {
+    onStart({ config }) {
+      const missing = options.required.filter((key) => !process.env[key])
+
+      if (missing.length > 0) {
+        if (options.strict !== false) {
+          throw new Error(`Missing required env vars: ${missing.join(', ')}`)
+        } else {
+          console.warn(`Warning: Missing env vars: ${missing.join(', ')}`)
+        }
+      }
+
+      if (options.prefix) {
+        const vars = Object.keys(process.env).filter((k) => k.startsWith(options.prefix!))
+        console.log(`Found ${vars.length} ${options.prefix}* variables`)
+      }
+    },
+  },
+}))
+```
+
+### 3. Cache Buster
+
+```ts
+import { definePlugin } from 'ruvyxa/plugins'
+
+export default definePlugin('cache-buster', () => ({
+  name: 'cache-buster',
+
+  build: {
+    onComplete({ duration, routes }) {
+      // สร้าง cache buster file สำหรับ CDN
+      const fs = require('fs')
+      const hash = Date.now().toString(36)
+      fs.writeFileSync(
+        '.ruvyxa/assets/cache-version.json',
+        JSON.stringify({
+          version: hash,
+          builtAt: new Date().toISOString(),
+          routes,
+          duration,
+        }),
+      )
+      console.log(`Cache version: ${hash}`)
+    },
+  },
+
+  http: {
+    onResponse(ctx) {
+      // Add cache buster query param
+      if (ctx.response.headers['content-type']?.includes('text/html')) {
+        // NOOP — cache buster สำหรับ assets
+      }
+    },
+  },
+}))
+```
+
+### 4. Response Time Header
+
+```ts
+import { definePlugin } from 'ruvyxa/plugins'
+
+export default definePlugin('response-time', () => ({
+  name: 'response-time',
+
+  http: {
+    onRequest(ctx) {
+      ctx.request.headers['x-start-time'] = String(performance.now())
+    },
+
+    onResponse(ctx) {
+      const start = parseFloat(ctx.request.headers['x-start-time'] || '0')
+      const elapsed = performance.now() - start
+      return {
+        response: {
+          headers: {
+            ...ctx.response.headers,
+            'X-Response-Time': `${Math.round(elapsed)}ms`,
+          },
+        },
+      }
+    },
+  },
+}))
+```
+
+### 5. S3 Image Upload
+
+```ts
+import { definePlugin } from 'ruvyxa/plugins'
+
+interface S3Options {
+  bucket: string
+  region?: string
+  pathPrefix?: string
+}
+
+export default definePlugin<S3Options>('s3-upload', (options) => ({
+  name: 's3-upload',
+
+  build: {
+    async onComplete({ assets }) {
+      const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3')
+      const client = new S3Client({ region: options.region || 'ap-southeast-1' })
+
+      for (const asset of assets.images) {
+        const key = `${options.pathPrefix || 'assets'}/${asset.name}`
+        await client.send(
+          new PutObjectCommand({
+            Bucket: options.bucket,
+            Key: key,
+            Body: require('fs').readFileSync(asset.path),
+            ContentType: asset.mimeType,
+          }),
+        )
+        console.log(`Uploaded: ${key}`)
+      }
+    },
+  },
+}))
+```
+
+---
+
 ## Plugin Ordering
 
 Plugins run in declaration order. When multiple plugins hook the same event:
@@ -1503,6 +1897,40 @@ npm publish --access public
 ---
 
 ## Plugin Boundaries and a Minimal Safe Plugin
+
+## Try It Yourself
+
+1. เปิด `ruvyxa.config.ts` และเพิ่ม plugin redirects — redirect `/old` → `/new`
+2. ทดลองเพิ่ม `securityHeaders` plugin — ดู headers ใน DevTools
+3. เพิ่ม `fonts` plugin ด้วย Google Fonts Inter + Noto Sans Thai
+4. สร้าง custom plugin ด้วย `ruvyxa plugin create`
+5. ใช้ `build.onTransform` เพื่อแทนที่ text ใน production build
+6. ใช้ `http.onRequest` เพื่อเพิ่ม rate limiting
+7. ใช้ `head` field เพื่อเพิ่ม Google Analytics script
+8. ลงทะเบียน plugin ใน config แล้วรัน dev — ดู logs
+9. Test plugin ordering — สลับลำดับใน array
+10. Publish plugin ของคุณไปยัง npm — `npm publish --access public`
+11. ทดลอง `middleware.pluginLimit` — เพิ่มเป็น 64MiB
+12. ใช้ definePlugin API สำหรับ plugin ใหม่ทั้งหมด
+
+---
+
+## Summary
+
+- 16 built-in plugins — redirects, headers, observability, securityHeaders, cacheRules, pwa,
+  sitemap, robots, feed, searchIndex, contentEngine, openApi, alias, bundleBudget, requireEnv, fonts
+- TypeScript plugin system — 2 API sets: definePlugin (new) + hooks (legacy)
+- Build hooks: onStart, onResolve, onTransform, onComplete
+- HTTP hooks: onRequest, onResponse
+- Socket registry — bi-directional IPC ระหว่าง Rust ↔ JS Worker
+- Plugin ordering — array order for onRequest, reverse for onResponse
+- Response limits — 32 MiB default, 256 MiB max
+- Plugin naming: `ruvyxa-plugin-<name>` บน npm
+- Head contribution — SEO, analytics, custom tags
+- 5 Example plugin จริง — request logger, env validator, cache buster, response time, S3 upload
+- Troubleshooting — 14 ปัญหาพร้อม error codes และวิธีแก้
+
+---
 
 The public plugin constructor is `definePlugin()` from `@ruvyxa/core/plugin` (also re-exported by
 `ruvyxa/plugin`). A plugin needs a non-empty name and at least one behavior: a registration

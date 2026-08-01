@@ -1,3 +1,19 @@
+## สิ่งที่คุณจะได้เรียนรู้ (What You Will Learn)
+
+- Plugin architecture and socket registry
+- All 16 built-in plugins with complete TypeScript types, options, and examples
+- `definePlugin()` API: concise declarations and `register()` escape hatch
+- Plugin hooks: `build.onResolve`, `build.onLoad`, `build.onTransform`, `build.onStart`,
+  `build.onComplete`, `http.onRequest`, `http.onResponse`, `http.route`, `dev.onFileChange`,
+  `diagnostics.report`, `native.claim`
+- Plugin execution timing and ordering rules
+- Response middleware limits (32 MiB default, 256 MiB max)
+- Publishing a plugin to npm
+- Custom plugin: SEO validator, virtual modules, analytics middleware
+- Troubleshooting every plugin failure
+
+---
+
 # ระบบ Plugin ใน Ruvyxa
 
 Ruvyxa มีระบบ plugin ที่ยืดหยุ่น — ตั้งแต่ built-in plugins 16 ตัวที่พร้อมใช้ ไปจนถึงการสร้าง custom
@@ -1477,6 +1493,80 @@ plugins: [
 
 ---
 
+## ลำดับการรันปลั๊กอิน (Plugin Ordering)
+
+Plugins run in declaration order. When multiple plugins hook the same event:
+
+```typescript
+plugins: [
+  redirects([{ source: '/old', destination: '/new' }]), // 1st: http.onRequest
+  securityHeaders({ contentSecurityPolicy: "default-src 'self'" }), // 2nd: http.onResponse
+  headers([{ source: '/api/*', headers: { 'x-foo': 'bar' } }]), // 3rd: http.onResponse
+]
+```
+
+**General rule**: Build-time plugins before server-time plugins. Redirects and security first, then
+headers and cache rules, then build-output plugins (sitemap, robots, pwa).
+
+### Ordering Within Same Hook
+
+For `http.onRequest` and `http.onResponse`, handlers registered by earlier plugins run first. Each
+handler can call `next()` to pass control. If a handler returns a `Response` without calling
+`next()`, subsequent handlers are skipped.
+
+For `build.onResolve`, the first plugin that returns a non-null string wins. Subsequent `onResolve`
+handlers are not called for that specifier.
+
+---
+
+## ข้อจำกัดการรันปลั๊กอิน (Plugin Execution Limits)
+
+### Response Body Limit
+
+TypeScript response middleware has a configurable buffer limit:
+
+```typescript
+// ruvyxa.config.ts
+export default config({
+  security: {
+    pluginLimit: 33_554_432, // 32 MiB default, max 268_435_456 (256 MiB)
+  },
+})
+```
+
+If response middleware produces a buffered body exceeding this limit, the framework returns a 500
+error. Binary streams and large file downloads should skip response middleware.
+
+### Timeout
+
+Plugin hooks have a configurable timeout via `middleware.timeoutMs`:
+
+```typescript
+export default config({
+  middleware: {
+    timeoutMs: 30_000, // 30 seconds default, max 300_000 (5 minutes)
+  },
+})
+```
+
+If exceeded: `RUV1700 TypeScript plugin hook timed out`. The worker is replaced. Timed-out hooks are
+not retried.
+
+### Worker Count
+
+```typescript
+export default config({
+  middleware: {
+    workers: 1, // 1-8, default 1
+  },
+})
+```
+
+Workers do not share module-level plugin state. Keep at 1 unless plugins are stateless and
+throughput-bottlenecked.
+
+---
+
 ## Plugin Registry — npm Publishing
 
 ### ขั้นตอนการสร้าง
@@ -1925,6 +2015,19 @@ hooks: {
 
 ---
 
+## Error Codes (RUV1600-1699, RUV2000-2102)
+
+| Code    | Title                        | Source           | Fix                           |
+| ------- | ---------------------------- | ---------------- | ----------------------------- |
+| RUV1600 | Plugin boundary violation    | Plugin host      | Fix server/client boundary    |
+| RUV1601 | Plugin hook timeout          | Plugin host      | Reduce work or increase limit |
+| RUV1700 | Plugin hook failed           | Plugin runtime   | Inspect the hook error        |
+| RUV1701 | Plugin bridge/protocol error | Plugin runtime   | Inspect the plugin response   |
+| RUV2102 | Invalid plugin definition    | `definePlugin()` | Return a valid plugin object  |
+| RUV2103 | Font self-hosting warning    | `fonts()` plugin | Check the font URL/network    |
+
+---
+
 ## Plugin Boundaries และ Minimal Safe Plugin
 
 public plugin constructor คือ `definePlugin()` จาก `@ruvyxa/core/plugin` (re-export ผ่าน
@@ -1968,3 +2071,10 @@ ruvyxa build
 CLI scaffolder สร้าง publishable package structure แต่ไม่ได้ register package ใน application config
 หรือ publish ไป npm ให้เพิ่ม behavior เดียว, ทดสอบ request/build path ที่ match ก่อน แล้วจึงเพิ่ม
 hooks ที่กว้างขึ้นหรือ native capability
+
+## ขั้นตอนถัดไป (Next Steps)
+
+- **[11-configuration.md](./11-configuration.md)** — Plugin config in detail
+- **[12-cli-commands.md](./12-cli-commands.md)** — `ruvyxa plugin create` command
+- **[15-official-packages.md](./15-official-packages.md)** — Official packages with plugins
+- **[16-error-handling.md](./16-error-handling.md)** — Plugin error codes

@@ -1078,6 +1078,52 @@ Per-adapter options passed through to the adapter runner.
 
 ## Configuration Validation
 
+## Validation Rules — Complete Reference (Rust)
+
+### Error Codes RUV1600-RUV1699
+
+| Code    | Condition                  | Field                                     | Solution                  |
+| ------- | -------------------------- | ----------------------------------------- | ------------------------- |
+| RUV1601 | Invalid value              | Multiple fields                           | Check allowed values      |
+| RUV1602 | Value out of range         | Multiple fields                           | Adjust value within range |
+| RUV1603 | Unknown field              | Entire config                             | Check camelCase spelling  |
+| RUV1602 | Invalid config structure   | `plugins.name` duplicate or invalid field | Fix schema / plugin name  |
+| RUV1603 | Invalid adapter definition | Adapter missing valid `build(context)`    | Fix adapter contract      |
+
+### Validation Matrix
+
+| Config Field                         | RUV1601     | RUV1602     | Notes                  |
+| ------------------------------------ | ----------- | ----------- | ---------------------- |
+| `appDir` empty/absolute              | ✅          | -           | relative path required |
+| `outDir` empty/absolute              | ✅          | -           | relative path required |
+| `server.port` 0                      | ✅          | ✅ (>65535) | 1024-65535             |
+| `server.host` invalid                | -           | ✅          | valid hostname/IP      |
+| `site.url` invalid                   | -           | ✅          | origin only            |
+| `site.sitemap.defaults.priority`     | -           | ✅ (0-1)    | float                  |
+| `build.parallelism` 0                | ✅          | ✅ (>64)    | 1-64                   |
+| `build.splitStrategy` invalid        | ✅          | -           | auto/route/vendor/all  |
+| `build.jsxRuntime` invalid           | ✅          | -           | automatic/classic      |
+| `build.esTarget` invalid             | ✅          | -           | es2020-esnext          |
+| `security.actionLimit` 0             | ✅          | ✅ (>10MB)  | 1B-10MB                |
+| `security.apiLimit` 0                | ✅          | ✅ (>50MB)  | 1B-50MB                |
+| `security.pluginLimit` 0             | ✅          | ✅ (>50MB)  | 1B-50MB                |
+| `security.maxBodySize` 0             | ✅          | ✅ (>100MB) | 1B-100MB               |
+| `security.trustedProxyIps[]` invalid | -           | ✅          | valid IP/CIDR          |
+| `security.actionRateLimit.max` 0     | ✅          | -           | ≥ 1                    |
+| `security.actionRateLimit.window` 0  | ✅          | -           | ≥ 1                    |
+| `middleware.workers` 0               | ✅          | ✅ (>8)     | 1-8                    |
+| `middleware.timeoutMs` 0             | ✅          | ✅ (>300s)  | 1ms-300s               |
+| `image.quality` out of range         | ✅ (0/100+) | -           | 1-100                  |
+| `image.avifQuality` out of range     | ✅ (0/100+) | -           | 1-100                  |
+| `image.sizes[]` 0                    | ✅          | ✅ (>10000) | 1-9999                 |
+| `image.formats` empty                | ✅          | -           | ≥ 1 format             |
+| `css.entries[]` absolute             | ✅          | -           | relative path          |
+| `cache.buildDir` absolute            | ✅          | -           | relative path          |
+| `adapter` unknown                    | ✅          | -           | See AdapterType        |
+| `plugins[].name` empty/duplicate     | ✅          | -           | unique, non-empty      |
+
+---
+
 Ruvyxa validates your config at startup via `validate_paths()`.
 
 ### Validation Functions
@@ -1224,6 +1270,48 @@ Run `ruvyxa doctor` to validate your config against all rules:
   TypeScript config found
   .env file present
 ```
+
+---
+
+## Try It Yourself
+
+1. **Basic Config**
+   - Open `ruvyxa.config.ts`
+   - Change `server.port` to 4000 → `npm run dev`
+
+2. **Security**
+   - Set `security.sameOrigin: true`
+   - Set `security.actionLimit: 2_097_152`
+   - Try sending a request larger than the limit
+
+3. **Image**
+   - Set `image.encoder.jpeg: 'guetzli'`
+   - Run `npm run build` → Observe the increased build time
+
+4. **Middleware**
+   - Enable CORS with origins `['https://example.com']`
+   - Test it from a different origin
+
+5. **Plugin**
+   - Add the `redirects` plugin → redirect `/old` → `/new`
+   - Add the `requireEnv` plugin → require `DATABASE_URL`
+
+6. **Inspection**
+   - `npm run doctor` — View validation results
+   - `npm run doctor --json` — View JSON output
+
+---
+
+## Summary
+
+- `ruvyxa.config.ts` is the central configuration file
+- `defineConfig()` provides type safety and auto-completion
+- Validation errors use codes RUV1600-RUV1699
+- Adapters can auto-detect from platform environment variables
+- 16 built-in plugins ready for use
+- Every field has a default value and validation
+- Backed by robust Rust validation
+- Use `npm run doctor` to inspect everything
 
 ---
 

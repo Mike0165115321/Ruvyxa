@@ -1,3 +1,18 @@
+## สิ่งที่คุณจะได้เรียนรู้ (What You Will Learn)
+
+- Complete `.ruvyxa/` build output structure
+- `build.json` schema and contract
+- Adapter architecture: build → inspect → transform → stage → atomic commit
+- All 10 adapters with exact options, types, and output
+- Adapter auto-detection via platform config files and environment variables
+- Staging directory and atomic deployment commit algorithm
+- Docker deployment patterns
+- Production readiness checklist
+- CI/CD integration for GitHub Actions and GitLab CI
+- Troubleshooting every known deployment failure
+
+---
+
 # Deploy แอป Ruvyxa สู่ Production
 
 Ruvyxa มีระบบ adapter ที่ทำให้ deploy ไปยัง platform ต่าง ๆ ได้ง่าย — Vercel, Netlify, Cloudflare,
@@ -473,556 +488,788 @@ Environment variables ที่ใช้ auto-detect:
 
 ---
 
-## Adapter แต่ละตัว — ละเอียด
-
-### 1. Vercel Adapter
-
-Adapter ที่นิยมมากที่สุด — รองรับ Edge Functions, Serverless Functions, ISR, Image Optimization
+## Vercel
 
 ```bash
-# Auto-detect — ถ้ามี VERCEL env จะใช้ vercel adapter อัตโนมัติ
-npm run build
-
-# หรือระบุเอง
-RUVYXA_ADAPTER=vercel npm run build
-npm run build -- --adapter vercel
-
-# Deploy
-npx vercel --prod
-# หรือใช้ Git integration — push ไป GitHub → Vercel auto-deploy
+npm i -D @ruvyxa/adapter-vercel
 ```
 
-**Output structure**:
+### Type Definitions
 
-```
-.ruvyxa/
-├── .vercel/
-│   ├── output/
-│   │   ├── config.json           # Vercel build output config
-│   │   ├── functions/            # Serverless functions
-│   │   │   ├── index.func/
-│   │   │   │   ├── .vc-config.json
-│   │   │   │   └── index.js
-│   │   │   ├── blog.[slug].func/
-│   │   │   └── api.users.func/
-│   │   ├── static/               # Static assets
-│   │   │   ├── index.html
-│   │   │   └── assets/
-│   │   └── edge/                 # Edge functions (ถ้ามี)
-│   │       └── middleware.js
-│   └── project.json
-├── .vercelignore
-└── build.json
+```typescript
+interface VercelAdapterOptions {
+  /** Custom functions output directory. Defaults to `${outDir}/functions`. */
+  functionsDir?: string
+  /** Emit Build Output API at project root (.vercel/output/). @default true */
+  projectOutput?: boolean
+  /** Node.js runtime version. @default 'nodejs20.x' */
+  runtime?: string
+  /** Max serverless function duration in seconds. @default 10 */
+  maxDuration?: number
+  /** Vercel region codes (e.g. ['sin1', 'iad1']). */
+  regions?: string[]
+}
+
+function vercelAdapter(options?: VercelAdapterOptions): Adapter
 ```
 
-**Vercel-specific env vars**:
+### Configuration
 
-| ตัวแปร          | คำอธิบาย                               |
-| --------------- | -------------------------------------- |
-| `VERCEL`        | auto-detect flag                       |
-| `VERCEL_ENV`    | `production`, `preview`, `development` |
-| `VERCEL_URL`    | Deployment URL                         |
-| `VERCEL_REGION` | Region ที่ function ทำงาน              |
+```typescript
+import { vercelAdapter } from '@ruvyxa/adapter-vercel'
 
-**Config ใน ruvyxa.config.ts**:
-
-```ts
-// ruvyxa.config.ts
-import { defineConfig } from 'ruvyxa/config'
-
-export default defineConfig({
-  adapter: 'vercel',
-  vercel: {
-    regions: ['iad1', 'hnd1'], // Serverless function regions
-    edge: true, // เปิด Edge Functions
-    isr: { revalidate: 60 }, // ISR default
-    imageOptimization: true, // Opt-in image optimization
-    maxDuration: 30, // Max function duration (s)
-  },
+export default config({
+  adapter: vercelAdapter({
+    regions: ['iad1', 'hnd1', 'sin1'],
+    maxDuration: 30,
+    runtime: 'nodejs22.x',
+    projectOutput: true,
+  }),
 })
 ```
 
-**ข้อจำกัด Vercel**:
+### Output Structure
 
-- Serverless function: max 30s (Hobby), 60s (Pro), 900s (Enterprise)
-- Edge function: max 30s CPU, 50ms startup
-- Bundle size: max 50MB (รวม node_modules)
-- Response size: max 4.5MB (Edge), Unlimited (Serverless)
+```
+.vercel/output/
+├── config.json                # Vercel Build Output API config
+├── static/                    # Static assets
+│   ├── _entry-[hash].js
+│   ├── _shared-[hash].js
+│   ├── index.html             # SSG pages
+│   ├── about/
+│   │   └── index.html
+│   └── assets/
+│       ├── images/
+│       └── styles.css
+└── functions/
+    └── __ruvyxa.func/
+        ├── .vc-config.json    # Serverless function config
+        ├── serverless-handler.mjs
+        ├── route-modules.mjs
+        ├── manifest.mjs
+        └── prerender/         # Bundled prerender output
+```
+
+### .vc-config.json
+
+```json
+{
+  "runtime": "nodejs20.x",
+  "handler": "serverless-handler.mjs",
+  "launcherType": "Nodejs",
+  "maxDuration": 10,
+  "regions": ["iad1"]
+}
+```
+
+### Feature Support
+
+| Feature             | Support | Notes                            |
+| ------------------- | ------- | -------------------------------- |
+| SSR                 | ✅      | Via serverless function          |
+| API Routes          | ✅      | Via serverless function          |
+| SSG                 | ✅      | Served from edge CDN             |
+| ISR                 | ✅      | Uses `os.tmpdir()` for ISR cache |
+| PPR                 | ✅      | Partial pre-rendering            |
+| CSR                 | ✅      | Minimal shell + client hydrate   |
+| Edge Functions      | 🔜      | Coming in a future release       |
+| Image Optimization  | ✅      | With `image.optimize: true`      |
+| Preview Deployments | ✅      | Automatic with Git integration   |
+| Server Actions      | ✅      | Via POST to function             |
+| Middleware          | ✅      | Via function prefix              |
+
+### ISR Behavior on Vercel
+
+On first request after deploy, ISR reads bundled pre-rendered HTML. After revalidation, writes
+updated HTML to `os.tmpdir()/ruvyxa-isr-cache/`. Cache persists for function instance lifetime. Cold
+starts read bundled snapshot.
 
 ---
 
-### 2. Netlify Adapter
+## Netlify
 
 ```bash
-RUVYXA_ADAPTER=netlify npm run build
-
-# Deploy
-npx netlify deploy --prod
-# หรือใช้ Git integration
+npm i -D @ruvyxa/adapter-netlify
 ```
 
-**Output**:
+### Type Definitions
+
+```typescript
+interface NetlifyAdapterOptions {
+  /** Custom functions output directory. Defaults to `${outDir}/functions`. */
+  functionsDir?: string
+  /** Enable edge functions. @default false */
+  edgeFunctions?: boolean
+  /** Node.js version for serverless functions. @default 'nodejs20' */
+  nodeVersion?: string
+  /** Publish directory for static assets. @default 'dist' */
+  publishDir?: string
+}
+
+function netlifyAdapter(options?: NetlifyAdapterOptions): Adapter
+```
+
+### Configuration
+
+```typescript
+import { netlifyAdapter } from '@ruvyxa/adapter-netlify'
+
+export default config({
+  adapter: netlifyAdapter({
+    edgeFunctions: false,
+    nodeVersion: 'nodejs20',
+  }),
+})
+```
+
+### Output Structure
 
 ```
-.ruvyxa/
-├── netlify.toml               # สร้างอัตโนมัติ — build config
-├── .netlify/
-│   ├── functions/             # Netlify Functions
-│   │   ├── render/
-│   │   │   ├── index.js
-│   │   │   └── package.json
-│   │   └── ...
-│   └── edge-functions/        # Edge Functions (ถ้าเปิด)
-│       └── middleware.js
-├── dist/                      # Static output
+.netlify/
+├── deploy.config              # Netlify deploy configuration
+├── dist/                      # Static assets + SSG pages
+│   ├── _entry.js
 │   ├── index.html
+│   ├── about/index.html
 │   └── assets/
-└── build.json
+└── functions/
+    └── __ruvyxa/
+        ├── serverless-handler.mjs
+        ├── route-modules.mjs
+        ├── manifest.mjs
+        └── prerender/
 ```
 
-**netlify.toml** ที่สร้างอัตโนมัติ:
+### netlify.toml (auto-generated)
 
 ```toml
 [build]
-  command = "npm run build"
-  publish = ".ruvyxa/dist"
-  functions = ".ruvyxa/.netlify/functions"
+  command = "npx ruvyxa build"
+  publish = ".netlify/dist"
+  functions = ".netlify/functions"
 
-[[edge_functions]]
-  function = "middleware"
-  path = "/*"
+[build.processing]
+  skip_processing = false
+
+[[redirects]]
+  from = "/*"
+  to = "/.netlify/functions/__ruvyxa"
+  status = 200
+
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
 ```
 
-**Config**:
+### Feature Support
 
-```ts
-export default defineConfig({
-  adapter: 'netlify',
-  netlify: {
-    edgeFunctions: true,
-    imageOptimization: true,
-  },
-})
+| Feature             | Support | Notes                                         |
+| ------------------- | ------- | --------------------------------------------- |
+| SSR                 | ✅      | Via serverless function                       |
+| API Routes          | ✅      | Via serverless function                       |
+| SSG                 | ✅      | Static files in publish dir                   |
+| ISR                 | ❌      | Netlify does not support writeable filesystem |
+| PPR                 | ❌      | Requires ISR support                          |
+| CSR                 | ✅      | Client hydration                              |
+| Edge Functions      | ✅      | With `edgeFunctions: true`                    |
+| Netlify Forms       | ✅      | Compatible with server actions                |
+| Split Testing       | ✅      | Branch-based deploys                          |
+| Preview Deployments | ✅      | Automatic                                     |
+
+### Deploy Commands
+
+```bash
+# Build
+ruvyxa build
+
+# Deploy via CLI
+netlify deploy --prod
+
+# Or push to Git with Netlify integration
 ```
-
-**ข้อจำกัด Netlify**:
-
-- Function: max 26s (Hobby), 60s (Pro)
-- Edge function: max 50ms CPU
-- Deploy: max 1000 functions
-- Bandwidth: 100GB/month (Hobby)
 
 ---
 
-### 3. Cloudflare Adapter
-
-รองรับทั้ง Cloudflare Pages และ Cloudflare Workers
+## Cloudflare
 
 ```bash
-RUVYXA_ADAPTER=cloudflare npm run build
+npm i -D @ruvyxa/adapter-cloudflare
 ```
 
-**Output (Pages)**:
+### Type Definitions
+
+```typescript
+interface CloudflareAdapterOptions {
+  /** Custom worker entry path. Defaults to `${outDir}/server/app`. */
+  workerEntry?: string
+  /** Emit wrangler.jsonc at project root. @default false */
+  projectConfig?: boolean
+  /** Workers compatibility date. @default '2025-09-01' */
+  compatibilityDate?: string
+}
+
+function cloudflareAdapter(options?: CloudflareAdapterOptions): Adapter
+```
+
+### Configuration
+
+```typescript
+import { cloudflareAdapter } from '@ruvyxa/adapter-cloudflare'
+
+export default config({
+  adapter: cloudflareAdapter({
+    compatibilityDate: '2025-09-01',
+    projectConfig: false,
+  }),
+})
+```
+
+### Output Structure
 
 ```
-.ruvyxa/
-├── _worker.js                 # Cloudflare Worker — entry point
-├── _routes.json               # Route config — static vs worker
-├── _headers                   # Custom headers
-├── _redirects                 # Custom redirects
-├── public/                    # Static files
-│   ├── index.html
-│   ├── assets/
-│   └── 404.html
-└── build.json
+.cloudflare/
+├── functions/                  # Cloudflare Pages Functions
+│   └── __ruvyxa.js
+├── _routes.json                # Route configuration
+├── _headers                    # Custom headers
+├── _redirects                  # Redirects
+├── index.html                  # SSG fallback
+└── assets/                     # Static files
+    ├── _entry-[hash].js
+    ├── _shared-[hash].js
+    ├── images/
+    └── styles.css
 ```
 
-**\_routes.json**:
+### Worker Handler (generated)
+
+The adapter generates a Worker fetch handler that imports the generic serverless handler and route
+manifest. Static assets are served by Cloudflare's `assets` binding — the Worker only handles
+dynamic routes.
+
+Supported strategies: `['ssr', 'ssg', 'csr', 'api']`
+
+ISR and PPR are rejected at build time with error code **RUV2210** because they require persistent
+storage (KV/Durable Objects) not yet integrated.
+
+### Deploy Commands
+
+```bash
+ruvyxa build
+
+# Deploy to Cloudflare Pages
+wrangler pages deploy .cloudflare
+
+# Deploy to Workers (with projectConfig: true)
+wrangler deploy -c .ruvyxa/deploy/cloudflare/wrangler.jsonc
+```
+
+### _routes.json
 
 ```json
 {
   "version": 1,
-  "include": ["/api/*", "/blog/*"],
-  "exclude": ["/assets/*", "/favicon.ico"]
+  "include": ["/*"],
+  "exclude": ["/assets/*", "/_entry*", "/_shared*"]
 }
 ```
 
-**Cloudflare Dashboard Settings**:
+### Feature Support
 
-```
-Build command: npx ruvyxa build --adapter cloudflare
-Build output:  .ruvyxa
-Root directory: /
-```
-
-**Config**:
-
-```ts
-export default defineConfig({
-  adapter: 'cloudflare',
-  cloudflare: {
-    type: 'pages', // 'pages' | 'workers'
-    workerName: 'my-app', // (workers only)
-    route: 'example.com/*', // (workers only)
-    compatibilityDate: '2026-01-01', // CF compatibility date
-    compatibilityFlags: ['nodejs_compat'],
-  },
-})
-```
-
-**ข้อจำกัด Cloudflare**:
-
-- Worker: 128MB RAM, 30s CPU (50ms free tier)
-- Worker size: 1MB uncompressed (5MB for Paid)
-- Pages: 500 builds/month (free), 5000 (paid)
-- KV: 1000 reads/s, 1000 writes/s
+| Feature            | Support | Notes                      |
+| ------------------ | ------- | -------------------------- |
+| SSR via Pages Func | ✅      | Worker fetch handler       |
+| API Routes         | ✅      | Via Worker                 |
+| SSG                | ✅      | Static assets binding      |
+| ISR                | ❌      | Needs KV integration       |
+| PPR                | ❌      | Needs KV integration       |
+| CSR                | ✅      | Client hydration           |
+| Workers            | ✅      | Full Workers compatibility |
+| Durable Objects    | 🔜      | Future release             |
 
 ---
 
-### 4. Node.js Adapter (VPS, Railway, Render)
-
-สำหรับ long-running Node.js server — เหมาะกับ VPS, Railway, Render, Docker
+## Node.js
 
 ```bash
-RUVYXA_ADAPTER=node npm run build
+npm i -D @ruvyxa/adapter-node
 ```
 
-**Output**:
+### Type Definitions
 
-```
-.ruvyxa/
-├── server.js                  # Entry point — app.listen()
-├── server/
-│   ├── app/
-│   ├── components/
-│   └── entry.js
-├── client/
-│   ├── chunks/
-│   └── runtime/
-├── prerender/
-├── assets/
-├── build.json
-└── package.json               # Dependencies — ใช้กับ npm install ตอน deploy
-```
-
-`server.js`:
-
-```js
-// .ruvyxa/server.js — entry ที่ import โดยตรง
-const { createServer } = require('./server/entry')
-const port = process.env.PORT || 3000
-
-createServer().then((server) => {
-  server.listen(port, () => {
-    console.log(`Ruvyxa running on http://localhost:${port}`)
-  })
-})
-```
-
-**Config**:
-
-```ts
-export default defineConfig({
-  adapter: 'node',
-  node: {
-    port: 3000,
-    host: '0.0.0.0',
-    cluster: true, // เปิด multi-core
-    clusterWorkers: 4, // จำนวน worker processes
-    gracefulShutdown: 10000, // ms รอ pending requests
-  },
-})
-```
-
-**Start script**:
-
-```json
-// package.json
-{
-  "scripts": {
-    "start": "node .ruvyxa/server.js"
-  }
+```typescript
+interface NodeAdapterOptions {
+  /** Entry point filename. @default 'server.js' */
+  entry?: string
+  /** Output directory. @default 'dist' */
+  outputDir?: string
+  /** Enable compression middleware. @default true */
+  compress?: boolean
 }
+
+function nodeAdapter(options?: NodeAdapterOptions): Adapter
 ```
 
----
+### Configuration
 
-### 5. Bun Adapter
+```typescript
+import { nodeAdapter } from '@ruvyxa/adapter-node'
 
-สำหรับ Bun runtime — performance สูง
-
-```bash
-RUVYXA_ADAPTER=bun npm run build -- --runtime bun
-```
-
-**Output**:
-
-```
-.ruvyxa/
-├── server.bun.js              # Bun entry point
-├── server/
-├── client/
-├── prerender/
-├── assets/
-├── build.json
-└── bun.lock                   # Bun lockfile
-```
-
-**Config**:
-
-```ts
-export default defineConfig({
-  adapter: 'bun',
-  runtime: 'bun',
-  bun: {
-    port: 3000,
-    host: '0.0.0.0',
-  },
+export default config({
+  adapter: nodeAdapter({
+    compress: true,
+  }),
 })
 ```
 
-**Start**:
-
-```bash
-bun run .ruvyxa/server.bun.js
-```
-
-**ข้อดีของ Bun**:
-
-- Hot reload ที่รวดเร็ว
-- Native JavaScript/TypeScript runtime (ไม่ต้อง transpile)
-- Node.js API compatibility ~90%
-- Performance สูงกว่า Node.js 2-4x
-
----
-
-### 6. Static Adapter
-
-Export เป็น static HTML — ไม่ต้องใช้ server
-
-```bash
-RUVYXA_ADAPTER=static npm run build
-```
-
-**Output**:
+### Output Structure
 
 ```
-.ruvyxa/
-├── index.html                 # /
-├── about.html                 # /about
-├── blog/
-│   ├── index.html             # /blog
-│   └── hello-world.html       # /blog/hello-world
+dist/
+├── server.js                  # Entry point — start this
+├── package.json               # Runtime dependencies
+├── server/                    # Route handlers
+│   ├── index.js
+│   ├── about.js
+│   ├── blog/[slug].js
+│   └── api/hello.js
+├── client/                    # Static assets
+│   ├── _entry-[hash].js
+│   ├── _shared-[hash].js
+│   └── manifest.json
 ├── assets/
 │   ├── images/
-│   ├── fonts/
-│   └── robots.txt
-├── 404.html                   # 404 fallback
-├── sitemap.xml                # SEO
-└── build.json
+│   └── styles.css
+└── prerender/                 # Pre-rendered HTML
+    ├── index.html
+    └── about/index.html
 ```
 
-**Config**:
-
-```ts
-export default defineConfig({
-  adapter: 'static',
-  static: {
-    trailingSlash: true, // /about → /about/index.html
-    fallback: '404.html', // 404 fallback
-    spaFallback: false, // SPA fallback (ส่ง index.html)
-    cleanUrls: true, // ไม่มี .html → /about
-  },
-})
-```
-
-**ข้อควรระวัง Static**:
-
-- Dynamic routes ต้องใช้ `generateStaticParams` — Ruvyxa ต้องรู้ params ทั้งหมดตอน build
-- API routes จะไม่ทำงาน — ต้องใช้ external API
-- Server actions จะไม่ทำงาน — ต้องใช้ client mutations
-
-**Deploy destinations**:
-
-- GitHub Pages
-- Netlify (static mode)
-- Cloudflare Pages (static mode)
-- AWS S3 + CloudFront
-- Nginx / Apache
-- Surge.sh
-- Any static hosting
-
----
-
-### 7. Railway Adapter
-
-```bash
-RUVYXA_ADAPTER=railway npm run build
-```
-
-**railway.json** (Ruvyxa สร้างให้):
+### Generated package.json
 
 ```json
 {
-  "build": {
-    "builder": "nixpacks",
-    "buildCommand": "npm run build"
-  },
-  "deploy": {
-    "startCommand": "npm run start",
-    "healthcheckPath": "/api/health",
-    "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 3
+  "name": "ruvyxa-app",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "ruvyxa": "^2.0.0"
   }
 }
 ```
 
-**Config**:
+### Running
 
-```ts
-export default defineConfig({
-  adapter: 'railway',
-  railway: {
-    healthPath: '/api/health',
-  },
-})
+```bash
+node dist/server.js
+# Listens on PORT env var (default 3000)
 ```
 
-Railway env vars อัตโนมัติ:
+### Production Deployment
 
-- `PORT` — ตั้งค่าโดย Railway
-- `RAILWAY_PROJECT_ID`
-- `RAILWAY_SERVICE_NAME`
+```bash
+# Set production environment
+export NODE_ENV=production
+export PORT=8080
+export DATABASE_URL=postgres://...
+
+# Start server
+node dist/server.js
+```
+
+### Feature Support
+
+| Feature        | Support | Notes                   |
+| -------------- | ------- | ----------------------- |
+| SSR            | ✅      | HTTP server             |
+| API Routes     | ✅      | HTTP server             |
+| SSG            | ✅      | Pre-rendered files      |
+| ISR            | ✅      | In-memory + disk cache  |
+| PPR            | ✅      | Streaming supported     |
+| CSR            | ✅      | Client hydration        |
+| WebSocket      | ✅      | Via realtime plugin     |
+| Server Actions | ✅      | POST handler            |
+| Cluster Mode   | ✅      | Via PM2 or node:cluster |
 
 ---
 
-### 8. Render Adapter
+## Bun
 
 ```bash
-RUVYXA_ADAPTER=render npm run build
+npm i -D @ruvyxa/adapter-bun
 ```
 
-**render.yaml** (Ruvyxa สร้างให้):
+### Type Definitions
+
+```typescript
+interface BunAdapterOptions {
+  /** Entry point filename. @default 'server.js' */
+  entry?: string
+  /** Output directory. @default 'dist' */
+  outputDir?: string
+}
+
+function bunAdapter(options?: BunAdapterOptions): Adapter
+```
+
+### Configuration
+
+```typescript
+import { bunAdapter } from '@ruvyxa/adapter-bun'
+
+export default config({
+  adapter: bunAdapter(),
+})
+```
+
+### Output Structure
+
+```
+dist/
+├── server.js                  # Single-file Bun server
+└── client/                    # Static assets
+    ├── _entry.js
+    └── assets/
+```
+
+The Bun adapter generates a single-file server that leverages Bun's runtime (built-in transpiler,
+SQLite, faster `fetch`). No `package.json` needed — Bun reads `bun.lock` from the project root.
+
+### Running
+
+```bash
+bun run dist/server.js
+```
+
+### Feature Support
+
+| Feature        | Support | Notes                |
+| -------------- | ------- | -------------------- |
+| SSR            | ✅      | Bun HTTP server      |
+| API Routes     | ✅      | Bun HTTP server      |
+| SSG            | ✅      | Static files served  |
+| ISR            | ✅      | Bun filesystem cache |
+| PPR            | ✅      | Streaming            |
+| CSR            | ✅      | Client hydration     |
+| Bun SQLite     | ✅      | Out of box           |
+| Server Actions | ✅      | POST handler         |
+
+---
+
+## Static Hosting
+
+Any platform serving static files: S3 + CloudFront, GitHub Pages, Surge.sh, Netlify (static mode).
+
+```bash
+npm i -D @ruvyxa/adapter-static
+```
+
+### Type Definitions
+
+```typescript
+interface StaticAdapterOptions {
+  /** Output directory. @default 'dist' */
+  outputDir?: string
+  /** Trailing slash behavior. @default false */
+  trailingSlash?: boolean
+  /** 404 fallback page. @default '404.html' */
+  notFoundPage?: string
+  /** Clean output directory before writing. @default true */
+  clean?: boolean
+}
+
+function staticAdapter(options?: StaticAdapterOptions): Adapter
+```
+
+### Configuration
+
+```typescript
+import { staticAdapter } from '@ruvyxa/adapter-static'
+
+export default config({
+  adapter: staticAdapter({
+    trailingSlash: false,
+    notFoundPage: '404.html',
+  }),
+})
+```
+
+### Output Structure
+
+```
+dist/
+├── index.html              # /
+├── about/
+│   └── index.html          # /about (SSG)
+├── blog/
+│   └── hello-world/
+│       └── index.html      # /blog/hello-world
+├── _redirects              # Netlify-style redirects
+├── 404.html                # Custom 404 page
+├── sitemap.xml             # Auto-generated sitemap
+├── robots.txt              # Auto-generated robots
+├── assets/
+│   ├── images/
+│   │   ├── logo.webp
+│   │   └── logo.png
+│   ├── fonts/
+│   └── styles.css
+└── client/
+    ├── _entry.js
+    └── _shared.js
+```
+
+### Deploy Examples
+
+```bash
+# S3 + CloudFront
+aws s3 sync dist/ s3://my-bucket --delete
+aws cloudfront create-invalidation --distribution-id XYZ --paths "/*"
+
+# GitHub Pages
+npx gh-pages -d dist
+
+# Surge.sh
+surge dist/ my-site.surge.sh
+
+# Netlify (static)
+npx netlify deploy --prod --dir=dist
+```
+
+### Compatibility Requirements
+
+Static mode requires SSG or CSR rendering strategy for every route. Routes using SSR, ISR, or PPR
+are excluded from output with a warning.
+
+```bash
+# Verify route compatibility
+ruvyxa check
+# Shows: "Route /api/users: incompatible with static adapter (type: api)"
+```
+
+---
+
+## AWS (Amplify Hosting)
+
+```bash
+npm i -D @ruvyxa/adapter-aws
+```
+
+### Type Definitions
+
+```typescript
+interface AwsAdapterOptions {
+  /** Amplify app ID. */
+  appId?: string
+  /** AWS region. @default 'us-east-1' */
+  region?: string
+  /** Package version for Lambda. @default '1.0.0' */
+  version?: string
+}
+
+function awsAdapter(options?: AwsAdapterOptions): Adapter
+```
+
+### Output Structure
+
+```
+.amplify/
+├── amplify.yml                # Amplify build spec
+├── dist/                      # Static assets
+└── functions/
+    └── ruvyxa-server/
+        ├── index.mjs
+        ├── package.json
+        └── node_modules/
+```
+
+### Feature Support
+
+| Feature | Support | Notes             |
+| ------- | ------- | ----------------- |
+| SSR     | ✅      | Lambda@Edge       |
+| API     | ✅      | Lambda function   |
+| SSG     | ✅      | CloudFront static |
+| CSR     | ✅      | Client hydration  |
+| ISR     | 🔜      | Lambda + CF cache |
+
+---
+
+## Firebase
+
+```bash
+npm i -D @ruvyxa/adapter-firebase
+```
+
+### Type Definitions
+
+```typescript
+interface FirebaseAdapterOptions {
+  /** Cloud Function name. @default 'ruvyxa' */
+  functionName?: string
+  /** GCP region. @default 'us-central1' */
+  region?: string
+  /** Memory allocation. @default '512Mi' */
+  memory?: string
+  /** Min instances for cold-start mitigation. @default 0 */
+  minInstances?: number
+  /** Max instances. @default 100 */
+  maxInstances?: number
+}
+
+function firebaseAdapter(options?: FirebaseAdapterOptions): Adapter
+```
+
+### Output Structure
+
+```
+.firebase/
+├── firebase.json              # Firebase Hosting config
+├── .firebaserc                # Project alias
+├── dist/                      # Static assets + SSG
+└── functions/
+    ├── package.json
+    ├── index.js               # Cloud Function entry
+    └── node_modules/
+```
+
+### firebase.json
+
+```json
+{
+  "hosting": {
+    "public": "dist",
+    "ignore": ["firebase.json", "**/.*"],
+    "rewrites": [{ "source": "**", "function": "ruvyxa" }]
+  },
+  "functions": {
+    "source": "functions"
+  }
+}
+```
+
+### Feature Support
+
+| Feature | Support | Notes            |
+| ------- | ------- | ---------------- |
+| SSR     | ✅      | Cloud Function   |
+| API     | ✅      | Cloud Function   |
+| SSG     | ✅      | Firebase Hosting |
+| CSR     | ✅      | Client hydrate   |
+| ISR     | ❌      | No writeable fs  |
+| PPR     | ❌      | No writeable fs  |
+
+---
+
+## Railway
+
+```bash
+npm i -D @ruvyxa/adapter-railway
+```
+
+### Type Definitions
+
+```typescript
+interface RailwayAdapterOptions {
+  /** Start command override. Defaults to 'node dist/server.js' */
+  startCommand?: string
+  /** Health check path. @default '/api/health' */
+  healthcheckPath?: string
+}
+
+function railwayAdapter(options?: RailwayAdapterOptions): Adapter
+```
+
+### Auto-Detection
+
+Railway sets `RAILWAY_ENVIRONMENT` env var. If found, the Node adapter output is enhanced with
+Railway-specific `railway.json`.
+
+### Output
+
+```
+dist/
+├── server.js
+├── railway.json
+├── client/
+└── assets/
+```
+
+### railway.json
+
+```json
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "nixpacks",
+    "buildCommand": "npx ruvyxa build"
+  },
+  "deploy": {
+    "startCommand": "node dist/server.js",
+    "healthcheckPath": "/api/health",
+    "restartPolicyType": "on-failure"
+  }
+}
+```
+
+---
+
+## Render
+
+```bash
+npm i -D @ruvyxa/adapter-render
+```
+
+### Type Definitions
+
+```typescript
+interface RenderAdapterOptions {
+  /** Service name. Must be lowercase with hyphens. */
+  serviceName?: string
+  /** Start command. Defaults to 'node dist/server.js' */
+  startCommand?: string
+  /** Health check path. @default '/health' */
+  healthCheckPath?: string
+  /** Instance type. @default 'starter' */
+  plan?: 'starter' | 'professional' | 'advanced'
+  /** Region. @default 'oregon' */
+  region?: 'oregon' | 'frankfurt' | 'singapore' | 'virginia'
+}
+
+function renderAdapter(options?: RenderAdapterOptions): Adapter
+```
+
+### Auto-Detection
+
+Render sets `RENDER` env var. If found, the adapter auto-detects and writes `render.yaml`.
+
+### Output
+
+```
+dist/
+├── server.js
+├── render.yaml                # Blueprint
+├── client/
+└── assets/
+```
+
+### render.yaml
 
 ```yaml
 services:
   - type: web
     name: my-app
     env: node
+    buildCommand: npx ruvyxa build
+    startCommand: node dist/server.js
+    healthCheckPath: /health
     plan: starter
-    buildCommand: npm run build
-    startCommand: npm run start
-    healthCheckPath: /api/health
-    autoDeploy: true
+    region: oregon
     envVars:
-      - key: RUVYXA_PUBLIC_API_URL
-        sync: false # set manually
-```
-
-**Config**:
-
-```ts
-export default defineConfig({
-  adapter: 'render',
-  render: {
-    healthPath: '/api/health',
-    autoDeploy: true,
-  },
-})
-```
-
----
-
-### 9. Firebase Adapter
-
-```bash
-RUVYXA_ADAPTER=firebase npm run build
-```
-
-**Output**:
-
-```
-.ruvyxa/
-├── firebase.json              # Firebase config
-├── .firebaserc                # Firebase project
-├── functions/                 # Cloud Functions
-│   ├── index.js
-│   ├── package.json
-│   └── node_modules/
-├── public/                    # Static hosting
-└── build.json
-```
-
-**Config**:
-
-```ts
-export default defineConfig({
-  adapter: 'firebase',
-  firebase: {
-    projectId: 'my-project',
-    region: 'asia-southeast1',
-    memory: '1GB', // '128MB' | '256MB' | '512MB' | '1GB'
-    minInstances: 0,
-    maxInstances: 10,
-  },
-})
-```
-
-**Deploy**:
-
-```bash
-npx firebase deploy --only hosting,functions
-```
-
----
-
-### 10. AWS Adapter
-
-```bash
-RUVYXA_ADAPTER=aws npm run build
-```
-
-**Output**:
-
-```
-.ruvyxa/
-├── cloudformation.yaml        # CloudFormation template
-├── lambda/                    # Lambda functions
-│   ├── server.zip
-│   └── middleware.zip
-├── s3/                        # S3 static assets
-│   ├── index.html
-│   ├── assets/
-│   └── 404.html
-└── build.json
-```
-
-**Config**:
-
-```ts
-export default defineConfig({
-  adapter: 'aws',
-  aws: {
-    region: 'ap-southeast-1',
-    bucket: 'my-app-static',
-    functionName: 'my-app-server',
-    cloudfront: true, // CloudFront distribution
-    certificateArn: 'arn:aws:...', // Custom domain cert
-    memorySize: 1024, // MB
-    timeout: 30, // seconds
-  },
-})
-```
-
-**Deploy**:
-
-```bash
-# ใช้ AWS CDK หรือ CloudFormation
-npx cdk deploy
-
-# หรือ deploy ด้วย aws cli
-aws s3 sync .ruvyxa/s3/ s3://my-app-static/
-aws lambda update-function-code --function-name my-app-server --zip-file fileb://.ruvyxa/lambda/server.zip
+      - key: NODE_ENV
+        value: production
 ```
 
 ---
@@ -1662,6 +1909,20 @@ curl -I https://old-domain.com/about
 
 ---
 
+## Error Codes (RUV1700-1799)
+
+| Code    | Title                       | Source                                | Fix                          |
+| ------- | --------------------------- | ------------------------------------- | ---------------------------- |
+| RUV1700 | Adapter not found           | CLI adapter resolution                | Install adapter package      |
+| RUV1701 | Adapter build failed        | Adapter `build()`                     | Check adapter compatibility  |
+| RUV1702 | Adapter manifest failed     | Build JSON write                      | Check disk/permissions       |
+| RUV2200 | Adapter runner failure      | Invalid adapter output                | Check adapter implementation |
+| RUV2202 | Unsupported adapter target  | Target is incompatible                | Choose a supported target    |
+| RUV2203 | Adapter package unavailable | Package cannot resolve                | Install or correct adapter   |
+| RUV2210 | Strategy unsupported        | Platform cannot render route strategy | Choose a supported strategy  |
+
+---
+
 ## Deployment Decisions ที่ CLI ตรวจได้
 
 Ruvyxa รองรับ built-in adapter names `node`, `bun`, `static`, `vercel`, `netlify`, `cloudflare`,
@@ -1706,3 +1967,10 @@ framework สร้าง output directory ตาม config (minimal starter ใ
 secrets, DNS, traffic splitting และ provider dashboard เป็นความรับผิดชอบของ hosting platform ให้
 document/automate งาน platform ใน repository configuration ของ host และอย่าอธิบายว่า `ruvyxa build`
 deploy ออก external platform เอง เว้นแต่ package ของ adapter ที่เลือกบอกไว้ชัดเจน
+
+## ขั้นตอนถัดไป (Next Steps)
+
+- **[11-configuration.md](./11-configuration.md)** — adapter and adapterOptions config
+- **[12-cli-commands.md](./12-cli-commands.md)** — build and deploy commands
+- **[14-plugins.md](./14-plugins.md)** — sitemap, robots, and deploy plugins
+- **[16-error-handling.md](./16-error-handling.md)** — deploy error codes

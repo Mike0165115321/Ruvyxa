@@ -687,6 +687,21 @@ export default config({
 
 ---
 
+## Under the Hood: ServerConfig for Actions
+
+Key fields in `ServerConfig` that control action behavior:
+
+| Field                      | Type           | Default           | Maximum Limit |
+| -------------------------- | -------------- | ----------------- | ------------- |
+| `action_body_limit_bytes`  | usize          | 1,048,576 (1 MiB) | 100 MiB       |
+| `action_rate_limit_max`    | usize          | 600               | 100,000       |
+| `action_rate_limit_window` | Duration       | 60s               | 3,600s        |
+| `same_origin_actions`      | bool           | true              | —             |
+| `fetch_metadata_actions`   | bool           | true              | —             |
+| `trusted_proxies`          | TrustedProxies | empty             | —             |
+
+---
+
 ## Error Codes
 
 | Code | Condition                    | HTTP Status                |

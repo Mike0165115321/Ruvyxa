@@ -6,1019 +6,479 @@ middleware, plugins, ไปจนถึง deployment adapters
 
 ---
 
-## ภาพรวมระบบ Config
+## สิ่งที่คุณจะได้เรียนรู้ (What You Will Learn)
 
-### โครงสร้างไฟล์
+- โครงสร้างของ config object แบบเต็ม
+- ทุก field พร้อมระบุ TypeScript type, Rust type, ค่าเริ่มต้น (default), การตรวจสอบ (validation)
+  และพฤติกรรม
+- กฎการตรวจสอบความถูกต้องของ Configuration (RUV1600-1602)
+- การจับคู่ field กับโครงสร้าง Rust `ProjectConfig` สำหรับทุก field
+- วิธีปรับแต่งเซิร์ฟเวอร์, build, render, cache, image, security, middleware, และ plugins
+- การคอนฟิก Plugin และ Adapter
+- รหัส Validation error และเงื่อนไขที่ทำให้เกิด
+- ตัวอย่างคอนฟิกขั้นต่ำ (Minimal) และแบบใช้งานจริง (Production)
+
+---
+
+## ฟังก์ชัน Config (The Config Function)
 
 ```ts
 // ruvyxa.config.ts
-import { defineConfig } from 'ruvyxa/config'
+import { config } from 'ruvyxa/config'
 
-export default defineConfig({
-  // ─── Directory ───
-  appDir: 'app',
-  outDir: '.ruvyxa',
-
-  // ─── Server ───
-  server: {
-    host: 'localhost',
-    port: 3000,
-  },
-
-  // ─── Site ───
-  site: {
-    url: 'https://example.com',
-  },
-
-  // ─── Build ───
-  build: {
-    minify: true,
-    sourcemap: false,
-    // ...
-  },
-
-  // ─── Other ───
-  render: { strategy: 'ssr' },
-  cache: { routeManifest: true },
-  debug: { overlay: true },
-  css: { entries: [] },
-  image: { formats: ['webp', 'avif'] },
-  security: { headers: true },
-  middleware: { workers: 1 },
-  plugins: [],
-  adapter: undefined,
-  adapterOptions: {},
+export default config({
+  // ... การตั้งค่าของคุณ
 })
 ```
 
-### `defineConfig()` — Type Safety
+ฟังก์ชัน `config()` ช่วยให้มี autocomplete และตรวจสอบความถูกต้อง (validation)
+ฟิลด์ที่ไม่รู้จักจะเกิด type error และ runtime warning `RUV1200`
+
+### ลำดับการโหลด Config
+
+```
+1. CLI อ่าน --root (ค่าเริ่มต้น: ".")
+2. เรียก load_project_config(root)
+3. ค้นหา find_runtime_script(root, "config-renderer.mjs")
+4. หากไม่พบ: คืนค่า ProjectConfig::default() พร้อมค่า default ต่างๆ
+5. หากพบ: สร้าง process Node/Bun เพื่อรัน config-renderer.mjs
+6. Config renderer ประมวลผล ruvyxa.config.ts, พ่น JSON ออกทาง stdout
+7. ข้อมูลจาก Config renderer ถูกแปลง -> โครงสร้าง ProjectConfig
+8. เรียก validate_paths() บน config ที่ถูกพาร์สแล้ว
+9. การเขียนทับค่ารันไทม์ (Runtime override ผ่าน --runtime flag) หากมี
+10. คำนวณ dependency_hash สำหรับทำ cache invalidation
+```
+
+Config renderer จะถูกรันสองครั้งหากรันไทม์ที่ถูกเลือกแตกต่างไปจาก bootstrap runtime
+
+---
+
+## รูปแบบ Config แบบเต็ม (Full Config Type - TypeScript)
 
 ```ts
-// ruzyxa/config — type definitions
-import { defineConfig } from 'ruvyxa/config'
-
-// TypeScript signature
-function defineConfig(config: RuvyxaConfig): RuvyxaConfig
-
-// Full config type
-interface RuvyxaConfig {
+type RuvyxaConfig = {
   appDir?: string
   outDir?: string
-  server?: ServerConfig
-  site?: SiteConfig
-  build?: BuildConfig
-  render?: RenderConfig
-  cache?: CacheConfig
-  debug?: DebugConfig
-  css?: CSSConfig
-  image?: ImageConfig
-  security?: SecurityConfig
-  middleware?: MiddlewareConfig
-  plugins?: PluginConfig[]
-  adapter?: AdapterType
-  adapterOptions?: Record<string, unknown>
+  runtime?: 'node' | 'bun' | 'edge' | 'static'
+  server?: {
+    host?: string
+    port?: number
+  }
+  site?: {
+    sitemap?: {
+      defaults?: {
+        changefreq?: 'always' | 'hourly' | 'daily' | 'weekly' | 'monthly' | 'yearly' | 'never'
+        priority?: number
+      }
+      entries?: Array<{
+        path: string
+        changefreq?: string
+        priority?: number
+        lastmod?: string
+        images?: string[]
+      }>
+    }
+  }
+  render?: {
+    strategy?: 'ssr' | 'ssg' | 'isr' | 'csr' | 'ppr'
+    revalidate?: number
+  }
+  build?: {
+    minify?: boolean
+    map?: boolean
+    treeShake?: boolean
+    split?: 'route' | 'single' | 'manual'
+    workers?: number
+    jsx?: 'automatic' | 'classic'
+    target?: 'es2018' | 'es2019' | 'es2020' | 'es2022' | 'esnext'
+    manifest?: boolean
+    warm?: boolean
+    prerenderCache?: boolean
+  }
+  cache?: {
+    routes?: boolean
+    css?: boolean
+    dir?: string
+  }
+  debug?: {
+    overlay?: boolean
+    traces?: boolean
+  }
+  css?: {
+    entries?: string[]
+  }
+  image?: {
+    optimize?: boolean
+    quality?: number
+    lossless?: boolean
+    keepOriginal?: boolean
+    variantWidths?: number[]
+    workers?: number
+  }
+  security?: {
+    actionLimit?: number
+    apiLimit?: number
+    pluginLimit?: number
+    actionRateLimit?: { max?: number; window?: number }
+    sameOrigin?: boolean
+    fetchMeta?: boolean
+    trustedProxyIps?: string[]
+    headers?: boolean
+  }
+  middleware?: {
+    workers?: number
+    timeoutMs?: number
+  }
+  plugins?: Array<{
+    name: string
+    options?: any
+    head?: Array<{ tag: string; attrs?: Record<string, string>; content?: string }>
+  }>
+  adapter?: string
+  adapterOptions?: Record<string, any>
 }
 ```
 
 ---
 
-## ทุก Config Field — Full Reference
+## โครงสร้าง Rust ProjectConfig Struct Mapping
 
----
+โครงสร้าง Rust แบบเต็มอยู่ที่ `crates/ruvyxa_cli/src/main.rs`:
 
-### `appDir`
-
-| Field    | TypeScript Type | Rust Type | Default | Required | Validation                                          |
-| -------- | --------------- | --------- | ------- | -------- | --------------------------------------------------- |
-| `appDir` | `string`        | `String`  | `'app'` | ❌       | ต้องเป็น relative path, ห้ามเป็น absolute หรือ `..` |
-
-```ts
-appDir: 'app' // default — ใช้โฟลเดอร์ app/ ที่ราก
-appDir: 'src/app' // ถ้าแยก src directory
-appDir: 'src/pages' // custom directory
-```
-
-**Validation Rules:**
-
-| Condition                                 | Error Code                  |
-| ----------------------------------------- | --------------------------- |
-| `appDir` ว่าง (`''`)                      | RUV1601                     |
-| `appDir` เป็น absolute (`/home/user/app`) | RUV1601                     |
-| `appDir` มี `..` (`../app`)               | RUV1601                     |
-| `appDir` ชี้ไปที่ไม่มีอยู่                | Warning (สร้างให้อัตโนมัติ) |
-
----
-
-### `outDir`
-
-| Field    | TypeScript Type | Rust Type | Default     | Required | Validation                                |
-| -------- | --------------- | --------- | ----------- | -------- | ----------------------------------------- |
-| `outDir` | `string`        | `String`  | `'.ruvyxa'` | ❌       | ต้องเป็น relative path, ห้ามเป็น absolute |
-
-```ts
-outDir: '.ruvyxa' // default
-outDir: 'dist' // output ไป dist/
-outDir: 'build' // output ไป build/
-```
-
-**Warning:** โฟลเดอร์ `outDir` ถูกลบตอน `ruvyxa clean` — ห้ามเก็บไฟล์สำคัญไว้ที่นี่
-
-**Validation Rules:**
-
-| Condition              | Error Code |
-| ---------------------- | ---------- |
-| `outDir` ว่าง          | RUV1601    |
-| `outDir` เป็น absolute | RUV1601    |
-
----
-
-### `server`
-
-```ts
-interface ServerConfig {
-  host?: string // default: 'localhost'
-  port?: number // default: 3000
+```rust
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProjectConfig {
+    app_dir: Option<String>,
+    out_dir: Option<String>,
+    runtime: Option<BuildTarget>,
+    #[serde(default, rename = "render")]
+    rendering: RenderingConfigOptions,
+    #[serde(default)]
+    server: ServerConfigOptions,
+    #[serde(default)]
+    css: CssConfigOptions,
+    #[serde(default)]
+    build: BuildConfigOptions,
+    #[serde(default)]
+    debug: DebugConfigOptions,
+    #[serde(default, rename = "image")]
+    images: ImageOptimizationOptions,
+    #[serde(default)]
+    security: SecurityConfigOptions,
+    #[serde(default)]
+    cache: CacheConfigOptions,
+    #[serde(default)]
+    site: SiteConfigOptions,
+    #[serde(default)]
+    middleware: MiddlewareConfig,
+    #[serde(default)]
+    plugins: Vec<BuildPluginConfig>,
+    #[serde(rename = "adapter")]
+    adapter: Option<serde_json::Value>,
+    #[serde(rename = "adapterOptions")]
+    adapter_options: Option<serde_json::Value>,
+    // ข้ามฟิลด์สำหรับใช้งานภายใน
 }
 ```
 
-| Field  | TypeScript Type | Rust Type | Default       | Required | Validation                                       |
-| ------ | --------------- | --------- | ------------- | -------- | ------------------------------------------------ |
-| `host` | `string`        | `String`  | `'localhost'` | ❌       | valid hostname/IP                                |
-| `port` | `number`        | `u16`     | `3000`        | ❌       | 1024-65535 (privileged ports ต้องใช้ sudo/admin) |
+จุดสังเกต: `deny_unknown_fields` หมายความว่าฟิลด์ใดๆ ที่ไม่มีในโครงสร้างนี้จะทำให้เกิด error ของ
+deserialization ในตอนที่ทำการโหลด config
+
+---
+
+## ข้อมูลฟิลด์พื้นฐาน (Common Fields)
+
+### appDir
+
+```ts
+appDir: 'app' // ค่าเริ่มต้น
+appDir: 'src/app' // กำหนดเอง
+```
+
+| Property       | Value                                                              |
+| -------------- | ------------------------------------------------------------------ |
+| TS type        | `string`                                                           |
+| Rust field     | `app_dir: Option<String>`                                          |
+| Rust default   | `None` -> แปลงเป็น `"app"` โดย `app_dir()`                         |
+| Validation     | ต้องเป็น relative path (ไม่มี `/` นำหน้า, ไม่มี `..`), และห้ามว่าง |
+| Error on empty | `RUV1601: config field 'appDir' must not be empty`                 |
+
+### outDir
+
+```ts
+outDir: '.ruvyxa' // ค่าเริ่มต้น
+outDir: 'dist' // กำหนดเอง
+```
+
+| Property     | Value                                                           |
+| ------------ | --------------------------------------------------------------- |
+| TS type      | `string`                                                        |
+| Rust field   | `out_dir: Option<String>`                                       |
+| Rust default | `None` -> แปลงเป็น `".ruvyxa"` โดย `out_dir()`                  |
+| Validation   | ต้องเป็น relative path และต้องไม่ชี้ไปยังไฟล์ที่อยู่ภายนอก root |
+
+### runtime
+
+```ts
+runtime: 'node' // กำหนดรันไทม์แบบเจาะจง
+```
+
+| Property   | Value                                                   |
+| ---------- | ------------------------------------------------------- |
+| TS type    | `'node'                                                 | 'bun' | 'edge' | 'static'` |
+| Rust field | `runtime: Option<BuildTarget>`                          |
+| Default    | ตรวจจับอัตโนมัติตาม Environment (เช็คจาก `bun`, `node`) |
+| Override   | ธงคำสั่ง `--runtime` ใน CLI จะทำการทับค่าฟิลด์นี้       |
+
+---
+
+## Server Configuration
 
 ```ts
 server: {
-  host: '0.0.0.0',      // เปิดให้เข้าถึงจากเครือข่าย (production)
-  port: 8080,            // ใช้ port 8080
+  host: '0.0.0.0', // เปิดรับจากภายนอก
+  port: 8080       // กำหนดพอร์ต
 }
 ```
 
-**Special Values:**
-
-| host          | ความหมาย                              |
-| ------------- | ------------------------------------- |
-| `'localhost'` | localhost เท่านั้น (ปลอดภัย, default) |
-| `'0.0.0.0'`   | ทุก network interface (production)    |
-| `'127.0.0.1'` | loopback เท่านั้น                     |
-| `'::'`        | IPv6 ทุก interface                    |
-
-**Validation Rules:**
-
-| Condition                     | Error Code                |
-| ----------------------------- | ------------------------- |
-| `port` < 1024 (non-admin)     | Warning — อาจต้องใช้ sudo |
-| `port` > 65535                | RUV1601                   |
-| `port` = 0                    | RUV1601                   |
-| `host` ไม่ใช่ IP/domain valid | RUV1602                   |
+| Field  | TS Type  | Default     | Validation | Error   | Behavior                                                            |
+| ------ | -------- | ----------- | ---------- | ------- | ------------------------------------------------------------------- |
+| `host` | `string` | `localhost` | Valid IP   | RUV1602 | bind host                                                           |
+| `port` | `number` | `3000`      | 1024-65535 | RUV1602 | ถ้าใช้งานอยู่ CLI จะแจ้งเตือน RUV1201 เว้นแต่จะระบุ port = 0 (สุ่ม) |
 
 ---
 
-### `site`
-
-```ts
-interface SiteConfig {
-  url?: string // auto-detect
-  sitemap?: boolean | SitemapConfig // default: true
-  robots?: boolean | RobotsConfig // default: true
-}
-
-interface SitemapConfig {
-  exclude?: string[] // glob patterns
-  additionalPaths?: string[]
-  defaults?: {
-    lastModified?: string // ISO 8601
-    changeFrequency?: 'always' | 'hourly' | 'daily' | 'weekly' | 'monthly' | 'yearly' | 'never'
-    priority?: number // 0.0 - 1.0
-  }
-}
-
-interface RobotsConfig {
-  rules?: RobotRule[]
-}
-
-interface RobotRule {
-  userAgent: string
-  allow?: string
-  disallow?: string
-}
-```
-
-| Field     | TypeScript Type            | Rust Type       | Default     | Required | Validation                |
-| --------- | -------------------------- | --------------- | ----------- | -------- | ------------------------- |
-| `url`     | `string`                   | `String`        | auto-detect | ❌       | ต้องเป็น origin ที่ valid |
-| `sitemap` | `boolean \| SitemapConfig` | `SitemapConfig` | `true`      | ❌       | -                         |
-| `robots`  | `boolean \| RobotsConfig`  | `RobotsConfig`  | `true`      | ❌       | -                         |
+## Site & SEO
 
 ```ts
 site: {
-  url: 'https://ruvyxa.dev',
   sitemap: {
-    exclude: ['/draft/*', '/admin/*'],
-    additionalPaths: ['/custom-landing', '/promo/summer'],
-    defaults: {
-      lastModified: '2026-07-29',
-      changeFrequency: 'weekly',
-      priority: 0.7,
-    },
-  },
-  robots: {
-    rules: [
-      { userAgent: '*', allow: '/' },
-      { userAgent: 'GPTBot', disallow: '/' },
-      { userAgent: 'Googlebot', allow: '/public', disallow: '/private' },
-    ],
-  },
+    defaults: { priority: 0.8 },
+    entries: [ { path: '/about', priority: 1.0 } ]
+  }
 }
 ```
 
-**Auto-detect URL Source Priority:**
-
-| Priority    | Source                          | Example                |
-| ----------- | ------------------------------- | ---------------------- |
-| 1 (highest) | `RUVYXA_SITE_URL` env           | `https://myapp.com`    |
-| 2           | `VERCEL_PROJECT_PRODUCTION_URL` | `myapp.vercel.app`     |
-| 3           | `VERCEL_URL`                    | `myapp-git.vercel.app` |
-| 4           | `NETLIFY` + `URL`               | `myapp.netlify.app`    |
-| 5           | `CF_PAGES_URL`                  | `myapp.pages.dev`      |
-| 6           | `RENDER_EXTERNAL_URL`           | `myapp.onrender.com`   |
-| 7           | `RAILWAY_STATIC_URL`            | `myapp.up.railway.app` |
-
-**Validation Rules:**
-
-| Condition                                             | Error Code              |
-| ----------------------------------------------------- | ----------------------- |
-| `url` ไม่ใช่ origin ที่ถูกต้อง                        | Config Parse Error      |
-| `url` มี path (`https://x.com/path`)                  | Warning (ไม่ควรมี path) |
-| `sitemap.exclude` glob pattern ผิด                    | RUV1602                 |
-| `robots.rules` userAgent ว่าง                         | RUV1602                 |
-| `sitemap.defaults.priority` < 0.0 หรือ > 1.0          | RUV1602                 |
-| `sitemap.defaults.changeFrequency` ไม่ใช่ค่าที่รองรับ | RUV1602                 |
+ใช้ร่วมกับปลั๊กอิน `sitemap` และปลั๊กอิน `robots` เพื่อรวบรวม SEO metadata ตอนที่ Build เสร็จ
+ค่าที่ถูกกำหนดใน `entries` จะไปทับค่า `defaults`
 
 ---
 
-### `build`
+## Render Configuration
 
 ```ts
-interface BuildConfig {
-  minify?: boolean // default: true
-  sourcemap?: boolean // default: false
-  treeShaking?: boolean // default: true
-  splitStrategy?: 'auto' | 'route' | 'vendor' | 'all' // default: 'auto'
-  parallelism?: number // default: CPU cores
-  jsxRuntime?: 'automatic' | 'classic' // default: 'automatic'
-  esTarget?: 'es2020' | 'es2021' | 'es2022' | 'esnext' // default: 'es2022'
-  emitChunkManifest?: boolean // default: false
-  prebundleDependencies?: boolean // default: true
-  prerenderCache?: boolean // default: true
+render: {
+  strategy: 'ssr',
+  revalidate: 60
 }
 ```
 
-| Field                   | TypeScript Type                                | Rust Type       | Default       | Validation           |
-| ----------------------- | ---------------------------------------------- | --------------- | ------------- | -------------------- |
-| `minify`                | `boolean`                                      | `bool`          | `true`        | -                    |
-| `sourcemap`             | `boolean`                                      | `bool`          | `false`       | -                    |
-| `treeShaking`           | `boolean`                                      | `bool`          | `true`        | -                    |
-| `splitStrategy`         | `'auto' \| 'route' \| 'vendor' \| 'all'`       | `SplitStrategy` | `'auto'`      | ต้องเป็นค่าที่รองรับ |
-| `parallelism`           | `number`                                       | `u32`           | CPU cores     | 1-64                 |
-| `jsxRuntime`            | `'automatic' \| 'classic'`                     | `JSXRuntime`    | `'automatic'` | -                    |
-| `esTarget`              | `'es2020' \| 'es2021' \| 'es2022' \| 'esnext'` | `ESTarget`      | `'es2022'`    | -                    |
-| `emitChunkManifest`     | `boolean`                                      | `bool`          | `false`       | -                    |
-| `prebundleDependencies` | `boolean`                                      | `bool`          | `true`        | -                    |
-| `prerenderCache`        | `boolean`                                      | `bool`          | `true`        | -                    |
+| Field        | TS Type  | Default | Validation      | Behavior                             |
+| ------------ | -------- | ------- | --------------- | ------------------------------------ |
+| `strategy`   | `enum`   | `ssr`   | ssr,ssg,isr,... | รูปแบบการเรนเดอร์มาตรฐานของทุก Route |
+| `revalidate` | `number` | `60`    | ≥ 1             | เวลาหน่วยวินาทีสำหรับ ISR            |
+
+---
+
+## Build Configuration
 
 ```ts
 build: {
   minify: true,
-  sourcemap: false,           // เปิดเฉพาะ dev ถ้าต้องการ debug
-  treeShaking: true,          // ตัด dead code
-  splitStrategy: 'route',     // split ตาม route
-  parallelism: 4,             // 4 workers
-  jsxRuntime: 'automatic',    // React 18+ JSX transform
-  esTarget: 'es2022',         // target browser ปี 2022+
-  emitChunkManifest: true,    // เขียน manifest.json
-  prebundleDependencies: true, // prebundle node_modules
-  prerenderCache: true,       // cache output ที่ prerender
+  split: 'route',
+  workers: 4
 }
 ```
 
-**Split Strategy Detail:**
+ควบคุม `oxc` compiler ภายใต้การทำงาน:
 
-| Strategy   | การทำงาน                        | เหมาะกับ        |
-| ---------- | ------------------------------- | --------------- |
-| `'auto'`   | Ruvyxa ตัดสินใจเอง              | ทั่วไป          |
-| `'route'`  | แยก chunk ตาม route             | แอปหลายหน้า     |
-| `'vendor'` | แยก vendor/library ไว้ต่างหาก   | Production app  |
-| `'all'`    | แต่ละ component เป็น chunk เล็ก | Micro-frontends |
-
-**Validation Rules:**
-
-| Condition                 | Error                       |
-| ------------------------- | --------------------------- |
-| `parallelism` < 1         | RUV1601                     |
-| `parallelism` > 64        | RUV1602 (แนะนำ ≤ CPU cores) |
-| `esTarget` ไม่รองรับ      | Config parse error          |
-| `jsxRuntime` ไม่รองรับ    | Config parse error          |
-| `splitStrategy` ไม่รองรับ | Config parse error          |
+| Field       | Default  | Description                                         |
+| ----------- | -------- | --------------------------------------------------- |
+| `minify`    | `true`   | ย่อขนาดโค้ด (Minification) ผ่าน Oxc AST             |
+| `treeShake` | `true`   | ลบโค้ดที่ไม่ได้ถูกใช้ (Dead code elimination)       |
+| `split`     | `route`  | กลยุทธ์การแบ่ง Bundle ('route', 'single', 'manual') |
+| `workers`   | CPUs     | จำนวนเทรดของ Oxc                                    |
+| `target`    | `es2022` | JavaScript language target                          |
 
 ---
 
-### `render`
-
-```ts
-interface RenderConfig {
-  strategy?: RenderStrategy // default: 'ssr'
-  revalidate?: number // default: undefined (ไม่ใช้ ISR)
-}
-
-type RenderStrategy = 'ssr' | 'ssg' | 'isr' | 'ppr' | 'csr'
-```
-
-| Field        | TypeScript Type  | Rust Type        | Default     | Validation           |
-| ------------ | ---------------- | ---------------- | ----------- | -------------------- |
-| `strategy`   | `RenderStrategy` | `RenderStrategy` | `'ssr'`     | ต้องเป็นค่าที่รองรับ |
-| `revalidate` | `number`         | `Option<u32>`    | `undefined` | ≥ 1 วินาที           |
-
-```ts
-render: {
-  strategy: 'ssr',       // default
-  revalidate: 60,        // ISR: revalidate ทุก 60 วินาที
-}
-```
-
-**Render Strategies Detail:**
-
-| Strategy | เต็มชื่อ                        | การทำงาน                     | เหมาะกับ               |
-| -------- | ------------------------------- | ---------------------------- | ---------------------- |
-| `'ssr'`  | Server-Side Rendering           | เรนเดอร์ทุก request          | ต้องข้อมูลสดตลอด       |
-| `'ssg'`  | Static Site Generation          | เรนเดอร์ตอน build            | content ไม่เปลี่ยนบ่อย |
-| `'isr'`  | Incremental Static Regeneration | SSG แต่ revalidate ตามเวลา   | content friendly       |
-| `'ppr'`  | Partial Prerendering            | static shell + dynamic slots | speed + dynamic        |
-| `'csr'`  | Client-Side Rendering           | client เรนเดอร์เอง           | dashboard, SPA         |
-
-**Override ต่อ route:** แต่ละ `page.tsx` สามารถ export `render` strategy ของตัวเอง:
-
-```tsx
-// app/blog/[slug]/page.tsx — override strategy
-export const render = {
-  strategy: 'isr' as const,
-  revalidate: 3600, // 1 ชั่วโมง
-}
-```
-
-**Validation Rules:**
-
-| Condition                     | Error                     |
-| ----------------------------- | ------------------------- |
-| `strategy` ไม่ใช่ค่าที่รองรับ | Config parse error        |
-| `revalidate` < 1              | RUV1601                   |
-| `revalidate` ใช้กับ `'csr'`   | Warning (CSR ไม่มี cache) |
-
----
-
-### `cache`
-
-```ts
-interface CacheConfig {
-  routeManifest?: boolean // default: true
-  css?: boolean // default: true
-  buildDir?: string // default: '.ruvyxa/cache'
-  image?: boolean // default: true
-  mdx?: boolean // default: true
-}
-```
-
-| Field           | TypeScript Type | Rust Type | Default           | Validation    |
-| --------------- | --------------- | --------- | ----------------- | ------------- |
-| `routeManifest` | `boolean`       | `bool`    | `true`            | -             |
-| `css`           | `boolean`       | `bool`    | `true`            | -             |
-| `buildDir`      | `string`        | `String`  | `'.ruvyxa/cache'` | relative path |
-| `image`         | `boolean`       | `bool`    | `true`            | -             |
-| `mdx`           | `boolean`       | `bool`    | `true`            | -             |
+## Cache Configuration
 
 ```ts
 cache: {
-  routeManifest: true,
+  routes: true,
   css: true,
-  buildDir: '.ruvyxa/cache',
-  image: true,
-  mdx: true,            // 512-entry LRU cache สำหรับ MDX
+  dir: '.ruvyxa/cache'
 }
 ```
 
-**Env Var Override:**
-
-```bash
-# RUVYXA_BUILD_CACHE_DIR มี priority สูงกว่า config field
-RUVYXA_BUILD_CACHE_DIR=/tmp/ruvyxa-cache npm run build
-```
-
-**Validation Rules:**
-
-| Condition           | Error   |
-| ------------------- | ------- |
-| `buildDir` absolute | RUV1601 |
-| `buildDir` ว่าง     | RUV1601 |
+- `routes`: บันทึกผลลัพธ์ของ Oxc AST และการแปลงรูปแบบ JSX ของแต่ละไฟล์ เพื่อให้รีโหลดขณะ HMR
+  ได้เร็วขึ้น
+- `css`: เก็บผลลัพธ์ของ PostCSS เพื่อไม่ต้องประมวลผล Tailwind/Autoprefixer
+  ใหม่ถ้าไฟล์นั้นไม่ได้ถูกแก้
+- `dir`: ปรับแต่งสถานที่เก็บแคช
 
 ---
 
-### `debug`
-
-```ts
-interface DebugConfig {
-  overlay?: boolean // default: true
-  traces?: boolean // default: false
-  sourceMap?: boolean // default: auto (dev = true, prod = false)
-  profiler?: boolean // default: false
-}
-```
-
-| Field       | TypeScript Type | Rust Type | Default | Validation |
-| ----------- | --------------- | --------- | ------- | ---------- |
-| `overlay`   | `boolean`       | `bool`    | `true`  | -          |
-| `traces`    | `boolean`       | `bool`    | `false` | -          |
-| `sourceMap` | `boolean`       | `bool`    | auto    | -          |
-| `profiler`  | `boolean`       | `bool`    | `false` | -          |
+## Debug Configuration
 
 ```ts
 debug: {
-  overlay: true,        // แสดง error ในเบราว์เซอร์
-  traces: false,        // ปิด debug traces ใน production
-  sourceMap: true,      // เปิด source maps (dev)
-  profiler: false,      // ปิด profiler
+  overlay: true, // แสดง popup แจ้งเตือน error ใน browser
+  traces: false  // เปิดการ log ประสิทธิภาพระดับ Oxc/Rust
 }
-```
-
-**Debug Features:**
-
-| Feature                  | `overlay: true` | `traces: true` |
-| ------------------------ | --------------- | -------------- |
-| Error overlay in browser | ✅              | -              |
-| Console stack traces     | -               | ✅             |
-| Route resolution log     | -               | ✅             |
-| SSR timing               | -               | ✅             |
-| Build performance        | -               | ✅             |
-
-**Env Var Override:**
-
-```bash
-# เปิด traces เฉพาะตอน debug
-RUVYXA_DEBUG=1 npm run dev
-# เปิดเฉพาะบาง module
-RUVYXA_DEBUG=route,image npm run dev
-# ปิดทั้งหมด
-RUVYXA_DEBUG=0 npm run dev
 ```
 
 ---
 
-### `css`
-
-```ts
-interface CSSConfig {
-  entries?: string[] // default: []
-  modules?: boolean // default: true (CSS Modules)
-  postcss?: boolean // default: true
-  lightningcss?: boolean // default: true (ใช้ Lightning CSS)
-  tailwind?: boolean // default: auto-detected
-}
-```
-
-| Field          | TypeScript Type | Rust Type     | Default | Validation                    |
-| -------------- | --------------- | ------------- | ------- | ----------------------------- |
-| `entries`      | `string[]`      | `Vec<String>` | `[]`    | relative paths, ห้าม absolute |
-| `modules`      | `boolean`       | `bool`        | `true`  | -                             |
-| `postcss`      | `boolean`       | `bool`        | `true`  | -                             |
-| `lightningcss` | `boolean`       | `bool`        | `true`  | -                             |
-| `tailwind`     | `boolean`       | `bool`        | auto    | auto-detect จาก dependencies  |
+## CSS Configuration
 
 ```ts
 css: {
-  entries: [
-    'src/styles/global.css',
-    'src/styles/fonts.css',
-    'node_modules/highlight.js/styles/github-dark.css',
-  ],
-  modules: true,        // เปิด CSS Modules (*.module.css)
-  postcss: true,        // ใช้ PostCSS (autoprefixer)
-  lightningcss: false,  // ใช้ traditional CSS processor
+  entries: ['src/styles/global.css', 'src/styles/fonts.scss']
 }
 ```
 
-**`entries` Behavior:** ไฟล์ใน `entries` จะถูก inject ในทุกหน้าโดยอัตโนมัติ — ไม่ต้อง import ใน
-layout
-
-**Validation Rules:**
-
-| Condition                      | Error                      |
-| ------------------------------ | -------------------------- |
-| `entries[]` เป็น absolute path | RUV1601                    |
-| `entries[]` file ไม่มีอยู่     | Warning (ignore ถ้าไม่เจอ) |
-| `entries[]` path มี `..`       | RUV1602                    |
+ชี้ตำแหน่งไฟล์ CSS เพิ่มเติมที่ไม่ถูกลิงก์ด้วย Layout หรือไม่ได้ประกาศใน `page.tsx`
+ส่วนที่ถูกประกาศไว้ใน `entries` จะถูกเพิ่มเข้าไปที่หัวเอกสารอัตโนมัติ
 
 ---
 
-### `image`
-
-```ts
-interface ImageConfig {
-  formats?: ('webp' | 'avif')[] // default: ['webp', 'avif']
-  sizes?: number[] // default: [640, 1280, 1920]
-  quality?: number // default: 80 (1-100)
-  avifQuality?: number // default: 65 (1-100)
-  lazy?: boolean // default: true
-  placeholder?: 'blur' | 'empty' // default: 'empty'
-  encoder?: {
-    jpeg?: 'mozjpeg' | 'guetzli' | 'libjpeg' // default: 'mozjpeg'
-    png?: 'oxipng' | 'pngquant' | 'libpng' // default: 'oxipng'
-    jpegQuality?: number // default: 80
-    pngQuality?: number // default: 85
-    pngCompressionLevel?: number // default: 3
-  }
-  cache?: {
-    enabled?: boolean // default: true
-    directory?: string // default: '.ruvyxa/cache/images'
-  }
-}
-```
-
-| Field                         | TypeScript Type                       | Rust Type          | Default                  | Validation               |
-| ----------------------------- | ------------------------------------- | ------------------ | ------------------------ | ------------------------ |
-| `formats`                     | `('webp' \| 'avif')[]`                | `Vec<ImageFormat>` | `['webp', 'avif']`       | ต้องมี ≥ 1               |
-| `sizes`                       | `number[]`                            | `Vec<u32>`         | `[640, 1280, 1920]`      | แต่ละค่า > 0 และ < 10000 |
-| `quality`                     | `number`                              | `u8`               | `80`                     | 1-100                    |
-| `avifQuality`                 | `number`                              | `u8`               | `65`                     | 1-100                    |
-| `lazy`                        | `boolean`                             | `bool`             | `true`                   | -                        |
-| `placeholder`                 | `'blur' \| 'empty'`                   | `PlaceholderMode`  | `'empty'`                | -                        |
-| `encoder.jpeg`                | `'mozjpeg' \| 'guetzli' \| 'libjpeg'` | `JpegEncoder`      | `'mozjpeg'`              | -                        |
-| `encoder.png`                 | `'oxipng' \| 'pngquant' \| 'libpng'`  | `PngEncoder`       | `'oxipng'`               | -                        |
-| `encoder.jpegQuality`         | `number`                              | `u8`               | `80`                     | 1-100                    |
-| `encoder.pngQuality`          | `number`                              | `u8`               | `85`                     | 1-100 (pngquant)         |
-| `encoder.pngCompressionLevel` | `number`                              | `u8`               | `3`                      | 0-6 (oxipng)             |
-| `cache.enabled`               | `boolean`                             | `bool`             | `true`                   | -                        |
-| `cache.directory`             | `string`                              | `String`           | `'.ruvyxa/cache/images'` | relative                 |
+## Image Configuration
 
 ```ts
 image: {
-  formats: ['webp', 'avif'],
-  sizes: [320, 640, 960, 1280, 1920, 2560],
-  quality: 85,
-  avifQuality: 70,
-  lazy: true,
-  placeholder: 'blur',
-  encoder: {
-    jpeg: 'mozjpeg',
-    png: 'oxipng',
-    jpegQuality: 80,
-    pngCompressionLevel: 4,
-  },
-  cache: {
-    enabled: true,
-    directory: '.ruvyxa/cache/images',
-  },
+  optimize: true,
+  quality: 82,
+  variantWidths: [640, 750, 1080, 1920]
 }
 ```
 
-**Validation Rules:**
+ควบคุมกระบวนการ Build-time Image Optimization ผ่านไลบรารี Sharp:
 
-| Condition                                  | Error              |
-| ------------------------------------------ | ------------------ |
-| `quality` < 1 หรือ > 100                   | RUV1601            |
-| `avifQuality` < 1 หรือ > 100               | RUV1601            |
-| `sizes[]` < 1 หรือ > 10000                 | RUV1601            |
-| `formats` empty array                      | RUV1601            |
-| `encoder.pngCompressionLevel` < 0 หรือ > 6 | RUV1601            |
-| `encoder.jpeg` ไม่ใช่ค่าที่รองรับ          | Config parse error |
-| `encoder.png` ไม่ใช่ค่าที่รองรับ           | Config parse error |
+- ถ้ากำหนด `optimize: false` คอมโพเนนต์ `<Image>` จะถูกแปลงกลับเป็น `<img loading="lazy">` ธรรมดา
+- ภาพจะถูกปรับขนาดตามอาร์เรย์ `variantWidths` สำหรับทำแอตทริบิวต์ `srcset`
 
 ---
 
-### `security`
-
-```ts
-interface SecurityConfig {
-  actionLimit?: number // default: 1_048_576 (1MB)
-  apiLimit?: number // default: 5_242_880 (5MB)
-  pluginLimit?: number // default: 5_242_880 (5MB)
-  actionRateLimit?: {
-    max?: number // default: undefined (ไม่จำกัด)
-    window?: number // default: undefined (วินาที)
-    key?: 'ip' | 'user' | 'route' // default: 'ip'
-  }
-  sameOrigin?: boolean // default: true
-  fetchMeta?: boolean // default: false
-  trustedProxyIps?: string[] // default: []
-  headers?: boolean // default: true
-  csrf?: boolean // default: true
-  xssProtection?: boolean // default: true
-  maxBodySize?: number // default: 10_485_760 (10MB)
-}
-```
-
-| Field                    | TypeScript Type             | Rust Type      | Default      | Validation   |
-| ------------------------ | --------------------------- | -------------- | ------------ | ------------ |
-| `actionLimit`            | `number`                    | `u64`          | `1_048_576`  | ≥ 1, ≤ 10MB  |
-| `apiLimit`               | `number`                    | `u64`          | `5_242_880`  | ≥ 1, ≤ 50MB  |
-| `pluginLimit`            | `number`                    | `u64`          | `5_242_880`  | ≥ 1, ≤ 50MB  |
-| `actionRateLimit.max`    | `number`                    | `u64`          | undefined    | ≥ 1          |
-| `actionRateLimit.window` | `number`                    | `u64`          | undefined    | ≥ 1 (วินาที) |
-| `actionRateLimit.key`    | `'ip' \| 'user' \| 'route'` | `RateLimitKey` | `'ip'`       | -            |
-| `sameOrigin`             | `boolean`                   | `bool`         | `true`       | -            |
-| `fetchMeta`              | `boolean`                   | `bool`         | `false`      | -            |
-| `trustedProxyIps`        | `string[]`                  | `Vec<String>`  | `[]`         | IP หรือ CIDR |
-| `headers`                | `boolean`                   | `bool`         | `true`       | -            |
-| `csrf`                   | `boolean`                   | `bool`         | `true`       | -            |
-| `xssProtection`          | `boolean`                   | `bool`         | `true`       | -            |
-| `maxBodySize`            | `number`                    | `u64`          | `10_485_760` | ≥ 1, ≤ 100MB |
+## Security Configuration
 
 ```ts
 security: {
-  actionLimit: 2_097_152,           // 2MB สำหรับ server actions
-  apiLimit: 10_485_760,             // 10MB สำหรับ API routes
-  pluginLimit: 1_048_576,           // 1MB สำหรับ plugin response
-  actionRateLimit: {
-    max: 100,                        // 100 requests
-    window: 60,                      // ต่อ 60 วินาที
-    key: 'ip',                       // rate limit โดย IP
-  },
-  sameOrigin: true,                  // action ต้องมาจาก origin เดียวกัน
-  fetchMeta: true,                   // ตรวจ Sec-Fetch-* headers
-  trustedProxyIps: [
-    '10.0.0.1',                      // address ตรงตัว
-    '172.16.0.0/12',                 // CIDR range
-    '2001:db8::/32',                 // IPv6 ก็ได้
-  ],
-  headers: true,                     // เพิ่ม security headers อัตโนมัติ
-  csrf: true,                        // ป้องกัน CSRF
-  xssProtection: true,               // XSS filter
-  maxBodySize: 20_971_520,           // 20MB max body
+  actionLimit: 1048576, // 1MB
+  apiLimit: 10485760,   // 10MB
+  pluginLimit: 33554432, // 32MB
+  sameOrigin: true
 }
 ```
 
-**`trustedProxyIps` — รูปแบบที่รับได้:**
+ควบคุม Body size parsers ที่ฝั่ง Server (เพื่อป้องกัน DDOS จาก Payload มหาศาล):
 
-รายการที่ไม่มี `/` ถือเป็น host route (`/32` สำหรับ IPv4, `/128` สำหรับ IPv6) bit ที่ต่ำกว่า prefix
-จะถูก mask ทิ้ง ดังนั้น `10.1.2.3/8` กับ `10.0.0.0/8` หมายถึง range เดียวกัน range แบบ IPv4 จะ match
-peer แบบ IPv4-mapped (`::ffff:10.0.0.9`) ด้วย ซึ่งเป็นรูปแบบที่ dual-stack listener รายงาน client
-IPv4
-
-loopback เชื่อถือได้เสมอ ไม่จำเป็นต้องใส่ในรายการ
-
-ค่าที่ผิดรูปจะได้ error:
-`RUV1602 config field 'security.trustedProxyIps' contains invalid IP or CIDR range 'xyz'`
-
-**Security Headers ที่ Ruvyxa เพิ่มอัตโนมัติ:**
-
-| Header                      | Value                             | เมื่อ `headers: true`          |
-| --------------------------- | --------------------------------- | ------------------------------ |
-| `X-Content-Type-Options`    | `nosniff`                         | ✅                             |
-| `X-Frame-Options`           | `SAMEORIGIN`                      | ✅                             |
-| `X-XSS-Protection`          | `1; mode=block`                   | ✅ (ถ้า `xssProtection: true`) |
-| `Referrer-Policy`           | `strict-origin-when-cross-origin` | ✅                             |
-| `Permissions-Policy`        | ตาม config                        | ✅                             |
-| `Strict-Transport-Security` | `max-age=31536000`                | ✅ (production)                |
-| `Content-Security-Policy`   | กำหนดเองผ่าน middleware           | ❌ (ต้องตั้งค่าเอง)            |
-
-**Validation Rules (Rust):**
-
-| Condition                              | Error Code |
-| -------------------------------------- | ---------- |
-| `actionLimit` < 1                      | RUV1601    |
-| `actionLimit` > 10_485_760 (10MB)      | RUV1602    |
-| `apiLimit` < 1                         | RUV1601    |
-| `apiLimit` > 52_428_800 (50MB)         | RUV1602    |
-| `pluginLimit` < 1                      | RUV1601    |
-| `pluginLimit` > 52_428_800 (50MB)      | RUV1602    |
-| `actionRateLimit.max` < 1 (ถ้าตั้ง)    | RUV1601    |
-| `actionRateLimit.window` < 1 (ถ้าตั้ง) | RUV1601    |
-| `trustedProxyIps[]` ไม่ใช่ IP/CIDR     | RUV1602    |
-| `maxBodySize` < 1                      | RUV1601    |
-| `maxBodySize` > 104_857_600 (100MB)    | RUV1602    |
+- RUV1602 จะถูกโยนขึ้นมา (throw) หากระบุเกินขีดจำกัดสูงสุด: `actionLimit > 10MB`, `apiLimit > 50MB`,
+  `pluginLimit > 256MB`
 
 ---
 
-### `middleware`
-
-```ts
-interface MiddlewareConfig {
-  builtin?: {
-    cors?: CorsConfig | boolean // default: false (ปิด)
-    timing?: boolean // default: true
-    log?: boolean // default: true
-    rate?: RateConfig | boolean // default: false (ปิด)
-    headers?: Record<string, string> // default: {}
-  }
-  workers?: number // default: 1 (1-8)
-  timeoutMs?: number // default: 30000 (30s)
-}
-
-interface CorsConfig {
-  origins?: string[] // allowed origins
-  methods?: string[] // allowed HTTP methods
-  headers?: string[] // allowed headers
-  credentials?: boolean // allow cookies
-  maxAge?: number // preflight cache (seconds)
-}
-
-interface RateConfig {
-  max: number // max requests
-  window: number // time window (seconds)
-  key?: 'ip' | 'user' | 'route' // rate limit key
-}
-```
-
-| Field             | TypeScript Type          | Rust Type            | Default | Validation |
-| ----------------- | ------------------------ | -------------------- | ------- | ---------- |
-| `builtin.cors`    | `CorsConfig \| boolean`  | `Option<CorsConfig>` | `false` | -          |
-| `builtin.timing`  | `boolean`                | `bool`               | `true`  | -          |
-| `builtin.log`     | `boolean`                | `bool`               | `true`  | -          |
-| `builtin.rate`    | `RateConfig \| boolean`  | `Option<RateConfig>` | `false` | -          |
-| `builtin.headers` | `Record<string, string>` | `HashMap`            | `{}`    | -          |
-| `workers`         | `number`                 | `u8`                 | `1`     | 1-8        |
-| `timeoutMs`       | `number`                 | `u64`                | `30000` | 1-300000   |
+## Middleware Configuration
 
 ```ts
 middleware: {
-  builtin: {
-    cors: {
-      origins: ['https://example.com', 'https://api.example.com'],
-      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-      headers: ['Content-Type', 'Authorization', 'X-Request-ID'],
-      credentials: true,
-      maxAge: 86400,           // cache preflight 1 วัน
-    },
-    timing: true,               // X-Response-Time header
-    log: true,                  // Request logging
-    rate: {                     // Rate limiting
-      max: 100,
-      window: 60,
-      key: 'ip',
-    },
-    headers: {
-      'X-Custom-Header': 'value',
-      'X-Api-Version': '1.0',
-    },
-  },
-  workers: 2,                   // 2 worker processes
-  timeoutMs: 15000,             // 15 วินาที
+  workers: 2,
+  timeoutMs: 5000
 }
 ```
 
-**Built-in Middleware Reference:**
+กำหนดค่าการทำงานใน `middleware.ts`:
 
-| Middleware | ฟังก์ชัน                                         | Default | Headers                        |
-| ---------- | ------------------------------------------------ | ------- | ------------------------------ |
-| `cors`     | Cross-Origin Resource Sharing (CORS) + preflight | ปิด     | `Access-Control-*`             |
-| `timing`   | Response time measurement                        | เปิด    | `X-Response-Time`              |
-| `log`      | Request logging (x-request-id)                   | เปิด    | `X-Request-ID`                 |
-| `rate`     | Rate limiting (token bucket algorithm)           | ปิด     | `X-RateLimit-*`, `Retry-After` |
-| `headers`  | Custom response headers                          | ปิด     | ตามกำหนด                       |
-
-**Validation Rules:**
-
-| Condition                     | Error Code             |
-| ----------------------------- | ---------------------- |
-| `workers` < 1                 | RUV1601                |
-| `workers` > 8                 | RUV1602                |
-| `timeoutMs` < 1               | RUV1601                |
-| `timeoutMs` > 300_000 (5 min) | RUV1602                |
-| `cors.origins` empty array    | RUV1601 (ถ้าเปิด cors) |
-| `rate.max` < 1 (ถ้าเปิด)      | RUV1601                |
-| `rate.window` < 1 (ถ้าเปิด)   | RUV1601                |
+- ควบคุมจำนวน V8 Isolate workers เพื่อรัน middleware แบบคู่ขนาน
+- ควบคุม Timeout (RUV2001 timeout error) หาก middleware ค้างและไม่คืนค่า
 
 ---
 
-### `plugins`
-
-```ts
-interface PluginConfig {
-  name: string
-  options?: Record<string, unknown>
-  enabled?: boolean // default: true
-}
-```
-
-| Field     | TypeScript Type  | Rust Type           | Default | Validation       |
-| --------- | ---------------- | ------------------- | ------- | ---------------- |
-| `plugin`  | `PluginConfig[]` | `Vec<PluginConfig>` | `[]`    | -                |
-| `name`    | `string`         | `String`            | -       | required, unique |
-| `options` | `object`         | `HashMap`           | `{}`    | -                |
-| `enabled` | `boolean`        | `bool`              | `true`  | -                |
-
-**All Built-in Plugins:**
-
-| Plugin Name     | ฟังก์ชัน                  | Options                                           |
-| --------------- | ------------------------- | ------------------------------------------------- |
-| `redirects`     | URL redirect rules        | `redirects: [{ source, destination, permanent }]` |
-| `headers`       | Custom response headers   | `headers: [{ source, headers }]`                  |
-| `observability` | Health check, metrics     | `endpoint: '/api/health'`                         |
-| `pwa`           | Progressive Web App       | `manifest: { name, short_name, icons, ... }`      |
-| `fonts`         | Google Fonts optimization | `families: ['Inter', 'Noto Sans Thai']`           |
-| `sitemap`       | Sitemap generation        | `exclude: [...], defaults: {...}`                 |
-| `robots`        | Robots.txt generation     | `rules: [...]`                                    |
-| `feed`          | RSS/Atom feed             | `type: 'rss' \| 'atom', title, description`       |
-| `search-index`  | Search index JSON         | `exclude: [...], fields: [...]`                   |
-| `open-api`      | OpenAPI/Swagger           | `title, version, description`                     |
-| `requireEnv`    | Required env vars check   | `vars: [...], mode: 'strict' \| 'warn'`           |
-| `compress`      | Response compression      | `algorithm: 'gzip' \| 'brotli', level: 6`         |
-| `web-vitals`    | Web Vitals analytics      | `endpoint: '/api/vitals'`                         |
-| `image-cdn`     | External image CDN        | `provider: 'cloudinary' \| 'imgix', options`      |
-| `analytics`     | Analytics integration     | `provider: 'ga4' \| 'plausible' \| 'umami'`       |
-| `i18n`          | Internationalization      | `locales: [...], defaultLocale: 'th'`             |
+## Plugin Configuration
 
 ```ts
 plugins: [
-  // Redirects
   {
-    name: 'redirects',
-    options: {
-      redirects: [
-        { source: '/old-page', destination: '/new-page', permanent: true },
-        { source: '/blog/:slug', destination: '/articles/:slug', permanent: false },
-      ],
-    },
-  },
-
-  // Custom headers
-  {
-    name: 'headers',
-    options: {
-      headers: [
-        {
-          source: '/(.*)',
-          headers: [
-            { key: 'X-Frame-Options', value: 'DENY' },
-            { key: 'X-Content-Type-Options', value: 'nosniff' },
-          ],
-        },
-      ],
-    },
-  },
-
-  // Observability
-  {
-    name: 'observability',
-    options: {
-      endpoint: '/api/health',
-      metrics: true,
-      tracing: false,
-    },
-  },
-
-  // PWA
-  {
-    name: 'pwa',
-    options: {
-      manifest: {
-        name: 'My App',
-        short_name: 'App',
-        description: 'แอปพลิเคชันของฉัน',
-        start_url: '/',
-        display: 'standalone',
-        background_color: '#ffffff',
-        theme_color: '#000000',
-        icons: [
-          { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },
-          { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' },
-        ],
-      },
-      serviceWorker: {
-        enabled: true,
-        cacheStrategy: 'network-first',
-      },
-    },
-  },
-
-  // Fonts
-  {
-    name: 'fonts',
-    options: {
-      families: [
-        'Inter:wght@400;500;600;700',
-        'Noto Sans Thai:wght@300;400;500;700',
-        'IBM Plex Sans Thai:wght@400;700',
-      ],
-      display: 'swap',
-      preload: true,
-    },
-  },
-
-  // Environment validation
-  {
-    name: 'requireEnv',
-    options: {
-      vars: ['DATABASE_URL', 'AUTH_SECRET', 'RUVYXA_PUBLIC_API_URL'],
-      mode: 'strict',
-    },
-  },
-
-  // Compression
-  {
-    name: 'compress',
-    options: {
-      algorithm: 'brotli',
-      level: 6,
-      threshold: 1024, // compress เฉพาะ > 1KB
-    },
-  },
-
-  // i18n
-  {
-    name: 'i18n',
-    options: {
-      locales: ['th', 'en', 'zh', 'ja'],
-      defaultLocale: 'th',
-      detectFromPath: true,
-      detectFromBrowser: true,
-    },
+    name: 'google-analytics',
+    options: { trackingId: 'G-XXXX' },
+    head: [{ tag: 'script', attrs: { src: '...' } }],
   },
 ]
 ```
 
+ถูกทำ Schema Validate ในฝั่ง Rust ทันที หากชื่อปลั๊กอินว่างเปล่าหรือตั้งชื่อซ้ำ จะทำให้เกิด RUV1601
+
 ---
 
-### `adapter`
-
-```ts
-type AdapterType =
-  | 'node' // Node.js (default)
-  | 'bun' // Bun runtime
-  | 'vercel' // Vercel Functions
-  | 'netlify' // Netlify Functions
-  | 'cloudflare' // Cloudflare Pages/Workers
-  | 'static' // Static export (HTML files)
-  | 'railway' // Railway
-  | 'render' // Render
-  | 'firebase' // Firebase Functions
-  | 'aws' // AWS Lambda
-  | 'fly' // Fly.io
-  | 'koyeb' // Koyeb
-  | undefined // auto-detect
-```
-
-| Field            | TypeScript Type           | Rust Type         | Default     | Validation            |
-| ---------------- | ------------------------- | ----------------- | ----------- | --------------------- |
-| `adapter`        | `AdapterType`             | `Option<Adapter>` | auto-detect | ต้องเป็นชื่อที่รองรับ |
-| `adapterOptions` | `Record<string, unknown>` | `HashMap`         | `{}`        | ขึ้นกับ adapter       |
+## Adapter Configuration
 
 ```ts
 adapter: 'node',
 adapterOptions: {
-  // Node.js specific
-  cluster: true,
-  workers: 4,
-}
-
-// Vercel
-adapter: 'vercel',
-adapterOptions: {
-  regions: ['iad1', 'hkg1', 'sin1'],
-  imageOptimization: true,
-}
-
-// Cloudflare
-adapter: 'cloudflare',
-adapterOptions: {
-  entryPoint: 'cloudflare-entry.ts',
-  routes: [{ pattern: '*.example.com/*', zone: 'example.com' }],
-}
-
-// Static
-adapter: 'static',
-adapterOptions: {
-  trailingSlash: true,
-  cleanUrls: false,
-}
-
-// AWS
-adapter: 'aws',
-adapterOptions: {
-  region: 'ap-southeast-1',
-  memory: 512,    // MB
-  timeout: 30,    // seconds
+  outDir: 'build'
 }
 ```
 
-**Auto-detect Logic:**
+ตั้งเป้าหมายของการ Build หากไม่ได้ระบุ จะตรวจจับอัตโนมัติตามสภาพแวดล้อม:
 
-```rust
-fn auto_detect_adapter() -> Option<Adapter> {
-    if env!("VERCEL").is_ok() { return Some(Adapter::Vercel); }
-    if env!("NETLIFY").is_ok() { return Some(Adapter::Netlify); }
-    if env!("CF_PAGES").is_ok() { return Some(Adapter::Cloudflare); }
-    if env!("RAILWAY_PROJECT_ID").is_ok() { return Some(Adapter::Railway); }
-    if env!("RENDER").is_ok() { return Some(Adapter::Render); }
-    if env!("FLY_APP_NAME").is_ok() { return Some(Adapter::Fly); }
-    Some(Adapter::Node)  // fallback
-}
+1. หากพบ `VERCEL` -> กำหนด adapter `vercel` อัตโนมัติ
+2. หากพบ `NETLIFY` -> กำหนด adapter `netlify` อัตโนมัติ
+3. ค่าเริ่มต้นสุดท้าย -> ใช้ adapter `node`
+
+---
+
+## Configuration Validation
+
+Ruvyxa ตรวจสอบ `ruvyxa.config.ts` **ก่อน** ที่จะรันคำสั่งอื่นใดเสมอ
+
+- ฟิลด์ที่ไม่มีอยู่จริง: Error (`deny_unknown_fields` ในฝั่ง Rust)
+- ผิดประเภทตัวแปร: Error (ผ่าน Serde)
+- ค่าของฟิลด์ผิด: Error RUV1601 หรือ RUV1602 (จาก `validate_paths()` และกฎต่างๆ)
+
+---
+
+## Minimal Complete Config (คอนฟิกขั้นต่ำ)
+
+นี่คือโครงร่างที่สะอาดที่สุด:
+
+```ts
+import { config } from 'ruvyxa/config'
+export default config({})
 ```
 
-**Env Var Override:**
+ทุกอย่างจะโหลดค่าเริ่มต้น (Defaults) ที่สมเหตุสมผลให้คุณ
 
-```bash
-RUVYXA_ADAPTER=vercel npm run build
+---
+
+## Full Production Config (คอนฟิกใช้งานจริง)
+
+```ts
+import { config } from 'ruvyxa/config'
+
+export default config({
+  appDir: 'src/app',
+  server: { port: 8080 },
+  render: { strategy: 'isr', revalidate: 3600 },
+  build: { split: 'manual', treeShake: true },
+  image: { quality: 90, lossless: true },
+  security: { sameOrigin: true },
+  adapter: 'vercel',
+})
 ```
 
 ---
+
+## คำสั่ง Doctor (Doctor Command)
+
+หากคุณไม่แน่ใจว่า Config ของคุณมีหน้าตาอย่างไรหลังจากถูกโหลดและผสานค่าเริ่มต้น:
+
+```bash
+ruvyxa doctor --config
+```
+
+จะพ่นรายละเอียดของการตั้งค่า และเช็ค RUV16xx ให้อย่างสมบูรณ์
 
 ## Validation Rules — Complete Reference (Rust)
 
@@ -1054,316 +514,6 @@ valid hostname/IP | | `site.url` invalid | - | ✅ | ✅ | origin เท่า�
 absolute | ✅ | - | ✅ | relative path | | `cache.buildDir` absolute | ✅ | - | ✅ | relative path |
 | `adapter` unknown | ✅ | - | ✅ | ดู AdapterType | | `plugins[].name` empty/duplicate | ✅ | - |
 ✅ | unique, non-empty |
-
----
-
-## Config Examples — Full Scenarios
-
-### 1. Minimal Config
-
-```ts
-import { defineConfig } from 'ruvyxa/config'
-
-export default defineConfig({
-  site: { url: 'https://myapp.com' },
-})
-```
-
-### 2. Static Blog (MDX + SSG)
-
-```ts
-import { defineConfig } from 'ruvyxa/config'
-
-export default defineConfig({
-  appDir: 'app',
-  outDir: '.ruvyxa',
-  site: {
-    url: 'https://blog.example.com',
-    sitemap: {
-      defaults: {
-        changeFrequency: 'daily',
-        priority: 0.7,
-      },
-    },
-  },
-  render: {
-    strategy: 'ssg',
-  },
-  image: {
-    formats: ['webp', 'avif'],
-    sizes: [640, 960, 1280, 1920],
-    quality: 85,
-    avifQuality: 70,
-    lazy: true,
-    encoder: {
-      jpeg: 'mozjpeg',
-      png: 'oxipng',
-    },
-  },
-  plugins: [{ name: 'feed', options: { type: 'rss', title: 'My Blog' } }, { name: 'search-index' }],
-})
-```
-
-### 3. E-commerce (SSR + ISR + Security)
-
-```ts
-import { defineConfig } from 'ruvyxa/config'
-
-export default defineConfig({
-  appDir: 'app',
-  server: {
-    host: '0.0.0.0',
-    port: 3000,
-  },
-  site: {
-    url: 'https://shop.example.com',
-    sitemap: {
-      exclude: ['/cart', '/checkout', '/account/*'],
-      defaults: { changeFrequency: 'hourly', priority: 0.5 },
-    },
-    robots: {
-      rules: [
-        { userAgent: '*', allow: '/' },
-        { userAgent: 'GPTBot', disallow: '/' },
-      ],
-    },
-  },
-  build: {
-    minify: true,
-    sourcemap: false,
-    treeShaking: true,
-    splitStrategy: 'vendor',
-    prebundleDependencies: true,
-  },
-  render: {
-    strategy: 'isr',
-    revalidate: 300, // 5 นาที
-  },
-  security: {
-    actionLimit: 2_097_152, // 2MB
-    apiLimit: 10_485_760, // 10MB
-    sameOrigin: true,
-    fetchMeta: true,
-    actionRateLimit: {
-      max: 30, // 30 requests
-      window: 60, // ต่อ 60 วินาที
-      key: 'ip',
-    },
-    trustedProxyIps: ['10.0.0.0/8', '172.16.0.0/12'],
-    headers: true,
-    csrf: true,
-  },
-  image: {
-    formats: ['webp', 'avif'],
-    sizes: [320, 640, 960, 1280, 1920],
-    quality: 80,
-    lazy: true,
-    placeholder: 'blur',
-  },
-  middleware: {
-    builtin: {
-      cors: {
-        origins: ['https://shop.example.com', 'https://api.stripe.com'],
-        methods: ['GET', 'POST'],
-        credentials: true,
-      },
-      rate: {
-        max: 100,
-        window: 60,
-        key: 'ip',
-      },
-      timing: true,
-      log: true,
-    },
-    workers: 2,
-    timeoutMs: 10000,
-  },
-  plugins: [
-    {
-      name: 'requireEnv',
-      options: {
-        vars: ['DATABASE_URL', 'STRIPE_API_KEY', 'AUTH_SECRET'],
-        mode: 'strict',
-      },
-    },
-    {
-      name: 'pwa',
-      options: {
-        manifest: {
-          name: 'My Shop',
-          short_name: 'Shop',
-          display: 'standalone',
-        },
-      },
-    },
-  ],
-  adapter: 'node',
-})
-```
-
-### 4. API Backend
-
-```ts
-import { defineConfig } from 'ruvyxa/config'
-
-export default defineConfig({
-  site: { url: 'https://api.example.com' },
-  server: {
-    host: '0.0.0.0',
-    port: 4000,
-  },
-  build: {
-    minify: true,
-    sourcemap: true,
-    target: 'node', // server-only bundle
-  },
-  security: {
-    apiLimit: 52_428_800, // 50MB สำหรับ file upload
-    sameOrigin: false, // API ต้องรับจากทุก origin
-    actionRateLimit: {
-      max: 1000,
-      window: 60,
-      key: 'ip',
-    },
-    trustedProxyIps: ['0.0.0.0/0'],
-  },
-  middleware: {
-    builtin: {
-      cors: {
-        origins: ['*'],
-        methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-        headers: ['Content-Type', 'Authorization'],
-        credentials: true,
-      },
-      rate: {
-        max: 1000,
-        window: 60,
-        key: 'ip',
-      },
-    },
-  },
-  plugins: [
-    {
-      name: 'open-api',
-      options: {
-        title: 'My API',
-        version: '1.0.0',
-        description: 'REST API documentation',
-      },
-    },
-    {
-      name: 'observability',
-      options: {
-        endpoint: '/api/health',
-        metrics: true,
-      },
-    },
-  ],
-})
-```
-
-### 5. Full-Stack Dashboard (PPR + CSR)
-
-```ts
-import { defineConfig } from 'ruvyxa/config'
-
-export default defineConfig({
-  appDir: 'app',
-  render: {
-    strategy: 'ppr',
-  },
-  build: {
-    splitStrategy: 'route',
-    parallel: 8,
-  },
-  debug: {
-    overlay: true,
-    traces: true,
-  },
-  css: {
-    entries: ['src/styles/global.css', 'src/styles/dashboard.css'],
-    tailwind: true,
-  },
-  plugins: [
-    {
-      name: 'fonts',
-      options: {
-        families: ['Inter:wght@400;500;600;700'],
-        display: 'swap',
-      },
-    },
-    {
-      name: 'web-vitals',
-      options: {
-        endpoint: '/api/vitals',
-      },
-    },
-  ],
-  adapter: 'vercel',
-  adapterOptions: {
-    regions: ['sin1', 'hkg1'],
-  },
-})
-```
-
----
-
-## ตรวจสอบ Config
-
-### `ruvyxa doctor`
-
-```bash
-npm run doctor
-```
-
-Output:
-
-```
-━━━ Ruvyxa Doctor ━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  Config
-  ──────
-  ✓ ruvyxa.config.ts (file exists)
-  ✓ Parsed successfully
-  ✓ defineConfig() valid
-
-  Fields
-  ──────
-  ✓ appDir:           "app" (exists)
-  ✓ outDir:           ".ruvyxa"
-  ✓ server.host:      "localhost"
-  ✓ server.port:      3000
-  ✓ site.url:         "https://example.com"
-  ✓ build.minify:     true
-  ✓ build.sourcemap:  false
-  ✓ No unknown fields
-  ✓ All paths valid
-  ✓ Middleware workers: 2 (valid)
-
-  Warnings
-  ────────
-  ⚠ site.url uses auto-detect — set explicitly for production
-  ⚠ security.headers enabled, but no CSP defined
-```
-
-### `--json` flag
-
-```json
-{
-  "ok": true,
-  "config": {
-    "appDir": "app",
-    "outDir": ".ruvyxa",
-    "server": { "host": "localhost", "port": 3000 },
-    "site": { "url": "auto-detect" }
-  },
-  "validations": {
-    "passed": 14,
-    "warnings": 2,
-    "errors": 0
-  }
-}
-```
 
 ---
 

@@ -639,6 +639,38 @@ component ใน route นั้น component จะไม่ถูก hydrate
 
 ---
 
+## Private Environment Variable Detection
+
+Ruvyxa ตรวจสอบการอ่านค่า `process.env.*` ในโค้ดฝั่ง client โดยใช้ regex scanner:
+
+```rust
+fn private_env_reads(source: &str) -> Vec<String> {
+    // รูปแบบ: process.env.<NAME> หรือ process.env['NAME'] หรือ process.env["NAME"]
+    // ยกเว้น RUVYXA_PUBLIC_* และ NODE_ENV
+}
+```
+
+### ตัวแปรสภาพแวดล้อมที่อนุญาตให้ใช้ใน Client Code
+
+| ตัวแปร                            | ใช้ใน client ได้ไหม? | หมายเหตุ                                  |
+| --------------------------------- | -------------------- | ----------------------------------------- |
+| `process.env.RUVYXA_PUBLIC_*`     | ✅ ได้               | ตัวแปรใดๆ ที่ขึ้นต้นด้วย `RUVYXA_PUBLIC_` |
+| `process.env.NODE_ENV`            | ✅ ได้               | ปลอดภัยเสมอ (ถูกแทนที่ตอน build time)     |
+| `process.env.*` (อื่นๆ)           | ❌ ไม่ได้            | ทำให้เกิด `RUV1008`                       |
+| `import.meta.env.RUVYXA_PUBLIC_*` | ✅ ได้               | ตัวแปร public ในรูปแบบของ Vite            |
+
+### RUV1008 Error
+
+```
+RUV1008: Private environment variable used in client graph
+  `process.env.DATABASE_URL` is reachable from browser code.
+  Only `RUVYXA_PUBLIC_*` env vars may be exposed to client modules.
+  → Move the env read into server-only code or rename it to
+    `RUVYXA_PUBLIC_*` if it is safe to expose.
+```
+
+---
+
 ## Boundary Validation Error Codes
 
 Ruvyxa ตรวจสอบ server/client boundary โดยอัตโนมัติตอน check/build:
@@ -787,6 +819,26 @@ export function PUT(request: Request, context: { params: RouteParams }): Promise
 export function DELETE(request: Request, context: { params: RouteParams }): Promise<Response>
 export function PATCH(request: Request, context: { params: RouteParams }): Promise<Response>
 ```
+
+---
+
+## When to Use Each
+
+### ควรเลือกใช้ Server Component เมื่อ:
+
+- การดึงข้อมูลคงที่ หรือข้อมูลจากฐานข้อมูล
+- ต้องการเข้าถึง API ที่มีเฉพาะในเซิร์ฟเวอร์ (เช่น DB, ตัวแปรสภาพแวดล้อม, ระบบไฟล์)
+- คอมโพเนนต์นั้นไม่มีการโต้ตอบ (ไม่มีคลิก, ไม่มี state)
+- ต้องการลดขนาด JS bundle ให้เล็กที่สุด
+- ต้องการให้ SEO และความเร็วในการโหลดเริ่มต้นดีที่สุด
+
+### ควรเลือกใช้ Client Component เมื่อ:
+
+- ต้องการใช้ `useState`, `useEffect`, `useReducer`
+- จัดการเหตุการณ์จากผู้ใช้ (onClick, onSubmit, onChange)
+- ต้องการใช้ API ของเบราว์เซอร์ (localStorage, navigator, IntersectionObserver)
+- มีการใช้ hooks จาก `@ruvyxa/react` เช่น `useRouter`, `usePathname`
+- คอมโพเนนต์นั้นต้องเรนเดอร์ข้อมูลที่มีการเปลี่ยนแปลงบ่อยๆ
 
 ---
 
@@ -975,6 +1027,71 @@ export default function Page() {
   }, [])
 }
 ```
+
+---
+
+## ลองทำดู
+
+สร้างโครงสร้างหน้าเพจแบบนี้:
+
+```
+app/
+├── page.tsx              ← server component (ค่าเริ่มต้น)
+├── components/
+│   ├── LikeButton.tsx    ← client component
+│   └── CommentForm.tsx   ← client component
+├── server/
+│   └── db.ts             ← server-only
+```
+
+**ขั้นตอนที่ 1:** สร้าง `app/server/db.ts`:
+
+```ts
+import 'server-only'
+
+export async function getPosts() {
+  return [{ id: 1, title: 'สวัสดี', likes: 10 }]
+}
+```
+
+**ขั้นตอนที่ 2:** สร้าง `app/components/LikeButton.tsx`:
+
+```tsx
+'use client'
+
+import { useState } from 'react'
+
+export function LikeButton({ initialLikes }: { initialLikes: number }) {
+  const [likes, setLikes] = useState(initialLikes)
+
+  return <button onClick={() => setLikes((l) => l + 1)}>♥ {likes}</button>
+}
+```
+
+**ขั้นตอนที่ 3:** สร้าง `app/page.tsx`:
+
+```tsx
+import { getPosts } from './server/db'
+import { LikeButton } from './components/LikeButton'
+
+export default async function HomePage() {
+  const posts = await getPosts()
+
+  return (
+    <main>
+      {posts.map((post) => (
+        <div key={post.id}>
+          <h2>{post.title}</h2>
+          <LikeButton initialLikes={post.likes} />
+        </div>
+      ))}
+    </main>
+  )
+}
+```
+
+ผลลัพธ์ที่ได้: รายการโพสต์จะเป็น HTML ที่ถูกเรนเดอร์จากเซิร์ฟเวอร์ และปุ่ม ♥ แต่ละปุ่มจะเป็น client
+island เล็กๆ โดยจะไม่มี JS ที่เกี่ยวข้องกับโค้ดฝั่งรายการโพสต์ถูกส่งไปที่เบราว์เซอร์เลย
 
 ---
 

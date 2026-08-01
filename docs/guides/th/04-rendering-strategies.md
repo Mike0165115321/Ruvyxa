@@ -924,6 +924,67 @@ export function getStaticParams() {
 
 ---
 
+## Rendering Strategy Detection — Edge Cases
+
+### `export const revalidate = 0`
+
+วิธีนี้จะสร้างพฤติกรรมคล้าย SSR โดยใช้กลไกของ ISR ตัวเพจจะถูก revalidate ในทุกๆ request เสมือน
+แต่ยังคงใช้โครงสร้างพื้นฐานของ ISR cache
+
+### มีทั้ง `ppr` และ `revalidate` ถูก export
+
+PPR มีความสำคัญสูงกว่า (priority 2) ISR (priority 3) ดังนั้น `revalidate` export จะถูกละเว้น
+
+### มีทั้ง `'use client'` และ `ppr`
+
+CSR มีความสำคัญสูงสุด (priority 1) ดังนั้น `ppr` export จะถูกละเว้น และเพจจะถูกเรนเดอร์แบบ client
+ล้วนๆ (fully client-rendered)
+
+### หน้าคอนเทนต์แบบ MDX/MD
+
+หน้า Markdown และ MDX ใช้กฎการตรวจสอบ (detection) แบบเดียวกัน โดยโค้ดในรูปแบบ Fenced code blocks และ
+inline code spans จะถูก **ซ่อนไว้** (blanked) ก่อนการตรวจสอบ
+เพื่อป้องกันกรณีที่โค้ดตัวอย่างในเอกสารเช่น `fetch(` หรือ `process.env.` ไปขัดขวางระบบ auto-SSG
+โดยไม่ตั้งใจ
+
+### Route ที่มี `getStaticParams` แต่มี dynamic markers ด้วย
+
+หากเพจทำการ export `getStaticParams` แต่โค้ดภายในที่เรียกใช้งานได้ดันมี `fetch(` ตัว route
+นั้นจะเป็น SSG เสมอ (priority 4) — ตัว dynamic markers จะส่งผลเฉพาะกับระบบ auto-SSG detection
+(priority 5) เท่านั้น
+
+---
+
+## Strategy Detection — What Runs When
+
+```
+                            BUILD TIME
+                                │
+                    ┌───────────┴───────────┐
+                    │                       │
+                   SSG                     ISR
+              (pre-render all            (pre-render all
+               pages + params)            pages + params)
+                    │                       │
+                    └───────────┬───────────┘
+                                │
+                            DEPLOY
+                                │
+                        ┌───────┴───────┐
+                        │               │
+                    REQUEST TIME    REQUEST TIME
+                        │               │
+                   ┌────┴────┐     ┌────┴────┐
+                   │         │     │         │
+                  SSR       PPR   ISR       CSR
+              (render per   (shell  (serve    (boot JS
+               request)     static, stale,     in
+                            stream  re-render  browser)
+                            slots)  bg)
+```
+
+---
+
 ## Best Practices
 
 ```tsx

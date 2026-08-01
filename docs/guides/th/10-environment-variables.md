@@ -263,6 +263,69 @@ export default function ClientPage() {
 
 ---
 
+## การเข้าถึง Environment Variables (Accessing Environment Variables)
+
+### At Runtime (ขณะรันไทม์)
+
+```tsx
+// ใช้งานได้ทุกที่ (ทั้งฝั่ง Server และ Client)
+const siteUrl = process.env.RUVYXA_PUBLIC_SITE_URL
+const siteUrl = import.meta.env.RUVYXA_PUBLIC_SITE_URL // ESM alias
+
+// ใช้งานเฉพาะ Server เท่านั้น -- หากใช้ในโค้ดฝั่ง Client จะเกิด RUV1008
+const dbUrl = process.env.DATABASE_URL
+```
+
+### ใน Server Components
+
+```tsx
+// app/page.tsx -- เป็น Server component จึงปลอดภัย
+export default async function HomePage() {
+  const dbUrl = process.env.DATABASE_URL
+  const data = await fetchData(dbUrl)
+  return <div>{/* render */}</div>
+}
+```
+
+### ใน Client Components
+
+```tsx
+// 'use client' -- อนุญาตให้ใช้ตัวแปรแบบ public เท่านั้น
+'use client'
+
+export default function AnalyticsTracker() {
+  const gaId = process.env.RUVYXA_PUBLIC_GA_ID
+  return <Script src={`https://www.googletagmanager.com/gtag/js?id=${gaId}`} />
+}
+```
+
+### ใน API Routes
+
+```tsx
+// app/api/payment/route.ts -- เฉพาะฝั่ง Server ปลอดภัย
+export async function POST(request: Request) {
+  const stripeKey = process.env.STRIPE_SECRET_KEY
+  // ... ประมวลผลการชำระเงิน
+  return Response.json({ success: true })
+}
+```
+
+### ใน Server Actions
+
+```ts
+// app/actions/email/action.ts
+'use server'
+
+import { action } from 'ruvyxa/server'
+
+export const sendNewsletter = action(async (formData: FormData) => {
+  const apiKey = process.env.SENDGRID_API_KEY
+  // ... ส่งอีเมล
+})
+```
+
+---
+
 ## TypeScript Declarations — ทุกแบบ
 
 ### 1. `ruvyxa-env.d.ts` (สำหรับ `process.env`)
@@ -958,6 +1021,100 @@ if (process.env.NODE_ENV !== 'production') {
 
 ---
 
+## Build-Time Variables (ตัวแปรช่วงบิลด์)
+
+ตัวแปร Environment เหล่านี้จะถูกแทนที่ด้วยค่าที่แท้จริงในช่วงที่มีการบิลด์ (Inline):
+
+```ts
+// ส่วนนี้จะถูกแทนที่ตอนทำ Build-time ด้วยค่าที่แท้จริง
+const apiUrl = process.env.RUVYXA_PUBLIC_API_URL
+// หลังจากรัน Build จะกลายเป็น: const apiUrl = "https://api.example.com";
+```
+
+### ผลที่ตามมา (Implications)
+
+1. **คุณต้องทำ Build ใหม่** ทุกครั้งหากต้องการให้เห็นค่า Environment (ที่เป็นกลุ่ม Public)
+   ที่ถูกเปลี่ยนแปลงไป
+2. **การคัดแยกโค้ดที่ไม่ได้ใช้ (Dead code elimination)** จะทำงานได้อย่างเต็มที่ --
+   บล็อกเงื่อนไขที่อ้างอิงจากตัวแปรเหล่านี้จะถูกคัดทิ้งไปหากไม่เข้าเงื่อนไข:
+
+```ts
+if (process.env.RUVYXA_PUBLIC_FEATURE_FLAG === 'enabled') {
+  // บล็อกคำสั่งนี้อาจถูกคัดทิ้งออกไปเลยในระบบ Production หากฟีเจอร์นี้ถูกปิดเอาไว้
+  registerFeature()
+}
+```
+
+สำหรับตัวแปรที่ใช้เฉพาะบน Server (Server-only vars) จะไม่มีการแทนที่ค่าเหล่านี้ในตอนทำ Build --
+ค่าเหล่านี้จะถูกอ่านมาจากตัวแปรบนระบบตามจริงในตอนรันไทม์
+
+### Stability (ความเสถียร)
+
+ระบบประมวลผลช่วง Build จะใช้ฟังก์ชัน `stable_process_env()` เพื่อรวบรวม snapshot ของตัวแปร
+Environment ทุกตัวให้สามารถคาดเดาและใช้แฮช (Hash) เข้ากระบวนการแคช (Cache) ได้:
+
+```rust
+fn prerender_context_hash(
+    root: &Path,
+    styles: &str,
+    client_assets: &BTreeMap<...>,
+    build: &BuildConfigOptions,
+    project_env: &BTreeMap<String, String>,
+) -> String {
+    // นำตัวแปร RUVYXA_PUBLIC_* เข้าร่วมการแฮชด้วย เพื่อให้การแคช (Cache) ถูกล้างออกไปใหม่หากมีการแก้ไข
+}
+```
+
+---
+
+## Validation & Defaults (การตรวจสอบค่าและค่าเริ่มต้น)
+
+### การใช้งาน requireEnv Plugin
+
+```ts
+// ruvyxa.config.ts
+import { config } from 'ruvyxa/config'
+
+export default config({
+  plugins: [
+    {
+      name: 'requireEnv',
+      options: {
+        variables: ['DATABASE_URL', 'STRIPE_SECRET_KEY', 'SENDGRID_API_KEY'],
+        strict: true, // ทำให้เกิด error ถ้าไม่ได้ระบุตัวแปรนี้
+      },
+    },
+  ],
+})
+```
+
+### Default Values (การกำหนดค่าตั้งต้น)
+
+```ts
+const port = process.env.PORT ?? '3000'
+const logLevel = process.env.LOG_LEVEL || 'info'
+```
+
+### Config Renderer Environment
+
+เมื่อ Ruvyxa ประมวลผลและเช็คค่าคอนฟิก `ruvyxa.config.ts` จะมีการกำหนด:
+
+```bash
+RUVYXA_RUNTIME=node     # หรืออาจเป็น bun เป็นต้น
+```
+
+นี่คือค่าที่ถูกแทรกเข้าไปผ่านฟังก์ชัน `run_config_renderer()`:
+
+```rust
+ProcessCommand::new(runtime.executable())
+    .arg(renderer)
+    .arg(root)
+    .env("RUVYXA_RUNTIME", runtime.command())
+    .output()?;
+```
+
+---
+
 ## Best Practices — เต็มรูปแบบ
 
 ### 1. `.env.example` — Template ที่ควร commit
@@ -1522,61 +1679,10 @@ RUVYXA_DEBUG=* ruvyxa dev
 
 ## Contract การโหลด Environment ปัจจุบัน
 
-สำหรับ project configuration และ JavaScript runtimes ปัจจุบัน Ruvyxa โหลด `.env` แล้วตามด้วย
-`.env.local` จาก project root โดยค่าซ้ำใน `.env.local` ชนะ `.env` parser รองรับบรรทัดว่าง, comments,
-`KEY=value`, quoted values และ dotenv-style `export KEY=value` แต่ไม่ได้ทำ environment-name matrix
-เช่น `.env.production.local` หรือ API แบบ `import.meta.env` ด้วยตัวเอง
+## ขั้นตอนถัดไป
 
-```dotenv
-# .env -- ค่า default ที่แชร์ใน project ได้
-RUVYXA_PUBLIC_SITE_NAME=Catalog
-CATALOG_API_URL=https://catalog.example.test
-
-# .env.local -- override เฉพาะ developer; เก็บ secrets ออกจาก version control
-CATALOG_API_URL=http://localhost:4010
-```
-
-ใช้ process environment variables ปกติสำหรับ production configuration ที่ platform ให้มาได้
-โดยไม่ต้อง สร้างกติกาชื่อ env-file เพิ่มเอง
-
-### Public Exposure คือ Build Boundary
-
-client-boundary scanner อนุญาต `NODE_ENV` และชื่อที่ขึ้นต้นด้วย `RUVYXA_PUBLIC_` ใน modules ที่
-browser เข้าถึงได้ ส่วน `process.env.NAME` ที่รู้ค่าแบบ static และไม่อยู่ในกลุ่มนี้จะได้ `RUV1008`
-การเติม prefix จึงเป็นการตัดสินใจเปิดเผยค่า ไม่ใช่กลไกเพื่อความสะดวก
-
-```tsx
-'use client'
-
-export function ProductApiStatus() {
-  const apiBase = process.env.RUVYXA_PUBLIC_API_BASE
-  return <p>Using {apiBase ?? 'the default API'}</p>
-}
-```
-
-```ts
-// app/server/database.ts
-import 'server-only'
-
-export function databaseUrl() {
-  const value = process.env.DATABASE_URL
-  if (!value) throw new Error('DATABASE_URL is required')
-  return value
-}
-```
-
-อย่าเปลี่ยนชื่อ secret เป็น `RUVYXA_PUBLIC_` เพื่อปิด diagnostic ให้ย้ายการอ่านไปหลัง server module,
-action, loader หรือ API route แทน
-
-### ตรวจ Boundary แทนการพิมพ์ค่าจริง
-
-หลีกเลี่ยงคำสั่งที่ dump environment contents ลง log การตรวจที่มีประโยชน์เป็นการตรวจโครงสร้าง:
-
-```bash
-ruvyxa analyze --format human
-npm run check
-```
-
-`analyze` รายงาน private variable ที่ไปถึง client graph และ `check` รัน project readiness flow เก็บ
-`.env.example` ที่ commit ได้พร้อมชื่อตัวแปร/placeholder ที่ไม่ secret และ exclude `.env.local`
-เมื่อมี credentials
+- [03-server-client-components.md](./03-server-client-components.md) -- ทำความเข้าใจ Server/client
+  boundary
+- [11-configuration.md](./11-configuration.md) -- คู่มือใช้งานคอนฟิก ruvyxa.config.ts แบบเต็ม
+- [14-plugins.md](./14-plugins.md) -- การจัดการปลั๊กอิน requireEnv และการประเมินค่า env
+- [16-error-handling.md](./16-error-handling.md) -- รายละเอียดของ RUV1008 และข้อผิดพลาดที่เกี่ยวข้อง

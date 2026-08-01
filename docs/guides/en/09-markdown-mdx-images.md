@@ -361,6 +361,106 @@ Here `meta` uses the custom export. Other auto-exports still generated.
 
 ---
 
+## MDX ESM Deduplication — Under the Hood
+
+When the same MDX file is imported multiple times (e.g. importing frontmatter from multiple
+components), Ruvyxa uses **module deduplication** to avoid recompiling it:
+
+```ts
+// Internal: MDX Module Cache
+interface MDXCachedModule {
+  source: string // compiled JS output
+  exports: {
+    frontmatter: Record<string, unknown>
+    meta: RouteMeta
+    headings: Heading[]
+    contentFormat: 'mdx' | 'markdown'
+  }
+  dependencies: string[] // list of imported modules
+  contentHash: string // blake3 hash of source
+  compiledAt: number // timestamp
+}
+
+// 512-entry LRU Cache
+class LRUCache<K, V> {
+  private capacity: number
+  private cache: Map<K, V>
+
+  constructor(capacity: number) {
+    this.capacity = capacity
+    this.cache = new Map()
+  }
+
+  get(key: K): V | undefined {
+    if (!this.cache.has(key)) return undefined
+    const value = this.cache.get(key)!
+    // Move to tail (most recently used)
+    this.cache.delete(key)
+    this.cache.set(key, value)
+    return value
+  }
+
+  set(key: K, value: V): void {
+    if (this.cache.has(key)) {
+      this.cache.delete(key)
+    } else if (this.cache.size >= this.capacity) {
+      // Evict least recently used
+      const lruKey = this.cache.keys().next().value
+      if (lruKey !== undefined) {
+        this.cache.delete(lruKey)
+      }
+    }
+    this.cache.set(key, value)
+  }
+
+  has(key: K): boolean {
+    return this.cache.has(key)
+  }
+}
+
+// Cache key = realpath + content hash
+function getMDXCacheKey(filePath: string, contentHash: string): string {
+  return `${filePath}::${contentHash}`
+}
+
+// Deduplication entry point
+function compileMDXIfNeeded(filePath: string): MDXCachedModule {
+  const realPath = fs.realpathSync(filePath)
+  const contentHash = hashFile(realPath) // blake3-256
+  const cacheKey = getMDXCacheKey(realPath, contentHash)
+
+  // Cache hit — skip compilation
+  if (MDX_CACHE.has(cacheKey)) {
+    return MDX_CACHE.get(cacheKey)!
+  }
+
+  // Cache miss — compile
+  const compiled = compileMDXFile(realPath)
+
+  // Validate dependencies haven't changed
+  const depHashes = compiled.dependencies.map((dep) => hashFile(dep))
+  compiled.exports = { ...compiled.exports, _depHashes: depHashes }
+
+  MDX_CACHE.set(cacheKey, compiled)
+  return compiled
+}
+
+const MDX_CACHE = new LRUCache<string, MDXCachedModule>(512)
+```
+
+### Cache Invalidation Rules
+
+| Event                        | Action                                       |
+| ---------------------------- | -------------------------------------------- |
+| MDX source changed           | contentHash changes → cache miss → recompile |
+| Dependency (import) changed  | dep hash mismatch → recompile                |
+| `ruvyxa clean`               | Purges entire cache + disk cache             |
+| Dev server restart           | cache persists to disk -> remains valid      |
+| Config changed (image, etc.) | affected cache entries invalidated           |
+| Cache full (512 entries)     | LRU eviction — drops least recently used     |
+
+---
+
 ## AST Node Lowering
 
 Every Markdown AST node is lowered to a `React.createElement()` call.
@@ -657,6 +757,163 @@ generated WebP (48 KB). Use <Image> from @ruvyxa/react.
 
 ---
 
+## Image Optimization (Build-Time) — Full Pipeline
+
+### Pipeline Diagram
+
+```
+Build Start
+    │
+    ▼
+┌──────────────────────────────────────────┐
+│ Phase 1: Discovery                       │
+│  • glob public/images/**/*.{jpg,png,gif} │
+│  • scan imports/references in source     │
+│  • filter out SVG, animated GIF          │
+│  • group by source file                  │
+└────────────────┬─────────────────────────┘
+                 ▼
+┌──────────────────────────────────────────┐
+│ Phase 2: Decode & Metadata               │
+│  • sharp().metadata()                    │
+│  • strip EXIF orientation                │
+│  • auto-rotate using EXIF                │
+│  • compute entropy score                 │
+└────────────────┬─────────────────────────┘
+                 ▼
+┌──────────────────────────────────────────┐
+│ Phase 3: Resize                          │
+│  • for each size in config.sizes[]       │
+│  • sharp().resize(width, fit='outside')  │
+│  • lanczos3 kernel                       │
+│  • preserve aspect ratio                 │
+└────────────────┬─────────────────────────┘
+                 ▼
+┌──────────────────────────────────────────┐
+│ Phase 4: Encode                          │
+│  ┌──────────────┬────────────┬──────────┐│
+│  │ Original     │ Encoder    │ Config   ││
+│  ├──────────────┼────────────┼──────────┤│
+│  │ JPEG → WebP │ cwebp      │ q=80     ││
+│  │ JPEG → AVIF │ libaom-av1 │ q=65     ││
+│  │ JPEG → JPEG │ mozjpeg    │ q=80,p   ││
+│  │ PNG  → WebP │ cwebp      │ q=80     ││
+│  │ PNG  → AVIF │ libaom-av1 │ q=65     ││
+│  │ PNG  → PNG  │ oxipng     │ o=3      ││
+│  │ JPEG premium│ guetzli    │ q=85     ││
+│  └──────────────┴────────────┴──────────┘│
+└────────────────┬─────────────────────────┘
+                 ▼
+┌──────────────────────────────────────────┐
+│ Phase 5: Hash & Write                    │
+│  • blake3-256(content)                   │
+│  • filename: {name}.{hash8}-{size}w.webp │
+│  • write → .ruvyxa/assets/images/        │
+│  • generate manifest.json                │
+│  • generate placeholder blur             │
+└──────────────────────────────────────────┘
+```
+
+### Encoder Parameters (Rust)
+
+#### mozjpeg (JPEG → JPEG)
+
+```rust
+struct MozJPEGParams {
+    quality: u8,           // 0-100, default: 80
+    progressive: bool,     // default: true
+    optimize_coding: bool, // default: true
+    smooth: u8,           // 0-100, default: 0
+    dct_method: DCTMethod, // Integer | Float
+    trellis_quant: bool,   // default: true
+    trellis_pass: bool,    // default: true
+    overshoot_deringing: bool, // default: true
+}
+```
+
+#### oxipng (PNG → PNG) — Lossless
+
+```rust
+struct OxiPNGParams {
+    level: u8,             // 0-6, default: 3
+    interlace: bool,       // default: false
+    strip: StripMeta,      // Safe | All | None
+    alpha: AlphaHandling,  // Preserve | Remove | Unpremultiply
+    deflate: DeflateAlgo,  // Zlib | Zopfli
+}
+```
+
+| Level | Behavior                        |
+| ----- | ------------------------------- |
+| 0     | no optimization                 |
+| 1     | basic filter + zlib             |
+| 2     | + row filter trials             |
+| 3     | + exhaustive filter trials      |
+| 4     | + zopfli (slow)                 |
+| 5     | + full zopfli                   |
+| 6     | maximum compression (very slow) |
+
+#### guetzli (JPEG — Premium Quality)
+
+```rust
+struct GuetzliParams {
+    quality: f32, // >= 84.0, default 85.0
+}
+```
+
+> **Note:** Guetzli provides the smallest JPEG files but requires significant memory (300MB per 1MP)
+> and time. Enabled only via `image.premium: true`.
+
+---
+
+## Using `<img>` vs `<Image>` Component
+
+| Feature             | `<img>` Tag                         | `<Image>` Component (`@ruvyxa/react`)            |
+| ------------------- | ----------------------------------- | ------------------------------------------------ |
+| Lazy Loading        | Browser native (`loading="lazy"`)   | Intersection Observer fallback + native lazy     |
+| Blur Placeholder    | ❌ No                               | ✅ Yes (Auto-generated base64 blur)              |
+| Responsive `srcset` | ❌ Manual configuration             | ✅ Auto-generated based on device widths         |
+| Format Negotiation  | ❌ No (`<picture>` needed manually) | ✅ Auto (WebP/AVIF depending on browser support) |
+| Preloading          | ❌ Manual `<link rel="preload">`    | ✅ Built-in with `priority={true}`               |
+| Layout Shift Guard  | ❌ Must provide explicit w/h        | ✅ Auto-inferred dimensions during build         |
+
+---
+
+## Analyze — Checking Image Usage
+
+You can use the Ruvyxa CLI to find unoptimized images or unused images in your project:
+
+```bash
+npm run analyze -- --images
+```
+
+This will output a report showing:
+
+- Images in `public/` that are never referenced
+- External image URLs that could be self-hosted
+- Unoptimized `<img>` tags that could be replaced with `<Image>`
+
+---
+
+## Logs and Debugging
+
+To view the internal image optimization logs during build, set the debug flag:
+
+```bash
+RUVYXA_DEBUG_IMAGE=1 npm run build
+```
+
+Output:
+
+```
+[IMAGE] Found 14 assets in public/
+[IMAGE] processing hero-banner.jpg (1920x1080)
+[IMAGE] └─ generated hero-banner.8a2b.webp (142KB, -65%)
+[IMAGE] └─ generated blur placeholder (284 bytes)
+```
+
+---
+
 ## SEO & Metadata
 
 ### The meta Export
@@ -798,6 +1055,41 @@ interface SeoProps {
          |    title: "Hello" |
          |  }                |
          +------------------+
+```
+
+---
+
+## Analyze — Checking Image Usage
+
+You can use the Ruvyxa CLI to find unoptimized images or unused images in your project:
+
+```bash
+npm run analyze -- --images
+```
+
+This will output a report showing:
+
+- Images in `public/` that are never referenced
+- External image URLs that could be self-hosted
+- Unoptimized `<img>` tags that could be replaced with `<Image>`
+
+---
+
+## Logs and Debugging
+
+To view the internal image optimization logs during build, set the debug flag:
+
+```bash
+RUVYXA_DEBUG_IMAGE=1 npm run build
+```
+
+Output:
+
+```
+[IMAGE] Found 14 assets in public/
+[IMAGE] processing hero-banner.jpg (1920x1080)
+[IMAGE] └─ generated hero-banner.8a2b.webp (142KB, -65%)
+[IMAGE] └─ generated blur placeholder (284 bytes)
 ```
 
 ---

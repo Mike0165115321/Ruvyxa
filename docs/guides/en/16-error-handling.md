@@ -1584,6 +1584,264 @@ direction without requiring sensitive data.
 
 ---
 
+## Error Code Ranges
+
+```
+RUV1000-1099  →  Boundary / Graph      — server/client boundary, env leak, route discovery
+RUV1100-1199  →  SSR / Render           — React SSR, renderer discovery
+RUV1200-1299  →  API / Server Runtime   — API route, port binding, renderer
+RUV1300-1399  →  Bundle / Compilation   — hydration bundling, client route, MDX
+RUV1400-1499  →  Style                  — Tailwind, Sass, CSS entries
+RUV1500-1599  →  Worker / Static Params — render worker, actions, static params, PPR
+RUV1600-1699  →  Config / Adapter       — config loading, validation, range, build()
+RUV1700-1799  →  Plugin Bridge          — plugin hook timeout, protocol, worker pool
+RUV1800-1899  →  JS Runtime             — module resolution, Oxc transform, circular deps
+RUV2000-2200  →  Adapter / Plugin Def   — BuildContext, options, definePlugin, build hook
+RUV3000-3201  →  Official Packages      — database, auth, realtime
+```
+
+---
+
+## Using `notFound()` and `redirect()`
+
+```ts
+// app/blog/[slug]/page.tsx
+import { notFound, redirect } from 'ruvyxa/server';
+
+export default async function BlogPost({ params }: { params: { slug: string } }) {
+  const post = await db.post.findUnique({ where: { slug: params.slug } });
+
+  if (!post) {
+    notFound();              // → แสดง not-found.tsx (404)
+  }
+
+  if (post.redirectTo) {
+    redirect(post.redirectTo, 301);  // → redirect (301 permanent)
+  }
+
+  if (!post.published) {
+    if (!isAdmin) {
+      redirect('/blog/drafts', 302);  // → redirect (302 temporary)
+    }
+  }
+
+  return <article>{post.title}</article>;
+}
+```
+
+**redirect status codes**:
+
+- `redirect(path)` — 307 (temporary)
+- `redirect(path, 301)` — 301 (permanent)
+- `redirect(path, 302)` — 302 (found)
+- `redirect(path, 308)` — 308 (permanent, preserve method)
+
+---
+
+## ดู Error Codes ทั้งหมด
+
+```bash
+# CLI tools สำหรับ debug
+ruvyxa doctor            # ตรวจสอบทุกอย่าง — config, routes, boundary, env
+ruvyxa doctor --json     # รับ compatibility report เป็น JSON
+ruvyxa check             # TypeScript check (เมื่อมี tsconfig) และ parity test
+ruvyxa analyze           # ตรวจ routes, imports และ server/client boundary
+ruvyxa trace /           # ดู route manifest entry ของ path ที่ระบุ
+```
+
+**Output `ruvyxa doctor`**:
+
+```
+━━━ Ruvyxa Doctor ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Version:   0.1.0
+  Node:      22.4.0
+  Platform:  win32
+
+  Config:
+    ✓ ruvyxa.config.ts found
+    ✓ All fields valid
+    ✓ Site URL set
+
+  Routes:
+    ✓ 12 routes registered
+    ✓ No ambiguous routes
+    ✓ All pages have metadata
+
+  Boundary:
+    ✓ 0 violations (server → client)
+    ✓ All server directives correct
+    ✓ Private env vars not exposed
+
+  Plugins:
+    ✓ 3 plugins registered
+    ✓ All plugin configs valid
+    ✓ Adapter: vercel
+
+  Ready for production ✓
+```
+
+---
+
+## ตาราง Error Codes — ทุก code
+
+| Code        | Title (Thai)                        | ช่วง              | Severity |
+| ----------- | ----------------------------------- | ----------------- | -------- |
+| **RUV1001** | ไม่พบไดเรกทอรี app                  | Boundary / Graph  | Error    |
+| **RUV1002** | Segment route dynamic ไม่ถูกต้อง    | Boundary / Graph  | Error    |
+| **RUV1003** | เส้นทาง route ขัดแย้งกัน            | Boundary / Graph  | Error    |
+| **RUV1004** | Page ไม่มี default export           | Boundary / Graph  | Error    |
+| **RUV1007** | โมดูล server-only ใน client graph   | Boundary / Graph  | Error    |
+| **RUV1008** | ตัวแปร env ส่วนบุคคลรั่วไหล         | Boundary / Graph  | Error    |
+| **RUV1009** | โมดูล client-only ใน server graph   | Boundary / Graph  | Error    |
+| **RUV1010** | ไฟล์ใน server/ ถึง client graph     | Boundary / Graph  | Error    |
+| **RUV1100** | React SSR ล้มเหลว                   | SSR / Render      | Error    |
+| **RUV1101** | SSR renderer ขาดพารามิเตอร์         | SSR / Render      | Error    |
+| **RUV1102** | ไม่พบ SSR renderer                  | SSR / Render      | Error    |
+| **RUV1200** | การเรียก API route ล้มเหลว          | API / Server      | Error    |
+| **RUV1201** | ไม่พบพอร์ตเซิร์ฟเวอร์ที่ว่าง        | API / Server      | Error    |
+| **RUV1202** | ไม่พบ API renderer                  | API / Server      | Error    |
+| **RUV1300** | Client hydration bundling ล้มเหลว   | Bundle / Compile  | Error    |
+| **RUV1303** | ไม่พบ client route                  | Bundle / Compile  | Error    |
+| **RUV1304** | Client bundle สำหรับ non-page route | Bundle / Compile  | Error    |
+| **RUV1311** | MDX compilation error               | Bundle / Compile  | Error    |
+| **RUV1312** | Frontmatter YAML error              | Bundle / Compile  | Error    |
+| **RUV1400** | Tailwind CSS compilation ล้มเหลว    | Style             | Error    |
+| **RUV1401** | ไม่พบ Tailwind CSS CLI              | Style             | Error    |
+| **RUV1402** | Sass compilation ล้มเหลว            | Style             | Error    |
+| **RUV1403** | ไม่พบ CSS entry ที่กำหนด            | Style             | Error    |
+| **RUV1404** | CSS entry ต้องอยู่ใน project root   | Style             | Error    |
+| **RUV1500** | SSG/action render ล้มเหลว           | Worker / Params   | Error    |
+| **RUV1501** | ไม่พบไฟล์ route action              | Worker / Params   | Error    |
+| **RUV1510** | Static params รูปแบบผิด             | Worker / Params   | Error    |
+| **RUV1511** | String shorthand ไม่ถูกต้อง         | Worker / Params   | Error    |
+| **RUV1512** | Static params entry ผิด             | Worker / Params   | Error    |
+| **RUV1513** | Static params cache duration ผิด    | Worker / Params   | Error    |
+| **RUV1550** | PPR render ล้มเหลว                  | Worker / Params   | Error    |
+| **RUV1600** | การโหลด config ล้มเหลว              | Config / Adapter  | Error    |
+| **RUV1601** | ค่าฟิลด์ config ไม่ถูกต้อง          | Config / Adapter  | Error    |
+| **RUV1602** | ค่าฟิลด์ config เกินค่าสูงสุด       | Config / Adapter  | Error    |
+| **RUV1603** | Adapter ต้องมี build()              | Config / Adapter  | Error    |
+| **RUV1700** | Plugin hook timeout / host หยุด     | Plugin Bridge     | Error    |
+| **RUV1701** | Plugin protocol error               | Plugin Bridge     | Error    |
+| **RUV1702** | ไม่พบ Worker pool script            | Plugin Bridge     | Error    |
+| **RUV1704** | Worker pool stream error            | Plugin Bridge     | Error    |
+| **RUV1801** | ไม่สามารถ resolve โมดูล             | JS Runtime        | Error    |
+| **RUV1802** | Oxc transform ล้มเหลว               | JS Runtime        | Error    |
+| **RUV1803** | Circular dependency                 | JS Runtime        | Error    |
+| **RUV1804** | JSX runtime ไม่ถูกต้อง              | JS Runtime        | Error    |
+| **RUV2000** | BuildContext validation ล้มเหลว     | Adapter / Plugin  | Error    |
+| **RUV2001** | ค่า options ของ adapter ไม่ถูกต้อง  | Adapter / Plugin  | Error    |
+| **RUV2102** | Plugin definition ไม่ถูกต้อง        | Adapter / Plugin  | Error    |
+| **RUV2200** | Adapter build hook ล้มเหลว          | Adapter / Plugin  | Error    |
+| **RUV3001** | Database operation error            | Official Packages | Error    |
+| **RUV3002** | Database adapter error              | Official Packages | Error    |
+| **RUV3003** | Database connection failed          | Official Packages | Error    |
+| **RUV3100** | Auth service error                  | Official Packages | Error    |
+| **RUV3101** | Auth request invalid                | Official Packages | Error    |
+| **RUV3102** | Too many authentication attempts    | Official Packages | Error    |
+| **RUV3103** | OAuth state invalid                 | Official Packages | Error    |
+| **RUV3104** | OAuth provider error                | Official Packages | Error    |
+| **RUV3105** | Production store error              | Official Packages | Error    |
+| **RUV3201** | Realtime error                      | Official Packages | Error    |
+
+---
+
+## Troubleshooting — Quick Reference
+
+| Error Code(s)       | ปัญหาที่พบบ่อย      | วิธีแก้ด่วน                                         |
+| ------------------- | ------------------- | --------------------------------------------------- |
+| RUV1007-1010        | Boundary violations | ตรวจ `'use client'`, imports, env vars              |
+| RUV1001-1004        | Route discovery     | ตรวจ `app/` directory, route names, default exports |
+| RUV1100-1102        | SSR / Render        | ตรวจ component, `error.tsx`, default export         |
+| RUV1200-1202        | API / Port          | ตรวจ route handler, port config, try/catch          |
+| RUV1300, 1303-1304  | Bundle / Hydration  | `ruvyxa clean && ruvyxa build`, ดู error message    |
+| RUV1311-1312        | MDX / Frontmatter   | ตรวจ syntax MDX และ YAML                            |
+| RUV1400-1404        | Style / CSS         | ตรวจ Tailwind config, SCSS syntax, css.entries      |
+| RUV1500-1501        | Render / Action     | ดู server logs, ตรวจ action files                   |
+| RUV1510-1513        | Static params       | ตรวจ `getStaticParams` return shape                 |
+| RUV1550             | PPR                 | ตรวจ component ใน static shell phase                |
+| RUV1600-1603        | Config / Adapter    | ตรวจ config fields, adapter implements build()      |
+| RUV1700, 1702, 1704 | Plugin bridge       | รีสตาร์ท dev server, `npm install ruvyxa`           |
+| RUV1701             | Plugin protocol     | อัปเดต Ruvyxa, ตรวจ plugin compatibility            |
+| RUV1801-1804        | JS Runtime          | ตรวจ import paths, syntax, circular deps            |
+| RUV2000-2001        | Adapter config      | ตรวจ BuildContext และ adapter options               |
+| RUV2102             | Plugin definition   | ตรวจ `definePlugin()` return value                  |
+| RUV2200             | Build hook          | ตรวจ adapter compatibility                          |
+| RUV3001-3003        | Database            | ตรวจ DATABASE_URL, adapter logs                     |
+| RUV3100-3105        | Auth                | ตรวจ provider config, OAuth state                   |
+| RUV3201             | Realtime            | ตรวจ message format                                 |
+
+---
+
+## Try It Yourself
+
+1. สร้าง `app/error.tsx` พร้อม UI สวยงาม — แสดง error message, digest, reset button
+2. สร้าง `app/not-found.tsx` พร้อมลิงก์กลับหน้าแรก และ search
+3. สร้าง `app/loading.tsx` — spinner + skeleton
+4. ทดลองสร้าง RUV1007 โดย import server module ใน client component — ดู error
+5. ใช้ `notFound()` ใน dynamic route — ดู 404 page
+6. จัดการ error ใน server action ด้วย try/catch — return error object
+7. ใช้ `RuvyxaError` class ใน custom error
+8. เปิด `debug.overlay: false` ถ้าไม่ต้องการ error overlay
+9. รัน `ruvyxa doctor` — ดู error ทั้งหมดในแอป
+10. ทดสอบ API route error handling — ส่ง POST ผิด format
+11. ตรวจสอบ bundle budget — เพิ่ม `bundleBudget` plugin
+12. ดู error overlay ใน dev mode — ทำ intentional error
+
+---
+
+## Summary
+
+- Error codes: RUV1001-3201 — แบ่งเป็น 11 ช่วง: boundary/graph, SSR/render, API/server,
+  bundle/compile, style, worker/params, config/adapter, plugin bridge, JS runtime, adapter/plugin
+  def, official packages
+- รวม 50+ error codes แต่ละตัวมี: code, title, คำอธิบาย, error text, วิธีแก้
+- Error boundary: `error.tsx` (catch errors), `not-found.tsx` (404), `loading.tsx` (loading state)
+- Error overlay ใน dev mode — แสดง file, line, why, fix, dismiss, reload, open in editor
+- Server actions และ API routes: จัดการด้วย try/catch + `RuvyxaError`
+- `notFound()` และ `redirect()` (301, 302, 307, 308) สำหรับควบคุม flow
+- `ruvyxa doctor` ตรวจทุกอย่าง — config, routes, boundary, env
+- 2 ตาราง: error code ทั้งหมด + cross-reference
+
+---
+
+## อ่าน Diagnostic เป็น Boundary Signal
+
+diagnostics ของ Ruvyxa ถูกสร้างจาก subsystem ที่เห็นปัญหา ให้เริ่มจาก code/message แล้วไปที่
+boundary ที่เป็นเจ้าของปัญหา แทนการมอง numeric ranges ว่าทุกเลขต้องมีอยู่จริง กลุ่มสำคัญปัจจุบันคือ:
+
+| Area                    | ตัวอย่าง                                              | จุดที่ควรตรวจแรก                                                       |
+| ----------------------- | ----------------------------------------------------- | ---------------------------------------------------------------------- |
+| Route discovery         | `RUV1001`, `RUV1002`, `RUV1004`                       | `appDir`, route entry filename, รูปแบบ dynamic segment, default export |
+| Client/server boundary  | `RUV1007`, `RUV1008`, `RUV1009`, `RUV1010`            | ไฟล์ที่ diagnostic ระบุและ reachable relative imports                  |
+| Content และ styles      | `RUV1310`–`RUV1312`, `RUV1402`, `RUV1403`             | Markdown/MDX frontmatter, Sass source หรือ stylesheet import path      |
+| Configuration           | `RUV1601`, `RUV1602`                                  | config field ที่ระบุและ range/path constraint ในเอกสาร                 |
+| Plugin/adapter contract | `RUV2102`, `RUV2200`, `RUV2202`, `RUV2203`, `RUV2210` | plugin definition หรือ target/adapter package ที่เลือก                 |
+
+ใช้คำสั่งที่เล็กที่สุดที่เปิดเผย boundary เดียวกัน:
+
+```bash
+ruvyxa routes
+ruvyxa trace /the-route-pattern
+ruvyxa analyze --format human
+ruvyxa doctor --json
+```
+
+`routes` ตอบเรื่อง discovery, `trace` ตอบ manifest entry เดียว, `analyze` ตอบ route/import
+validation และ `doctor` ตอบ environment/configuration/adapter compatibility คำสั่งเหล่านี้ไม่ได้แก้
+source/config ให้อัตโนมัติ จึงควรเก็บ file/path context ของ diagnostic แล้วแก้ที่สาเหตุที่เล็กที่สุด
+
+### ลำดับ Escalation ที่ปลอดภัย
+
+1. reproduce ด้วยคำสั่งที่เป็นเจ้าของ failure
+2. อ่านไฟล์และ import/config edge ที่ result ระบุ
+3. เปลี่ยนสาเหตุเดียว ไม่เปลี่ยน settings ที่ไม่เกี่ยวหลายอย่างพร้อมกัน
+4. รัน focused command ซ้ำ
+5. รัน `npm run check` เมื่อ failure ข้าม route, render หรือ type boundary
+
+อย่า log secrets, environment dump ทั้งหมด หรือ private request payload เพื่อ "ดูรายละเอียดเพิ่ม"
+boundary diagnostics ตั้งใจให้ชี้ source location และ safe direction โดยไม่ต้องใช้ข้อมูล sensitive
+
 ## Next Steps
 
 - **[02-routing.md](./02-routing.md)** — Resolve route conflicts (RUV1002-1004)

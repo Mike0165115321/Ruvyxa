@@ -19,6 +19,59 @@ Ruvyxa supports five rendering strategies. The right one depends on one question
 
 ---
 
+## Decision Tree
+
+```
+Incoming Request
+    │
+    ▼
+Has 'use client' without data-loading server components?
+    │         │
+   Yes        No
+    │         │
+    ▼         ▼
+   CSR      Has export const ppr = true?
+                │         │
+               Yes        No
+                │         │
+                ▼         ▼
+               PPR      Has export const revalidate = N?
+                           │         │
+                          Yes        No
+                           │         │
+                           ▼         ▼
+                          ISR      Has getStaticParams or staticParams?
+                           │         │         │
+                           │        Yes        No
+                           │         │         │
+                           │         ▼         ▼
+                           │      SSG          Route has dynamic segment?
+                           │      (dynamic)    │         │
+                           │                  Yes        No
+                           │                   │         │
+                           │                   ▼         ▼
+                           │                 SSR      Has dynamic data marker?
+                           │                   │      (fetch, cookies, headers,
+                           │                   │       Date.now, Math.random,
+                           │                   │       process.env, searchParams)
+                           │                   │         │
+                           │                   │         │
+                           │                   ◄─────────┤
+                           │                   │ Yes     │ No
+                           │                   ▼         ▼
+                           │                SSR        SSG
+                           │                           (static)
+◄───────────────────────────┘───────────────────────────►
+
+SSG ─── static HTML, Node runtime not required
+ISR ─── SSG + cache expiration + background refresh
+SSR ─── server render on every request
+PPR ─── static shell + live content streaming
+CSR ─── purely browser-rendered
+```
+
+---
+
 ## Detection Algorithm — Exact Priority
 
 Source: `crates/ruvyxa_graph/src/lib.rs`, function `detect_render_strategy`
@@ -1018,6 +1071,64 @@ If a page exports `getStaticParams` but reachable code contains `fetch(`, the ro
 | Product page with recommendations | PPR                      |
 | Admin panel (behind auth)         | CSR                      |
 | API documentation                 | SSG with `staticParams`  |
+
+---
+
+## Troubleshooting
+
+| Problem                           | Cause                                                             | Solution                                   |
+| --------------------------------- | ----------------------------------------------------------------- | ------------------------------------------ |
+| SSG does not work, always SSR     | Dynamic APIs are used e.g. `cookies()`, `headers()`, `Date.now()` | Use ISR or SSR instead                     |
+| ISR does not refresh              | `revalidate` time not reached, or error in background render      | Wait or reduce revalidate time             |
+| PPR static shell has dynamic data | Missing `<Suspense>` boundary                                     | Wrap dynamic content with `<Suspense>`     |
+| CSR has flash                     | Missing fallback state                                            | Add loading state                          |
+| Slow build due to too much SSG    | getStaticParams returns too many paths                            | Use ISR or limit params                    |
+| SSG takes long build time         | Too many SSG pages                                                | Convert some pages to ISR                  |
+| ISR cache does not refresh        | Background render error                                           | Check server logs                          |
+| PPR stream is slow                | Dynamic slots are heavy                                           | Use multi-level `<Suspense>` or add cache  |
+| getStaticParams fails             | Database/API not ready at build time                              | Use try/catch or ISR instead               |
+| Hydration mismatch                | Server HTML ≠ Client first render                                 | Check `useEffect` + `Date` / `Math.random` |
+
+### Error Examples
+
+```tsx
+// SSG fails due to Date.now()
+export default function Page() {
+  // ❌ Date.now() → SSR (dynamic marker)
+  const time = Date.now()
+  return <p>{time}</p>
+}
+
+// ✅ Use new Date() → SSG (Not a dynamic marker)
+export default function Page() {
+  const time = new Date().toISOString()
+  return <p>{time}</p>
+}
+```
+
+```tsx
+// PPR fails because there is no Suspense
+export const ppr = true
+
+export default function Page() {
+  // ❌ PPR requires <Suspense> boundary
+  return <DynamicContent />
+}
+
+// ✅ Correct
+export const ppr = true
+
+export default function Page() {
+  return (
+    <div>
+      <p>Static shell</p>
+      <Suspense fallback={<p>Loading...</p>}>
+        <DynamicContent />
+      </Suspense>
+    </div>
+  )
+}
+```
 
 ---
 

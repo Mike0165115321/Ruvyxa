@@ -1267,6 +1267,13 @@ interface ImageLoaderProps {
 
 _เอกสารอ้างอิงสำหรับ Ruvyxa 1.0 — อัปเดตล่าสุดตาม codebase ณ เวลาที่เผยแพร่_
 
+## สิ่งที่คุณจะได้เรียนรู้ (What You Will Learn)
+
+## @ruvyxa/react/server
+
+- `renderToPipeableStream`
+- `renderToReadableStream`
+
 ## วิธีใช้ API Reference อย่างปลอดภัย
 
 public export barrels เป็น source ที่ผูกกับ implementation สำหรับบทนี้: `@ruvyxa/react` export

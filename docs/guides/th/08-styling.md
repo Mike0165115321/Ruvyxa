@@ -25,6 +25,32 @@ stylesheet นอก project
 
 ---
 
+## Type Definitions
+
+```ts
+// ruvyxa.config.ts
+export interface CssConfig {
+  /** ไฟล์ Global CSS ที่จะรวมอยู่ในทุกหน้า */
+  entries?: string[]
+  /** การตั้งค่า CSS Modules */
+  modules?: {
+    localsConvention?: 'camelCase' | 'camelCaseOnly' | 'dashes' | 'dashesOnly'
+    generateScopedName?: string | ((name: string, filename: string, css: string) => string)
+  }
+  /** เปิดใช้งาน Tailwind CSS (ค่าเริ่มต้น: true ถ้ามี tailwind.config.js) */
+  tailwind?: boolean
+  /** การตั้งค่า Autoprefixer */
+  autoprefixer?: boolean | object
+  /** การตั้งค่า SCSS/Sass */
+  preprocessorOptions?: {
+    scss?: object
+    sass?: object
+  }
+}
+```
+
+---
+
 ## Global CSS
 
 import ไฟล์ CSS ใน root layout — CSS จะเป็น global, ใช้ได้กับทุก component โดยไม่ต้อง import ซ้ำ
@@ -584,6 +610,18 @@ css: {
 
 ---
 
+## CSS Ordering
+
+ลำดับของการ Inject CSS ไปที่เบราว์เซอร์มีความสำคัญ (เพื่อหลีกเลี่ยงปัญหา CSS Specificity) Ruvyxa
+ใช้ลำดับดังนี้:
+
+1. `css.entries` จาก `ruvyxa.config.ts` (Global reset/utilities)
+2. `import './global.css'` ใน `app/layout.tsx` (Root layouts)
+3. CSS ที่ import เข้าไปใน Server Components
+4. CSS ที่ import เข้าไปใน Client Components (โหลดแบบ Async หรือ Dynamic)
+
+---
+
 ## Style Objects (CSS-in-JS)
 
 React style objects — ไม่ต้อง import ไฟล์ CSS, เขียน inline ได้เลย:
@@ -649,6 +687,87 @@ css: {
   entries: ['./app/globals.css'],
 }
 ```
+
+---
+
+## CSS Minification
+
+Ruvyxa ใช้ LightningCSS (เขียนด้วย Rust) สำหรับ Minify CSS และจัดการ Vendor Prefixes อัตโนมัติ
+ซึ่งเร็วโคตรๆ:
+
+- ลบ Whitespace/Comments
+- แปลงสีเป็นรูปแบบที่สั้นที่สุด (`#ff0000` -> `red`)
+- ยุบรวม (Merge) Rules ที่เหมือนกัน
+- ลดขนาดการเขียน CSS calc()
+
+---
+
+## Remote Style Imports
+
+คุณสามารถดึง CSS จาก CDN ภายนอกมาใช้ในโปรเจกต์ได้โดยตรง (ถูกดาวน์โหลดตอน Build time):
+
+```css
+/* app/global.css */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
+@import 'https://cdn.jsdelivr.net/npm/normalize.css@8.0.1/normalize.css';
+```
+
+Ruvyxa จะดาวน์โหลดเนื้อหาของ `@import` ที่เป็น HTTP(s) และฝัง (inline) ไปในไฟล์ CSS สุดท้าย
+(เพื่อประสิทธิภาพที่ดีขึ้น)
+
+---
+
+## Style End Tag Escaping
+
+เมื่อแทรก Inline `<style>` ฝั่ง Server, เนื้อหา CSS อาจมีข้อมูลที่เบราว์เซอร์มองว่าเป็นปิดแท็ก
+`</style>` ซึ่งทำให้เกิดช่องโหว่ XSS Ruvyxa Escape แท็กเหล่านี้ใน CSS ให้อัตโนมัติ:
+
+```css
+/* โค้ดต้นฉบับ */
+.bad-content::after {
+  content: "</style><script>alert('XSS')</script>";
+}
+
+/* ถูก Escape ให้อัตโนมัติเป็น */
+.bad-content::after {
+  content: "<\/style><script>alert('XSS')<\/script>";
+}
+```
+
+---
+
+## Error Codes Reference
+
+| รหัสข้อผิดพลาด | คำอธิบาย                                  | วิธีแก้ไข                              |
+| -------------- | ----------------------------------------- | -------------------------------------- |
+| `RUV3001`      | หาไฟล์ CSS ที่ import ไม่เจอ              | ตรวจสอบ Path หรือการสะกดชื่อไฟล์       |
+| `RUV3002`      | Syntax Error ในไฟล์ SCSS/CSS              | ตรวจสอบบรรทัดที่มีข้อผิดพลาดในไฟล์ CSS |
+| `RUV3003`      | `css.entries` อ้างอิงไฟล์ที่ไม่มีอยู่จริง | ตรวจสอบ Path ใน `ruvyxa.config.ts`     |
+| `RUV3004`      | Tailwind config มีข้อผิดพลาด              | ตรวจสอบไฟล์ `tailwind.config.js`       |
+
+---
+
+## Performance Characteristics
+
+| ฟีเจอร์          | ความซับซ้อน | หมายเหตุ                                   |
+| ---------------- | ----------- | ------------------------------------------ |
+| CSS Minification | `O(n)`      | เร็วมาก (ใช้ LightningCSS ภายใน)           |
+| SCSS Compilation | `O(n)`      | โหลด dart-sass ผ่าน worker thread          |
+| Tailwind JIT     | `O(n)`      | สแกนไฟล์ที่ถูกเปลี่ยนเพื่อสร้างคลาสแบบ JIT |
+
+---
+
+## Edge Cases
+
+### การใช้ `@import` ใน CSS Modules
+
+CSS Modules รองรับการใช้ `@import` เพื่อดึงตัวแปร (variables) จากไฟล์อื่น
+แต่ควรระวังเรื่องการใช้โค้ดซ้ำซ้อน แนะนำให้ใช้ SCSS `@use` แทนถ้าเป็นไปได้
+
+### ลำดับของ Tailwind Utilities
+
+ถ้าคุณใช้ Tailwind ร่วมกับ Custom CSS โปรดจำไว้ว่าคลาสของ Tailwind จะถูก Inject ตามลำดับในไฟล์หลัก
+หากมีปัญหา Specificity ให้ใช้ `@layer` ของ Tailwind เข้าช่วย
 
 ---
 
@@ -946,6 +1065,256 @@ fn normalized_relative_path(path, project_root) -> String {
 
 ---
 
+## Choosing an Approach
+
+| วิธีการ                   | เหมาะสำหรับ                                          | ไม่เหมาะสำหรับ                                         |
+| ------------------------- | ---------------------------------------------------- | ------------------------------------------------------ |
+| Tailwind CSS              | แอปเน้นความเร็วในการสร้าง, ดีไซน์สไตล์ Utility-first | คนที่ไม่ชอบ HTML Class รกๆ                             |
+| CSS Modules               | แอปที่มี Component ซับซ้อนและใช้ซ้ำได้               | การแชร์สไตล์ที่ต้องใช้ซ้ำข้าม Component บ่อยๆ (Global) |
+| Global CSS                | โปรเจกต์ขนาดเล็กมาก, สไตล์พื้นฐาน (Reset/Base)       | โปรเจกต์ขนาดใหญ่ที่ต้องการ Encapsulation               |
+| CSS-in-JS (Style Objects) | ผู้พัฒนาที่ชอบเขียน Logic ร่วมกับสไตล์               | ระบบที่ต้องการ Framework-agnostic CSS                  |
+
+---
+
+## Responsive Design Patterns
+
+ตัวอย่างการทำ Responsive แบบไม่ต้องพึ่งพา Tailwind:
+
+```css
+/* app/components/Card.module.css */
+.card {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+
+/* รองรับจอขนาด 768px ขึ้นไป */
+@media (min-width: 768px) {
+  .card {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* รองรับจอขนาด 1024px ขึ้นไป */
+@media (min-width: 1024px) {
+  .card {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+```
+
+---
+
+## Theming with CSS Custom Properties
+
+เราสนับสนุนการใช้ CSS Variables ในการทำ Theming (โดยเฉพาะ Dark/Light mode):
+
+```css
+/* app/global.css */
+:root {
+  --bg-color: #ffffff;
+  --text-color: #111827;
+  --primary-color: #3b82f6;
+}
+
+[data-theme='dark'] {
+  --bg-color: #111827;
+  --text-color: #f9fafb;
+  --primary-color: #60a5fa;
+}
+
+body {
+  background-color: var(--bg-color);
+  color: var(--text-color);
+}
+```
+
+---
+
+## Critical CSS Extraction
+
+ในกระบวนการ Build, Ruvyxa จะดึง CSS ส่วนสำคัญ (Critical CSS) ที่จำเป็นต่อการแสดงผล "เหนือขอบจอ
+(Above the fold)" ของทุกเพจ และฝัง (Inline) เข้าไปใน HTML ของหน้าเพจนั้น
+เพื่อให้เบราว์เซอร์เรนเดอร์ได้ทันทีโดยไม่ต้องรอโหลดไฟล์ `.css`
+
+---
+
+## CSS Animation Performance
+
+พยายามแอนิเมทเฉพาะคุณสมบัติที่เบราว์เซอร์สามารถประมวลผลผ่าน GPU ได้ (เช่น `transform`, `opacity`)
+เพื่อประสิทธิภาพสูงสุด:
+
+```css
+/* ❌ ไม่ดี: ทำให้เกิด Layout Reflow */
+.box {
+  transition: margin-left 0.3s ease;
+}
+.box:hover {
+  margin-left: 20px;
+}
+
+/* ✅ ดี: ใช้ GPU Hardware Acceleration */
+.box {
+  transition: transform 0.3s ease;
+}
+.box:hover {
+  transform: translateX(20px);
+}
+```
+
+---
+
+## Print Stylesheets
+
+คุณสามารถกำหนดรูปแบบสำหรับเวลาพิมพ์ (Print) โดยใช้ Media Query แบบ `print`:
+
+```css
+@media print {
+  header,
+  footer,
+  nav,
+  .hide-on-print {
+    display: none !important;
+  }
+
+  body {
+    background: white;
+    color: black;
+    font-size: 12pt;
+  }
+}
+```
+
+---
+
+## Font Loading
+
+เพื่อประสิทธิภาพสูงสุด ควรโหลดฟอนต์ผ่านคำสั่ง `@font-face` แทนการฝังผ่าน External CSS จาก Google
+Fonts โดยตรง:
+
+```css
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap; /* ทำให้ข้อความแสดงขึ้นมาก่อนฟอนต์จะโหลดเสร็จ */
+  src: url('/fonts/Inter-Regular.woff2') format('woff2');
+}
+```
+
+---
+
+## Dark Mode with prefers-color-scheme
+
+คุณสามารถจัดการโหมดมืดอัตโนมัติตามการตั้งค่าระบบของผู้ใช้งาน:
+
+```css
+:root {
+  --background: white;
+  --text: black;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: black;
+    --text: white;
+  }
+}
+```
+
+---
+
+## CSS Utility Classes
+
+นอกเหนือจาก Tailwind แล้ว คุณสามารถสร้างชุด Utility เล็กๆ ของคุณเองได้ถ้าโปรเจกต์ไม่ได้ใหญ่พอจะใช้
+Tailwind:
+
+```css
+/* utilities.css */
+.flex {
+  display: flex;
+}
+.flex-col {
+  flex-direction: column;
+}
+.items-center {
+  align-items: center;
+}
+.justify-center {
+  justify-content: center;
+}
+.mt-4 {
+  margin-top: 1rem;
+}
+.text-center {
+  text-align: center;
+}
+```
+
+---
+
+## PostCSS and Autoprefixer
+
+Ruvyxa ฝัง Autoprefixer และ PostCSS มาให้แล้ว เบื้องหลังจะเพิ่ม Vendor Prefix ให้อัตโนมัติ:
+
+```css
+/* ก่อน Build */
+.example {
+  user-select: none;
+}
+
+/* หลัง Build */
+.example {
+  -webkit-user-select: none;
+  user-select: none;
+}
+```
+
+---
+
+## CSS Ordering Deep Dive
+
+หากมี CSS หลายสไตล์ซ้อนทับกัน (Specificity ชนกัน) โค้ดที่โหลดทีหลังจะชนะ:
+
+1. `<link rel="stylesheet">` จาก `css.entries` โหลดก่อนเสมอ
+2. สไตล์ของ Server Component โหลดตาม
+3. สไตล์ของ Client Component (ที่โหลดตอน Hydration)
+
+คุณสามารถควบคุมเรื่องนี้ได้โดยใช้ฟีเจอร์ใหม่ `@layer` ใน CSS:
+
+```css
+@layer base, components, utilities;
+
+@layer base {
+  h1 {
+    font-size: 2rem;
+  }
+}
+
+@layer utilities {
+  .text-xl {
+    font-size: 1.5rem;
+  }
+}
+```
+
+---
+
+## Build Output
+
+ในโหมด Build ไฟล์ CSS ทั้งหมดที่ไม่ได้มาจาก Client Modules จะถูกรวมและแบ่งออกเป็นไฟล์หลัก (Chunks)
+ภายในโฟลเดอร์ `.ruvyxa/static/css/` ซึ่งมี Hash ในชื่อไฟล์ เพื่อประโยชน์เรื่อง Browser Caching
+ระยะยาว:
+
+```
+.ruvyxa/static/css/
+├── global.7f8a9b.css
+├── app_page.2b3c4d.css
+└── _about_page.1a2b3c.css
+```
+
+---
+
 ## ข้อผิดพลาดทั่วไป
 
 | ปัญหา                            | สาเหตุ                          | วิธีแก้                                                |
@@ -1032,6 +1401,60 @@ app/styles/
 5. **HMR ช่วยให้แก้ style ได้เร็ว** — แก้ SCSS → browser อัพเดตทันทีโดยไม่ reload
 6. **ใช้ Tailwind เมื่อต้องการ utility-first** — ใช้ `@import "tailwindcss"` ใน entry CSS
 7. **ระวัง `@import` (deprecated)** — ใช้ `@use` แทนเสมอ
+
+---
+
+## ลองทำดู
+
+สร้างกล่องโต้ตอบการลบแบบมีสไตล์:
+
+**1. `app/components/DeleteDialog.module.css`**
+
+```css
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.dialog {
+  background: white;
+  padding: 24px;
+  border-radius: 8px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+}
+.dangerButton {
+  background: red;
+  color: white;
+  padding: 8px 16px;
+  border-radius: 4px;
+}
+```
+
+**2. `app/components/DeleteDialog.tsx`**
+
+```tsx
+import styles from './DeleteDialog.module.css'
+
+export function DeleteDialog({ onConfirm, onCancel }) {
+  return (
+    <div className={styles.overlay}>
+      <div className={styles.dialog}>
+        <h2>ยืนยันการลบ?</h2>
+        <p>การกระทำนี้ไม่สามารถย้อนกลับได้</p>
+        <div>
+          <button onClick={onCancel}>ยกเลิก</button>
+          <button className={styles.dangerButton} onClick={onConfirm}>
+            ลบข้อมูล
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+```
 
 ---
 
