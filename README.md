@@ -174,12 +174,11 @@
   via `ruvyxa.config.ts`. Route-scoped middleware targets specific path patterns.
 - **Plugin middleware** — application modules register route-scoped Fetch `Request`/`Response` hooks
   alongside build transforms and completion callbacks.
-- **First-party plugin kit** — `ruvyxa/plugins` includes a Content Engine that turns native
-  Markdown/MDX routes into a live content API, locale-aware search, RSS, sitemap, explicit answer
-  data, and an experimental `llms.txt` index from one metadata source. AI search/training crawlers
-  can be controlled independently, alongside observability, security policy, cache rules, PWA,
-  OpenAPI, redirects, bundle budgets, and environment validation. Build-generated files are included
-  in adapter artifacts.
+- **16 Built-in Plugins** — Drop-in solutions from `ruvyxa/plugins` for advanced functionality:
+  Content Engine (Markdown/MDX to API + `llms.txt`), OpenAPI generator, Bundle Budget enforcer,
+  PWA/Manifest, Sitemap, RSS Feeds, SEO Robots, Redirects, Security Headers, and more. All plugins
+  operate within strict execution limits and are fully extensible. See the
+  [Plugins Architecture](docs/guides/en/14-plugins.md).
 - **Official state packages** — `@ruvyxa/database` provides a typed adapter facade, `@ruvyxa/auth`
   provides secure provider-driven sessions, and `@ruvyxa/realtime` connects opted-in server actions
   to the native self-hosted WebSocket transport with explicit deployment guards.
@@ -198,15 +197,18 @@
   capabilities, and every route unsupported by the selected adapter (`--json` for CI).
 - **`bench`** — benchmark route discovery, analysis, validation, and production builds.
 - **`test:parity`** — compare dev/prod routes and smoke-render page routes.
-- **Structured diagnostics** — `RUV####` error codes with file locations and suggested fixes. Never
-  a generic build error when the framework can pinpoint the source.
+- **First-Class Diagnostics** — Over 50 detailed `RUV####` error codes spanning Boundary Violations
+  (RUV1000s), Server/Render Errors (RUV1100s), Build/Compilation (RUV1300s), and Official Packages
+  (RUV3000s). See the [Complete Error Catalog](docs/guides/en/16-error-handling.md) for exact file
+  locations, causes, and suggested fixes.
 
-### Scaffold & adapters
+### Deploy Anywhere (10 Adapters)
 
 - **Four starters** — `npm create ruvyxa@latest` defaults to the focused `minimal` app, with `blog`,
   `crud`, and `api-backend` available through `--template`.
-- **Ten deployment adapters** — Node, Bun, static, Vercel, Netlify, Cloudflare, Railway, Render,
-  Firebase Hosting, and AWS Amplify Hosting with provider-native zero-config output.
+- **10 Deployment Adapters** — Zero-config native output for Vercel, Netlify, Cloudflare, Node.js,
+  Bun, Static, AWS Amplify, Firebase, Railway, and Render. See the
+  [Deployment Guide](docs/guides/en/13-deployment.md) for platform-specific configurations.
 
 ---
 
@@ -246,6 +248,11 @@ my-app/
 ├── ruvyxa.config.ts
 └── tsconfig.json
 ```
+
+First time using Ruvyxa? Check out the
+**[Tutorial: Build a Mini Blog](docs/guides/en/01-getting-started.md#tutorial-build-a-mini-blog)**
+in the Getting Started guide for a step-by-step introduction to Routing, Server Components, and
+Dynamic Routes.
 
 For a fuller integration app with dynamic routes, API routes, server actions, and all rendering
 strategies, see [examples/demo](examples/demo).

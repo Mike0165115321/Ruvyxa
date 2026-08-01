@@ -708,6 +708,118 @@ Visit **http://localhost:3000/about**. The new page works instantly — no resta
 
 ---
 
+## Tutorial: Build a Mini Blog
+
+To help you understand the core concepts of Ruvyxa (Routing, Server Components, and Data Fetching),
+let's build a simple mini-blog step by step.
+
+### 1. Create the Blog Folder
+
+Ruvyxa uses **file-system routing**. Any folder inside `app/` becomes a URL route. Let's create a
+route for our blog at `http://localhost:3000/blog`.
+
+Create a new file at `app/blog/page.tsx`:
+
+```tsx
+export default function BlogList() {
+  return (
+    <main>
+      <h1>My Mini Blog</h1>
+      <p>Welcome to my awesome blog!</p>
+    </main>
+  )
+}
+```
+
+If you visit `/blog` in your browser, you will see this page immediately.
+
+### 2. Fetch Data (Server Components)
+
+By default, all components in Ruvyxa are **Server Components**. This means they run on the server
+_before_ being sent to the browser. You can fetch data directly inside the component using
+`async/await` without needing `useEffect` or any API routes!
+
+Update `app/blog/page.tsx` to fetch some dummy posts:
+
+```tsx
+// We can make the component async!
+export default async function BlogList() {
+  // Fetch data directly on the server
+  const res = await fetch('https://jsonplaceholder.typicode.com/posts?_limit=3')
+  const posts = await res.json()
+
+  return (
+    <main>
+      <h1>My Mini Blog</h1>
+      <ul>
+        {posts.map((post: any) => (
+          <li key={post.id}>
+            <h2>{post.title}</h2>
+            <p>{post.body}</p>
+          </li>
+        ))}
+      </ul>
+    </main>
+  )
+}
+```
+
+### 3. Add Navigation (Link Component)
+
+To navigate between pages without reloading the browser (Client-side Navigation), use the `<Link>`
+component from `@ruvyxa/react`.
+
+Let's update the blog page to link back to the home page:
+
+```tsx
+import { Link } from '@ruvyxa/react'
+
+export default async function BlogList() {
+  // ... fetch posts ...
+  return (
+    <main>
+      <Link href="/">← Back to Home</Link>
+      <h1>My Mini Blog</h1>
+      {/* ... render posts ... */}
+    </main>
+  )
+}
+```
+
+### 4. Create a Dynamic Route
+
+What if we want to show a single post at `/blog/1` or `/blog/2`? We use **Dynamic Segments** by
+wrapping the folder name in brackets, like `[id]`.
+
+Create a new file at `app/blog/[id]/page.tsx`:
+
+```tsx
+import { Link } from '@ruvyxa/react'
+
+export default async function BlogPost({ params }: { params: { id: string } }) {
+  // Access the dynamic [id] from the URL
+  const { id } = params
+
+  // Fetch the specific post
+  const res = await fetch(`https://jsonplaceholder.typicode.com/posts/${id}`)
+  const post = await res.json()
+
+  return (
+    <main>
+      <Link href="/blog">← Back to Blog</Link>
+      <h1>{post.title}</h1>
+      <p>{post.body}</p>
+    </main>
+  )
+}
+```
+
+**Congratulations!** You've just learned the three most important concepts in Ruvyxa:
+
+1. **Routing:** Folders define URLs (`app/blog/page.tsx` -> `/blog`).
+2. **Data Fetching:** Use `async/await` directly in your Server Components.
+3. **Dynamic Routes:** Use brackets (`[id]`) to capture URL variables.
+
 ## The 4 Starter Templates
 
 ### minimal

@@ -1216,6 +1216,118 @@ export default function AboutPage() {
 
 ---
 
+## บทช่วยสอน: สร้างมินิบล็อก (Tutorial: Build a Mini Blog)
+
+เพื่อให้คุณเข้าใจแนวคิดพื้นฐานที่สำคัญที่สุดของ Ruvyxa (Routing, Server Components, และการดึงข้อมูล)
+ได้ง่ายและเร็วที่สุด เรามาลองสร้างมินิบล็อกแบบทีละขั้นตอนกันครับ
+
+### 1. สร้างโฟลเดอร์สำหรับบล็อก
+
+Ruvyxa ใช้ระบบ **File-system routing** (โฟลเดอร์คือ URL) โฟลเดอร์ใดๆ ก็ตามที่คุณสร้างใน `app/`
+จะกลายเป็น URL อัตโนมัติ มาสร้างหน้าบล็อกที่ URL `http://localhost:3000/blog` กันครับ
+
+สร้างไฟล์ใหม่ที่ `app/blog/page.tsx`:
+
+```tsx
+export default function BlogList() {
+  return (
+    <main>
+      <h1>บล็อกของฉัน</h1>
+      <p>ยินดีต้อนรับสู่มินิบล็อก!</p>
+    </main>
+  )
+}
+```
+
+เมื่อคุณเปิดเบราว์เซอร์ไปที่ `/blog` คุณจะเห็นหน้านี้ปรากฏขึ้นทันที
+
+### 2. ดึงข้อมูล (Server Components)
+
+ใน Ruvyxa ทุกๆ Component จะเป็น **Server Components** เป็นค่าเริ่มต้น
+ซึ่งหมายความว่ามันจะทำงานเสร็จตั้งแต่บนเซิร์ฟเวอร์ก่อนส่งมาที่หน้าจอ คุณจึงสามารถใช้ `async/await`
+ดึงข้อมูลจาก Database หรือ API ได้โดยตรง ไม่ต้องใช้ `useEffect` ให้ยุ่งยากเลย!
+
+มาแก้ไฟล์ `app/blog/page.tsx` ให้ดึงข้อมูลบทความจำลองกัน:
+
+```tsx
+// เปลี่ยนฟังก์ชันให้เป็น async ได้เลย!
+export default async function BlogList() {
+  // ดึงข้อมูลตรงๆ บน Server
+  const res = await fetch('https://jsonplaceholder.typicode.com/posts?_limit=3')
+  const posts = await res.json()
+
+  return (
+    <main>
+      <h1>บล็อกของฉัน</h1>
+      <ul>
+        {posts.map((post: any) => (
+          <li key={post.id}>
+            <h2>{post.title}</h2>
+            <p>{post.body}</p>
+          </li>
+        ))}
+      </ul>
+    </main>
+  )
+}
+```
+
+### 3. การเปลี่ยนหน้า (Link Component)
+
+หากต้องการเปลี่ยนหน้าโดยที่เว็บไม่กระตุก (ไม่ต้องโหลดหน้าใหม่ทั้งหมด) ให้ใช้ `<Link>` จากแพ็กเกจ
+`@ruvyxa/react` ครับ
+
+ลองเพิ่มปุ่มกลับหน้าแรกเข้าไปในบล็อก:
+
+```tsx
+import { Link } from '@ruvyxa/react'
+
+export default async function BlogList() {
+  // ... โค้ดดึงข้อมูล ...
+  return (
+    <main>
+      <Link href="/">← กลับหน้าแรก</Link>
+      <h1>บล็อกของฉัน</h1>
+      {/* ... โค้ดแสดงบทความ ... */}
+    </main>
+  )
+}
+```
+
+### 4. สร้าง Dynamic Route (URL แบบแปรผัน)
+
+ถ้าเราต้องการเปิดอ่านบทความเดี่ยวๆ เช่น `/blog/1` หรือ `/blog/2` เราจะใช้ **Dynamic Segments**
+โดยการตั้งชื่อโฟลเดอร์ใส่ไว้ในวงเล็บก้ามปู เช่น `[id]` ครับ
+
+สร้างไฟล์ใหม่ที่ `app/blog/[id]/page.tsx`:
+
+```tsx
+import { Link } from '@ruvyxa/react'
+
+// Ruvyxa จะส่งพารามิเตอร์ [id] มาให้ทาง props อัตโนมัติ
+export default async function BlogPost({ params }: { params: { id: string } }) {
+  const { id } = params
+
+  // ดึงข้อมูลเฉพาะบทความนั้นๆ
+  const res = await fetch(`https://jsonplaceholder.typicode.com/posts/${id}`)
+  const post = await res.json()
+
+  return (
+    <main>
+      <Link href="/blog">← กลับไปหน้ารวมบล็อก</Link>
+      <h1>{post.title}</h1>
+      <p>{post.body}</p>
+    </main>
+  )
+}
+```
+
+**ยินดีด้วยครับ! 🎉** คุณเพิ่งได้เรียนรู้หัวใจสำคัญ 3 อย่างของ Ruvyxa ไปแบบง่ายๆ:
+
+1. **Routing:** การตั้งชื่อโฟลเดอร์คือการสร้าง URL (`app/blog/page.tsx` -> `/blog`)
+2. **Data Fetching:** คุณสามารถใช้ `async/await` เพื่อดึงข้อมูลได้ทันทีใน Server Components
+3. **Dynamic Routes:** การใช้วงเล็บ `[id]` เพื่อรับค่าตัวแปรจาก URL
+
 ## Starter Templates ทั้ง 4 รูปแบบ (The 4 Starter Templates)
 
 ### minimal
@@ -1335,58 +1447,6 @@ export async function createRuvyxaApp(
 | Missing template       | `Template directory was not found.`                                               |
 | Template incomplete    | `Template is incomplete. Missing required files:`                                 |
 | Copy failure           | `Failed to create project at "...".`                                              |
-
----
-
-## Your First 10 Minutes (10 นาทีแรกของคุณ)
-
-แผนแบบย่อให้คุณคุ้นเคยกับ Ruvyxa:
-
-1. **`npm create ruvyxa@latest playtime`** — สร้างโปรเจค minimal scaffold
-2. **`cd playtime && npm run dev`** — รันเซิร์ฟเวอร์
-3. แก้ไข `app/page.tsx` — เปลี่ยนข้อความบน heading
-4. สร้าง `app/hello/page.tsx` — เขียน Component ง่ายๆ
-5. สร้าง `app/blog/[slug]/page.tsx` — ทดสอบ Dynamic Routing:
-
-```tsx
-export default function BlogPost({ params }: { params: { slug: string } }) {
-  return <h1>Post: {params.slug}</h1>
-}
-```
-
-6. เข้า URL `/blog/hello-world` — ดู slug ว่าขึ้นปกติไหม
-7. รัน `npm run routes` — ตรวจสอบตาราง Route table
-8. รัน `npm run doctor` — เพื่อเช็คว่ามีปัญหาใดซ่อนอยู่หรือไม่
-
----
-
-## Security Implications
-
-### Environment Variables
-
-- ตัวแปร `RUVYXA_PUBLIC_*` สามารถใช้ในฝั่ง Client ได้อย่างปลอดภัย
-- การอ้างอิง `process.env.*` ใดๆ ที่ไม่ใช่ public ใน Client โค้ดจะทำให้เกิด Error `RUV1008`
-- ตัวแปร Environment ฝั่ง Server ต้องอยู่ใน Server Components, API routes หรือ Actions เท่านั้น
-
-### Payload Limits
-
-| จำนวนจำกัด           | ค่าเริ่มต้น        | Config key             |
-| -------------------- | ------------------ | ---------------------- |
-| Server action body   | 1 MB               | `security.actionLimit` |
-| API route body       | 10 MB              | `security.apiLimit`    |
-| Plugin response body | 32 MB (max 256 MB) | `security.pluginLimit` |
-
-### Rate Limiting
-
-```ts
-// ruvyxa.config.ts
-security: {
-  actionRateLimit: {
-    max: 600,     // requests per window
-    window: 60,   // window in seconds
-  }
-}
-```
 
 ---
 
