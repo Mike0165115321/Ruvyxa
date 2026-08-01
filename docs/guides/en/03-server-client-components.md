@@ -504,12 +504,12 @@ fn private_env_reads(source: &str) -> Vec<String> {
 
 ### Allowed Env Vars in Client Code
 
-| Variable                          | Allowed in client? | Notes                                       |
-| --------------------------------- | ------------------ | ------------------------------------------- |
-| `process.env.RUVYXA_PUBLIC_*`     | ✅ Yes             | Any variable prefixed with `RUVYXA_PUBLIC_` |
-| `process.env.NODE_ENV`            | ✅ Yes             | Always safe (replaced at build time)        |
-| `process.env.*` (any other)       | ❌ No              | Fires `RUV1008`                             |
-| `import.meta.env.*`              | ❌ No              | Not a current Ruvyxa contract; use `process.env.RUVYXA_PUBLIC_*` |
+| Variable                      | Allowed in client? | Notes                                                            |
+| ----------------------------- | ------------------ | ---------------------------------------------------------------- |
+| `process.env.RUVYXA_PUBLIC_*` | ✅ Yes             | Any variable prefixed with `RUVYXA_PUBLIC_`                      |
+| `process.env.NODE_ENV`        | ✅ Yes             | Always safe (replaced at build time)                             |
+| `process.env.*` (any other)   | ❌ No              | Fires `RUV1008`                                                  |
+| `import.meta.env.*`           | ❌ No              | Not a current Ruvyxa contract; use `process.env.RUVYXA_PUBLIC_*` |
 
 ### RUV1008 Error
 

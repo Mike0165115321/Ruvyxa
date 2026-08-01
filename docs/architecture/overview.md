@@ -42,16 +42,16 @@ ruvyxa_diagnostics          (serde + thiserror — nothing else)
 
 ## Key Design Decisions
 
-| Decision                               | Why                                                                                                           |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Decision                               | Why                                                                                                                   |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | **Rust core, Node/Bun render**         | Rust owns discovery/build orchestration; persistent workers handle JS rendering without per-request process creation. |
 | **Oxc for TS/JSX**                     | Oxc provides the repository's parser/compiler/minifier pipeline. Performance must be measured for the target project. |
-| **Persistent worker pool**             | Server workers are bounded to the available parallelism range (2–8 by default). NDJSON over stdin/stdout. |
-| **Radix trie router**                  | O(path_depth) vs O(n) linear scan. Recompiled on manifest change.                                             |
-| **Blake3 content hashing**             | Immutable caching (max-age=31536000).                                                                         |
-| **Staging + atomic commit**            | Build writes to staging and commits by rename, restoring the previous output if the commit fails. |
-| **fnv1a_64 deterministic CSS scoping** | Reproducible builds: `fnv1a_64(project_relative_path + class_name)`.                                          |
-| **`deny_unknown_fields` config**       | Typos fail fast, not silently ignored.                                                                        |
+| **Persistent worker pool**             | Server workers are bounded to the available parallelism range (2–8 by default). NDJSON over stdin/stdout.             |
+| **Radix trie router**                  | O(path_depth) vs O(n) linear scan. Recompiled on manifest change.                                                     |
+| **Blake3 content hashing**             | Immutable caching (max-age=31536000).                                                                                 |
+| **Staging + atomic commit**            | Build writes to staging and commits by rename, restoring the previous output if the commit fails.                     |
+| **fnv1a_64 deterministic CSS scoping** | Reproducible builds: `fnv1a_64(project_relative_path + class_name)`.                                                  |
+| **`deny_unknown_fields` config**       | Typos fail fast, not silently ignored.                                                                                |
 
 ---
 

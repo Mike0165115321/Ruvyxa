@@ -1,7 +1,7 @@
 # Markdown, MDX, Images, and Metadata
 
-This guide describes the current content compiler, the build-time image optimizer, and the
-metadata APIs that are present in the repository.
+This guide describes the current content compiler, the build-time image optimizer, and the metadata
+APIs that are present in the repository.
 
 ## Markdown and MDX routes
 
@@ -34,7 +34,7 @@ MDX parse failures, and `RUV1312` for invalid or unclosed frontmatter.
 Unless the source already declares the same named export, the compiler supplies:
 
 ```ts
-export const frontmatter = { /* YAML mapping */ }
+export const frontmatter = {/* YAML mapping */}
 export const meta = frontmatter
 export const headings = [{ depth: 2, text: 'Mission', slug: 'mission' }]
 export const contentFormat = 'md' // or 'mdx'
@@ -84,8 +84,8 @@ export default config({
 ```
 
 The option names are `optimize`, `quality`, `lossless`, `keepOriginal`, `variantWidths`, and
-`workers`. The optimizer writes the converted asset under the build assets directory and records
-its source, dimensions, byte counts, cache status, and variants in the image manifest.
+`workers`. The optimizer writes the converted asset under the build assets directory and records its
+source, dimensions, byte counts, cache status, and variants in the image manifest.
 
 `@ruvyxa/react`'s `<Image>` component rewrites local PNG/JPEG URLs to the generated WebP URL. It can
 also produce a `srcSet` from the shared responsive widths. Remote URLs, already-WebP URLs, and
@@ -108,8 +108,8 @@ export function Hero() {
 }
 ```
 
-`alt` is required. `fill` is available when the parent establishes the required positioning
-context. A custom `loader` or `unoptimized` opts out of local URL rewriting.
+`alt` is required. `fill` is available when the parent establishes the required positioning context.
+A custom `loader` or `unoptimized` opts out of local URL rewriting.
 
 ## Metadata
 
@@ -165,8 +165,8 @@ ruvyxa build
 ```
 
 Verify generated WebP paths and the image manifest after a build. Do not use undocumented encoder
-names or universal compression/latency percentages as acceptance criteria; measure the actual
-assets and workload if optimization results matter.
+names or universal compression/latency percentages as acceptance criteria; measure the actual assets
+and workload if optimization results matter.
 
 ## Source of truth
 
@@ -181,14 +181,16 @@ assets and workload if optimization results matter.
 ## Production contract and retained detail
 
 The section above is the current, source-backed contract for this release. The original long-form
-draft is retained below to preserve instructional context and audit history. It is non-normative:
-do not copy its API snippets or capability claims unless they are revalidated against the current
+draft is retained below to preserve instructional context and audit history. It is non-normative: do
+not copy its API snippets or capability claims unless they are revalidated against the current
 source and package export map. This boundary is intentional so the document can retain its original
 depth without presenting unsupported historical design as production behavior.
 
 ### English content/image draft — historical draft (non-normative)
 
-> **Archive warning:** The material below is retained for history only. It is not the current content/image contract; examples may be stale or unsupported and must not be copied as working code. The source-backed contract above is authoritative.
+> **Archive warning:** The material below is retained for history only. It is not the current
+> content/image contract; examples may be stale or unsupported and must not be copied as working
+> code. The source-backed contract above is authoritative.
 
 # Markdown, MDX, Images & Metadata
 
@@ -983,10 +985,10 @@ export default config({
 })
 ```
 
-`workers: 0` uses the optimizer's default worker calculation. `quality` is clamped to the
-supported 1–100 range, and `lossless` selects the WebP lossless path. The optimizer's cache key
-includes the source content and relevant options, so a changed source or option does not reuse an
-old encoded result.
+`workers: 0` uses the optimizer's default worker calculation. `quality` is clamped to the supported
+1–100 range, and `lossless` selects the WebP lossless path. The optimizer's cache key includes the
+source content and relevant options, so a changed source or option does not reuse an old encoded
+result.
 
 The `<Image>` component uses the generated WebP URL for local PNG/JPEG sources. It creates a
 responsive `srcSet` from the shared device-width list when the intrinsic width and `sizes` allow it.
@@ -1002,14 +1004,14 @@ resulting URLs independently.
 
 ## Using `<img>` vs `<Image>` Component
 
-| Feature             | `<img>` Tag                         | `<Image>` Component (`@ruvyxa/react`)            |
-| ------------------- | ----------------------------------- | ------------------------------------------------ |
-| Lazy Loading        | Browser native (`loading="lazy"`)   | Browser-native loading with `priority` override |
-| Blur Placeholder    | ❌ No                               | ❌ No built-in blur-placeholder API              |
-| Responsive `srcset` | Manual configuration               | Generated from configured device widths         |
-| Format Negotiation  | Manual `<picture>`/`srcSet`        | Local build output is WebP; use `Picture` for art direction |
-| Preloading          | Manual `<link rel="preload">`     | `priority` changes loading/fetch priority        |
-| Layout Shift Guard  | Provide dimensions                 | `width`/`height` or a positioned `fill` parent  |
+| Feature             | `<img>` Tag                       | `<Image>` Component (`@ruvyxa/react`)                       |
+| ------------------- | --------------------------------- | ----------------------------------------------------------- |
+| Lazy Loading        | Browser native (`loading="lazy"`) | Browser-native loading with `priority` override             |
+| Blur Placeholder    | ❌ No                             | ❌ No built-in blur-placeholder API                         |
+| Responsive `srcset` | Manual configuration              | Generated from configured device widths                     |
+| Format Negotiation  | Manual `<picture>`/`srcSet`       | Local build output is WebP; use `Picture` for art direction |
+| Preloading          | Manual `<link rel="preload">`     | `priority` changes loading/fetch priority                   |
+| Layout Shift Guard  | Provide dimensions                | `width`/`height` or a positioned `fill` parent              |
 
 ---
 
@@ -1235,13 +1237,13 @@ Output:
 | Condition                 | Message                                             |
 | ------------------------- | --------------------------------------------------- |
 | Extension not .md or .mdx | `RUV1310: unsupported content extension for <path>` |
-| .md GFM parse failure     | `RUV1310: Markdown parse error: &lt;details&gt;`     |
+| .md GFM parse failure     | `RUV1310: Markdown parse error: &lt;details&gt;`    |
 
 ### RUV1311
 
 | Condition          | Message                                                    |
 | ------------------ | ---------------------------------------------------------- |
-| .mdx parse failure | `RUV1311: MDX parse error: &lt;details&gt;`                 |
+| .mdx parse failure | `RUV1311: MDX parse error: &lt;details&gt;`                |
 | Invalid ESM syntax | `MdxSignal::Eof("incomplete or invalid JS module syntax")` |
 
 ### RUV1312
@@ -1249,7 +1251,7 @@ Output:
 | Condition            | Message                                                               |
 | -------------------- | --------------------------------------------------------------------- |
 | Unclosed frontmatter | `RUV1312: frontmatter starts with '---' but has no closing delimiter` |
-| Invalid YAML         | `RUV1312: invalid YAML frontmatter: &lt;details&gt;`                   |
+| Invalid YAML         | `RUV1312: invalid YAML frontmatter: &lt;details&gt;`                  |
 | Non-mapping          | `RUV1312: frontmatter must be a YAML mapping`                         |
 
 ---

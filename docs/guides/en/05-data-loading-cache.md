@@ -11,7 +11,7 @@ packages/@ruvyxa/core/src/server.ts and the ruvyxa/server re-export.
 
 ### Loader and cache types
 
-~~~ts
+```ts
 export interface LoaderContext {
   params: Record<string, string>
   request: Request
@@ -36,11 +36,11 @@ export interface CacheBuilder {
 export function cache(key: string): CacheBuilder
 export function invalidateCache(keyOrPrefix?: string): void
 export function cacheStats(): { size: number; maxEntries: number }
-~~~
+```
 
 ### Server loader with an explicit cache key
 
-~~~tsx
+```tsx
 import { loader } from 'ruvyxa/server'
 
 export const getUser = loader(async ({ params, cache }) => {
@@ -54,11 +54,11 @@ export const getUser = loader(async ({ params, cache }) => {
       return response.json() as Promise<{ id: string; name: string }>
     })
 })
-~~~
+```
 
 For a function whose argument is not supplied through loader context, build the key explicitly:
 
-~~~ts
+```ts
 import { cache } from 'ruvyxa/server'
 
 export const getUserById = (userId: string) =>
@@ -66,42 +66,43 @@ export const getUserById = (userId: string) =>
     .ttl('5m')
     .swr('1m')
     .get(() => fetchUser(userId))
-~~~
+```
 
-loader(handler) is a callable loader. It is not a chainable builder and does not expose
-.key(), .ttl(), .swr(), or .get() methods.
+loader(handler) is a callable loader. It is not a chainable builder and does not expose .key(),
+.ttl(), .swr(), or .get() methods.
 
 ### TTL, SWR, and cache keys
 
 TTL accepts a positive string such as 500ms, 30s, 5m, 1h, or 1d; the default is 60 seconds. A
 malformed or unsafe duration throws the invalid-cache-duration error.
 
-When .get() is called on a fresh entry, the value is returned immediately. During the SWR window, the
-stale value is returned while at most one background refresh is started for that key. After the SWR
-window, the producer runs synchronously for the next request. If a producer fails while a stale entry
-exists, the stale value may be returned; a miss with no prior value propagates the producer error.
+When .get() is called on a fresh entry, the value is returned immediately. During the SWR window,
+the stale value is returned while at most one background refresh is started for that key. After the
+SWR window, the producer runs synchronously for the next request. If a producer fails while a stale
+entry exists, the stale value may be returned; a miss with no prior value propagates the producer
+error.
 
 Choose keys that include every input affecting the result:
 
-~~~ts
+```ts
 cache('products:featured')
 cache('tenant:' + tenantId + ':settings')
 cache('user:' + userId + ':profile')
-~~~
+```
 
 ### Invalidation and actions
 
-~~~ts
+```ts
 import { invalidateCache } from 'ruvyxa/server'
 
 invalidateCache('user:profile:42')
 invalidateCache('user:profile') // exact key and keys beginning with user:profile:
-invalidateCache()                 // clear this worker cache
-~~~
+invalidateCache() // clear this worker cache
+```
 
 invalidateCache returns void. In an action handler, use the invalidate function from ActionContext:
 
-~~~ts
+```ts
 import { action } from 'ruvyxa/server'
 
 export const updateProfile = action
@@ -116,7 +117,7 @@ export const updateProfile = action
     invalidate('user:profile:' + input.userId)
     return { ok: true }
   })
-~~~
+```
 
 ### Cache limits, observability, and deployment
 
@@ -124,13 +125,13 @@ The built-in store is bounded to 1,024 entries and uses LRU eviction. A timer pr
 have passed the full stale window. cacheStats() reports the current entry count and the configured
 maximum. These are local process metrics, not a distributed cache or a cross-worker coherence layer.
 
-For multiple workers, use an application-owned external cache at the data-access boundary. Define its
-serialization, TTL, invalidation, failure, and key-isolation behavior explicitly; Ruvyxa does not
-export a Redis/Memcached provider or a cache-aside API.
+For multiple workers, use an application-owned external cache at the data-access boundary. Define
+its serialization, TTL, invalidation, failure, and key-isolation behavior explicitly; Ruvyxa does
+not export a Redis/Memcached provider or a cache-aside API.
 
 ### Browser loader hook
 
-~~~tsx
+```tsx
 'use client'
 import { useRuvyxaLoader } from '@ruvyxa/react'
 
@@ -143,15 +144,15 @@ export function UserPanel() {
   if (result.error) return <p>{result.error.message}</p>
   return <button onClick={result.refetch}>{result.data?.name}</button>
 }
-~~~
+```
 
 This hook manages browser loading state; it does not make the server cache shared or durable.
 
 ## Verification
 
 Use ruvyxa check, ruvyxa analyze, and ruvyxa trace <route> to verify the surrounding route. Use
-ruvyxa bench for workload-specific measurements. The repository does not establish universal latency,
-throughput, ROI, or deployment timelines.
+ruvyxa bench for workload-specific measurements. The repository does not establish universal
+latency, throughput, ROI, or deployment timelines.
 
 ---
 
@@ -162,7 +163,9 @@ revalidate each API example against the current source before using it.
 
 ### English cache draft — historical draft (non-normative)
 
-> **Archive warning:** The material below is retained for history only. It is not the current cache API; examples may be stale or unsupported and must not be copied as working code. The source-backed contract above is authoritative.
+> **Archive warning:** The material below is retained for history only. It is not the current cache
+> API; examples may be stale or unsupported and must not be copied as working code. The
+> source-backed contract above is authoritative.
 
 # Data Loading and Caching
 
@@ -305,11 +308,11 @@ export default async function ProfilePage({ params }: { params: { id: string } }
 The public loader is created with its handler. The handler receives loader context, and the returned
 loader is callable. Caching is explicit through the separate `cache(key)` builder:
 
-| Pattern | Behavior |
-| --- | --- |
-| `loader(async (ctx) => value)` | Creates a callable loader with the framework loader marker. |
-| `cache('resource:key').get(producer)` | Reads or produces one value in the process-local cache. |
-| `cache('resource:key').ttl('5m').swr('1m').get(producer)` | Adds fresh and stale windows to that cache entry. |
+| Pattern                                                   | Behavior                                                    |
+| --------------------------------------------------------- | ----------------------------------------------------------- |
+| `loader(async (ctx) => value)`                            | Creates a callable loader with the framework loader marker. |
+| `cache('resource:key').get(producer)`                     | Reads or produces one value in the process-local cache.     |
+| `cache('resource:key').ttl('5m').swr('1m').get(producer)` | Adds fresh and stale windows to that cache entry.           |
 
 `loader()` is not a chainable cache builder. It does not expose `.key()`, `.ttl()`, `.swr()`, or
 `.get()`; use `cache(key)` when the application needs an explicit data-cache entry.
@@ -1091,12 +1094,12 @@ export const getBlogPost = (slug: string) =>
     .ttl('5m')
     .swr('1m')
     .get(async () => {
-    return await db.query('SELECT * FROM posts WHERE slug = ?', [slug])
+      return await db.query('SELECT * FROM posts WHERE slug = ?', [slug])
     })
 ```
 
-The key must include `slug`; otherwise different posts would share one cache entry. The example
-does not claim that the page cache and data cache expire at the same moment.
+The key must include `slug`; otherwise different posts would share one cache entry. The example does
+not claim that the page cache and data cache expire at the same moment.
 
 ## Thundering Herd Prevention
 

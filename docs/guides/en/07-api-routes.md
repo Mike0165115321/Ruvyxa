@@ -701,24 +701,24 @@ export async function GET() {
 
 ## Performance Characteristics
 
-| Operation                       | Overhead                         |
-| ------------------------------- | -------------------------------- |
-| Route matching                  | O(path depth) — Radix trie       |
-| Body buffering (up to apiLimit) | Memory proportional to body size |
+| Operation                       | Overhead                                         |
+| ------------------------------- | ------------------------------------------------ |
+| Route matching                  | O(path depth) — Radix trie                       |
+| Body buffering (up to apiLimit) | Memory proportional to body size                 |
 | Handler dispatch                | Depends on the selected runtime and worker state |
-| Response streaming              | Depends on the response and network            |
-| Security headers                | Added by the request pipeline when configured  |
+| Response streaming              | Depends on the response and network              |
+| Security headers                | Added by the request pipeline when configured    |
 
 ### Comparison: API Route vs Direct Handler
 
-| Aspect           | API Route         | Direct Handler |
-| ---------------- | ----------------- | -------------- |
-| Body limit       | 10 MiB (default)  | N/A            |
-| Security headers | Automatic         | Manual         |
-| Middleware       | Automatic         | Manual         |
-| Routing          | File-system based | Manual         |
-| Streaming        | Full support      | Full support   |
-| Worker dispatch  | Yes, runtime-dependent | Native      |
+| Aspect           | API Route              | Direct Handler |
+| ---------------- | ---------------------- | -------------- |
+| Body limit       | 10 MiB (default)       | N/A            |
+| Security headers | Automatic              | Manual         |
+| Middleware       | Automatic              | Manual         |
+| Routing          | File-system based      | Manual         |
+| Streaming        | Full support           | Full support   |
+| Worker dispatch  | Yes, runtime-dependent | Native         |
 
 ---
 

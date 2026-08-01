@@ -1038,9 +1038,9 @@ If a page exports `getStaticParams` but reachable code contains `fetch(`, the ro
 
 ## Best Practices
 
-1. **Prefer SSG for eligible pages.** The framework's automatic detector still defaults to SSR
-   when a route is dynamic or cannot be proven static; choose SSG deliberately when the route and
-   its reachable dependencies are static.
+1. **Prefer SSG for eligible pages.** The framework's automatic detector still defaults to SSR when
+   a route is dynamic or cannot be proven static; choose SSG deliberately when the route and its
+   reachable dependencies are static.
 
 2. **Use ISR for content that changes.** Blog posts, docs, marketing pages — these are perfect for
    ISR.

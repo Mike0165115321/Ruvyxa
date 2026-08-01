@@ -1088,7 +1088,7 @@ Check:
 | `RUV2200` | Build error                        | General build failure                                 |
 | `RUV2202` | Unsupported strategy for adapter   | Route strategy not supported by selected adapter      |
 | `RUV2203` | Missing package                    | Required dependency not found                         |
-| `—`       | Internal framework error           | Code depends on the failing subsystem                |
+| `—`       | Internal framework error           | Code depends on the failing subsystem                 |
 
 ---
 

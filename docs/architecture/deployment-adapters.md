@@ -38,18 +38,18 @@ selection is a fallback in the runtime runner, not dependency scanning of `packa
 
 The repository currently ships these ten first-party adapter packages:
 
-| Name | Package |
-| --- | --- |
-| `node` | `@ruvyxa/adapter-node` |
-| `bun` | `@ruvyxa/adapter-bun` |
-| `static` | `@ruvyxa/adapter-static` |
-| `vercel` | `@ruvyxa/adapter-vercel` |
-| `netlify` | `@ruvyxa/adapter-netlify` |
+| Name         | Package                      |
+| ------------ | ---------------------------- |
+| `node`       | `@ruvyxa/adapter-node`       |
+| `bun`        | `@ruvyxa/adapter-bun`        |
+| `static`     | `@ruvyxa/adapter-static`     |
+| `vercel`     | `@ruvyxa/adapter-vercel`     |
+| `netlify`    | `@ruvyxa/adapter-netlify`    |
 | `cloudflare` | `@ruvyxa/adapter-cloudflare` |
-| `railway` | `@ruvyxa/adapter-railway` |
-| `render` | `@ruvyxa/adapter-render` |
-| `firebase` | `@ruvyxa/adapter-firebase` |
-| `aws` | `@ruvyxa/adapter-aws` |
+| `railway`    | `@ruvyxa/adapter-railway`    |
+| `render`     | `@ruvyxa/adapter-render`     |
+| `firebase`   | `@ruvyxa/adapter-firebase`   |
+| `aws`        | `@ruvyxa/adapter-aws`        |
 
 The authoritative capability list is each adapter's `supports` field. It is a declaration used by
 the runner; successful local compilation does not prove that a provider-side deployment will meet
@@ -70,9 +70,9 @@ start.mjs
 README.md
 ```
 
-The generated standalone server uses `node:http` and honors `PORT` and `HOST`. It can be copied to
-a Node-compatible host, Docker image, PM2, systemd, or a PaaS; the adapter itself does not deploy
-the artifact.
+The generated standalone server uses `node:http` and honors `PORT` and `HOST`. It can be copied to a
+Node-compatible host, Docker image, PM2, systemd, or a PaaS; the adapter itself does not deploy the
+artifact.
 
 ### Static
 
@@ -112,14 +112,16 @@ or production rollback service.
 ## Production contract and retained detail
 
 The section above is the current, source-backed contract for this release. The original long-form
-draft is retained below to preserve instructional context and audit history. It is non-normative:
-do not copy its API snippets or capability claims unless they are revalidated against the current
+draft is retained below to preserve instructional context and audit history. It is non-normative: do
+not copy its API snippets or capability claims unless they are revalidated against the current
 source and package export map. This boundary is intentional so the document can retain its original
 depth without presenting unsupported historical design as production behavior.
 
 ### Deployment adapter draft — historical draft (non-normative)
 
-> **Archive warning:** The material below is retained for history only. It is not the current adapter contract; examples may be stale or unsupported and must not be copied as working commands. The source-backed contract above is authoritative.
+> **Archive warning:** The material below is retained for history only. It is not the current
+> adapter contract; examples may be stale or unsupported and must not be copied as working commands.
+> The source-backed contract above is authoritative.
 
 # Deployment Adapters · อาดาปเตอร์สำหรับการปรับใช้
 

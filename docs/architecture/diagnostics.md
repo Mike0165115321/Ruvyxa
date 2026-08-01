@@ -203,38 +203,38 @@ Key behavior:
 
 ## Error Code Catalog
 
-| Code    | Title                                                           | Crate             |
-| ------- | --------------------------------------------------------------- | ----------------- |
-| RUV1001 | App directory was not found                                     | graph             |
-| RUV1002 | Invalid dynamic route segment / Catch-all must be final segment | graph             |
-| RUV1003 | Conflicting route paths                                         | graph             |
-| RUV1004 | Page is missing a default export                                | graph, dev_server |
-| RUV1007 | Server-only module imported into client graph                   | graph             |
-| RUV1008 | Private environment variable used in client graph               | graph             |
-| RUV1009 | Client-only module imported into server/SSR graph               | graph, bundler    |
-| RUV1010 | Server directory module reached by client graph                 | graph             |
-| RUV1100 | React SSR failed                                                | dev_server        |
-| RUV1102 | SSR renderer was not found                                      | dev_server        |
-| RUV1200 | API route execution failed                                      | dev_server        |
-| RUV1201 | No available server port was found                              | dev_server        |
-| RUV1202 | API renderer was not found                                      | dev_server        |
-| RUV1300 | Client hydration bundling failed / Compile error                | dev_server        |
-| RUV1303 | Client route was not found                                      | dev_server        |
-| RUV1304 | Client bundle requested for a non-page route                    | dev_server        |
-| RUV1400 | Tailwind CSS compilation failed                                 | dev_server        |
-| RUV1401 | Tailwind CSS CLI was not found                                  | dev_server        |
-| RUV1402 | Sass compilation failed                                         | dev_server        |
-| RUV1403 | CSS import / stylesheet could not be resolved                   | dev_server        |
-| RUV1404 | CSS entry must stay inside the project root                     | dev_server        |
-| RUV1500 | SSG render failed                                               | dev_server        |
-| RUV1501 | Route action file was not found                                 | dev_server        |
-| RUV1550 | PPR render failed                                               | dev_server        |
-| RUV1600 | Config load failure                                              | cli/config         |
-| RUV1601 | Config value or path is invalid                                  | cli/config         |
-| RUV1602 | Config shape, unknown field, or configured limit is invalid      | cli/config         |
-| RUV1603 | Adapter definition or output is invalid                          | cli/config/runtime |
-| RUV1702 | Worker pool script was not found                                | dev_server        |
-| RUV1101 | SSR renderer arguments are missing                               | runtime/SSR       |
+| Code    | Title                                                           | Crate              |
+| ------- | --------------------------------------------------------------- | ------------------ |
+| RUV1001 | App directory was not found                                     | graph              |
+| RUV1002 | Invalid dynamic route segment / Catch-all must be final segment | graph              |
+| RUV1003 | Conflicting route paths                                         | graph              |
+| RUV1004 | Page is missing a default export                                | graph, dev_server  |
+| RUV1007 | Server-only module imported into client graph                   | graph              |
+| RUV1008 | Private environment variable used in client graph               | graph              |
+| RUV1009 | Client-only module imported into server/SSR graph               | graph, bundler     |
+| RUV1010 | Server directory module reached by client graph                 | graph              |
+| RUV1100 | React SSR failed                                                | dev_server         |
+| RUV1102 | SSR renderer was not found                                      | dev_server         |
+| RUV1200 | API route execution failed                                      | dev_server         |
+| RUV1201 | No available server port was found                              | dev_server         |
+| RUV1202 | API renderer was not found                                      | dev_server         |
+| RUV1300 | Client hydration bundling failed / Compile error                | dev_server         |
+| RUV1303 | Client route was not found                                      | dev_server         |
+| RUV1304 | Client bundle requested for a non-page route                    | dev_server         |
+| RUV1400 | Tailwind CSS compilation failed                                 | dev_server         |
+| RUV1401 | Tailwind CSS CLI was not found                                  | dev_server         |
+| RUV1402 | Sass compilation failed                                         | dev_server         |
+| RUV1403 | CSS import / stylesheet could not be resolved                   | dev_server         |
+| RUV1404 | CSS entry must stay inside the project root                     | dev_server         |
+| RUV1500 | SSG render failed                                               | dev_server         |
+| RUV1501 | Route action file was not found                                 | dev_server         |
+| RUV1550 | PPR render failed                                               | dev_server         |
+| RUV1600 | Config load failure                                             | cli/config         |
+| RUV1601 | Config value or path is invalid                                 | cli/config         |
+| RUV1602 | Config shape, unknown field, or configured limit is invalid     | cli/config         |
+| RUV1603 | Adapter definition or output is invalid                         | cli/config/runtime |
+| RUV1702 | Worker pool script was not found                                | dev_server         |
+| RUV1101 | SSR renderer arguments are missing                              | runtime/SSR        |
 
 This is a source-confirmed catalog of the codes documented by this architecture page, not a promise
 that every runtime or package code is listed. Codes are string constants (`&'static str`), not enum

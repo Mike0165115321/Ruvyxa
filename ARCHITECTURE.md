@@ -1,6 +1,7 @@
 # Ruvyxa Framework: Comprehensive System Architecture
 
-> This document is the definitive, deep-dive architectural manual for the Ruvyxa Framework. It synthesizes all subsystem documentation into a single, cohesive master reference.
+> This document is the definitive, deep-dive architectural manual for the Ruvyxa Framework. It
+> synthesizes all subsystem documentation into a single, cohesive master reference.
 
 ## Table of Contents
 
@@ -64,16 +65,16 @@ ruvyxa_diagnostics          (serde + thiserror — nothing else)
 
 ### Key Design Decisions
 
-| Decision                               | Why                                                                                                           |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Decision                               | Why                                                                                                                   |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | **Rust core, Node/Bun render**         | Rust owns discovery/build orchestration; persistent workers handle JS rendering without per-request process creation. |
 | **Oxc for TS/JSX**                     | Oxc provides the repository's parser/compiler/minifier pipeline. Performance must be measured for the target project. |
-| **Persistent worker pool**             | Server workers are bounded to available parallelism (2–8 by default). NDJSON over stdin/stdout. |
-| **Radix trie router**                  | O(path_depth) vs O(n) linear scan. Recompiled on manifest change.                                             |
-| **Blake3 content hashing**             | Immutable caching (max-age=31536000).                                                                         |
-| **Staging + atomic commit**            | Build writes to staging and restores the previous output if the commit fails. |
-| **fnv1a_64 deterministic CSS scoping** | Reproducible builds: `fnv1a_64(project_relative_path + class_name)`.                                          |
-| **`deny_unknown_fields` config**       | Typos fail fast, not silently ignored.                                                                        |
+| **Persistent worker pool**             | Server workers are bounded to available parallelism (2–8 by default). NDJSON over stdin/stdout.                       |
+| **Radix trie router**                  | O(path_depth) vs O(n) linear scan. Recompiled on manifest change.                                                     |
+| **Blake3 content hashing**             | Immutable caching (max-age=31536000).                                                                                 |
+| **Staging + atomic commit**            | Build writes to staging and restores the previous output if the commit fails.                                         |
+| **fnv1a_64 deterministic CSS scoping** | Reproducible builds: `fnv1a_64(project_relative_path + class_name)`.                                                  |
+| **`deny_unknown_fields` config**       | Typos fail fast, not silently ignored.                                                                                |
 
 ---
 
@@ -196,12 +197,12 @@ alphabetically. The table below maps each user-visible concern to its primary so
 
 | Concern                           | Primary implementation                                                           | What it owns                                                           | Read next                                         |
 | --------------------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------- |
-| Command parsing and orchestration | `crates/ruvyxa_cli/src/main.rs`                                                  | CLI surface, argument precedence, dispatch                             | [CLI & Build Pipeline](#cli)                    |
-| Configuration translation         | `crates/ruvyxa_cli/src/config.rs`, `packages/ruvyxa/runtime/config-renderer.mjs` | Config files, validation, runtime config hand-off                      | [CLI & Build Pipeline](#cli)                    |
-| Route discovery and validation    | `crates/ruvyxa_graph/src/lib.rs`                                                 | File conventions, manifests, rendering detection, boundary diagnostics | [Route Discovery](#graph)                       |
-| Client compilation and linking    | `crates/ruvyxa_bundler/src`                                                      | AST scanning, resolution, boundary checks, output                      | [Bundler](#bundler)                             |
-| HTTP serving and rendering        | `crates/ruvyxa_dev_server/src/lib.rs`                                            | Axum routes, request dispatch, HMR, render cache, security application | [Dev Server](#dev-server)                       |
-| Middleware and plugin bridge      | `crates/ruvyxa_middleware/src` and `packages/ruvyxa/runtime/plugin-runtime.mjs`  | Middleware stacking and JavaScript-plugin communication                | [Middleware](#middleware)                       |
+| Command parsing and orchestration | `crates/ruvyxa_cli/src/main.rs`                                                  | CLI surface, argument precedence, dispatch                             | [CLI & Build Pipeline](#cli)                      |
+| Configuration translation         | `crates/ruvyxa_cli/src/config.rs`, `packages/ruvyxa/runtime/config-renderer.mjs` | Config files, validation, runtime config hand-off                      | [CLI & Build Pipeline](#cli)                      |
+| Route discovery and validation    | `crates/ruvyxa_graph/src/lib.rs`                                                 | File conventions, manifests, rendering detection, boundary diagnostics | [Route Discovery](#graph)                         |
+| Client compilation and linking    | `crates/ruvyxa_bundler/src`                                                      | AST scanning, resolution, boundary checks, output                      | [Bundler](#bundler)                               |
+| HTTP serving and rendering        | `crates/ruvyxa_dev_server/src/lib.rs`                                            | Axum routes, request dispatch, HMR, render cache, security application | [Dev Server](#dev-server)                         |
+| Middleware and plugin bridge      | `crates/ruvyxa_middleware/src` and `packages/ruvyxa/runtime/plugin-runtime.mjs`  | Middleware stacking and JavaScript-plugin communication                | [Middleware](#middleware)                         |
 | Public TypeScript contract        | `packages/@ruvyxa/core/src`, `packages/@ruvyxa/react/src`                        | Config, server helpers, React components/hooks                         | [API Reference](../guides/en/17-api-reference.md) |
 
 #### Boundary Walkthrough: One Request
@@ -234,13 +235,11 @@ never discovered, or changing a page when the failure is a module boundary viola
 - [Concurrency](#concurrency) — parallelism model, locks
 - [Site Discovery](#site-discovery) — sitemap/robots generation
 
-
 ---
 
 ## CLI Architecture
 
-**Crate**: `ruvyxa_cli`
-**Source**: `crates/ruvyxa_cli/src/`
+**Crate**: `ruvyxa_cli` **Source**: `crates/ruvyxa_cli/src/`
 
 `main.rs` holds only the clap command surface and `main`'s dispatch. Everything a command does lives
 in a sibling module, and the modules reach each other through crate-root re-exports:
@@ -434,7 +433,7 @@ matching to canonical forms). This makes `ruvyxa BUILD --Target node` equivalent
 ### Error Handling
 
 - `anyhow::Result` with `.context()` for all failures
-- Error codes: `RUV1205` (prerender path escape), `RUV1600`–`RUV1602` (config validation),
+- Error codes: `RUV1205` (prerender path escape), `RUV1600`–`RUV1603` (config validation),
   `RUV1700`–`RUV1701` (plugin errors), `RUV2200`–`RUV2203` (adapter errors)
 - Diagnostics bubble through `fail_on_diagnostics()` which prints each diagnostic and bails with
   count
@@ -442,13 +441,11 @@ matching to canonical forms). This makes `ruvyxa BUILD --Target node` equivalent
 - Security limits validated against hard ceilings from `ruvyxa_dev_server` constants
 - Build staging directory has drop-guard cleanup; commit failures trigger rollback
 
-
 ---
 
 ## Route Discovery & Validation · การค้นหาและตรวจสอบเส้นทาง
 
-**Crate**: `ruvyxa_graph`
-**Module**: `crates/ruvyxa_graph/src/lib.rs`
+**Crate**: `ruvyxa_graph` **Module**: `crates/ruvyxa_graph/src/lib.rs`
 
 ### สรุป (Thai Summary)
 
@@ -500,8 +497,8 @@ pub enum RouteKind {
 }
 ```
 
-Only `page.tsx`, `page.jsx`, `page.md`, `page.mdx` → `RouteKind::Page`.
-Only `route.ts`, `route.js` → `RouteKind::Api`.
+Only `page.tsx`, `page.jsx`, `page.md`, `page.mdx` → `RouteKind::Page`. Only `route.ts`, `route.js`
+→ `RouteKind::Api`.
 
 #### RenderStrategy & RenderMeta
 
@@ -758,19 +755,18 @@ reads this manifest downstream during bundling, middleware setup, and sitemap ge
 5. **Layering is structural** — `layout_chain` follows directory nesting automatically; no manual
    `children` wiring beyond the React component itself.
 
-
 ---
 
 ## Bundler · การรวมโค้ด
 
-**Crate**: `ruvyxa_bundler`
-**Modules**: `crates/ruvyxa_bundler/src/{lib,types,resolver,compiler,boundary,linker}.rs`
+**Crate**: `ruvyxa_bundler` **Modules**:
+`crates/ruvyxa_bundler/src/{lib,types,resolver,compiler,boundary,linker}.rs`
 
 ### สรุป
 
 `ruvyxa_bundler` รับ RouteManifest + source files → สร้างชุด bundles ที่พร้อม deploy (IIFE สำหรับ
-client, ESM/CJS สำหรับ server) ใช้ Oxc เป็น parser/minifier, path resolution
-แบบกำหนดเอง, circular dep detection
+client, ESM/CJS สำหรับ server) ใช้ Oxc เป็น parser/minifier, path resolution แบบกำหนดเอง, circular
+dep detection
 
 ---
 
@@ -1160,8 +1156,7 @@ pub fn emit(options: &BundleOptions, modules: &[CompiledModule]) -> Result<()> {
 ### Why This Design
 
 1. **Oxc over SWC** — Rust-native parsing/minification without a NAPI bridge; benchmark this
-   repository's workload before making a speed claim.
-   overhead.
+   repository's workload before making a speed claim. overhead.
 2. **IIFE for client** — No ESM module system dependency in the browser. Works in all environments
    including workers, edge, and sandboxes.
 3. **Custom resolver, not webpack** — No need for webpack's plugin system complexity. `ruvyxa` has 3
@@ -1171,7 +1166,6 @@ pub fn emit(options: &BundleOptions, modules: &[CompiledModule]) -> Result<()> {
    before they reach the user. Catches the error during `build`, not at runtime.
 5. **Tarjan for cycles** — Cycle detection is a developer DX feature, not a correctness requirement.
    The linker handles cycles gracefully; the detection simply warns.
-
 
 ---
 
@@ -1512,7 +1506,6 @@ Realtime WebSocket handler:
   `Cross-Origin-Resource-Policy: same-origin`,
   `Permissions-Policy: camera=(), microphone=(), geolocation=()`.
 
-
 ---
 
 ## Middleware
@@ -1719,22 +1712,21 @@ connections.
 - The rate limiter is **in-process only**. There is no Redis backend, no `RateLimitStore` trait.
   High-cardinality token buckets (10k+) trigger a full sweep of expired entries.
 - Compression is applied **to all routes unconditionally** but only activates on responses with a
-  known content-length. Streaming SSE and chunked responses are never run through the async
-  compression adapter.
+  known content-length. Streaming and chunked responses are not run through the async compression
+  adapter. The current server source does not provide an SSE endpoint; do not infer SSE support from
+  this compression rule.
 - Plugin workers are **not restarted automatically** after a failed hook unless the process itself
   died or the protocol stream was poisoned. Application-level errors are returned to the caller
   without process replacement.
 - The pool size fan-out to >1 workers only happens when the registry declares at least one HTTP
   hook. A build-only plugin sees a single worker regardless of the configured pool size.
 
-
 ---
 
 ## Worker Pool · กลุ่มผู้ทำงาน
 
 **Modules**: `crates/ruvyxa_dev_server/src/worker_pool.rs`,
-`packages/ruvyxa/runtime/worker-pool.mjs`
-**Crate**: `ruvyxa_dev_server`
+`packages/ruvyxa/runtime/worker-pool.mjs` **Crate**: `ruvyxa_dev_server`
 
 ### สรุป
 
@@ -1842,7 +1834,8 @@ const MAX_CONCURRENT_REQUESTS = positiveIntegerEnv(
 
 A request awaits `acquireRequestSlot()` before dispatch and calls `releaseRequestSlot()` when it
 finishes, which starts the longest-waiting queued request. Below the limit the acquire resolves
-synchronously, so the common case adds no latency.
+synchronously, so the common case does not wait in the request-slot queue. This is a control-flow
+property, not a measured guarantee about wall-clock latency.
 
 Renders are CPU-bound and each one holds a React tree, a compiled bundle, and its response buffer.
 Admitting a whole burst at once exhausts the heap or thrashes the CPU into timeouts that present as
@@ -1977,7 +1970,6 @@ wedged worker cannot hold up server shutdown.
 5. **Retry gated on idempotency** — Recovery never turns one action into two.
 6. **Recycling gated on isolation and idleness** — The only unbounded resource is bounded, without
    dropping work in progress or charging the dev server for a cost it does not incur.
-
 
 ---
 
@@ -2205,7 +2197,6 @@ reused).
 4. **Granular `RwLock` per registry** — HMR updates are write-heavy but infrequent. Multiple
    concurrent reads (from the worker pool) do not block each other. A single `Mutex` would serialize
    all reads.
-
 
 ---
 
@@ -2475,7 +2466,6 @@ the dev server worker pool. Not exposed to external clients.
 4. **Module registry over ESM** — ES modules (`<script type="module">`) have cross-origin and CORS
    complications with HMR. A synchronous `__ruvyxa` registry is simpler and works with the IIFE
    output format.
-
 
 ---
 
@@ -2810,13 +2800,11 @@ assets/
   IPv6 in brackets, port in valid range. This prevents accidentally leaking staging URLs into
   production sitemaps.
 
-
 ---
 
 ## Diagnostics · การวินิจฉัย
 
-**Crate**: `ruvyxa_diagnostics`
-**Module**: `crates/ruvyxa_diagnostics/src/lib.rs`
+**Crate**: `ruvyxa_diagnostics` **Module**: `crates/ruvyxa_diagnostics/src/lib.rs`
 
 ### สรุป
 
@@ -3045,7 +3033,7 @@ Key behavior:
 | RUV1501 | Route action file was not found                                 | dev_server        |
 | RUV1550 | PPR render failed                                               | dev_server        |
 | RUV1702 | Worker pool script was not found                                | dev_server        |
-| RUV1101 | Sensitive compiler detail (generic fallback)                    | dev_server        |
+| RUV1101 | SSR renderer received missing required arguments                | runtime/SSR       |
 
 Codes are string constants (`&'static str`), not enum variants — any crate can emit any code without
 touching the diagnostics crate.
@@ -3077,7 +3065,6 @@ This crate owns only the type definitions and SARIF serializer. The actual error
 domain crates (`ruvyxa_graph`, `ruvyxa_bundler`, `ruvyxa_dev_server`) which construct `Diagnostic`
 values directly via the builder pattern. There is no centralized error registry — codes are
 conventional strings.
-
 
 ---
 
@@ -3299,7 +3286,6 @@ Route paths are validated during `discover_routes()` to prevent directory traver
    validation is the server enforcing the same policy. Defense in depth — if the browser ignores
    CORS (fetch with `mode: no-cors`), the server still blocks the request.
 
-
 ---
 
 ## Deployment Adapters · อาดาปเตอร์สำหรับการปรับใช้
@@ -3337,20 +3323,20 @@ ruvyxa build --adapter node
 
 ### Built-in Adapters
 
-| Package                      | Platform            | Output                               |
-| ---------------------------- | ------------------- | ------------------------------------ |
-| Name | Package |
-| --- | --- |
-| `node` | `@ruvyxa/adapter-node` |
-| `bun` | `@ruvyxa/adapter-bun` |
-| `static` | `@ruvyxa/adapter-static` |
-| `vercel` | `@ruvyxa/adapter-vercel` |
-| `netlify` | `@ruvyxa/adapter-netlify` |
+| Package      | Platform                     | Output |
+| ------------ | ---------------------------- | ------ |
+| Name         | Package                      |
+| ---          | ---                          |
+| `node`       | `@ruvyxa/adapter-node`       |
+| `bun`        | `@ruvyxa/adapter-bun`        |
+| `static`     | `@ruvyxa/adapter-static`     |
+| `vercel`     | `@ruvyxa/adapter-vercel`     |
+| `netlify`    | `@ruvyxa/adapter-netlify`    |
 | `cloudflare` | `@ruvyxa/adapter-cloudflare` |
-| `railway` | `@ruvyxa/adapter-railway` |
-| `render` | `@ruvyxa/adapter-render` |
-| `firebase` | `@ruvyxa/adapter-firebase` |
-| `aws` | `@ruvyxa/adapter-aws` |
+| `railway`    | `@ruvyxa/adapter-railway`    |
+| `render`     | `@ruvyxa/adapter-render`     |
+| `firebase`   | `@ruvyxa/adapter-firebase`   |
+| `aws`        | `@ruvyxa/adapter-aws`        |
 
 ---
 
@@ -3371,7 +3357,7 @@ ruvyxa build --adapter node
 The generated `server/index.mjs` is a standalone server:
 
 ```javascript
-node .ruvyxa/deploy/node/server/index.mjs
+node.ruvyxa / deploy / node / server / index.mjs
 ```
 
 ---

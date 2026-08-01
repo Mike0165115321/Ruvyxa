@@ -737,14 +737,14 @@ Key fields in `ServerConfig` that control action behavior:
 
 ## Performance Characteristics
 
-| Operation                  | Overhead                  |
-| -------------------------- | ------------------------- |
-| Security checks            | Depends on request/configuration |
-| Body parsing (JSON)        | Payload-size-dependent    |
-| Body parsing (URL-encoded) | Payload-size-dependent    |
-| Rate limiter check         | O(1) average              |
+| Operation                  | Overhead                                         |
+| -------------------------- | ------------------------------------------------ |
+| Security checks            | Depends on request/configuration                 |
+| Body parsing (JSON)        | Payload-size-dependent                           |
+| Body parsing (URL-encoded) | Payload-size-dependent                           |
+| Rate limiter check         | O(1) average                                     |
 | Worker dispatch            | Depends on the selected runtime and worker state |
-| Handler execution          | User-defined              |
+| Handler execution          | User-defined                                     |
 
 ---
 
@@ -1086,21 +1086,17 @@ import { action } from 'ruvyxa/server'
 // In-memory counter (replace with DB in real app)
 let count = 0
 
-export const increment = action
-  .input({ parse: () => ({}) })
-  .handler(async ({ invalidate }) => {
-    count++
-    invalidate('counter:value')
-    return { count }
-  })
+export const increment = action.input({ parse: () => ({}) }).handler(async ({ invalidate }) => {
+  count++
+  invalidate('counter:value')
+  return { count }
+})
 
-export const reset = action
-  .input({ parse: () => ({}) })
-  .handler(async ({ invalidate }) => {
-    count = 0
-    invalidate('counter:value')
-    return { count }
-  })
+export const reset = action.input({ parse: () => ({}) }).handler(async ({ invalidate }) => {
+  count = 0
+  invalidate('counter:value')
+  return { count }
+})
 ```
 
 **Step 2:** Create `app/counter/page.tsx`:

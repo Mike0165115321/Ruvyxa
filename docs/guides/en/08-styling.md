@@ -800,14 +800,14 @@ fn escape_style_end_tags(css) -> String:
 
 ## Performance Characteristics
 
-| Operation           | Overhead           | Notes                        |
-| ------------------- | ------------------ | ---------------------------- |
-| Sass compilation    | Per file, cached   | Rust-based compilation path  |
-| CSS Module hashing  | Per class name     | FNV-1a 64-bit deterministic hash |
-| Style collection    | Walk import graph  | Cached until invalidated     |
-| CSS minification    | O(n) over CSS size | Conservative — no AST        |
-| HMR style swap      | Depends on file, browser, and connection | WebSocket push + DOM update |
-| File system watcher | Per changed path   | BTreeSet lookup              |
+| Operation           | Overhead                                 | Notes                            |
+| ------------------- | ---------------------------------------- | -------------------------------- |
+| Sass compilation    | Per file, cached                         | Rust-based compilation path      |
+| CSS Module hashing  | Per class name                           | FNV-1a 64-bit deterministic hash |
+| Style collection    | Walk import graph                        | Cached until invalidated         |
+| CSS minification    | O(n) over CSS size                       | Conservative — no AST            |
+| HMR style swap      | Depends on file, browser, and connection | WebSocket push + DOM update      |
+| File system watcher | Per changed path                         | BTreeSet lookup                  |
 
 ### CSS Module Overhead
 
@@ -936,15 +936,15 @@ cause caching issues and SSR hydration errors.
 
 ## Choosing an Approach
 
-| When to use                          | Approach                             |
-| ------------------------------------ | ------------------------------------ |
-| Quick prototyping, small projects    | Global CSS                           |
-| Nesting, variables, mixins           | SCSS                                 |
-| Component libraries, large teams     | CSS Modules                          |
-| Scoped + nested                      | `.module.scss`                       |
-| Print styles, third-party CSS        | `css.entries` config                 |
-| Tailwind utility classes             | Tailwind via `@import "tailwindcss"` |
-| Design system with tokens            | SCSS variables in partials           |
+| When to use                          | Approach                                           |
+| ------------------------------------ | -------------------------------------------------- |
+| Quick prototyping, small projects    | Global CSS                                         |
+| Nesting, variables, mixins           | SCSS                                               |
+| Component libraries, large teams     | CSS Modules                                        |
+| Scoped + nested                      | `.module.scss`                                     |
+| Print styles, third-party CSS        | `css.entries` config                               |
+| Tailwind utility classes             | Tailwind via `@import "tailwindcss"`               |
+| Design system with tokens            | SCSS variables in partials                         |
 | Micro-frontends or shared components | CSS Modules (scoped class names reduce collisions) |
 
 ---
@@ -1119,8 +1119,8 @@ export function ThemeToggle() {
 ## CSS collection and inlining
 
 Ruvyxa collects the stylesheets reached by the application imports and configured CSS entries, then
-places the collected stylesheet in a `style[data-ruvyxa-css]` element in rendered documents. This
-is stylesheet collection and inlining; it is not an above-the-fold critical-CSS extractor.
+places the collected stylesheet in a `style[data-ruvyxa-css]` element in rendered documents. This is
+stylesheet collection and inlining; it is not an above-the-fold critical-CSS extractor.
 
 ```text
 imported CSS/SCSS + css.entries
@@ -1132,10 +1132,10 @@ collect_styles() → preprocess, resolve imports, scope modules
 <style data-ruvyxa-css>…all collected CSS…</style>
 ```
 
-The resulting HTML does not establish a universal performance score, eliminate every possible
-FOUC, or guarantee that only visible-above-the-fold rules are included. If a project needs
-critical-CSS extraction, run and measure a separate, application-specific tool after verifying that
-it preserves the framework's style and hydration behavior.
+The resulting HTML does not establish a universal performance score, eliminate every possible FOUC,
+or guarantee that only visible-above-the-fold rules are included. If a project needs critical-CSS
+extraction, run and measure a separate, application-specific tool after verifying that it preserves
+the framework's style and hydration behavior.
 
 ## CSS Animation Performance
 

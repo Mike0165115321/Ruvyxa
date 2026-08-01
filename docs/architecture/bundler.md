@@ -6,8 +6,8 @@
 ## สรุป
 
 `ruvyxa_bundler` รับ RouteManifest + source files → สร้างชุด bundles ที่พร้อม deploy (IIFE สำหรับ
-client, ESM/CJS สำหรับ server) ใช้ Oxc เป็น parser/minifier, path resolution
-แบบกำหนดเอง, circular dep detection
+client, ESM/CJS สำหรับ server) ใช้ Oxc เป็น parser/minifier, path resolution แบบกำหนดเอง, circular
+dep detection
 
 ---
 
@@ -397,8 +397,7 @@ pub fn emit(options: &BundleOptions, modules: &[CompiledModule]) -> Result<()> {
 ## Why This Design
 
 1. **Oxc over SWC** — Rust-native parsing/minification without a NAPI bridge; benchmark the target
-   workload before making a speed claim.
-   overhead.
+   workload before making a speed claim. overhead.
 2. **IIFE for client** — No ESM module system dependency in the browser. Works in all environments
    including workers, edge, and sandboxes.
 3. **Custom resolver, not webpack** — No need for webpack's plugin system complexity. `ruvyxa` has 3
