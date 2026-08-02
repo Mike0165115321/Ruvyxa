@@ -195,7 +195,7 @@ ruvyxa test:parity [--root <PATH>] [--runtime <node|bun>]
 
 ```bash
 ruvyxa test:parity
-ruvyxa start
+ruvyxa parity
 ```
 
 ## `ruvyxa plugin create`
@@ -331,7 +331,7 @@ npm run check
 ```bash
 ruvyxa test:parity
 # alias ที่เท่ากัน
-ruvyxa start
+ruvyxa parity
 ```
 
 ### ตรวจ URL หรือ Route ที่มีปัญหา

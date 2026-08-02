@@ -1833,7 +1833,8 @@ curl -I https://old-domain.com/about
 4. สร้าง Dockerfile และ docker-compose.yml สำหรับ production
 5. ตั้งค่า CI/CD ด้วย GitHub Actions — รวม quality + build + deploy
 6. Deploy ไปยัง platform ที่เลือก — ใช้ staging ก่อน production
-7. ทดสอบ `ruvyxa deploy:stage && ruvyxa deploy:swap`
+7. Test the selected provider/CI staging and promotion workflow; the current CLI has no
+   `ruvyxa deploy:stage` or `ruvyxa deploy:swap` command
 8. ตรวจ production checklist ทุกข้อก่อน deploy จริง
 9. รัน `ruvyxa bench` และ `ruvyxa analyze` หลัง deploy
 10. ตั้ง monitoring: uptime check, error tracking, performance alert

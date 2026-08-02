@@ -1644,8 +1644,8 @@ psql $DATABASE_URL -f migrations/001_init.sql
 ### 11. Monitoring & Logging
 
 ```bash
-# ตรวจ logging ถูกตั้งค่า
-ruvyxa doctor --logging
+# ตรวจ project, runtime และ adapter ก่อนสร้าง artifact
+ruvyxa doctor --adapter node
 
 # Production logging ควรมี:
 # - request/response logs
@@ -1653,6 +1653,9 @@ ruvyxa doctor --logging
 # - performance metrics
 # - uptime monitoring
 ```
+
+CLI ปัจจุบันไม่มี flag `ruvyxa doctor --logging`; การตั้งค่า log, error tracking, metrics และ uptime
+monitoring เป็นความรับผิดชอบของ application, provider และ observability tooling ที่เลือกใช้
 
 ### 12. Pre-deploy Health Check
 
@@ -2033,7 +2036,8 @@ curl -I https://old-domain.com/about
 4. สร้าง Dockerfile และ docker-compose.yml สำหรับ production
 5. ตั้งค่า CI/CD ด้วย GitHub Actions — รวม quality + build + deploy
 6. Deploy ไปยัง platform ที่เลือก — ใช้ staging ก่อน production
-7. ทดสอบ `ruvyxa deploy:stage && ruvyxa deploy:swap`
+7. ทดสอบขั้นตอน staging และ promotion ของ provider/CI ที่เลือก (ไม่มีคำสั่ง `ruvyxa deploy:stage`
+   หรือ `ruvyxa deploy:swap` ใน CLI ปัจจุบัน)
 8. ตรวจ production checklist ทุกข้อก่อน deploy จริง
 9. รัน `ruvyxa bench` และ `ruvyxa analyze` หลัง deploy
 10. ตั้ง monitoring: uptime check, error tracking, performance alert

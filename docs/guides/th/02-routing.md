@@ -44,10 +44,10 @@ Ruvyxa จับคู่ไฟล์พิเศษในโฟลเดอร�
 | ไฟล์        | ชนิด          | Extension                     | หน้าที่                                       |
 | ----------- | ------------- | ----------------------------- | --------------------------------------------- |
 | `page`      | หน้า          | `.tsx`, `.jsx`, `.md`, `.mdx` | แสดง content ของ route                        |
-| `layout`    | Layout        | `.tsx`, `.jsx`                | หุ้ม child pages, persist ข้าม navigation     |
-| `loading`   | Loading       | `.tsx`, `.jsx`                | UI ขณะ route โหลด                             |
-| `error`     | Error         | `.tsx`, `.jsx`                | UI เมื่อ route error                          |
-| `not-found` | 404           | `.tsx`, `.jsx`                | UI เมื่อหา route ไม่พบ                        |
+| `layout`    | Layout        | `.tsx`                        | หุ้ม child pages, persist ข้าม navigation     |
+| `loading`   | Loading       | `.tsx`                        | UI ขณะ route โหลด                             |
+| `error`     | Error         | `.tsx`                        | UI เมื่อ route error                          |
+| `not-found` | 404           | `.tsx`                        | UI เมื่อหา route ไม่พบ                        |
 | `route`     | API           | `.ts`, `.js`                  | HTTP endpoint (GET, POST, PUT, DELETE, PATCH) |
 | `action`    | Action        | `.ts`, `.js`                  | Server action สำหรับ mutations                |
 | `client`    | Client module | `.tsx`                        | Client-side module (hydration)                |
@@ -796,11 +796,16 @@ interface LinkProps extends Omit<AnchorHTMLAttributes<HTMLAnchorElement>, 'href'
 ### Prefetch mechanism
 
 ```tsx
-// Link prefetch ทำงานผ่าน modulepreload hint:
-<link rel="modulepreload" href="/__ruvyxa/client/route-blog-[slug].js">
+// Link prefetch ใช้ URL ที่ได้จาก manifest:
+const entry = { src: '/__ruvyxa/client?path=/blog/%5Bslug%5D' }
+document.head.append(
+  Object.assign(document.createElement('link'), {
+    rel: 'modulepreload',
+    href: entry.src,
+  }),
+)
 
-// Shared chunks ก็ถูก preload ด้วย:
-<link rel="modulepreload" href="/__ruvyxa/client/shared-vendors.js">
+// ถ้า production manifest ระบุ sharedChunks ก็ preload URL เหล่านั้นด้วย
 ```
 
 Prefetch ไม่ execute bundle — แค่ warm network cache และ module graph
@@ -819,7 +824,7 @@ Link ส่งต่อ browser ทันทีเมื่อ:
 
 ## Router Hooks
 
-ต้องใช้ใน `'use client'` component เท่านั้น:
+ใช้สำหรับ component ที่ต้องทำ client navigation:
 
 ```tsx
 'use client'
@@ -876,18 +881,17 @@ function useParams(): RouteParams // { slug: "hello" }
 function useSearchParams(): URLSearchParams // query string
 
 // useSelectedRoute
-function useSelectedRoute(): string | null // route pattern ที่ match
+function useSelectedRoute(): string // route pattern ที่ match
 ```
 
 ### Hook constraint
 
-```ts
-// ❌ ผิด — ต้องมี 'use client'
-import { useRouter } from '@ruvyxa/react'
-// → RUV1008: Server-only hook
+`useRouter` เป็น helper สำหรับ client navigation และไม่ได้สร้าง diagnostic `RUV1008`; รหัสนั้นใช้กับ
+private environment variable ที่เข้าถึงได้จาก client graph ให้กำหนด component ที่เป็น navigation
+control เป็น client-side:
 
-// ✅ ถูก
-;('use client')
+```tsx
+'use client'
 import { useRouter } from '@ruvyxa/react'
 ```
 
@@ -946,11 +950,14 @@ GET /__ruvyxa/client/route-manifest.json
 Response:
 {
   "routes": [
-    { "path": "/", "src": "/__ruvyxa/client/page-home.js", "sharedChunks": [...] },
-    { "path": "/blog/[slug]", "src": "/__ruvyxa/client/page-blog-[slug].js", ... }
+    { "path": "/", "src": "/__ruvyxa/client?path=/" },
+    { "path": "/blog/[slug]", "src": "/__ruvyxa/client?path=/blog/%5Bslug%5D" }
   ]
 }
 ```
+
+ใน development endpoint นี้คืนเฉพาะ `path` และ `src` พร้อม `Cache-Control: no-store`; production
+manifest ที่ build แล้วอาจเพิ่ม `sharedChunks` ได้ จึงไม่ควรอ้างอิงชื่อไฟล์ bundle แบบตายตัว
 
 ---
 
@@ -1076,19 +1083,19 @@ params.slug = "hello world"   ← URL decoded
 
 ## Troubleshooting
 
-| ปัญหา                      | สาเหตุ                       | วิธีแก้                            |
-| -------------------------- | ---------------------------- | ---------------------------------- |
-| 404 ไม่เจอหน้า             | URL ไม่ตรงกับโฟลเดอร์        | เช็ค spelling, case-sensitive      |
-| Route ซ้ำ                  | สองไฟล์ match URL เดียวกัน   | `npm run routes` หาตัวซ้ำ          |
-| Dynamic segment ไม่ทำงาน   | ลืมวงเล็บ `[slug]`           | ใช้ `[square]` ไม่ใช่ `:param`     |
-| Layout ไม่ซ้อน             | layout.tsx ผิดตำแหน่ง        | layout ต้องอยู่ในโฟลเดอร์ของ route |
-| `useRouter()` error        | ไม่ได้ใส่ `'use client'`     | เพิ่ม directive                    |
-| import .tsx ไม่เจอ         | path พิมพ์ผิด                | เช็ค relative path                 |
-| params.slug เป็น undefined | ไม่ match dynamic segment    | ดูที่ `params` object ทั้งตัว      |
-| ไม่เห็น route group        | ใช้ `()name` ไม่ใช่ `(name)` | วงเล็บเท่านั้น                     |
-| 404 route ซ้ำกับ catch-all | Static กินก่อน catch-all     | จัด priority ใหม่                  |
-| Link ไม่ navigate          | Cross-origin URL             | ใช้ relative path                  |
-| router.refresh() ไม่ทำงาน  | Bundle ยังไม่ load           | รอให้ bundle โหลดก่อน              |
+| ปัญหา                              | สาเหตุ                       | วิธีแก้                            |
+| ---------------------------------- | ---------------------------- | ---------------------------------- |
+| 404 ไม่เจอหน้า                     | URL ไม่ตรงกับโฟลเดอร์        | เช็ค spelling, case-sensitive      |
+| Route ซ้ำ                          | สองไฟล์ match URL เดียวกัน   | `npm run routes` หาตัวซ้ำ          |
+| Dynamic segment ไม่ทำงาน           | ลืมวงเล็บ `[slug]`           | ใช้ `[square]` ไม่ใช่ `:param`     |
+| Layout ไม่ซ้อน                     | layout.tsx ผิดตำแหน่ง        | layout ต้องอยู่ในโฟลเดอร์ของ route |
+| navigation control ไม่ interactive | component ไม่ได้ hydrate     | เพิ่ม `'use client'` ที่ component |
+| import .tsx ไม่เจอ                 | path พิมพ์ผิด                | เช็ค relative path                 |
+| params.slug เป็น undefined         | ไม่ match dynamic segment    | ดูที่ `params` object ทั้งตัว      |
+| ไม่เห็น route group                | ใช้ `()name` ไม่ใช่ `(name)` | วงเล็บเท่านั้น                     |
+| 404 route ซ้ำกับ catch-all         | Static กินก่อน catch-all     | จัด priority ใหม่                  |
+| Link ไม่ navigate                  | Cross-origin URL             | ใช้ relative path                  |
+| router.refresh() ไม่ทำงาน          | Bundle ยังไม่ load           | รอให้ bundle โหลดก่อน              |
 
 ### ตัวอย่างข้อผิดพลาด
 
@@ -1101,12 +1108,8 @@ params.slug = "hello world"   ← URL decoded
 ```
 
 ```tsx
-// ผิด: ใช้ useRouter โดยไม่มี 'use client'
-import { useRouter } from '@ruvyxa/react'
-// → RUV1008: Server-only hook
-
-// ถูก:
-;('use client')
+// Navigation component ที่ต้อง interactive
+'use client'
 import { useRouter } from '@ruvyxa/react'
 ```
 

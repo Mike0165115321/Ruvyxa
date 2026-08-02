@@ -1159,30 +1159,40 @@ Same as error boundaries: nearest `loading.tsx` in the route tree wraps the segm
 
 import { action } from 'ruvyxa/server'
 
-export const registerUser = action(async (formData: FormData) => {
-  const email = formData.get('email') as string
-  const password = formData.get('password') as string
+export const registerUser = action
+  .input({
+    parse(value: unknown): { email: string; password: string } {
+      if (!value || typeof value !== 'object') throw new Error('Expected an object')
+      const { email, password } = value as Record<string, unknown>
+      return {
+        email: typeof email === 'string' ? email : '',
+        password: typeof password === 'string' ? password : '',
+      }
+    },
+  })
+  .handler(async ({ input }) => {
+    const { email, password } = input
 
-  // Validation errors
-  const errors: Record<string, string> = {}
-  if (!email || !email.includes('@')) errors.email = 'Invalid email'
-  if (!password || password.length < 8) errors.password = 'Too short (min 8)'
+    // Validation errors
+    const errors: Record<string, string> = {}
+    if (!email || !email.includes('@')) errors.email = 'Invalid email'
+    if (!password || password.length < 8) errors.password = 'Too short (min 8)'
 
-  if (Object.keys(errors).length > 0) {
-    return { success: false, errors }
-  }
-
-  // Business logic error
-  try {
-    await createUser({ email, password })
-    return { success: true }
-  } catch (err) {
-    return {
-      success: false,
-      errors: { email: 'This email is already registered' },
+    if (Object.keys(errors).length > 0) {
+      return { success: false, errors }
     }
-  }
-})
+
+    // Business logic error
+    try {
+      await createUser({ email, password })
+      return { success: true }
+    } catch (err) {
+      return {
+        success: false,
+        errors: { email: 'This email is already registered' },
+      }
+    }
+  })
 ```
 
 ### Client Error Handling
@@ -1190,20 +1200,32 @@ export const registerUser = action(async (formData: FormData) => {
 ```tsx
 'use client'
 
-import { useActionState } from 'react'
+import { useState } from 'react'
 
 export function RegisterForm() {
-  const [state, action, pending] = useActionState(registerUser, null)
+  const [state, setState] = useState<{ errors?: Record<string, string> } | null>(null)
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const formData = new FormData(event.currentTarget)
+    const response = await fetch('/__ruvyxa/action?path=/actions/register&name=registerUser', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: String(formData.get('email') ?? ''),
+        password: String(formData.get('password') ?? ''),
+      }),
+    })
+    setState(await response.json())
+  }
 
   return (
-    <form action={action}>
+    <form onSubmit={submit}>
       <input name="email" type="email" />
       {state?.errors?.email && <p className="error">{state.errors.email}</p>}
       <input name="password" type="password" />
       {state?.errors?.password && <p className="error">{state.errors.password}</p>}
-      <button type="submit" disabled={pending}>
-        Register
-      </button>
+      <button type="submit">Register</button>
     </form>
   )
 }
@@ -1308,7 +1330,7 @@ const apiUrl = process.env.RUVYXA_PUBLIC_API_URL
 
 // ✅ Good — private env accessed only in server actions
 ;('use server')
-export const getData = action(async () => {
+export const getData = action.handler(async () => {
   const url = process.env.DATABASE_URL // safe here
 })
 ```

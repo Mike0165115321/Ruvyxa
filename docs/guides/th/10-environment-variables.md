@@ -415,24 +415,11 @@ interface ImportMeta {
 }
 ```
 
-### 3. Auto-generated Type Declarations
+### 3. Type declarations must be maintained by the project
 
-Ruvyxa สามารถสร้าง `ruvyxa-env.d.ts` อัตโนมัติจากไฟล์ `.env`:
-
-```bash
-# สร้าง type declarations จาก .env
-ruvyxa doctor --generate-env-types
-```
-
-Output:
-
-```
-━━━ Generate Env Types ━━━━━━━━━━━━━━━━━━━━━━
-  ✓ Scanned .env, .env.production
-  ✓ Generated ruvyxa-env.d.ts (14 variables)
-  ✓ Type safety for all env vars
-  ⚠ Private vars: 8 (no RUVYXA_PUBLIC_ prefix)
-```
+CLI ปัจจุบันไม่มี `ruvyxa doctor --generate-env-types` และไม่สร้าง `ruvyxa-env.d.ts` จากไฟล์ `.env`
+โดยอัตโนมัติ ให้สร้างและดูแล declaration เองตามตัวอย่างด้านบน โดยเฉพาะอย่าใช้ declaration
+เป็นหลักฐานว่า private variable ปลอดภัยใน client bundle
 
 ---
 

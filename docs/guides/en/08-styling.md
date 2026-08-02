@@ -625,38 +625,22 @@ fn resolve_style_import(root, base_dir, specifier, tsconfig) → Option<PathBuf>
 
 ## Style Objects (CSS-in-JS)
 
-Ruvyxa provides an optional styling solution for those who prefer CSS-in-JS, but without the runtime
-overhead.
+React inline `style` objects work normally, but Ruvyxa does not export a `css()` helper or an
+`@ruvyxa/core/style` subpath. Use CSS files, CSS modules, or an independently installed CSS-in-JS
+library when that model is required.
 
 ```tsx
-import { css } from '@ruvyxa/core/style'
-
-const styles = {
-  container: css({
-    display: 'flex',
-    padding: '20px',
-    backgroundColor: 'var(--bg)',
-    '&:hover': {
-      backgroundColor: 'var(--bg-hover)',
-    },
-  }),
-  title: css({
-    fontSize: '24px',
-    fontWeight: 'bold',
-  }),
-}
-
 export default function Component() {
   return (
-    <div className={styles.container}>
-      <h1 className={styles.title}>Hello</h1>
+    <div style={{ display: 'flex', padding: '20px', backgroundColor: 'var(--bg)' }}>
+      <h1 style={{ fontSize: '24px', fontWeight: 'bold' }}>Hello</h1>
     </div>
   )
 }
 ```
 
-These `css()` calls are statically extracted and compiled into regular CSS during build. They have
-zero runtime cost.
+For reusable or stateful styling, prefer an imported stylesheet so Ruvyxa's existing style pipeline
+can collect and serve it.
 
 ---
 

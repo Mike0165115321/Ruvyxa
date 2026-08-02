@@ -1,6 +1,47 @@
 # Protocols · โพรโทคอล
 
-**Scope**: Cross-crate (dev server HMR, server actions, client module protocol)
+**Scope**: Cross-crate (dev server HMR, server actions, client route assets)
+
+## Current production contract
+
+The following endpoints are the source-backed contract in the current dev server. They use the
+double-underscore namespace `__ruvyxa`; the older `/_ruvyxa/...` paths below are retained only as
+historical context and must not be implemented against.
+
+### HMR
+
+The browser connects to `ws(s)://<host>/__ruvyxa/hmr`. The watcher publishes a JSON object with
+`type`, `paths`, `affectedRoutes`, and `fullReload`. The injected client currently performs a full
+`location.reload()` after receiving a valid message; it does not negotiate manifest hashes, keep a
+browser module registry, or apply per-module hot swaps.
+
+### Server actions
+
+The only action endpoint is:
+
+```text
+POST /__ruvyxa/action?path=<route-path>&name=<exported-action>
+```
+
+The action must be an exported value from the route-local `action.ts` or `action.js` module whose
+`ruvyxa.kind` is `action` (created with the `action` builder). The endpoint accepts JSON or
+`application/x-www-form-urlencoded` payloads, applies body-size, same-origin, Fetch Metadata, and
+rate-limit checks, then forwards the request to the worker. There is no public
+`/_ruvyxa/action/{name}` form and no `'use server'` registration protocol.
+
+### Client route assets
+
+In development, `GET /__ruvyxa/client/route-manifest.json` returns the current browser route table;
+each route points to an on-demand ESM bundle at `GET /__ruvyxa/client?path=<route-pattern>`.
+Production serves the emitted client assets beneath `/__ruvyxa/client/`. These are route bundles,
+not URL-encoded source-module endpoints or IIFE registry modules. The worker-pool render channel is
+internal process communication, not a public `/__ruvyxa/render` HTTP endpoint.
+
+## Retained historical protocol draft (non-normative)
+
+> **Archive warning:** Everything below is a legacy design draft. It contains obsolete paths,
+> message shapes, and module-loading mechanics; do not copy it into an application or integration.
+> The current contract above and the dev-server route registration are authoritative.
 
 ## สรุป
 

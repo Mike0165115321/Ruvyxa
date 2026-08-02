@@ -201,7 +201,7 @@ check used by `ruvyxa check`.
 
 ```bash
 ruvyxa test:parity
-ruvyxa start
+ruvyxa parity
 ```
 
 ## `ruvyxa plugin create`
@@ -342,7 +342,7 @@ and render parity flow. To run just the parity portion:
 ```bash
 ruvyxa test:parity
 # equivalent alias
-ruvyxa start
+ruvyxa parity
 ```
 
 ### Inspect Routes Before Debugging a URL

@@ -1190,51 +1190,50 @@ debug: {
 ```ts
 'use server'
 import { action } from 'ruvyxa/server'
-import { RuvyxaError } from 'ruvyxa/errors'
 
 // === Action ที่จัดการ error ครบถ้วน ===
-export const createUser = action(async (data: FormData) => {
-  try {
-    // 1. Input validation
-    const email = data.get('email') as string
-    const name = data.get('name') as string
+export const createUser = action
+  .input({
+    parse(value: unknown): { email: string; name: string } {
+      if (!value || typeof value !== 'object') throw new Error('รูปแบบข้อมูลไม่ถูกต้อง')
+      const { email, name } = value as Record<string, unknown>
+      if (typeof email !== 'string' || !email.includes('@')) {
+        throw new Error('กรุณากรอกอีเมลที่ถูกต้อง')
+      }
+      if (typeof name !== 'string' || name.length < 2) {
+        throw new Error('ชื่อต้องมีอย่างน้อย 2 ตัวอักษร')
+      }
+      return { email, name }
+    },
+  })
+  .handler(async ({ input }) => {
+    try {
+      const { email, name } = input
 
-    if (!email || !email.includes('@')) {
-      throw new RuvyxaError('RUV1200', 'กรุณากรอกอีเมลที่ถูกต้อง')
+      // 1. Business logic
+      const existing = await db.user.findUnique({ where: { email } })
+      if (existing) {
+        return { error: 'อีเมลนี้มีผู้ใช้แล้ว', code: 'RUV1200' }
+      }
+
+      const user = await db.user.create({
+        data: { email, name },
+        select: { id: true, email: true, name: true },
+      })
+
+      await sendWelcomeEmail(email, name)
+
+      // 2. Success
+      return { success: true, user }
+    } catch (error) {
+      // 3. Error handling: Ruvyxa does not export a RuvyxaError class to applications.
+      console.error('Unexpected error in createUser:', error)
+      return {
+        error: 'เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ',
+        code: 'RUV1200',
+      }
     }
-
-    if (!name || name.length < 2) {
-      throw new RuvyxaError('RUV1200', 'ชื่อต้องมีอย่างน้อย 2 ตัวอักษร')
-    }
-
-    // 2. Business logic
-    const existing = await db.user.findUnique({ where: { email } })
-    if (existing) {
-      throw new RuvyxaError('RUV1200', 'อีเมลนี้มีผู้ใช้แล้ว')
-    }
-
-    const user = await db.user.create({
-      data: { email, name },
-      select: { id: true, email: true, name: true },
-    })
-
-    await sendWelcomeEmail(email, name)
-
-    // 3. Success
-    return { success: true, user }
-  } catch (error) {
-    // 4. Error handling
-    if (error instanceof RuvyxaError) {
-      return { error: error.message, code: error.code }
-    }
-
-    console.error('Unexpected error in createUser:', error)
-    return {
-      error: 'เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ',
-      code: 'RUV1200',
-    }
-  }
-})
+  })
 ```
 
 **Client-side**:
@@ -1249,7 +1248,10 @@ export function RegisterForm() {
 
   async function handleSubmit(formData: FormData) {
     setError(null)
-    const result = await createUser(formData)
+    const result = await createUser({
+      email: String(formData.get('email') ?? ''),
+      name: String(formData.get('name') ?? ''),
+    })
 
     if (result.error) {
       setError(`Error ${result.code}: ${result.error}`)
@@ -1275,8 +1277,6 @@ export function RegisterForm() {
 
 ```ts
 // app/api/users/route.ts
-import { NextResponse } from 'ruvyxa/server'
-
 // === GET /api/users ===
 export async function GET(request: Request) {
   try {
@@ -1289,13 +1289,13 @@ export async function GET(request: Request) {
       db.user.count(),
     ])
 
-    return NextResponse.json({
+    return Response.json({
       data: users,
       pagination: { total, limit, offset },
     })
   } catch (error) {
     console.error('GET /api/users error:', error)
-    return NextResponse.json(
+    return Response.json(
       {
         error: 'RUV1200',
         message: 'ไม่สามารถดึงข้อมูลผู้ใช้ได้',
@@ -1318,19 +1318,19 @@ export async function POST(request: Request) {
 
     // Validate
     if (!body.email || !body.name) {
-      return NextResponse.json(
+      return Response.json(
         { error: 'RUV1200', message: 'ข้อมูลไม่ครบ: email และ name' },
         { status: 400 },
       )
     }
 
     const user = await db.user.create({ data: body })
-    return NextResponse.json({ user }, { status: 201 })
+    return Response.json({ user }, { status: 201 })
   } catch (error) {
     const isValidation = error instanceof SyntaxError
     const status = isValidation ? 400 : 500
 
-    return NextResponse.json(
+    return Response.json(
       {
         error: 'RUV1200',
         message: isValidation ? 'ข้อมูล JSON ไม่ถูกต้อง' : 'ไม่สามารถสร้างผู้ใช้ได้',
@@ -1612,7 +1612,7 @@ const apiUrl = process.env.RUVYXA_PUBLIC_API_URL
 
 // ✅ Good — private env accessed only in server actions
 ;('use server')
-export const getData = action(async () => {
+export const getData = action.handler(async () => {
   const url = process.env.DATABASE_URL // safe here
 })
 ```

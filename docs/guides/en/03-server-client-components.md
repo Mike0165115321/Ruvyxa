@@ -81,8 +81,9 @@ localStorage.getItem("key") // ReferenceError
 window.innerWidth           // ReferenceError
 document.getElementById("x") // ReferenceError
 
-// ❌ No router hooks (RUV1008)
-import { useRouter } from "@ruvyxa/react" // Error: Server-only hook
+// Router hooks are client-navigation helpers. RUV1008 is reserved for a private
+// process.env read that is reachable from a client graph.
+import { useRouter } from '@ruvyxa/react'
 
 // ❌ No client-only libraries
 import "client-only" // RUV1009: Client-only module in server graph
@@ -1035,16 +1036,16 @@ module. This is why moving a shared helper can affect more than one page.
 
 ## Troubleshooting
 
-### "RUV1008: Server-only hook"
+### "Interactive component is not hydrated"
 
 ```tsx
 // Incorrect:
 export default function Page() {
-  const [x, setX] = useState(0) // ← RUV1008
+  const [x, setX] = useState(0)
   return <button onClick={() => setX(1)}>...</button>
 }
 
-// Correct: Add 'use client'
+// Mark an interactive page or component as client-side:
 ;('use client')
 export default function Page() {
   const [x, setX] = useState(0)

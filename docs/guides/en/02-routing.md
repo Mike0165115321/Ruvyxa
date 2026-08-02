@@ -42,8 +42,6 @@ app/
 | --------------- | ----------------------------------------------------------------- |
 | `page.tsx`      | Page component — renders UI at this route                         |
 | `page.jsx`      | Page component (JSX variant)                                      |
-| `page.ts`       | Page component (no JSX, returns React element)                    |
-| `page.js`       | Page component (JS variant)                                       |
 | `page.mdx`      | MDX page — Markdown with React components                         |
 | `page.md`       | Markdown page — plain markdown                                    |
 | `layout.tsx`    | Layout component — wraps child pages, persists across navigations |
@@ -58,7 +56,7 @@ app/
 When multiple files define the same route, the priority is:
 
 ```
-page.tsx > page.jsx > page.ts > page.js > page.mdx > page.md
+page.tsx > page.jsx > page.mdx > page.md
 route.ts > route.js
 ```
 
@@ -593,17 +591,14 @@ export type MetaExport = Meta | MetaFactory
 
 ```tsx
 // app/blog/[slug]/page.tsx
-import type { Metadata } from 'ruvyxa'
+import type { Meta } from '@ruvyxa/react'
 
-export const meta: Metadata = {
+export const meta: Meta = {
   title: 'My Blog',
   description: 'A blog about things',
   canonical: 'https://example.com/blog',
   robots: 'index, follow',
-  openGraph: {
-    title: 'My Blog',
-    image: '/og-image.png',
-  },
+  image: '/og-image.png',
 }
 
 export default function BlogPage() {
@@ -614,13 +609,11 @@ export default function BlogPage() {
 ### Dynamic Meta from Params
 
 ```tsx
-export const meta = ({ params }: { params: { slug: string } }): Metadata => ({
+export const meta = ({ params }: { params: { slug: string } }): Meta => ({
   title: `Post: ${params.slug}`,
   description: `Read about ${params.slug}`,
   canonical: `https://example.com/blog/${params.slug}`,
-  alternates: {
-    canonical: `/blog/${params.slug}`,
-  },
+  alternates: [{ hreflang: 'en', href: `https://example.com/blog/${params.slug}` }],
 })
 ```
 
@@ -1056,29 +1049,26 @@ The router reads/writes these globals:
 
 ### Route Manifest (Client)
 
-Published at `__ruvyxa/client/route-manifest.json`:
+In development, the live manifest is published at `/__ruvyxa/client/route-manifest.json`:
 
 ```json
 {
   "routes": [
     {
       "path": "/",
-      "src": "/__ruvyxa/client/pages/index.mjs",
-      "sharedChunks": [{ "src": "/__ruvyxa/client/shared/vendor.mjs" }],
-      "strategy": "ssg"
+      "src": "/__ruvyxa/client?path=/"
     },
     {
       "path": "/blog/[slug]",
-      "src": "/__ruvyxa/client/pages/blog/[slug].mjs",
-      "sharedChunks": [],
-      "strategy": "isr"
+      "src": "/__ruvyxa/client?path=/blog/%5Bslug%5D"
     }
   ]
 }
 ```
 
-This manifest is fetched lazily (first client navigation) and cached. It contains only
-`{ path, src, sharedChunks }` — no absolute source paths or module graphs.
+This manifest is fetched lazily (first client navigation) and cached. The development endpoint
+returns `{ path, src }` with `Cache-Control: no-store`; production's emitted manifest can also
+describe shared chunks. Neither form exposes absolute source paths or module graphs.
 
 ### Navigation Flow
 
@@ -1209,7 +1199,7 @@ params.slug = "hello world"   ← URL decoded
 | `layout.tsx` missing `<html>`           | Root layout must have `<html>` and `<body>`       | Add them to root layout                |
 | `page.tsx` in `_components/`            | Underscore folders are ignored                    | Move `page.tsx` outside                |
 | Accessing `params` async                | `params` is synchronous in Ruvyxa                 | Use `params.slug` directly             |
-| `meta` as a function returns wrong type | Type mismatch in dynamic metadata                 | Ensure return type is `Metadata`       |
+| `meta` as a function returns wrong type | Type mismatch in dynamic metadata                 | Ensure return type is `Meta`           |
 | `<Link>` without `@ruvyxa/react` import | Unknown component                                 | Import `Link` from `@ruvyxa/react`     |
 | Forgot `'use client'` for hooks         | `useState`/`useRouter` on server                  | Add directive or use `useRuvyxaLoader` |
 | Using `[...slug]` not at end of path    | `RUV1002`: catch-all must be final                | Move to last segment                   |

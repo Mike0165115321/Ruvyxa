@@ -716,17 +716,17 @@ CSR pages receive a minimal shell HTML:
 <!DOCTYPE html>
 <html lang="en">
   <head>
-    <title>Dashboard</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
   </head>
   <body>
-    <div id="root"><!-- Loading... --></div>
-    <script type="module" src="/__ruvyxa/client/pages/dashboard.mjs"></script>
+    <div id="__ruvyxa"></div>
+    <script type="module" src="/__ruvyxa/client?path=/dashboard"></script>
   </body>
 </html>
 ```
 
-The page content (including the loading state from the server render) is present in the initial
-HTML, but the real content is rendered client-side after hydration.
+No page content is server-rendered into a CSR shell; the client bundle renders it in the browser.
 
 ### CSR Auto-Detection
 

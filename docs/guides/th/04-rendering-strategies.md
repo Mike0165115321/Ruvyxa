@@ -616,8 +616,8 @@ export default function Page() {
 .ruvyxa/
 ├── prerender/
 │   └── ppr-page/
-│       ├── index.html         ← static shell
-│       └── ppr-shell.json     ← metadata (dynamic slots info)
+│       └── index.html         ← static shell
+└── prerender/manifest.json    ← concrete path และ strategy ของ prerendered routes
 ```
 
 ### เมื่อใช้ PPR
@@ -821,24 +821,20 @@ export default function Page() {
 
 ```
 .ruvyxa/
-├── prerender/                      # pre-rendered pages
-│   ├── [route-path]/
-│   │   ├── index.html             # SSG/ISR HTML
-│   │   └── ppr-shell.json         # PPR metadata (ถ้ามี)
-│   ├── isr-page/
-│   │   └── index.html             # ISR (cache first)
-│   └── ppr-page/
-│       ├── index.html             # PPR static shell
-│       └── ppr-shell.json         # dynamic slots metadata
+├── prerender/                      # pre-rendered HTML และรายการ route
+│   ├── [route-path]/index.html     # SSG / ISR / PPR / CSR shell ตาม route
+│   └── manifest.json               # concrete prerendered paths และ strategy
 ├── server/
-│   ├── page-ssr.js                # SSR fallback handler
-│   └── serverless-handler.mjs     # serverless entry
+│   ├── app/                        # source snapshot ที่ runtime ใช้
+│   ├── components/
+│   └── server/
 ├── client/
-│   ├── page-home.js               # client bundle pages
-│   ├── page-blog-[slug].js
-│   └── shared-*.js                # shared chunks
-├── route-manifest.json             # build report
-└── route-modules.mjs              # route module registry
+│   ├── manifest.json               # internal build manifest
+│   ├── route-manifest.json         # browser-safe route table
+│   └── *.js                        # emitted hashed route/shared bundles
+├── assets/                         # public และ optimized assets
+├── manifest.json                   # route manifest สำหรับ runtime
+└── build.json                      # build summary
 ```
 
 ### Prerender output file naming
@@ -847,7 +843,7 @@ export default function Page() {
 Static route:    /about → prerender/about/index.html
 Dynamic route:   /blog/[slug] → prerender/blog/[slug-value]/index.html
 ISR:             /isr-page → prerender/isr-page/index.html
-PPR shell:       /ppr-page → prerender/ppr-page/index.html + ppr-shell.json
+PPR shell:       /ppr-page → prerender/ppr-page/index.html (รายละเอียด route อยู่ใน prerender/manifest.json)
 ```
 
 ---

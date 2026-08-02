@@ -594,8 +594,8 @@ declare namespace NodeJS {
 }
 
 declare module '*.mdx' {
-  import type { MDXContent } from 'ruvyxa/mdx'
-  const content: MDXContent
+  import type { ComponentType } from 'react'
+  const content: ComponentType
   export default content
 }
 
@@ -1126,10 +1126,11 @@ rm -rf node_modules pnpm-lock.yaml && pnpm install
 rm -rf node_modules yarn.lock && yarn install
 ```
 
-### "RUV1008: Server-only hook"
+### "Interactive component ยังไม่ได้ hydrate"
 
-สาเหตุ: ใช้ `useState`, `useEffect`, หรือ event handlers ใน server component วิธีแก้: เพิ่ม
-`'use client'` directive ที่บรรทัดแรกของไฟล์
+สาเหตุ: component ที่ต้องโต้ตอบใช้ `useState`, `useEffect` หรือ event handler แต่ไม่ได้ถูกกำหนดเป็น
+client-side วิธีแก้: เพิ่ม `'use client'` ที่บรรทัดแรกของไฟล์นั้น `RUV1008` สงวนไว้สำหรับ private
+environment variable ที่เข้าถึงได้จาก client graph ไม่ใช่ router หรือ React hook
 
 ---
 

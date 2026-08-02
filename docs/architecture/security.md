@@ -91,14 +91,17 @@ Retry-After: <seconds>
 
 ## 3. CSRF Protection for Server Actions
 
-All POST requests to `/_ruvyxa/action/*` require:
+The server-action endpoint is `POST /__ruvyxa/action?path=<route>&name=<export>`. Before invoking
+the action it applies these checks:
 
-1. **Origin validation**: `Origin` header must match an allowed origin from
-   `CorsConfig.allow_origins`. No `Origin` header → blocked (browsers always send `Origin` on
-   cross-origin POST).
-2. **`Ruvyxa-Action` header**: Must equal the action name being called. E.g.,
-   `Ruvyxa-Action: submitForm`. Absent or mismatched → 403.
-3. **Method check**: Only POST allowed. GET → 405.
+1. **Content type**: JSON or URL-encoded form data only; other payloads return 415.
+2. **Origin validation**: when enabled, `Origin` must match `Host`; a trusted proxy may supply the
+   scheme through `X-Forwarded-Proto`.
+3. **Fetch Metadata**: when enabled, `Sec-Fetch-Site: cross-site` returns 403.
+4. **Rate limit**: the action endpoint is POST-only and applies the configured per-client/action
+   limit before dispatch.
+
+There is no `Ruvyxa-Action` request header contract in the current server implementation.
 
 ---
 

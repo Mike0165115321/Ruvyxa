@@ -89,7 +89,7 @@ export default async function ProductPage() {
 ### สิ่งที่ server components ทำไม่ได้
 
 ```tsx
-// ❌ ERROR — RUV1008
+// ❌ Client component ที่ขาด directive
 export default function BadComponent() {
   const [count, setCount] = useState(0) // ไม่ได้ — ต้องใช้ client component
   useEffect(() => {}, []) // ไม่ได้ — ต้องใช้ client component
@@ -917,16 +917,16 @@ export default function ServerMessage() {
 
 ## การแก้ไขปัญหาที่พบบ่อย
 
-### "RUV1008: Server-only hook"
+### "Interactive component ยังไม่ได้ hydrate"
 
 ```tsx
 // ผิด:
 export default function Page() {
-  const [x, setX] = useState(0) // ← RUV1008
+  const [x, setX] = useState(0)
   return <button onClick={() => setX(1)}>...</button>
 }
 
-// ถูก: เพิ่ม 'use client'
+// กำหนด page หรือ component ที่ interactive เป็น client-side:
 ;('use client')
 export default function Page() {
   const [x, setX] = useState(0)

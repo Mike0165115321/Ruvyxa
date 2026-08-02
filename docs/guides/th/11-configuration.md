@@ -487,14 +487,15 @@ export default config({
 
 ## คำสั่ง Doctor (Doctor Command)
 
-หากคุณไม่แน่ใจว่า Config ของคุณมีหน้าตาอย่างไรหลังจากถูกโหลดและผสานค่าเริ่มต้น:
+หากต้องการตรวจว่า Config ใช้ได้กับกฎปัจจุบัน ให้รัน:
 
 ```bash
-ruvyxa doctor --config
+ruvyxa doctor
 ```
 
-จะพ่นรายละเอียดของการตั้งค่าและเช็ค RUV16xx ตามกฎที่มีอยู่ใน source; อย่าถือว่าฟิลด์ที่ไม่ได้อยู่ใน
-type หรือ parser เป็น configuration ที่รองรับ
+CLI ปัจจุบันไม่มี flag `--config` สำหรับพิมพ์ configuration ที่ merge แล้ว; `doctor` จะตรวจ
+configuration และรายงาน diagnostics ที่รองรับ อย่าถือว่าฟิลด์ที่ไม่ได้อยู่ใน type หรือ parser เป็น
+configuration ที่รองรับ
 
 ## Validation Rules — Complete Reference (Rust)
 
