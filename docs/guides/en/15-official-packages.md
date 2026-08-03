@@ -152,7 +152,7 @@ build completion.
 ## Versioning
 
 This source tree uses one repository release version for the first-party packages. The checked-in
-package manifests currently report `1.0.25` for `ruvyxa`, `@ruvyxa/auth`, `@ruvyxa/database`,
+package manifests currently report `1.0.26` for `ruvyxa`, `@ruvyxa/auth`, `@ruvyxa/database`,
 `@ruvyxa/realtime`, and the first-party adapter packages. Built-in plugins are not separately
 versioned or split into independent plugin versions; they follow the `ruvyxa` package version.
 

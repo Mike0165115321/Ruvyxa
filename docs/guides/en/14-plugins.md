@@ -30,7 +30,7 @@ fonts
 ```
 
 These are built-in plugin factories, not separately versioned packages. The checked-in first-party
-package manifests use release version 1.0.25; realtime@1 is a native capability/protocol identifier,
+package manifests use release version 1.0.26; realtime@1 is a native capability/protocol identifier,
 not a plugin package version.
 
 ### Configuration and registration

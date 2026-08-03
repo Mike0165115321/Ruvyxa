@@ -456,8 +456,8 @@ Every Ruvyxa project comes with these scripts:
 ```json
 {
   "dependencies": {
-    "@ruvyxa/react": "^1.0.25",
-    "ruvyxa": "^1.0.25",
+    "@ruvyxa/react": "^1.0.26",
+    "ruvyxa": "^1.0.26",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },

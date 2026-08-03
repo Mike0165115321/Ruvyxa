@@ -30,7 +30,7 @@ fonts
 ```
 
 Built-in plugin ไม่ได้แยก package version ของตัวเอง manifest ของ first-party packages ใน repository
-ปัจจุบันใช้ release version 1.0.25 ส่วน realtime@1 เป็น native capability/protocol identifier ไม่ใช่
+ปัจจุบันใช้ release version 1.0.26 ส่วน realtime@1 เป็น native capability/protocol identifier ไม่ใช่
 version ของ plugin แยกต่างหาก
 
 ### การลงทะเบียนและ config

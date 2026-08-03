@@ -147,7 +147,7 @@ Client รองรับ `subscribe`, `subscribeRoute` และ `close` พร
 ## Versioning
 
 source tree นี้ใช้ release version เดียวกันสำหรับ first-party packages manifest ที่ commit อยู่
-ปัจจุบันระบุ `1.0.25` สำหรับ `ruvyxa`, `@ruvyxa/auth`, `@ruvyxa/database`, `@ruvyxa/realtime` และ
+ปัจจุบันระบุ `1.0.26` สำหรับ `ruvyxa`, `@ruvyxa/auth`, `@ruvyxa/database`, `@ruvyxa/realtime` และ
 first-party adapter packages ทั้งหมด Built-in plugins ไม่ได้แยก package และไม่มี version แยก จึง
 ติดตาม version ของ package `ruvyxa`
 
