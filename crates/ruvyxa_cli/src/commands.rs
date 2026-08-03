@@ -219,10 +219,10 @@ fn write_machine_report(report: &str) -> anyhow::Result<()> {
 }
 
 fn write_machine_report_to(writer: &mut impl Write, report: &str) -> anyhow::Result<()> {
-    if let Err(error) = writeln!(writer, "{report}") {
-        if error.kind() != std::io::ErrorKind::BrokenPipe {
-            return Err(error).context("failed to write machine-readable report");
-        }
+    if let Err(error) = writeln!(writer, "{report}")
+        && error.kind() != std::io::ErrorKind::BrokenPipe
+    {
+        return Err(error).context("failed to write machine-readable report");
     }
     Ok(())
 }
