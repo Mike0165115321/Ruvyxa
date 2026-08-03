@@ -1,6 +1,6 @@
 {
   "name": "@ruvyxa/testing",
-  "version": "1.0.25",
+  "version": "1.0.26",
   "description": "Framework-native loader, action, and cache test doubles for Ruvyxa applications.",
   "license": "Apache-2.0",
   "type": "module",
@@ -17,12 +17,23 @@
     "url": "https://github.com/thirawat27/ruvyxa/issues"
   },
   "homepage": "https://github.com/thirawat27/ruvyxa#readme",
-  "engines": { "node": ">=22.12.0" },
-  "publishConfig": { "access": "public" },
-  "peerDependencies": { "@ruvyxa/core": "^1.0.25" },
-  "devDependencies": { "@ruvyxa/core": "workspace:^" },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "@ruvyxa/core": "^1.0.25"
+  },
+  "devDependencies": {
+    "@ruvyxa/core": "workspace:^"
+  },
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
   "scripts": {
     "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
