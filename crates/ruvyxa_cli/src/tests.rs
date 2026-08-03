@@ -1545,6 +1545,68 @@ fn config_paths_must_stay_project_relative() {
 }
 
 #[test]
+fn validates_and_propagates_i18n_routing_config() {
+    let config: ProjectConfig = serde_json::from_value(json!({
+        "i18n": {
+            "locales": ["en", "th", "fr-FR"],
+            "defaultLocale": "en",
+            "localeParam": "lang"
+        }
+    }))
+    .unwrap();
+    config.validate_paths().unwrap();
+    let routing = config.discover_options(Path::new("project")).i18n.unwrap();
+    assert_eq!(routing.locales, ["en", "th", "fr-FR"]);
+    assert_eq!(routing.default_locale, "en");
+    assert!(routing.detect_locale);
+    assert_eq!(routing.cookie, "RUVYXA_LOCALE");
+
+    let duplicate: ProjectConfig = serde_json::from_value(json!({
+        "i18n": { "locales": ["en", "EN"], "defaultLocale": "en" }
+    }))
+    .unwrap();
+    assert!(
+        duplicate
+            .validate_paths()
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate locale")
+    );
+
+    let missing_default: ProjectConfig = serde_json::from_value(json!({
+        "i18n": { "locales": ["th"], "defaultLocale": "en" }
+    }))
+    .unwrap();
+    assert!(
+        missing_default
+            .validate_paths()
+            .unwrap_err()
+            .to_string()
+            .contains("defaultLocale")
+    );
+}
+
+#[test]
+fn locale_only_dynamic_routes_expand_without_static_params_boilerplate() {
+    let routing = ruvyxa_graph::I18nRouting {
+        locales: vec!["en".into(), "th".into()],
+        default_locale: "en".into(),
+        locale_param: "lang".into(),
+        detect_locale: true,
+        cookie: "RUVYXA_LOCALE".into(),
+    };
+    let paths = locale_static_paths(Some(&routing), "/[lang]/about").unwrap();
+    assert_eq!(
+        paths
+            .iter()
+            .map(|path| path.path.as_str())
+            .collect::<Vec<_>>(),
+        ["/en/about", "/th/about"]
+    );
+    assert!(locale_static_paths(Some(&routing), "/[lang]/blog/[slug]").is_none());
+}
+
+#[test]
 fn copies_external_style_sources_into_server_output() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
@@ -1622,6 +1684,43 @@ fn parses_analyze_sarif_output_options() {
     };
     assert_eq!(args.format, AnalyzeFormat::Sarif);
     assert_eq!(args.output, Some(PathBuf::from("reports/ruvyxa.sarif")));
+}
+
+#[test]
+fn parses_interactive_analyze_html_shorthand() {
+    let cli = Cli::try_parse_from(normalized_cli_args(os_args([
+        "Ruvyxa",
+        "ANALYZE",
+        "--HTML",
+        "--OUTPUT",
+        "reports/bundle.html",
+    ])))
+    .unwrap();
+
+    let Command::Analyze(args) = cli.command else {
+        panic!("expected analyze command");
+    };
+    assert!(args.html);
+    assert_eq!(args.format, AnalyzeFormat::Auto);
+    assert_eq!(args.output, Some(PathBuf::from("reports/bundle.html")));
+}
+
+#[test]
+fn parses_routes_json_for_tooling_consumers() {
+    let cli = Cli::try_parse_from(normalized_cli_args(os_args([
+        "Ruvyxa",
+        "ROUTES",
+        "--JSON",
+        "--ROOT",
+        "examples/demo",
+    ])))
+    .unwrap();
+
+    let Command::Routes(args) = cli.command else {
+        panic!("expected routes command");
+    };
+    assert!(args.json);
+    assert_eq!(args.root, PathBuf::from("examples/demo"));
 }
 
 #[test]

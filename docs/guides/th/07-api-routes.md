@@ -1280,9 +1280,9 @@ ownership ให้เก็บการตัดสินใจเหล่า�
 เมื่อ endpoint ตอบกลับไม่ตรงคาด ให้ยืนยันก่อนว่า route ใดถูกค้นพบ แล้วจึงแก้ handler:
 
 ```bash
-ruvyxa routes
-ruvyxa trace /api/products/[id]
-ruvyxa analyze --format human
+npm run routes
+npm run trace -- /api/products/[id]
+npm run analyze -- --format human
 ```
 
 route manifest แยก page และ API entries และ analyzer มอง API import graph เป็น server graph

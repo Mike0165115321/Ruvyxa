@@ -14,6 +14,8 @@ export interface StandaloneServerOptions {
    * @default 'bundle'
    */
   isrCache?: 'bundle' | 'tmp'
+  /** Validated build runtime policy embedded into the generated server. */
+  runtimePolicy?: Readonly<Record<string, unknown>>
 }
 
 /**
@@ -43,6 +45,8 @@ import { createReadStream, readFileSync, writeFileSync, mkdirSync, statSync } fr
 import os from 'node:os';
 import path from 'node:path';
 
+const runtimePolicy = ${JSON.stringify(options.runtimePolicy ?? {})};
+
 const here = import.meta.dirname;
 const prerenderDir = path.join(here, 'prerender');
 const isrCacheDir = ${isrCacheDirectory};
@@ -50,6 +54,8 @@ const publicDir = path.resolve(here, '..', 'public');
 
 const handler = createHandler({
   routes: manifest.routes,
+  middleware: runtimePolicy.middleware,
+  i18n: manifest.i18n,
   importPage: loadRouteModule,
   importApi: loadRouteModule,
   readPrerendered: (pathname, revalidate = 60) => {

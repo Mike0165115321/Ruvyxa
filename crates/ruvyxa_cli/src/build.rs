@@ -367,6 +367,15 @@ pub(crate) async fn build_with_output(args: BuildArgs, show_summary: bool) -> an
                 .map(|(name, _)| serde_json::json!(name))),
         "adapterOptions": config.adapter_options.clone(),
         "images": image_report,
+        "runtime": {
+            "middleware": config.middleware,
+            "i18n": manifest.i18n,
+            "image": {
+                "onDemand": config.images.on_demand.enabled(),
+                "maxWidth": config.images.on_demand.max_width(),
+                "sizes": config.images.variant_widths
+            }
+        },
         "hashAlgorithm": ASSET_HASH_ALGORITHM,
         "security": {
             "actionLimit": config.security.action_body_limit_bytes.unwrap_or(1024 * 1024),

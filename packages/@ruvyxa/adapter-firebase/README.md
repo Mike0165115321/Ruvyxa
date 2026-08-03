@@ -4,7 +4,7 @@ Full-stack Firebase Hosting adapter for Ruvyxa. It publishes static assets to Fi
 rewrites dynamic requests to a generated second-generation HTTPS function.
 
 ```bash
-ruvyxa build --adapter firebase
+npm run build -- --adapter firebase
 firebase deploy --only hosting,functions
 ```
 

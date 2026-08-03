@@ -23,8 +23,8 @@ use ruvyxa_bundler::JsxRuntime;
 use ruvyxa_diagnostics::Diagnostic;
 use ruvyxa_diagnostics::{Result, RuvyxaError};
 use ruvyxa_graph::{
-    DiscoverOptions, RenderStrategy, RouteEntry, RouteKind, RouteManifest, RouteParams,
-    discover_routes,
+    DiscoverOptions, I18nRouting, RenderStrategy, RouteEntry, RouteKind, RouteManifest,
+    RouteParams, discover_routes,
 };
 #[cfg(test)]
 use ruvyxa_middleware::PluginHttpResponse;
@@ -35,6 +35,8 @@ use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 
+mod devtools;
+mod dynamic_image;
 mod env_file;
 #[cfg(test)]
 use env_file::parse_env_source;
@@ -50,6 +52,9 @@ pub use action_security::{IpPrefix, TrustedProxies};
 use action_security::{
     action_content_type_is_supported, action_fetch_site_is_cross_site, action_origin_is_cross_site,
 };
+use devtools::{DevToolsMetrics, dashboard_html};
+pub use dynamic_image::DynamicImageConfig;
+use dynamic_image::{DynamicImageCache, DynamicImageError};
 
 mod cli_output;
 use cli_output::{
@@ -63,6 +68,7 @@ use port_binding::bind_listener;
 use port_binding::{PORT_FALLBACK_SCAN_LIMIT, port_conflict_diagnostic};
 
 mod html_document;
+mod i18n;
 #[cfg(test)]
 use html_document::{
     client_hydration_script, compose_document, dev_diagnostic_overlay, hmr_client_script,
@@ -72,7 +78,7 @@ use html_document::{
     dev_error_overlay, error_response, plain_error_page, public_internal_error,
     url_encode_component,
 };
-pub use html_document::{hydration_loader_source, hydration_loader_url};
+pub use html_document::{hydration_loader_source, hydration_loader_url, localize_document};
 
 mod plugin_bridge;
 #[cfg(test)]
@@ -270,6 +276,10 @@ pub struct ServerConfig {
     pub plugin_head: Vec<PluginHeadEntry>,
     pub default_render_strategy: Option<RenderStrategy>,
     pub default_revalidate: Option<u64>,
+    /// Validated file-system locale routing policy.
+    pub i18n: Option<I18nRouting>,
+    /// Same-origin runtime image resizing policy.
+    pub dynamic_images: DynamicImageConfig,
 }
 
 impl ServerConfig {
@@ -343,6 +353,8 @@ impl ServerConfig {
             plugin_head: Vec::new(),
             default_render_strategy: None,
             default_revalidate: None,
+            i18n: None,
+            dynamic_images: DynamicImageConfig::default(),
         }
     }
 
@@ -379,6 +391,8 @@ impl ServerConfig {
             plugin_head: Vec::new(),
             default_render_strategy: None,
             default_revalidate: None,
+            i18n: None,
+            dynamic_images: DynamicImageConfig::default(),
         }
     }
 }
@@ -395,6 +409,8 @@ struct AppState {
     hmr_tracker: Arc<HmrTracker>,
     plugin_runtime: Option<Arc<PluginHost>>,
     realtime: Option<RealtimeRuntime>,
+    devtools: Arc<DevToolsMetrics>,
+    dynamic_image_cache: Arc<DynamicImageCache>,
 }
 
 #[derive(Clone)]
@@ -407,11 +423,14 @@ struct RealtimeRuntime {
 /// Framework endpoints registered on the router before the plugin realtime
 /// route. Must stay in sync with the `Router::new()` chain in [`serve`];
 /// registering a realtime transport on one of these would panic in axum.
-const RESERVED_FRAMEWORK_ROUTES: [&str; 4] = [
+const RESERVED_FRAMEWORK_ROUTES: [&str; 7] = [
     "/__ruvyxa/hmr",
     "/__ruvyxa/client",
     "/__ruvyxa/action",
     "/__ruvyxa/trace",
+    "/__ruvyxa/devtools",
+    "/__ruvyxa/devtools/data",
+    "/__ruvyxa/image",
 ];
 
 #[derive(Default)]
@@ -603,6 +622,7 @@ fn normalize_cache_path(path: &Path) -> PathBuf {
 fn discover_options(config: &ServerConfig) -> DiscoverOptions {
     DiscoverOptions::new(&config.app_dir)
         .with_rendering_defaults(config.default_render_strategy, config.default_revalidate)
+        .with_i18n(config.i18n.clone())
 }
 
 pub async fn serve(config: ServerConfig) -> Result<()> {
@@ -717,6 +737,8 @@ pub async fn serve(config: ServerConfig) -> Result<()> {
         hmr_tracker,
         plugin_runtime,
         realtime,
+        devtools: Arc::new(DevToolsMetrics::default()),
+        dynamic_image_cache: Arc::new(DynamicImageCache::default()),
     };
 
     let _watcher = if config.watch {
@@ -744,11 +766,17 @@ pub async fn serve(config: ServerConfig) -> Result<()> {
         .route("/__ruvyxa/client", get(client_bundle))
         .route("/__ruvyxa/hydration-loader.js", get(hydration_loader))
         .route("/__ruvyxa/client/route-manifest.json", get(client_manifest))
+        .route("/__ruvyxa/image", get(dynamic_image_endpoint))
         .route(
             "/__ruvyxa/action",
             post(action_endpoint).layer(DefaultBodyLimit::max(config.action_body_limit_bytes)),
         )
         .route("/__ruvyxa/trace", get(trace_endpoint));
+    if config.watch {
+        app = app
+            .route("/__ruvyxa/devtools", get(devtools_dashboard))
+            .route("/__ruvyxa/devtools/data", get(devtools_data));
+    }
     if let Some(path) = realtime_path {
         app = app.route(&path, get(realtime_ws));
     }
@@ -1252,6 +1280,15 @@ struct ClientBundleQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct DynamicImageQuery {
+    src: String,
+    #[serde(rename = "w")]
+    width: u32,
+    #[serde(rename = "q")]
+    quality: Option<u8>,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct ActionQuery {
     pub(crate) path: String,
     pub(crate) name: String,
@@ -1329,6 +1366,9 @@ async fn client_bundle(
 ) -> Response {
     let response = match render_client_bundle_pooled(&state, &query.path).await {
         Ok(script) => {
+            if state.config.watch {
+                state.devtools.record_bundle(&query.path, script.len());
+            }
             // The client bundle is cached behind an `Arc<str>`; serve that
             // allocation instead of copying the whole script per request.
             let mut response = shared_text_body(script).into_response();
@@ -1360,6 +1400,98 @@ async fn hydration_loader() -> Response {
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    with_security_headers(response)
+}
+
+async fn dynamic_image_endpoint(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<DynamicImageQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if query
+        .quality
+        .is_some_and(|quality| !(1..=100).contains(&quality))
+    {
+        return with_security_headers(
+            (
+                StatusCode::BAD_REQUEST,
+                "image quality must be between 1 and 100",
+            )
+                .into_response(),
+        );
+    }
+    let bytes = match dynamic_image::optimize(
+        &state.config.public_dir,
+        &state.config.dynamic_images,
+        &state.dynamic_image_cache,
+        &query.src,
+        query.width,
+        query.quality,
+    )
+    .await
+    {
+        Ok(bytes) => bytes,
+        Err(DynamicImageError::InvalidRequest(message)) => {
+            return with_security_headers((StatusCode::BAD_REQUEST, message).into_response());
+        }
+        Err(DynamicImageError::NotFound) => {
+            return with_security_headers(StatusCode::NOT_FOUND.into_response());
+        }
+        Err(DynamicImageError::TooLarge) => {
+            return with_security_headers(
+                (
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "image exceeds runtime limits",
+                )
+                    .into_response(),
+            );
+        }
+        Err(DynamicImageError::Decode) => {
+            return with_security_headers(
+                (
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    "image could not be decoded",
+                )
+                    .into_response(),
+            );
+        }
+        Err(DynamicImageError::Io(error)) => {
+            error!(%error, src = %query.src, "dynamic image read failed");
+            return with_security_headers(StatusCode::NOT_FOUND.into_response());
+        }
+        Err(DynamicImageError::Worker) => {
+            error!(src = %query.src, "dynamic image worker failed");
+            return with_security_headers(StatusCode::INTERNAL_SERVER_ERROR.into_response());
+        }
+    };
+    let etag = static_assets::compute_etag(&bytes);
+    if headers
+        .get(header::IF_NONE_MATCH)
+        .is_some_and(|value| static_assets::etag_matches(value, &etag))
+    {
+        let mut response = StatusCode::NOT_MODIFIED.into_response();
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=60, stale-while-revalidate=86400"),
+        );
+        response.headers_mut().insert(
+            header::ETAG,
+            HeaderValue::from_str(&etag).unwrap_or_else(|_| HeaderValue::from_static("")),
+        );
+        return with_security_headers(response);
+    }
+    let mut response = bytes.as_ref().to_vec().into_response();
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static("image/webp"));
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=60, stale-while-revalidate=86400"),
+    );
+    response.headers_mut().insert(
+        header::ETAG,
+        HeaderValue::from_str(&etag).unwrap_or_else(|_| HeaderValue::from_static("")),
+    );
     with_security_headers(response)
 }
 
@@ -1404,7 +1536,8 @@ async fn action_endpoint(
         );
     }
 
-    let response = match render_server_action_pooled(
+    let action_started = Instant::now();
+    let (response, action_error) = match render_server_action_pooled(
         &state,
         &query.path,
         &query.name,
@@ -1414,7 +1547,7 @@ async fn action_endpoint(
     )
     .await
     {
-        Ok(response) => response,
+        Ok(response) => (response, false),
         Err(error) => {
             error!(
                 %error,
@@ -1424,12 +1557,76 @@ async fn action_endpoint(
             );
             let message = public_internal_error(&state.config, &error);
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("console.error({message:?});"),
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("console.error({message:?});"),
+                )
+                    .into_response(),
+                true,
             )
-                .into_response()
         }
     };
+    if state.config.watch {
+        state.devtools.record_action(
+            &query.path,
+            &query.name,
+            action_started.elapsed(),
+            action_error,
+        );
+    }
+    with_security_headers(response)
+}
+
+async fn devtools_dashboard(State(state): State<Arc<AppState>>) -> Response {
+    if !state.config.watch {
+        return with_security_headers(StatusCode::NOT_FOUND.into_response());
+    }
+    let mut response = dashboard_html().into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    with_security_headers(response)
+}
+
+async fn devtools_data(
+    State(state): State<Arc<AppState>>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.watch || hmr_origin_is_cross_site(&headers, &state.config, peer.ip()) {
+        return with_security_headers(StatusCode::NOT_FOUND.into_response());
+    }
+    let routes = match state.runtime_cache.router(&state.config).await {
+        Ok((manifest, _)) => manifest
+            .routes
+            .iter()
+            .map(|route| {
+                serde_json::json!({
+                    "path": route.path,
+                    "kind": format!("{:?}", route.kind).to_lowercase(),
+                    "strategy": format!("{:?}", route.render.strategy).to_lowercase(),
+                    "file": route.file.strip_prefix(&state.config.root)
+                        .unwrap_or(&route.file).display().to_string(),
+                })
+            })
+            .collect::<Vec<_>>(),
+        Err(error) => {
+            error!(%error, "devtools route snapshot failed");
+            Vec::new()
+        }
+    };
+    let snapshot = state.devtools.snapshot(
+        serde_json::Value::Array(routes),
+        state.render_cache.snapshot().await,
+    );
+    let mut response = json_response(StatusCode::OK, &snapshot);
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     with_security_headers(response)
 }
 

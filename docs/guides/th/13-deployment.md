@@ -6,11 +6,11 @@ platform นั้น adapter ไม่ได้ทำการ deploy, health-g
 ## Flow ของ build และการ serve
 
 ```bash
-ruvyxa check
-ruvyxa doctor --adapter node
-ruvyxa build --adapter node
-ruvyxa start       # serve build ที่มีอยู่แล้ว
-ruvyxa preview     # ตรวจดู build ในเครื่อง
+npm run check
+npm run doctor -- --adapter node
+npm run build -- --adapter node
+npm run start # serve build ที่มีอยู่แล้ว
+npm run preview # ตรวจดู build ในเครื่อง
 ```
 
 `start` และ `preview` serve build ที่สร้างเสร็จแล้ว ไม่ได้หมายถึง build + stage + health-check +
@@ -75,7 +75,7 @@ PaaS ได้ แต่ adapter ไม่ได้ deploy ไป provider ใ�
 SSR, ISR, PPR หรือ API route ไม่ได้ Dynamic SSG ใช้ metadata `getStaticParams`/`staticParams`
 
 ```bash
-ruvyxa build --adapter static
+npm run build -- --adapter static
 # publish artifact .ruvyxa/deploy/static/ ตาม output ของ adapter
 ```
 
@@ -113,9 +113,9 @@ CI ควร validate และ build artifact ส่วนการ deploy เ�
 ```yaml
 steps:
   - run: pnpm install --frozen-lockfile
-  - run: pnpm exec ruvyxa check
-  - run: pnpm exec ruvyxa doctor --adapter node
-  - run: pnpm exec ruvyxa build --adapter node
+  - run: npm run check
+  - run: npm run doctor -- --adapter node
+  - run: npm run build -- --adapter node
   - uses: actions/upload-artifact@v4
     with:
       name: ruvyxa-node-build
@@ -124,7 +124,7 @@ steps:
 
 ## การตรวจสอบและ performance
 
-ใช้ `ruvyxa analyze` ตรวจ bundle และ `ruvyxa bench` วัดผลบน application/deployment จริง หากบันทึก
+ใช้ `npm run analyze` ตรวจ bundle และ `npm run bench` วัดผลบน application/deployment จริง หากบันทึก
 ผลลัพธ์ควรระบุ workload, hardware, adapter และ sample size เสมอ repository ไม่มี target สากลสำหรับ
 TTFB, throughput, bundle size, image size, ROI หรือ timeline
 
@@ -132,7 +132,7 @@ TTFB, throughput, bundle size, image size, ROI หรือ timeline
 
 | อาการ                   | ตรวจสอบก่อน                                                                       |
 | ----------------------- | --------------------------------------------------------------------------------- |
-| หา adapter ไม่เจอ       | ตรวจ name/package และรัน `ruvyxa doctor --adapter <name>`                         |
+| หา adapter ไม่เจอ       | ตรวจ name/package และรัน `npm run doctor -- --adapter <name>`                     |
 | Strategy ไม่รองรับ      | เทียบ route strategy กับ field `supports` ของ adapter                             |
 | Static route หาย        | ตรวจว่าเป็น `ssg`/`csr` และ dynamic route export `getStaticParams`/`staticParams` |
 | output ไม่ถูก serve     | รัน `build` ก่อน เพราะ `start`/`preview` ไม่ได้สร้าง build                        |
@@ -809,7 +809,7 @@ export default config({
 
 ```toml
 [build]
-  command = "npx ruvyxa build"
+  command = "npm run build"
   publish = ".netlify/dist"
   functions = ".netlify/functions"
 
@@ -1368,7 +1368,7 @@ dist/
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
     "builder": "nixpacks",
-    "buildCommand": "npx ruvyxa build"
+    "buildCommand": "npm run build"
   },
   "deploy": {
     "startCommand": "node dist/server.js",
@@ -1426,7 +1426,7 @@ services:
   - type: web
     name: my-app
     env: node
-    buildCommand: npx ruvyxa build
+    buildCommand: npm run build
     startCommand: node dist/server.js
     healthCheckPath: /health
     plan: starter
@@ -2124,3 +2124,17 @@ deploy ออก external platform เอง เว้นแต่ package ข�
 - **[12-cli-commands.md](./12-cli-commands.md)** — build and deploy commands
 - **[14-plugins.md](./14-plugins.md)** — sitemap, robots, and deploy plugins
 - **[16-error-handling.md](./16-error-handling.md)** — deploy error codes
+
+# Fetch-native middleware และ Edge target
+
+policy ของ built-in middleware ที่ validate แล้วจะถูกเขียนใน `build.json` และฝังใน runtime artifact
+ทำให้ CORS, rate limit, timing, logging และ custom headers ใช้ config เดียวกันใน native dev,
+Node/Bun, serverless, Cloudflare Workers และ Vercel Edge
+
+```ts
+adapter: vercelAdapter({ edge: true, regions: ['sin1'] })
+```
+
+Vercel Edge รองรับ SSR, SSG, CSR และ API หากต้องใช้ ISR/PPR ให้เลือก Node serverless แบบปกติ เพราะ
+สอง strategy นี้ใช้ temporary cache ที่เขียนได้ Cloudflare รองรับ SSR, SSG, CSR และ API ส่วน ISR/PPR
+ต้องออกแบบ KV หรือ Durable Object เพิ่ม ระบบจึงปฏิเสธตอน build แทนการลดความสามารถเงียบ ๆ

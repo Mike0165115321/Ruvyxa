@@ -1,10 +1,22 @@
 import type { Adapter, AdapterOutput, BuildContext } from '@ruvyxa/core'
-import { clientBuildOutput, staticAssetPattern, validateBuildContext } from '@ruvyxa/core'
+import {
+  clientBuildOutput,
+  runtimeBuildPolicy,
+  staticAssetPattern,
+  validateBuildContext,
+} from '@ruvyxa/core'
 
 /**
  * Options for Vercel deployment.
  */
 export interface VercelAdapterOptions {
+  /**
+   * Emit a Web-standard Edge Function instead of a Node.js serverless
+   * function. Edge mode supports SSR, SSG, CSR, and API routes; ISR/PPR need
+   * the writable Node cache and are rejected during build capability checks.
+   * @default false
+   */
+  edge?: boolean
   /** Custom functions output directory. Defaults to `${outDir}/functions`. */
   functionsDir?: string
   /**
@@ -44,7 +56,7 @@ export interface VercelAdapterOptions {
  * serverless function (Node.js runtime). Reads the route manifest and handles
  * SSR/API/ISR/PPR requests.
  */
-function vercelHandlerSource(): string {
+function vercelHandlerSource(runtimePolicy: unknown): string {
   return `import { createHandler, prerenderRelativePath } from './serverless-handler.mjs';
 import { loadRouteModule } from './route-modules.mjs';
 // Imported, not read from disk: a platform that re-bundles the function only
@@ -54,6 +66,19 @@ import manifest from './manifest.mjs';
 import { readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+
+const runtimePolicy = ${JSON.stringify(runtimePolicy ?? {})};
+
+function optimizeImage(request, { src, width, quality }) {
+  if (width > (runtimePolicy.image?.maxWidth ?? 3840)) {
+    return new Response('Image width exceeds configured maximum', { status: 400 });
+  }
+  const destination = new URL('/_vercel/image', request.url);
+  destination.searchParams.set('url', src);
+  destination.searchParams.set('w', String(width));
+  destination.searchParams.set('q', String(quality));
+  return Response.redirect(destination, 307);
+}
 
 const prerenderDir = path.join(import.meta.dirname, 'prerender');
 // The function bundle directory is read-only at runtime; only the platform
@@ -69,6 +94,9 @@ const readEntry = (htmlPath, revalidate) => {
 
 const handler = createHandler({
   routes: manifest.routes,
+  middleware: runtimePolicy.middleware,
+  i18n: manifest.i18n,
+  optimizeImage: runtimePolicy.image?.onDemand === true ? optimizeImage : undefined,
   importPage: loadRouteModule,
   importApi: loadRouteModule,
   readPrerendered: (pathname, revalidate = 60) => {
@@ -161,6 +189,60 @@ export default async function(req, res, context) {
 `
 }
 
+/** Vercel Edge entry point: Request -> Response with no Node.js imports. */
+function vercelEdgeHandlerSource(runtimePolicy: unknown): string {
+  return `import { createHandler } from './serverless-handler.mjs';
+import { loadRouteModule } from './route-modules.mjs';
+import manifest from './manifest.mjs';
+
+const runtimePolicy = ${JSON.stringify(runtimePolicy ?? {})};
+function optimizeImage(request, { src, width, quality }) {
+  if (width > (runtimePolicy.image?.maxWidth ?? 3840)) {
+    return new Response('Image width exceeds configured maximum', { status: 400 });
+  }
+  const destination = new URL('/_vercel/image', request.url);
+  destination.searchParams.set('url', src);
+  destination.searchParams.set('w', String(width));
+  destination.searchParams.set('q', String(quality));
+  return Response.redirect(destination, 307);
+}
+const handler = createHandler({
+  routes: manifest.routes,
+  importPage: loadRouteModule,
+  importApi: loadRouteModule,
+  middleware: runtimePolicy.middleware,
+  i18n: manifest.i18n,
+  optimizeImage: runtimePolicy.image?.onDemand === true ? optimizeImage : undefined,
+  supportedStrategies: ['ssr', 'ssg', 'csr', 'api'],
+});
+
+export default function(request, context) {
+  return handler(request, context);
+}
+`
+}
+
+function vercelImagesConfig(runtimePolicy: Readonly<Record<string, unknown>>): object | undefined {
+  const image = runtimePolicy.image
+  if (!image || typeof image !== 'object' || Array.isArray(image)) return undefined
+  const policy = image as Readonly<Record<string, unknown>>
+  if (policy.onDemand !== true) return undefined
+  const maxWidth = typeof policy.maxWidth === 'number' ? policy.maxWidth : 3840
+  const configured = Array.isArray(policy.sizes) ? policy.sizes : []
+  const sizes = configured
+    .filter((size): size is number => Number.isInteger(size) && size >= 16 && size <= maxWidth)
+    .filter((size, index, values) => values.indexOf(size) === index)
+    .sort((left, right) => left - right)
+  if (sizes.length === 0) sizes.push(640, 750, 828, 1080, 1200, 1920, 2048, 3840)
+  return {
+    sizes: sizes.filter((size) => size <= maxWidth),
+    domains: [],
+    minimumCacheTTL: 86400,
+    formats: ['image/avif', 'image/webp'],
+    localPatterns: [{ pathname: '^/(?!__ruvyxa/).*$' }],
+  }
+}
+
 /**
  * Create a Vercel deployment adapter for Ruvyxa.
  *
@@ -188,6 +270,13 @@ export function vercelAdapter(options: VercelAdapterOptions = {}): Adapter {
     throw new Error(`[RUV2001] vercelAdapter: "functionsDir" must not be an empty string`)
   }
 
+  if (options.edge === true && options.runtime !== undefined) {
+    throw new Error(`[RUV2001] vercelAdapter: "runtime" cannot be set when "edge" is true`)
+  }
+  if (options.edge === true && options.maxDuration !== undefined) {
+    throw new Error(`[RUV2001] vercelAdapter: "maxDuration" cannot be set when "edge" is true`)
+  }
+
   if (
     options.regions !== undefined &&
     (!Array.isArray(options.regions) ||
@@ -201,19 +290,26 @@ export function vercelAdapter(options: VercelAdapterOptions = {}): Adapter {
 
   return {
     name: 'vercel',
-    target: 'serverless',
-    supports: ['ssr', 'ssg', 'csr', 'isr', 'ppr', 'api'],
+    target: options.edge === true ? 'edge' : 'serverless',
+    supports:
+      options.edge === true
+        ? ['ssr', 'ssg', 'csr', 'api']
+        : ['ssr', 'ssg', 'csr', 'isr', 'ppr', 'api'],
     build(ctx: BuildContext): AdapterOutput {
       validateBuildContext(ctx, 'vercelAdapter')
       const functionsDir = options.functionsDir ?? `${ctx.outDir}/functions`
       const runtime = options.runtime ?? 'nodejs20.x'
       const maxDuration = options.maxDuration ?? 10
+      const edge = options.edge === true
+      const runtimePolicy = runtimeBuildPolicy(ctx)
+      const images = vercelImagesConfig(runtimePolicy)
       const STATIC_ASSET_PATTERN = staticAssetPattern()
 
       // Build Output API v3 config with dynamic routing
       const buildOutputConfig = JSON.stringify(
         {
           version: 3,
+          ...(images === undefined ? {} : { images }),
           routes: [
             {
               // Hashed client bundles are served under /__ruvyxa/client/
@@ -253,13 +349,19 @@ export function vercelAdapter(options: VercelAdapterOptions = {}): Adapter {
 
       // Vercel function configuration
       const vcConfig = JSON.stringify(
-        {
-          runtime,
-          handler: 'index.mjs',
-          maxDuration,
-          launcherType: 'Nodejs',
-          ...(options.regions === undefined ? {} : { regions: options.regions }),
-        },
+        edge
+          ? {
+              runtime: 'edge',
+              entrypoint: 'index.mjs',
+              ...(options.regions === undefined ? {} : { regions: options.regions }),
+            }
+          : {
+              runtime,
+              handler: 'index.mjs',
+              maxDuration,
+              launcherType: 'Nodejs',
+              ...(options.regions === undefined ? {} : { regions: options.regions }),
+            },
         null,
         2,
       )
@@ -285,7 +387,9 @@ export function vercelAdapter(options: VercelAdapterOptions = {}): Adapter {
                 kind: 'function',
                 path: '.vercel/output/functions/__ruvyxa_handler.func',
                 scope: 'project',
-                handlerSource: vercelHandlerSource(),
+                handlerSource: edge
+                  ? vercelEdgeHandlerSource(runtimePolicy)
+                  : vercelHandlerSource(runtimePolicy),
               },
               {
                 kind: 'file',
@@ -303,7 +407,7 @@ export function vercelAdapter(options: VercelAdapterOptions = {}): Adapter {
 
       return {
         name: 'vercel',
-        target: 'serverless',
+        target: edge ? 'edge' : 'serverless',
         platform: 'vercel',
         entry: `${ctx.outDir}/server/app`,
         assetsDir: `${ctx.outDir}/assets`,
@@ -324,7 +428,9 @@ export function vercelAdapter(options: VercelAdapterOptions = {}): Adapter {
           {
             kind: 'function',
             path: 'deploy/vercel/.vercel/output/functions/__ruvyxa_handler.func',
-            handlerSource: vercelHandlerSource(),
+            handlerSource: edge
+              ? vercelEdgeHandlerSource(runtimePolicy)
+              : vercelHandlerSource(runtimePolicy),
           },
           // Function config
           {

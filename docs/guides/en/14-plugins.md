@@ -89,9 +89,9 @@ malformed plugin protocol/response data as RUV1701.
 ### Production verification
 
 ```bash
-ruvyxa check
-ruvyxa analyze
-ruvyxa build
+npm run check
+npm run analyze
+npm run build
 ```
 
 For a production review, record the selected plugins, configuration inputs, generated artifacts,

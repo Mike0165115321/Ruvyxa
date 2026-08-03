@@ -181,7 +181,10 @@ Source starters: `templates/minimal/`, `templates/blog/`, `templates/crud/`,
 
 `packages/create-ruvyxa/scripts/prepare-template.mjs` copies all four into package before packing.
 
-Keep starter scripts consistent: `dev`, `build`, `start`, `check`.
+Keep every application starter's scripts consistent: `dev`, `build`, `start`, `preview`,
+`typecheck`, `check`, `routes`, `analyze`, `add`, `doctor`, `clean`, `trace`, `bench`,
+`test:parity`, and `plugin`. Commands that accept arguments must document the
+`npm run <script> -- <argument>` form.
 
 ---
 

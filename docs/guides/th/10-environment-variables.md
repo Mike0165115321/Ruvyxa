@@ -13,7 +13,8 @@ contract ปัจจุบันของ repository คือ:
 - bundler scanner บันทึกเฉพาะ `process.env.NAME` และ `process.env["NAME"]`/`process.env['NAME']`
   ที่ระบุชื่อแบบ static; `process.env[name]` ไม่ใช่ชื่อที่ scanner รู้ได้ล่วงหน้า
 - ใน module ที่ client เข้าถึงได้ อนุญาต `NODE_ENV` และชื่อที่ขึ้นต้นด้วย `RUVYXA_PUBLIC_` เท่านั้น
-  ชื่อ static อื่นจะทำให้เกิด diagnostic RUV1008
+  ชื่อ static อื่นจะทำให้เกิด diagnostic RUV1008; `npm run analyze` และ `npm run build` จะจบด้วย
+  ความล้มเหลวเมื่อพบ diagnostic นี้
 - `import.meta.env`, `PUBLIC_*`, `NEXT_PUBLIC_*` และ `VITE_*` ไม่ใช่ public-variable alias ที่มีใน
   source ปัจจุบัน ถ้าต้องการให้ browser เห็นให้ใช้ `process.env.RUVYXA_PUBLIC_*`
 - `requireEnv` ตรวจตัวแปรที่จำเป็นตอน build แต่ไม่เปิดเผย private value ให้ browser และไม่แทนที่
@@ -1251,7 +1252,7 @@ jobs:
         run: npm ci
 
       - name: Validate env vars
-        run: npx ruvyxa check
+        run: npm run check
 
       - name: Check missing env vars
         run: |
@@ -1533,13 +1534,13 @@ jobs:
         run: npm ci
 
       - name: Check env vars
-        run: npx ruvyxa check
+        run: npm run check
 
       - name: Run tests
         run: npm test
 
       - name: Check for env violations
-        run: npx ruvyxa analyze --format json | jq '.diagnostics | map(select(.code == "RUV1008"))'
+        run: npm run analyze -- --format json | jq '.diagnostics | map(select(.code == "RUV1008"))'
 
       - name: Build
         run: npm run build
@@ -1577,8 +1578,8 @@ validate:
   stage: validate
   script:
     - npm ci
-    - npx ruvyxa check
-    - npx ruvyxa analyze --format json
+    - npm run check
+    - npm run analyze -- --format json
 
 build:
   stage: build
@@ -1594,7 +1595,7 @@ build:
 deploy:
   stage: deploy
   script:
-    - npx ruvyxa start
+    - npm run start
   environment: production
 ```
 

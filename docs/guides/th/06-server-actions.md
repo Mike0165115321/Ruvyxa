@@ -1170,10 +1170,10 @@ action endpoint ตรวจ request และ rate limiter ที่ตั้�
 `security.actionLimit`, `security.actionRateLimit`, same-origin checks, Fetch Metadata checks และ
 trusted-proxy settings ต้องอยู่ในการทบทวน deployment/security; schema `parse` ไม่ได้แทนการป้องกันนี้
 
-ใช้ `ruvyxa analyze --format human` ตรวจว่า dependencies ของ action ไม่ไปอยู่ใน client graph แล้วใช้
-`npm run check` เป็น project-level type/parity gate ไม่ควรอธิบายหรือเรียก `'use server'` ว่าเป็นกลไก
-register action: route-local `action.ts`/`action.js` และ exported action values คือ convention
-ปัจจุบัน
+ใช้ `npm run analyze -- --format human` ตรวจว่า dependencies ของ action ไม่ไปอยู่ใน client graph
+แล้วใช้ `npm run check` เป็น project-level type/parity gate ไม่ควรอธิบายหรือเรียก `'use server'`
+ว่าเป็นกลไก register action: route-local `action.ts`/`action.js` และ exported action values คือ
+convention ปัจจุบัน
 
 ---
 

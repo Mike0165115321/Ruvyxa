@@ -210,12 +210,12 @@ In this example:
 
 ### Prefix Detection Algorithm
 
-The client bundle scanner in `crates/ruvyxa_bundler/src/boundary.rs` uses a token-aware scan:
+The client bundle scanner in `crates/ruvyxa_bundler/src/boundary.rs` reads the parsed module AST:
 
 ```rust
-fn find_private_env_reads(source: &str) -> Vec<String> {
-    // Scans source bytes for `process.env.NAME` and `process.env['NAME']`
-    // Skips strings, comments, template literals, regex literals
+fn private_env_reads(module: &ast::ModuleAst) -> Vec<String> {
+    // Reads parsed `process.env.NAME` and `process.env['NAME']` expressions.
+    // Text in strings, comments, and regex literals is not an env access.
     // Allows: NODE_ENV, RUVYXA_PUBLIC_*
     // Reports: everything else as private
 }
@@ -256,27 +256,28 @@ RUV1008: Private environment variable used in client bundle
   https://ruvyxa.dev/docs/errors/RUV1008
 ```
 
-This check happens at **build time** and **dev time**, so you catch it before deployment.
+Run `npm run analyze` while developing; `npm run build` performs the same prebuild validation before
+it creates deployable output.
 
 ### RUV1008 -- Full Error Specification
 
 | Field             | Value                                                                               |
 | ----------------- | ----------------------------------------------------------------------------------- |
 | Error Code        | `RUV1008`                                                                           |
-| Severity          | Non-fatal diagnostic (build continues, but reported)                                |
+| Severity          | Validation error: `npm run analyze` and `npm run build` fail when it is reported    |
 | Trigger           | `process.env.VAR` or `process.env['VAR']` in client-bundle code                     |
 | Condition         | VAR is not `NODE_ENV` and does not start with `RUVYXA_PUBLIC_`                      |
-| File Location     | `boundary.rs` in `find_private_env_reads()`                                         |
+| File Location     | `ruvyxa_graph/src/lib.rs` and `ruvyxa_bundler/src/boundary.rs`                      |
 | Also triggers for | `@ruvyxa/auth`, `@ruvyxa/database` imports (RUV1007), `server/` directory (RUV1010) |
 
 ### Related Boundary Violations
 
-| Code    | Message                                            | Severity   | Trigger                                           |
-| ------- | -------------------------------------------------- | ---------- | ------------------------------------------------- |
-| RUV1007 | Server-only module imported into client bundle     | Hard error | `import "server-only"` or `import "@ruvyxa/auth"` |
-| RUV1008 | Private environment variable used in client bundle | Diagnostic | `process.env.SECRET` in client code               |
-| RUV1009 | Client-only module imported into SSR graph         | Diagnostic | `import "client-only"` in server bundle           |
-| RUV1010 | Server directory module reached by client graph    | Hard error | File under `server/` reachable from client        |
+| Code    | Message                                            | Severity   | Trigger                                            |
+| ------- | -------------------------------------------------- | ---------- | -------------------------------------------------- |
+| RUV1007 | Server-only module imported into client bundle     | Hard error | `import "server-only"` or `import "@ruvyxa/auth"`  |
+| RUV1008 | Private environment variable used in client bundle | Error      | Private `process.env.SECRET` reachable from client |
+| RUV1009 | Client-only module imported into SSR graph         | Error      | `import "client-only"` reachable from server code  |
+| RUV1010 | Server directory module reached by client graph    | Hard error | File under `server/` reachable from client         |
 
 ---
 

@@ -148,4 +148,26 @@ describe('cloudflareAdapter', () => {
     assert.match(contents, /\/\*\.webp\n {2}Cache-Control: public, max-age=3600, must-revalidate/)
     assert.doesNotMatch(contents, /^\/\*\.js$/m)
   })
+
+  it('embeds validated edge middleware, i18n, and on-demand image wiring', () => {
+    const output = cloudflareAdapter().build({
+      root: '.',
+      outDir: '.ruvyxa',
+      buildInfo: {
+        runtime: {
+          middleware: { builtin: { timing: true, headers: { 'x-edge': 'yes' } } },
+          image: { onDemand: true, maxWidth: 2048 },
+        },
+      },
+    })
+    const worker = output.artifacts?.find((artifact) => artifact.kind === 'function')
+    const source = String(worker?.handlerSource ?? '')
+
+    assert.match(source, /middleware: runtimePolicy\.middleware/)
+    assert.match(source, /i18n: manifest\.i18n/)
+    assert.match(source, /onDemand === true \? optimizeImage/)
+    assert.match(source, /"maxWidth":2048/)
+    assert.match(source, /cf: \{ image:/)
+    assert.doesNotMatch(source, /node:/)
+  })
 })

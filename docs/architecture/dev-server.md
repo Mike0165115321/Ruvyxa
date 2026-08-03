@@ -71,17 +71,20 @@ pub enum JavaScriptRuntime { Node, Bun }
 
 ## Framework Endpoints
 
-| Route                                  | Method | Handler            | Purpose                                                 |
-| -------------------------------------- | ------ | ------------------ | ------------------------------------------------------- |
-| `/__ruvyxa/hmr`                        | GET    | `hmr_ws`           | HMR WebSocket — broadcasts file-change JSON to browsers |
-| `/__ruvyxa/client`                     | GET    | `client_bundle`    | On-demand compiled client JS bundles per route          |
-| `/__ruvyxa/hydration-loader.js`        | GET    | `hydration_loader` | Client hydration loader script                          |
-| `/__ruvyxa/client/route-manifest.json` | GET    | `client_manifest`  | Live route table for browser router                     |
-| `/__ruvyxa/action`                     | POST   | `action_endpoint`  | Server action dispatch                                  |
-| `/__ruvyxa/trace`                      | GET    | `trace_endpoint`   | Runtime route trace (debug only)                        |
+| Route                                  | Method | Handler                  | Purpose                                                          |
+| -------------------------------------- | ------ | ------------------------ | ---------------------------------------------------------------- |
+| `/__ruvyxa/hmr`                        | GET    | `hmr_ws`                 | HMR WebSocket — broadcasts file-change JSON to browsers          |
+| `/__ruvyxa/client`                     | GET    | `client_bundle`          | On-demand compiled client JS bundles per route                   |
+| `/__ruvyxa/hydration-loader.js`        | GET    | `hydration_loader`       | Client hydration loader script                                   |
+| `/__ruvyxa/client/route-manifest.json` | GET    | `client_manifest`        | Live route table for browser router                              |
+| `/__ruvyxa/image`                      | GET    | `dynamic_image_endpoint` | Bounded same-origin WebP resize when `image.onDemand` is enabled |
+| `/__ruvyxa/action`                     | POST   | `action_endpoint`        | Server action dispatch                                           |
+| `/__ruvyxa/trace`                      | GET    | `trace_endpoint`         | Runtime route trace (debug only)                                 |
+| `/__ruvyxa/devtools`                   | GET    | `devtools_dashboard`     | Development dashboard (only while watching)                      |
+| `/__ruvyxa/devtools/data`              | GET    | `devtools_data`          | Development dashboard data (only while watching)                 |
 
 Reserved paths (collision rejection): `/__ruvyxa/hmr`, `/__ruvyxa/client`, `/__ruvyxa/action`,
-`/__ruvyxa/trace`.
+`/__ruvyxa/trace`, `/__ruvyxa/devtools`, `/__ruvyxa/devtools/data`, and `/__ruvyxa/image`.
 
 ---
 

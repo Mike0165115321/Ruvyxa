@@ -86,9 +86,9 @@ RUV1700 และ protocol/response ที่ผิดรูปแบบเป�
 ### การตรวจ production
 
 ```bash
-ruvyxa check
-ruvyxa analyze
-ruvyxa build
+npm run check
+npm run analyze
+npm run build
 ```
 
 Production review ควรบันทึก plugin ที่เลือก, config, generated artifacts, environment variables,

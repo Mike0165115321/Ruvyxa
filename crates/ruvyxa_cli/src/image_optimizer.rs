@@ -38,12 +38,59 @@ pub struct ImageOptimizationOptions {
     /// Zero uses Rayon's global worker count.
     #[serde(rename = "workers")]
     pub parallelism: usize,
+    /// Optional runtime transforms for same-origin public assets.
+    pub on_demand: OnDemandImageOptions,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum OnDemandImageOptions {
+    Enabled(bool),
+    Config(OnDemandImageConfigOptions),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct OnDemandImageConfigOptions {
+    pub enabled: bool,
+    pub max_width: u32,
+}
+
+impl Default for OnDemandImageConfigOptions {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_width: 3840,
+        }
+    }
+}
+
+impl Default for OnDemandImageOptions {
+    fn default() -> Self {
+        Self::Enabled(false)
+    }
+}
+
+impl OnDemandImageOptions {
+    pub fn enabled(&self) -> bool {
+        match self {
+            Self::Enabled(enabled) => *enabled,
+            Self::Config(config) => config.enabled,
+        }
+    }
+
+    pub fn max_width(&self) -> u32 {
+        match self {
+            Self::Enabled(_) => 3840,
+            Self::Config(config) => config.max_width,
+        }
+    }
 }
 
 /// Default responsive breakpoints, matching `DEFAULT_DEVICE_WIDTHS` in
 /// `packages/@ruvyxa/react/src/image.tsx`. The two MUST stay identical: the
 /// build emits these widths and the component references them at render time.
-/// `tests/packages/react/image-variants.test.mjs` asserts the lists agree.
+/// `packages/@ruvyxa/react/test/image-variants.test.mjs` asserts the lists agree.
 pub const DEFAULT_VARIANT_WIDTHS: [u32; 8] = [640, 750, 828, 1080, 1200, 1920, 2048, 3840];
 
 impl Default for ImageOptimizationOptions {
@@ -55,6 +102,7 @@ impl Default for ImageOptimizationOptions {
             keep_original: true,
             variant_widths: DEFAULT_VARIANT_WIDTHS.to_vec(),
             parallelism: 0,
+            on_demand: OnDemandImageOptions::default(),
         }
     }
 }

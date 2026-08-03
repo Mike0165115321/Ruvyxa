@@ -1140,8 +1140,8 @@ page สามารถ render data นี้บน server ได้เอง; �
 path:
 
 ```bash
-ruvyxa analyze --format human
-ruvyxa trace /the-affected-route
+npm run analyze -- --format human
+npm run trace -- /the-affected-route
 npm run check
 ```
 

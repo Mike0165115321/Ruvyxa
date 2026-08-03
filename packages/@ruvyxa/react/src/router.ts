@@ -56,6 +56,8 @@ export interface NavigateOptions {
   replace?: boolean
   /** Scroll to the top after navigating. Defaults to `true`. */
   scroll?: boolean
+  /** Animate this navigation with the browser View Transitions API when available. */
+  viewTransition?: boolean
 }
 
 /** Public navigation surface returned by {@link useRouter}. */
@@ -214,6 +216,37 @@ function createRouter(): RouterInstance {
     return true
   }
 
+  async function renderRouteWithTransition(
+    context: RouteContextValue,
+    enabled: boolean | undefined,
+  ): Promise<boolean> {
+    if (!enabled || typeof document === 'undefined') return renderRoute(context)
+    const documentWithTransitions = document as Document & {
+      startViewTransition?: (update: () => void) => { updateCallbackDone: Promise<void> }
+    }
+    const reducedMotion =
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    if (reducedMotion || !documentWithTransitions.startViewTransition) {
+      return renderRoute(context)
+    }
+    const factory = globals.__RUVYXA_ROUTES__?.[context.route]
+    const root = globals.__RUVYXA_ROOT__
+    if (!factory || !root) return false
+    globals.__RUVYXA_ROUTE_PARAMS__ = context.params
+    globals.__RUVYXA_REQUEST_PATH__ = context.pathname
+    globals.__RUVYXA_ROUTE_PATTERN__ = context.route
+    try {
+      const transition = documentWithTransitions.startViewTransition(() => {
+        root.render(factory(context))
+      })
+      await transition.updateCallbackDone
+      return true
+    } catch {
+      return false
+    }
+  }
+
   /**
    * Execute a route bundle so it registers its tree factory.
    *
@@ -294,7 +327,7 @@ function createRouter(): RouterInstance {
 
     snapshot = context
     search = url.search
-    if (!renderRoute(context)) {
+    if (!(await renderRouteWithTransition(context, options.viewTransition))) {
       hardNavigate(url, historyMode === 'replace')
       return
     }

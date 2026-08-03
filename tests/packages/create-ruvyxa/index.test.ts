@@ -13,6 +13,26 @@ const frameworkVersion = JSON.parse(
   await readFile(new URL('../../../package.json', import.meta.url), 'utf8'),
 ).version as string
 
+const starterScripts = {
+  dev: 'ruvyxa dev',
+  build: 'ruvyxa build',
+  start: 'ruvyxa start',
+  preview: 'ruvyxa preview',
+  typecheck: 'tsc --noEmit',
+  check: 'ruvyxa check',
+  routes: 'ruvyxa routes',
+  'routes:json': 'ruvyxa routes --json',
+  analyze: 'ruvyxa analyze',
+  'analyze:html': 'ruvyxa analyze --html',
+  add: 'ruvyxa add',
+  doctor: 'ruvyxa doctor',
+  clean: 'ruvyxa clean',
+  trace: 'ruvyxa trace',
+  bench: 'ruvyxa bench',
+  'test:parity': 'ruvyxa test:parity',
+  plugin: 'ruvyxa plugin',
+}
+
 describe('detectPackageManager', () => {
   it("recognizes Bun's text lockfile", async () => {
     const root = await mkdtemp(join(tmpdir(), 'ruvyxa-bun-lock-'))
@@ -130,7 +150,7 @@ describe('createRuvyxaApp', () => {
       ])
       const packageJson = await readPackageJson(target)
       assert.equal(packageJson.name, 'my-app')
-      assert.equal(packageJson.scripts.build, 'ruvyxa build')
+      assert.deepEqual(packageJson.scripts, starterScripts)
       assert.equal(packageJson.dependencies.ruvyxa, `^${frameworkVersion}`)
       assert.equal(packageJson.dependencies['@ruvyxa/react'], `^${frameworkVersion}`)
     } finally {
@@ -164,7 +184,9 @@ describe('createRuvyxaApp', () => {
         const files = await listFiles(target)
         assert.ok(files.includes(expectedFile))
         assert.ok(files.includes('.gitignore'))
-        assert.equal((await readPackageJson(target)).name, `${template}-app`)
+        const packageJson = await readPackageJson(target)
+        assert.equal(packageJson.name, `${template}-app`)
+        assert.deepEqual(packageJson.scripts, starterScripts)
       } finally {
         await rm(tempRoot, { recursive: true, force: true })
       }

@@ -28,7 +28,7 @@ npm run dev        # → http://localhost:3000
 
 ---
 
-## User Guide (17 chapters)
+## User Guide (18 chapters)
 
 | #   | Chapter                                                                | Level | Topics                                                                                              |
 | --- | ---------------------------------------------------------------------- | ----- | --------------------------------------------------------------------------------------------------- |
@@ -43,16 +43,17 @@ npm run dev        # → http://localhost:3000
 | 09  | [Markdown, MDX & Images](guides/en/09-markdown-mdx-images.md)          | 🟢    | Content pages, frontmatter, MDX components, Image optimization, SEO                                 |
 | 10  | [Environment Variables](guides/en/10-environment-variables.md)         | 🟢    | `.env` files, `RUVYXA_PUBLIC_*` prefix, server-only secrets, TypeScript declarations                |
 | 11  | [Configuration](guides/en/11-configuration.md)                         | 🔴    | `ruvyxa.config.ts` fields, defaults, validation, and source-backed examples                         |
-| 12  | [CLI Commands](guides/en/12-cli-commands.md)                           | 🟢    | All 13 commands, options, example output, exit codes                                                |
+| 12  | [CLI Commands](guides/en/12-cli-commands.md)                           | 🟢    | All 14 commands, options, example output, exit codes                                                |
 | 13  | [Deployment](guides/en/13-deployment.md)                               | 🟢    | Build output, adapters, all platforms, production checklist, CI/CD                                  |
 | 14  | [Plugins](guides/en/14-plugins.md)                                     | 🔴    | 16 built-in plugins, custom plugin API, hooks, lifecycle                                            |
 | 15  | [Official Packages](guides/en/15-official-packages.md)                 | 🟡    | Auth, Database, Realtime — server API, client API, plugin setup                                     |
 | 16  | [Error Handling](guides/en/16-error-handling.md)                       | 🔴    | Current RUV#### diagnostics, error boundaries, and recovery guidance                                |
 | 17  | [API Reference](guides/en/17-api-reference.md)                         | 🔴    | Public exports from `@ruvyxa/react` and `@ruvyxa/core`                                              |
+| 18  | [Database ORM Starters](guides/en/18-database-orm-starters.md)         | 🟡    | Production-shaped Prisma and Drizzle setup, migrations, pooling, and testing                        |
 
 ---
 
-## User Guide (ภาษาไทย — 17 บท)
+## User Guide (ภาษาไทย — 18 บท)
 
 | #   | บท                                                                     | ระดับ |
 | --- | ---------------------------------------------------------------------- | ----- |
@@ -73,6 +74,7 @@ npm run dev        # → http://localhost:3000
 | 15  | [แพ็กเกจทางการ](guides/th/15-official-packages.md)                     | 🟡    |
 | 16  | [การจัดการ Error](guides/th/16-error-handling.md)                      | 🔴    |
 | 17  | [เอกสารอ้างอิง API](guides/th/17-api-reference.md)                     | 🔴    |
+| 18  | [ตัวอย่างเริ่มต้น Database ORM](guides/th/18-database-orm-starters.md) | 🟡    |
 
 ---
 
@@ -84,7 +86,7 @@ npm run dev        # → http://localhost:3000
 | [Route Discovery](architecture/graph.md)                   | `ruvyxa_graph`       | File conventions, segment types, validation, manifest, rendering strategy detection               |
 | [Compilation Pipeline](architecture/bundler.md)            | `ruvyxa_bundler`     | Oxc resolver/compiler, IIFE linker, minifier, CSS modules, boundary checks, chunking, source maps |
 | [Dev Server](architecture/dev-server.md)                   | `ruvyxa_dev_server`  | Axum HTTP server, radix trie router, HMR WebSocket, render cache, style pipeline                  |
-| [CLI & Build Pipeline](architecture/cli.md)                | `ruvyxa_cli`         | 13 commands, two-phase config, staging build, atomic commit, image optimization                   |
+| [CLI & Build Pipeline](architecture/cli.md)                | `ruvyxa_cli`         | 14 commands, two-phase config, staging build, atomic commit, image optimization                   |
 | [Middleware](architecture/middleware.md)                   | `ruvyxa_middleware`  | Tower middleware stack, compression, CORS, security headers, rate limiting, plugin host           |
 | [Worker Pool](architecture/worker-pool.md)                 | —                    | Node/Bun persistent workers, NDJSON protocol, LRU bundle cache, request coalescing                |
 | [Diagnostics](architecture/diagnostics.md)                 | `ruvyxa_diagnostics` | All RUV#### codes with title, explanation, fix                                                    |
@@ -106,6 +108,7 @@ npm run dev        # → http://localhost:3000
 | `@ruvyxa/auth`      | Authentication            | `createAuth`, stores, Google/GitHub providers; `createAuthClient` from `/client`             |
 | `@ruvyxa/database`  | Database facade           | `createDatabase`, `prismaAdapter`, `dynamoAdapter`, custom adapters                          |
 | `@ruvyxa/realtime`  | Action-driven WebSocket   | `realtime`; `createRealtimeClient` from `/client`                                            |
+| `@ruvyxa/testing`   | Server primitive testing  | `mockLoader`, `mockAction`, `mockCache`                                                      |
 | `@ruvyxa/adapter-*` | Platform deploy           | 10 adapters (vercel, netlify, cloudflare, node, bun, static, aws, firebase, railway, render) |
 | `@ruvyxa/cli-*`     | Native binaries           | 5 platform binaries (darwin-arm64, linux-arm64, linux-x64, win32-arm64, win32-x64)           |
 | `create-ruvyxa`     | Project scaffold          | `create-ruvyxa` CLI, 4 starter templates                                                     |
@@ -130,14 +133,14 @@ Use the guides for application decisions and the architecture pages for implemen
 Each detailed guide now includes an implementation-bound section that distinguishes the supported
 contract from examples that are application-specific.
 
-| If you need to…                  | Start here                                                     | Then verify with                               |
-| -------------------------------- | -------------------------------------------------------------- | ---------------------------------------------- |
-| Add or troubleshoot a page       | [Routing](guides/en/02-routing.md)                             | `ruvyxa routes`, then `ruvyxa trace <pattern>` |
-| Choose SSR/SSG/ISR/PPR/CSR       | [Rendering Strategies](guides/en/04-rendering-strategies.md)   | Route manifest / `ruvyxa trace`                |
-| Keep a secret out of the browser | [Environment Variables](guides/en/10-environment-variables.md) | `ruvyxa analyze --format human`                |
-| Configure a deployment           | [Deployment](guides/en/13-deployment.md)                       | `ruvyxa doctor --adapter <name>`               |
-| Create a plugin                  | [Plugins](guides/en/14-plugins.md)                             | `ruvyxa plugin create <name>`                  |
-| Understand framework internals   | [Architecture Overview](architecture/overview.md)              | Owning crate/package source listed there       |
+| If you need to…                  | Start here                                                     | Then verify with                                    |
+| -------------------------------- | -------------------------------------------------------------- | --------------------------------------------------- |
+| Add or troubleshoot a page       | [Routing](guides/en/02-routing.md)                             | `npm run routes`, then `npm run trace -- <pattern>` |
+| Choose SSR/SSG/ISR/PPR/CSR       | [Rendering Strategies](guides/en/04-rendering-strategies.md)   | Route manifest / `npm run trace -- <pattern>`       |
+| Keep a secret out of the browser | [Environment Variables](guides/en/10-environment-variables.md) | `npm run analyze -- --format human`                 |
+| Configure a deployment           | [Deployment](guides/en/13-deployment.md)                       | `npm run doctor -- --adapter <name>`                |
+| Create a plugin                  | [Plugins](guides/en/14-plugins.md)                             | `npm run plugin -- create <name>`                   |
+| Understand framework internals   | [Architecture Overview](architecture/overview.md)              | Owning crate/package source listed there            |
 
-The minimal starter has scripts only for `dev`, `build`, `start`, `typecheck`, and `check`. Invoke
-other CLI capabilities directly unless the project deliberately adds a corresponding package script.
+Every application starter maps every framework CLI command to a package script. Pass command
+arguments after `--`, for example `npm run analyze -- --format human`.

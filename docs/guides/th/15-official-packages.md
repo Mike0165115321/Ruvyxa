@@ -2309,3 +2309,22 @@ specifiers
 ลำดับนี้ช่วยไม่ให้ package ถูกอธิบายเกินว่าเป็น architecture สมบูรณ์ของ auth/database/event delivery
 มันให้ framework integration boundary ส่วน data modeling, authorization policy, driver configuration
 และ operational monitoring ยังเป็นการตัดสินใจของแอป
+
+# Unit test สำหรับ Server primitives
+
+`@ruvyxa/testing` มี utility ที่ไม่ผูกกับ Vitest/Jest/Node test สำหรับ mock loader, action และ cache
+โดยไม่ต้องเปิด server จริง:
+
+```ts
+import { mockAction, mockCache, mockLoader } from '@ruvyxa/testing'
+
+const loadUser = mockLoader(async ({ params }) => ({ id: params.id }))
+const saveUser = mockAction(async ({ input, invalidate }) => {
+  invalidate('users')
+  return input
+})
+const cache = mockCache({ users: [{ id: '1' }] })
+```
+
+mock ทุกตัวมี call records และ `reset()` ส่วน integration test ควรใช้ฐานข้อมูลชั่วคราวจริงและ route
+artifact ที่ build แล้ว เพราะ utility เหล่านี้ตั้งใจแยกทดสอบเฉพาะ application logic

@@ -6,6 +6,7 @@ import {
   projectRelativeOutDir,
   PUBLIC_ASSET_CACHE_CONTROL,
   publicAssetGlobs,
+  runtimeBuildPolicy,
   validateBuildContext,
 } from '@ruvyxa/core'
 
@@ -44,7 +45,7 @@ export interface NetlifyAdapterOptions {
  * handler using the Web-standard Request/Response API. Reads the route
  * manifest and handles SSR/API/ISR/PPR requests.
  */
-function netlifyHandlerSource(): string {
+function netlifyHandlerSource(runtimePolicy: unknown): string {
   return `import { createHandler, prerenderRelativePath } from './serverless-handler.mjs';
 import { loadRouteModule } from './route-modules.mjs';
 // Netlify bundles the function with esbuild, so anything the deployed code
@@ -54,6 +55,8 @@ import manifest from './manifest.mjs';
 import { readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+
+const runtimePolicy = ${JSON.stringify(runtimePolicy ?? {})};
 
 // Deploy-time prerender output is likewise dropped by the bundler unless the
 // site declares included_files. Reads are best-effort: a miss falls through to
@@ -73,6 +76,8 @@ const readEntry = (htmlPath, revalidate) => {
 
 const handler = createHandler({
   routes: manifest.routes,
+  middleware: runtimePolicy.middleware,
+  i18n: manifest.i18n,
   importPage: loadRouteModule,
   importApi: loadRouteModule,
   readPrerendered: (pathname, revalidate = 60) => {
@@ -156,6 +161,7 @@ export function netlifyAdapter(options: NetlifyAdapterOptions = {}): Adapter {
       // Config files are committed or read on other machines; never embed the
       // absolute build-machine outDir in them.
       const relativeOutDir = projectRelativeOutDir(ctx)
+      const runtimePolicy = runtimeBuildPolicy(ctx)
 
       // Hashed client bundles are served under /__ruvyxa/client/ (see the
       // chunk manifest src fields); the immutable header must match that URL.
@@ -229,7 +235,7 @@ export function netlifyAdapter(options: NetlifyAdapterOptions = {}): Adapter {
           {
             kind: 'function',
             path: 'deploy/netlify/functions/ruvyxa-handler',
-            handlerSource: netlifyHandlerSource(),
+            handlerSource: netlifyHandlerSource(runtimePolicy),
           },
           // Netlify config for the deploy directory
           {
@@ -247,7 +253,7 @@ export function netlifyAdapter(options: NetlifyAdapterOptions = {}): Adapter {
                   kind: 'function',
                   path: '.netlify/v1/functions/ruvyxa-handler',
                   scope: 'project',
-                  handlerSource: netlifyHandlerSource(),
+                  handlerSource: netlifyHandlerSource(runtimePolicy),
                 } satisfies AdapterArtifact,
                 {
                   kind: 'file',

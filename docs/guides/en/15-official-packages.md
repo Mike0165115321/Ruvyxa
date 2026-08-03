@@ -1809,3 +1809,22 @@ driver configuration, and operational monitoring remain application decisions.
 - **[10-environment-variables.md](./10-environment-variables.md)** — Env vars for API keys
 - **[14-plugins.md](./14-plugins.md)** — Plugin system used by official packages
 - **[16-error-handling.md](./16-error-handling.md)** — Error codes reference
+
+# Unit testing Server primitives
+
+`@ruvyxa/testing` provides dependency-free Vitest/Jest/Node-test utilities for loaders, actions, and
+cache policies without starting a real server:
+
+```ts
+import { mockAction, mockCache, mockLoader } from '@ruvyxa/testing'
+
+const loadUser = mockLoader(async ({ params }) => ({ id: params.id }))
+const saveUser = mockAction(async ({ input, invalidate }) => {
+  invalidate('users')
+  return input
+})
+const cache = mockCache({ users: [{ id: '1' }] })
+```
+
+Each mock exposes recorded calls and `reset()`. Use a real disposable database and generated route
+artifacts for integration tests; these mocks intentionally isolate application logic.

@@ -307,3 +307,47 @@ describe('client router navigation state', () => {
     }
   })
 })
+
+describe('client router view transitions', () => {
+  it('uses the native API only when the navigation opts in', async () => {
+    const keys = [
+      'window',
+      'document',
+      '__RUVYXA_ROUTES__',
+      '__RUVYXA_ROOT__',
+      '__RUVYXA_ROUTE_MANIFEST__',
+      '__RUVYXA_ROUTER_INSTANCE__',
+    ]
+    const previous = new Map(
+      keys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
+    )
+    const rendered = []
+    let transitions = 0
+    try {
+      globalThis.window = browserWindow('/')
+      globalThis.document = {
+        startViewTransition(update) {
+          transitions += 1
+          update()
+          return { updateCallbackDone: Promise.resolve() }
+        },
+      }
+      globalThis.__RUVYXA_ROUTE_MANIFEST__ = {
+        routes: [{ path: '/about', src: '/chunks/about.js' }],
+      }
+      globalThis.__RUVYXA_ROUTES__ = { '/about': (context) => context.pathname }
+      globalThis.__RUVYXA_ROOT__ = { render: (tree) => rendered.push(tree) }
+
+      const router = getRouterInstance()
+      await router.navigate('/about', { viewTransition: true })
+
+      assert.equal(transitions, 1)
+      assert.deepEqual(rendered, ['/about'])
+    } finally {
+      for (const key of keys) delete globalThis[key]
+      for (const [key, descriptor] of previous) {
+        if (descriptor) Object.defineProperty(globalThis, key, descriptor)
+      }
+    }
+  })
+})

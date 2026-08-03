@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Ruvyxa DevTools</title>
+    <style>
+      :root{color-scheme:dark;--bg:#101316;--panel:#171c21;--line:#293139;--text:#edf2f6;--muted:#8d9aa6;--accent:#48b8c8;--good:#75c49b;--bad:#e87979;font-family:Inter,ui-sans-serif,system-ui,sans-serif}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text)}
+      header{height:58px;display:flex;align-items:center;justify-content:space-between;padding:0 22px;border-bottom:1px solid var(--line);background:var(--panel)}h1{margin:0;font-size:18px;letter-spacing:-.02em}.live{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:12px}.dot{width:7px;height:7px;border-radius:50%;background:var(--good)}
+      main{display:grid;grid-template-columns:minmax(300px,38%) 1fr;min-height:calc(100dvh - 58px)}aside{border-right:1px solid var(--line);padding:18px;overflow:auto}.content{padding:18px;overflow:auto}input{width:100%;padding:9px 11px;background:#11161a;color:var(--text);border:1px solid var(--line);border-radius:5px}input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+      .route{display:grid;grid-template-columns:1fr auto;gap:8px;padding:10px 4px;border-bottom:1px solid var(--line);font-size:13px}.route code{color:#c2eaf0}.tag{color:var(--muted);font-size:11px}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid var(--line);background:var(--panel)}.metric{padding:14px;border-right:1px solid var(--line)}.metric:last-child{border:0}.metric small{display:block;color:var(--muted);margin-bottom:5px}.metric strong{font-size:21px;font-variant-numeric:tabular-nums}
+      h2{margin:24px 0 10px;font-size:14px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.08em}table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line)}th,td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:left;font-size:12px}th{color:var(--muted)}td.num{text-align:right;font-variant-numeric:tabular-nums}.empty{color:var(--muted);padding:22px;text-align:center;border:1px solid var(--line);background:var(--panel)}
+      @media(max-width:850px){main{grid-template-columns:1fr}aside{border-right:0;border-bottom:1px solid var(--line);max-height:42dvh}.metrics{grid-template-columns:1fr 1fr}.metric:nth-child(2){border-right:0}.metric:nth-child(-n+2){border-bottom:1px solid var(--line)}}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+    </style>
+  </head>
+  <body>
+    <header><h1>Ruvyxa DevTools</h1><span class="live"><i class="dot"></i><span id="status">Live</span></span></header>
+    <main>
+      <aside><input id="filter" type="search" placeholder="Filter routes…" aria-label="Filter routes" /><div id="routes"></div></aside>
+      <section class="content">
+        <div class="metrics"><div class="metric"><small>Cache entries</small><strong id="cache">0</strong></div><div class="metric"><small>Cache hit rate</small><strong id="hitRate">0%</strong></div><div class="metric"><small>Client output</small><strong id="bundles">0 B</strong></div><div class="metric"><small>Action calls</small><strong id="actions">0</strong></div></div>
+        <h2>Server actions</h2><div id="actionEmpty" class="empty">No Server Actions have run in this session.</div><table id="actionTable" hidden><thead><tr><th>Action</th><th>Calls</th><th>Errors</th><th>Average</th><th>Last</th></tr></thead><tbody id="actionRows"></tbody></table>
+        <h2>LRU order</h2><div id="lru" class="empty">The render cache is empty.</div>
+      </section>
+    </main>
+    <script>
+      (()=>{let latest=null;const $=id=>document.getElementById(id),fmt=n=>n<1024?`${n} B`:`${(n/1024).toFixed(1)} KB`,time=n=>n<1000?`${n} µs`:`${(n/1000).toFixed(1)} ms`;
+        function renderRoutes(){const q=$('filter').value.trim().toLowerCase(),host=$('routes');host.replaceChildren();for(const r of(latest?.routes||[]).filter(r=>!q||`${r.path} ${r.file}`.toLowerCase().includes(q))){const row=document.createElement('div');row.className='route';const code=document.createElement('code');code.textContent=r.path;const tag=document.createElement('span');tag.className='tag';tag.textContent=`${r.kind} · ${r.strategy}`;row.append(code,tag);host.append(row)}}
+        function render(d){latest=d;renderRoutes();$('cache').textContent=`${d.cache.entries}/${d.cache.capacity}`;const total=d.cache.hits+d.cache.misses;$('hitRate').textContent=total?`${Math.round(d.cache.hits/total*100)}%`:'0%';$('bundles').textContent=fmt(d.bundles.reduce((n,b)=>n+b.bytes,0));$('actions').textContent=String(d.actions.reduce((n,a)=>n+a.calls,0));
+          const tbody=$('actionRows');tbody.replaceChildren();$('actionEmpty').hidden=d.actions.length>0;$('actionTable').hidden=d.actions.length===0;for(const a of d.actions){const tr=document.createElement('tr');for(const [v,c] of [[a.action,''],[a.calls,'num'],[a.errors,'num'],[time(Number(a.totalMicros/a.calls)),'num'],[time(Number(a.lastMicros)),'num']]){const td=document.createElement('td');td.textContent=String(v);td.className=c;tr.append(td)}tbody.append(tr)}$('lru').textContent=d.cache.lruKeys.length?d.cache.lruKeys.join('  →  '):'The render cache is empty.'}
+        async function poll(){try{const response=await fetch('/__ruvyxa/devtools/data',{cache:'no-store'});if(!response.ok)throw new Error();render(await response.json());$('status').textContent='Live'}catch{$('status').textContent='Disconnected'}finally{setTimeout(poll,1000)}}$('filter').addEventListener('input',renderRoutes);poll()})();
+    </script>
+  </body>
+</html>

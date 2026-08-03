@@ -168,7 +168,6 @@ impl RecencyList {
     }
 
     /// Keys from least to most recently used, for test assertions.
-    #[cfg(test)]
     fn keys_front_to_back(&self) -> Vec<Arc<str>> {
         let mut keys = Vec::with_capacity(self.links.len());
         let mut cursor = self.head.clone();
@@ -190,6 +189,19 @@ impl RecencyList {
         }
         keys
     }
+}
+
+/// Read-only cache state exposed to development tooling.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderCacheSnapshot {
+    pub entries: usize,
+    pub capacity: usize,
+    pub ttl_seconds: u64,
+    pub hits: u64,
+    pub misses: u64,
+    /// Keys ordered from least to most recently used.
+    pub lru_keys: Vec<String>,
 }
 
 /// Thread-safe LRU render cache.
@@ -226,6 +238,27 @@ impl RenderCache {
         let capacity = render_cache_capacity(configured.as_deref(), 512);
         // 30 minutes TTL in production
         Self::new(capacity, 1800)
+    }
+
+    /// Capture cache counters and LRU state without changing recency.
+    pub async fn snapshot(&self) -> RenderCacheSnapshot {
+        let entries = self.entries.read().await.len();
+        let lru_keys = self
+            .order
+            .read()
+            .await
+            .keys_front_to_back()
+            .into_iter()
+            .map(|key| key.to_string())
+            .collect();
+        RenderCacheSnapshot {
+            entries,
+            capacity: self.capacity,
+            ttl_seconds: self.ttl.as_secs(),
+            hits: self.hits.load(Ordering::Relaxed),
+            misses: self.misses.load(Ordering::Relaxed),
+            lru_keys,
+        }
     }
 
     /// Try to get a cached value as an owned `String`.

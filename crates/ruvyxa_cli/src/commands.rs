@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 use std::process::Command as ProcessCommand;
 use std::time::{Duration, Instant};
 
@@ -22,10 +22,14 @@ use walkdir::WalkDir;
 
 use crate::*;
 
-pub(crate) fn print_routes(args: ProjectArgs) -> anyhow::Result<()> {
+pub(crate) fn print_routes(args: RoutesArgs) -> anyhow::Result<()> {
     let config = load_project_config(&args.root)?;
     let app_dir = args.root.join(config.app_dir());
     let manifest = discover_project_routes(&args.root, &config)?;
+    if args.json {
+        write_machine_report(&serde_json::to_string_pretty(&manifest)?)?;
+        return Ok(());
+    }
     let page_routes = manifest
         .routes
         .iter()
@@ -108,14 +112,20 @@ pub(crate) fn analyze(args: AnalyzeArgs) -> anyhow::Result<()> {
     let config = load_project_config(&args.root)?;
     let manifest = discover_project_routes(&args.root, &config)?;
     let validation = validate_app(&args.root, &manifest)?;
-    let format = match args.format {
-        AnalyzeFormat::Auto if args.output.is_some() => AnalyzeFormat::Json,
-        AnalyzeFormat::Auto if std::io::stdout().is_terminal() => AnalyzeFormat::Human,
-        AnalyzeFormat::Auto => AnalyzeFormat::Json,
-        explicit => explicit,
+    if args.html && args.format != AnalyzeFormat::Auto {
+        anyhow::bail!("--html cannot be combined with --format; use one report selector");
+    }
+    let format = match (args.html, args.format) {
+        (true, _) => AnalyzeFormat::Html,
+        (false, format) => match format {
+            AnalyzeFormat::Auto if args.output.is_some() => AnalyzeFormat::Json,
+            AnalyzeFormat::Auto if std::io::stdout().is_terminal() => AnalyzeFormat::Human,
+            AnalyzeFormat::Auto => AnalyzeFormat::Json,
+            explicit => explicit,
+        },
     };
     if format == AnalyzeFormat::Human && args.output.is_some() {
-        anyhow::bail!("--output requires --format json or --format sarif");
+        anyhow::bail!("--output requires --format json, sarif, or html");
     }
 
     // Keep the machine-readable JSON contract for pipes and scripts; render the
@@ -129,11 +139,22 @@ pub(crate) fn analyze(args: AnalyzeArgs) -> anyhow::Result<()> {
             env!("CARGO_PKG_VERSION"),
             &args.root,
         ))?),
+        AnalyzeFormat::Html => {
+            let bundle = analyze_client_bundle(&args.root, &config, &manifest)?;
+            Some(render_analyzer_html(
+                &args.root,
+                &manifest,
+                &validation,
+                &bundle,
+            )?)
+        }
         AnalyzeFormat::Auto => unreachable!("auto format is resolved above"),
     };
 
     if let Some(report) = serialized {
-        if let Some(output) = &args.output {
+        let html_default_output =
+            (args.html && args.output.is_none()).then(|| args.root.join(".ruvyxa/analyze.html"));
+        if let Some(output) = args.output.as_ref().or(html_default_output.as_ref()) {
             if let Some(parent) = output
                 .parent()
                 .filter(|parent| !parent.as_os_str().is_empty())
@@ -144,8 +165,14 @@ pub(crate) fn analyze(args: AnalyzeArgs) -> anyhow::Result<()> {
             }
             fs::write(output, format!("{report}\n"))
                 .with_context(|| format!("failed to write analysis report {}", output.display()))?;
+            if format == AnalyzeFormat::Html {
+                print_tui_header("Analyze");
+                print_field("format", accent("interactive html"));
+                print_field("report", path_text(output));
+                println!();
+            }
         } else {
-            println!("{report}");
+            write_machine_report(&report)?;
         }
     } else {
         print_tui_header("Analyze");
@@ -183,6 +210,20 @@ pub(crate) fn analyze(args: AnalyzeArgs) -> anyhow::Result<()> {
         );
     }
 
+    Ok(())
+}
+
+/// Writes machine-readable output without treating a downstream closed pipe as a CLI failure.
+fn write_machine_report(report: &str) -> anyhow::Result<()> {
+    write_machine_report_to(&mut std::io::stdout().lock(), report)
+}
+
+fn write_machine_report_to(writer: &mut impl Write, report: &str) -> anyhow::Result<()> {
+    if let Err(error) = writeln!(writer, "{report}") {
+        if error.kind() != std::io::ErrorKind::BrokenPipe {
+            return Err(error).context("failed to write machine-readable report");
+        }
+    }
     Ok(())
 }
 
@@ -861,4 +902,28 @@ pub(crate) fn fail_on_diagnostics(diagnostics: &[Diagnostic]) -> anyhow::Result<
         "build validation failed with {} diagnostic(s)",
         diagnostics.len()
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{self, Write};
+
+    use super::write_machine_report_to;
+
+    struct ClosedPipe;
+
+    impl Write for ClosedPipe {
+        fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
+            Err(io::Error::from(io::ErrorKind::BrokenPipe))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn ignores_closed_pipe_for_machine_reports() {
+        assert!(write_machine_report_to(&mut ClosedPipe, "{}\n").is_ok());
+    }
 }

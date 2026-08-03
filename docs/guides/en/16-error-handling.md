@@ -22,19 +22,23 @@ a stable public code or a fixed file location.
 
 ## Error Code Format
 
-Every Ruvyxa error follows this structure:
+Framework diagnostics always start with a code and title. The file, explanation, suggested fix, and
+affected-route lines are emitted only when the producing subsystem supplies them; arbitrary runtime
+exceptions can be plain messages rather than `Diagnostic` values.
 
 ```
 RUV####: Error Title
 
-  Detail: A human-readable explanation of what went wrong.
   File: app/page.tsx:25
-  Context: Additional info (variable values, route params, etc.)
 
-  Fix: What to do to resolve the error.
+  Why:
+    A human-readable explanation of what went wrong.
 
-  For more information, see:
-  https://ruvyxa.dev/docs/errors/RUV####
+  Fix:
+    What to do to resolve the error.
+
+  Affected routes:
+    /blog/[slug]
 ```
 
 ### Diagnostic Structure (Rust)
@@ -70,11 +74,11 @@ analysis.
 | ------- | -------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------ |
 | RUV1001 | App directory was not found                        | Missing `app/` directory at project root             | Create `app/` directory                                |
 | RUV1002 | Invalid dynamic route segment                      | Route segment uses disallowed characters or syntax   | Use correct `[param]`, `[...param]`, or `[[...param]]` |
-| RUV1003 | Conflicting route paths                            | Two files match same URL pattern                     | Remove or rename conflicting file                      |
+| RUV1003 | Conflicting route paths                            | Two files match the same URL shape                   | Remove one route or add a static path segment          |
 | RUV1004 | Page is missing a default export                   | Page file lacks `export default`                     | Add `export default function Page() { ... }`           |
 | RUV1007 | Server-only module imported into client bundle     | `import "server-only"` reachable from client bundle  | Move server code behind API route or loader            |
 | RUV1008 | Private environment variable used in client bundle | `process.env.SECRET` in client-reachable code        | Prefix with `RUVYXA_PUBLIC_` or move to server         |
-| RUV1009 | Client-only module imported into SSR graph         | `'client-only'` module reachable from server runtime | Use dynamic import with `{ ssr: false }`               |
+| RUV1009 | Client-only module imported into SSR graph         | `'client-only'` module reachable from server runtime | Keep that module out of the server-reachable graph     |
 | RUV1010 | Server directory module reached by client graph    | File inside `server/` directory imported from client | Restructure imports                                    |
 
 #### RUV1001 — App directory was not found
@@ -118,8 +122,9 @@ RUV1003: Conflicting route paths
 
   Both files match the same URL pattern like /products/123.
 
-  Fix: Rename one of the conflicting dynamic segments so
-       they have different parameter names.
+  Fix: Remove one route or give one route a static discriminator,
+       for example /products/by-slug/[slug]. Parameter names alone
+       do not make dynamic route shapes distinct.
 ```
 
 **Source**: `crates/ruvyxa_graph/src/lib.rs:1501`
@@ -166,10 +171,8 @@ RUV1008: Private environment variable used in client bundle
 
   Variable: DATABASE_URL
   File: app/components/UserCard.tsx:12
-  Value: postgres://user:pass@localhost:5432/db
-
   ⚠ This variable is NOT prefixed with RUVYXA_PUBLIC_.
-    It will be inlined in the client bundle and exposed to users.
+    Private environment access is not allowed in a client-reachable module.
 
   Fix:
     1. If this value is safe for clients, rename it to
@@ -178,13 +181,10 @@ RUV1008: Private environment variable used in client bundle
        to a server component, API route, or server action.
 ```
 
-**Source**: `crates/ruvyxa_bundler/src/boundary.rs:104` **Detection**: Non-fatal warning emitted
-during build when bundler finds `process.env.<NON_PUBLIC_VAR>` in client-reachable code. The
-variable is still inlined but the diagnostic warns. Fatal only if the env var access is in a client
-component that would ship it to browsers.
-
-**Edge case**: Variables accessed only inside `if (typeof window === 'undefined')` guards are
-considered server-only and do not trigger RUV1008.
+**Source**: `crates/ruvyxa_graph/src/lib.rs` **Detection**: `npm run analyze` reports this as a
+diagnostic and fails; `npm run build` stops during its prebuild validation for the same reason.
+Ruvyxa does not inline the private value as part of this diagnostic, and this static check does not
+evaluate `typeof window` guards.
 
 #### RUV1009 — Client-only module imported into SSR graph
 
@@ -192,15 +192,18 @@ considered server-only and do not trigger RUV1008.
 RUV1009: Client-only module imported into SSR graph
 
   File: app/components/Map.tsx:1
-  Import: leaflet
+  Import: ./client-map
 
-  This module uses browser APIs and cannot be rendered on the server.
+  The imported module declares `import 'client-only'` and cannot be reached
+  by the server graph.
 
-  Fix: Use dynamic import with `{ ssr: false }` or wrap
-       in a client component boundary.
+  Fix: Move the import behind a client component boundary, or remove the
+       `client-only` marker if the module is genuinely server-safe.
 ```
 
-**Source**: `crates/ruvyxa_bundler/src/boundary.rs:132`
+**Source**: `crates/ruvyxa_bundler/src/boundary.rs` **Detection**: This diagnostic is triggered by
+the `client-only` marker in a module reached by the SSR graph. Ruvyxa does not support a
+Next.js-style `{ ssr: false }` import option; use an explicit client boundary instead.
 
 #### RUV1010 — Server directory module reached by client graph
 
@@ -613,12 +616,12 @@ RUV1550: PPR render failed
 
 ### RUV1600–RUV1603: Config Errors Documented by Current Source
 
-| Code    | Title                                         | Cause                                                 | Fix                                      |
-| ------- | --------------------------------------------- | ----------------------------------------------------- | ---------------------------------------- |
-| RUV1600 | Config load failure                           | Config file threw or returned error                   | Check config syntax, run `ruvyxa doctor` |
-| RUV1601 | Config field invalid                          | Config field has invalid value                        | Fix the field value                      |
-| RUV1602 | Config shape, unknown field, or limit invalid | Unsupported shape/field or value above a source limit | Correct the config                       |
-| RUV1603 | Adapter must provide build function           | `config.adapter` missing `build` method               | Ensure adapter exports `build(context)`  |
+| Code    | Title                                         | Cause                                                 | Fix                                       |
+| ------- | --------------------------------------------- | ----------------------------------------------------- | ----------------------------------------- |
+| RUV1600 | Config load failure                           | Config file threw or returned error                   | Check config syntax, run `npm run doctor` |
+| RUV1601 | Config field invalid                          | Config field has invalid value                        | Fix the field value                       |
+| RUV1602 | Config shape, unknown field, or limit invalid | Unsupported shape/field or value above a source limit | Correct the config                        |
+| RUV1603 | Adapter must provide build function           | `config.adapter` missing `build` method               | Ensure adapter exports `build(context)`   |
 
 #### RUV1600 — Config load failure
 
@@ -629,7 +632,7 @@ RUV1600: Config load failure
   or validation.
 
   Fix: Check ruvyxa.config.ts for syntax errors and
-       run `ruvyxa doctor` for diagnostics.
+       run `npm run doctor` for diagnostics.
 ```
 
 **Source**: `crates/ruvyxa_cli/src/runtime_config.rs`, `packages/ruvyxa/runtime/config-renderer.mjs`
@@ -752,7 +755,7 @@ RUV1702: Worker pool script was not found
   Script: plugin-runtime.mjs
 
   The TypeScript plugin host runtime script is missing from
-  the ruvyxa start installation.
+  the installed Ruvyxa package.
 
   Fix: Reinstall ruvyxa: npm install ruvyxa
 ```
@@ -1378,7 +1381,7 @@ export default {
 
 ### Overlay Format
 
-During development (`ruvyxa dev`), errors show as an in-browser overlay:
+During development (`npm run dev`), errors show as an in-browser overlay:
 
 ```
 ┌──────────────────────────────────────────┐
@@ -1444,7 +1447,7 @@ In production, errors return HTTP 500 or show `error.tsx` fallback. The overlay 
 
 ## Common Error Patterns by Development Phase
 
-### During `ruvyxa dev`
+### During `npm run dev`
 
 | Symptom                    | Likely Error                                     | Action                                   |
 | -------------------------- | ------------------------------------------------ | ---------------------------------------- |
@@ -1456,25 +1459,25 @@ In production, errors return HTTP 500 or show `error.tsx` fallback. The overlay 
 | 500 on form submit         | RUV1500 (action error)                           | Check action code, add error handling    |
 | Plugin not running         | RUV1602 (plugin/config shape invalid)            | Check plugin configuration               |
 
-### During `ruvyxa build`
+### During `npm run build`
 
 | Symptom                                  | Likely Error                           | Action                                 |
 | ---------------------------------------- | -------------------------------------- | -------------------------------------- |
-| Build fails immediately                  | RUV1600 (config load failure)          | Run `ruvyxa doctor`                    |
+| Build fails immediately                  | RUV1600 (config load failure)          | Run `npm run doctor`                   |
 | Build fails during compilation           | RUV1802 (Oxc transform), RUV1311 (MDX) | Fix indicated syntax error             |
 | Build fails at module resolution         | RUV1801 (module not resolved)          | Install package or fix import path     |
 | Build succeeds but output missing routes | RUV1002 (invalid route segment)        | Check filenames for invalid characters |
 | Build succeeds but circular deps found   | RUV1803 (circular dependency)          | Break the dependency cycle             |
 | Build OOM                                | Not a numbered error                   | Reduce `build.workers`, increase RAM   |
 
-### During `ruvyxa check`
+### During `npm run check`
 
-| Symptom                      | Likely Error          | Action                       |
-| ---------------------------- | --------------------- | ---------------------------- |
-| Boundary violations reported | RUV1007-1010          | Restructure imports          |
-| Route conflicts reported     | RUV1003 (conflicting) | Rename conflicting files     |
-| Config validation errors     | RUV1600-1603          | Fix config file              |
-| SSG params missing           | RUV1510-1513          | Add/export `getStaticParams` |
+| Symptom                      | Likely Error          | Action                                   |
+| ---------------------------- | --------------------- | ---------------------------------------- |
+| Boundary violations reported | RUV1007-1010          | Restructure imports                      |
+| Route conflicts reported     | RUV1003 (conflicting) | Remove one route or add a static segment |
+| Config validation errors     | RUV1600-1603          | Fix config file                          |
+| SSG params missing           | RUV1510-1513          | Add/export `getStaticParams`             |
 
 ### During Deployment
 
@@ -1543,7 +1546,7 @@ RUV3201     Realtime          15-official-packages.md
 | Blank white page               | Uncaught client error           | Check browser console, add `error.tsx`   |
 | RUV1003 after adding file      | Two files match same URL        | Remove duplicate route file              |
 | RUV1008 on build               | Private env in client component | Rename to `RUVYXA_PUBLIC_*`              |
-| RUV1600 on project creation    | Typo in config                  | Run `ruvyxa doctor`                      |
+| RUV1600 on project creation    | Typo in config                  | Run `npm run doctor`                     |
 | RUV1801 for local import       | Incorrect import path           | Use relative path or alias               |
 | RUV1100 after deploy           | SSR render failure              | Check page component, dependencies       |
 | RUV1500 on worker pool         | SSG / action render failed      | Check server logs, restart               |
@@ -1577,10 +1580,10 @@ every number exists. The current high-value groups include:
 Use the smallest command that exposes the same boundary:
 
 ```bash
-ruvyxa routes
-ruvyxa trace /the-route-pattern
-ruvyxa analyze --format human
-ruvyxa doctor --json
+npm run routes
+npm run trace -- /the-route-pattern
+npm run analyze -- --format human
+npm run doctor -- --json
 ```
 
 `routes` answers discovery, `trace` answers one manifest entry, `analyze` answers route/import
@@ -1660,14 +1663,14 @@ export default async function BlogPost({ params }: { params: { slug: string } })
 
 ```bash
 # CLI tools สำหรับ debug
-ruvyxa doctor            # ตรวจสอบทุกอย่าง — config, routes, boundary, env
-ruvyxa doctor --json     # รับ compatibility report เป็น JSON
-ruvyxa check             # TypeScript check (เมื่อมี tsconfig) และ parity test
-ruvyxa analyze           # ตรวจ routes, imports และ server/client boundary
-ruvyxa trace /           # ดู route manifest entry ของ path ที่ระบุ
+npm run doctor # ตรวจสอบทุกอย่าง — config, routes, boundary, env
+npm run doctor -- --json     # รับ compatibility report เป็น JSON
+npm run check # TypeScript check (เมื่อมี tsconfig) และ parity test
+npm run analyze # ตรวจ routes, imports และ server/client boundary
+npm run trace -- /           # ดู route manifest entry ของ path ที่ระบุ
 ```
 
-**Output `ruvyxa doctor`**:
+**Output `npm run doctor`**:
 
 ```
 ━━━ Ruvyxa Doctor ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1766,28 +1769,28 @@ ruvyxa trace /           # ดู route manifest entry ของ path ที่�
 
 ## Troubleshooting — Quick Reference
 
-| Error Code(s)       | ปัญหาที่พบบ่อย      | วิธีแก้ด่วน                                         |
-| ------------------- | ------------------- | --------------------------------------------------- |
-| RUV1007-1010        | Boundary violations | ตรวจ `'use client'`, imports, env vars              |
-| RUV1001-1004        | Route discovery     | ตรวจ `app/` directory, route names, default exports |
-| RUV1100-1102        | SSR / Render        | ตรวจ component, `error.tsx`, default export         |
-| RUV1200-1202        | API / Port          | ตรวจ route handler, port config, try/catch          |
-| RUV1300, 1303-1304  | Bundle / Hydration  | `ruvyxa clean && ruvyxa build`, ดู error message    |
-| RUV1311-1312        | MDX / Frontmatter   | ตรวจ syntax MDX และ YAML                            |
-| RUV1400-1404        | Style / CSS         | ตรวจ Tailwind config, SCSS syntax, css.entries      |
-| RUV1500-1501        | Render / Action     | ดู server logs, ตรวจ action files                   |
-| RUV1510-1513        | Static params       | ตรวจ `getStaticParams` return shape                 |
-| RUV1550             | PPR                 | ตรวจ component ใน static shell phase                |
-| RUV1600-1603        | Config / Adapter    | ตรวจ config fields, adapter implements build()      |
-| RUV1700, 1702, 1704 | Plugin bridge       | รีสตาร์ท dev server, `npm install ruvyxa`           |
-| RUV1701             | Plugin protocol     | อัปเดต Ruvyxa, ตรวจ plugin compatibility            |
-| RUV1801-1804        | JS Runtime          | ตรวจ import paths, syntax, circular deps            |
-| RUV2000-2001        | Adapter config      | ตรวจ BuildContext และ adapter options               |
-| RUV2102             | Plugin definition   | ตรวจ `definePlugin()` return value                  |
-| RUV2200             | Build hook          | ตรวจ adapter compatibility                          |
-| RUV3001-3003        | Database            | ตรวจ DATABASE_URL, adapter logs                     |
-| RUV3100-3105        | Auth                | ตรวจ provider config, OAuth state                   |
-| RUV3201             | Realtime            | ตรวจ message format                                 |
+| Error Code(s)       | ปัญหาที่พบบ่อย      | วิธีแก้ด่วน                                            |
+| ------------------- | ------------------- | ------------------------------------------------------ |
+| RUV1007-1010        | Boundary violations | ตรวจ `'use client'`, imports, env vars                 |
+| RUV1001-1004        | Route discovery     | ตรวจ `app/` directory, route names, default exports    |
+| RUV1100-1102        | SSR / Render        | ตรวจ component, `error.tsx`, default export            |
+| RUV1200-1202        | API / Port          | ตรวจ route handler, port config, try/catch             |
+| RUV1300, 1303-1304  | Bundle / Hydration  | `npm run clean` แล้ว `npm run build`, ดู error message |
+| RUV1311-1312        | MDX / Frontmatter   | ตรวจ syntax MDX และ YAML                               |
+| RUV1400-1404        | Style / CSS         | ตรวจ Tailwind config, SCSS syntax, css.entries         |
+| RUV1500-1501        | Render / Action     | ดู server logs, ตรวจ action files                      |
+| RUV1510-1513        | Static params       | ตรวจ `getStaticParams` return shape                    |
+| RUV1550             | PPR                 | ตรวจ component ใน static shell phase                   |
+| RUV1600-1603        | Config / Adapter    | ตรวจ config fields, adapter implements build()         |
+| RUV1700, 1702, 1704 | Plugin bridge       | รีสตาร์ท dev server, `npm install ruvyxa`              |
+| RUV1701             | Plugin protocol     | อัปเดต Ruvyxa, ตรวจ plugin compatibility               |
+| RUV1801-1804        | JS Runtime          | ตรวจ import paths, syntax, circular deps               |
+| RUV2000-2001        | Adapter config      | ตรวจ BuildContext และ adapter options                  |
+| RUV2102             | Plugin definition   | ตรวจ `definePlugin()` return value                     |
+| RUV2200             | Build hook          | ตรวจ adapter compatibility                             |
+| RUV3001-3003        | Database            | ตรวจ DATABASE_URL, adapter logs                        |
+| RUV3100-3105        | Auth                | ตรวจ provider config, OAuth state                      |
+| RUV3201             | Realtime            | ตรวจ message format                                    |
 
 ---
 
@@ -1801,7 +1804,7 @@ ruvyxa trace /           # ดู route manifest entry ของ path ที่�
 6. จัดการ error ใน server action ด้วย try/catch — return error object
 7. ใช้ `RuvyxaError` class ใน custom error
 8. เปิด `debug.overlay: false` ถ้าไม่ต้องการ error overlay
-9. รัน `ruvyxa doctor` — ดู error ทั้งหมดในแอป
+9. รัน `npm run doctor` — ดู error ทั้งหมดในแอป
 10. ทดสอบ API route error handling — ส่ง POST ผิด format
 11. ตรวจสอบ bundle budget — เพิ่ม `bundleBudget` plugin
 12. ดู error overlay ใน dev mode — ทำ intentional error
@@ -1818,7 +1821,7 @@ ruvyxa trace /           # ดู route manifest entry ของ path ที่�
 - Error overlay ใน dev mode — แสดง file, line, why, fix, dismiss, reload, open in editor
 - Server actions และ API routes: จัดการด้วย try/catch + `RuvyxaError`
 - `notFound()` และ `redirect()` (301, 302, 307, 308) สำหรับควบคุม flow
-- `ruvyxa doctor` ตรวจทุกอย่าง — config, routes, boundary, env
+- `npm run doctor` ตรวจทุกอย่าง — config, routes, boundary, env
 - 2 ตาราง: error code ทั้งหมด + cross-reference
 
 ---
@@ -1839,10 +1842,10 @@ boundary ที่เป็นเจ้าของปัญหา แทนก�
 ใช้คำสั่งที่เล็กที่สุดที่เปิดเผย boundary เดียวกัน:
 
 ```bash
-ruvyxa routes
-ruvyxa trace /the-route-pattern
-ruvyxa analyze --format human
-ruvyxa doctor --json
+npm run routes
+npm run trace -- /the-route-pattern
+npm run analyze -- --format human
+npm run doctor -- --json
 ```
 
 `routes` ตอบเรื่อง discovery, `trace` ตอบ manifest entry เดียว, `analyze` ตอบ route/import

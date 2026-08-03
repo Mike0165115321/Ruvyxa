@@ -7,8 +7,20 @@
     "dev": "ruvyxa dev",
     "build": "ruvyxa build",
     "start": "ruvyxa start",
+    "preview": "ruvyxa preview",
     "typecheck": "tsc --noEmit",
-    "check": "ruvyxa check"
+    "check": "ruvyxa check",
+    "routes": "ruvyxa routes",
+    "routes:json": "ruvyxa routes --json",
+    "analyze": "ruvyxa analyze",
+    "analyze:html": "ruvyxa analyze --html",
+    "add": "ruvyxa add",
+    "doctor": "ruvyxa doctor",
+    "clean": "ruvyxa clean",
+    "trace": "ruvyxa trace",
+    "bench": "ruvyxa bench",
+    "test:parity": "ruvyxa test:parity",
+    "plugin": "ruvyxa plugin"
   },
   "dependencies": {
     "@ruvyxa/react": "^1.0.25",

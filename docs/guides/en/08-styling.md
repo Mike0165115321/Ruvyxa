@@ -1322,7 +1322,7 @@ resolution. For equal-specificity rules, later styles win.
 
 ## Build Output
 
-During `ruvyxa build`, the style pipeline:
+During `npm run build`, the style pipeline:
 
 1. Collects all reachable stylesheets
 2. Compiles Sass
@@ -1469,8 +1469,8 @@ explicit `css.entries` file.
 4. Re-run the normal route/analysis checks after changing a shared style entry.
 
 ```bash
-ruvyxa analyze --format human
-ruvyxa trace /
+npm run analyze -- --format human
+npm run trace -- /
 npm run build
 ```
 

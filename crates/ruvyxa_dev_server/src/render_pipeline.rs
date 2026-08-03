@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use ruvyxa_bundler::JsxRuntime;
@@ -22,7 +22,7 @@ use ruvyxa_graph::{
 use serde::Deserialize;
 
 use crate::html_document::{
-    client_hydration_script, compose_document, error_page, hmr_client_script,
+    client_hydration_script, compose_localized_document, error_page, hmr_client_script,
 };
 use crate::plugin_head::render_plugin_head;
 use crate::render_cache::RenderCache;
@@ -71,7 +71,11 @@ pub struct RenderContext {
 impl RenderContext {
     /// Discover the route graph and compile the router for `config`.
     pub fn new(config: &ServerConfig) -> Result<Self> {
-        let manifest = discover_routes(DiscoverOptions::new(&config.app_dir))?;
+        let manifest = discover_routes(
+            DiscoverOptions::new(&config.app_dir)
+                .with_rendering_defaults(config.default_render_strategy, config.default_revalidate)
+                .with_i18n(config.i18n.clone()),
+        )?;
         let router = RadixRouter::compile(&manifest);
         Ok(Self {
             manifest,
@@ -129,11 +133,31 @@ pub(crate) fn render_request_cached(
         return Ok(public_response);
     }
 
-    let Some(route_match) = context.router.find(&context.manifest, request_path) else {
-        return Ok(html_response(
-            StatusCode::NOT_FOUND,
-            error_page("Route not found", config.watch && config.error_overlay),
-        ));
+    let route_match = match context.router.find(&context.manifest, request_path) {
+        Some(route_match) => route_match,
+        None => {
+            let headers = HeaderMap::new();
+            if let Some(location) = crate::i18n::locale_redirect_path(
+                config.i18n.as_ref(),
+                &context.manifest,
+                &context.router,
+                request_path,
+                method,
+                &headers,
+            ) {
+                return Ok(with_security_headers(
+                    (
+                        StatusCode::TEMPORARY_REDIRECT,
+                        [(header::LOCATION, location)],
+                    )
+                        .into_response(),
+                ));
+            }
+            return Ok(html_response(
+                StatusCode::NOT_FOUND,
+                error_page("Route not found", config.watch && config.error_overlay),
+            ));
+        }
     };
     if is_missing_static_asset(request_path, &route_match.route.path) {
         return Ok(html_response(
@@ -195,14 +219,33 @@ pub(crate) async fn render_request_pooled(
     }
 
     let (manifest, router) = state.runtime_cache.router(&state.config).await?;
-    let Some(route_match) = router.find(&manifest, request_path) else {
-        return Ok(html_response(
-            StatusCode::NOT_FOUND,
-            error_page(
-                "Route not found",
-                state.config.watch && state.config.error_overlay,
-            ),
-        ));
+    let route_match = match router.find(&manifest, request_path) {
+        Some(route_match) => route_match,
+        None => {
+            if let Some(location) = crate::i18n::locale_redirect_path(
+                state.config.i18n.as_ref(),
+                &manifest,
+                &router,
+                request_path,
+                method,
+                request_headers,
+            ) {
+                return Ok(with_security_headers(
+                    (
+                        StatusCode::TEMPORARY_REDIRECT,
+                        [(header::LOCATION, location)],
+                    )
+                        .into_response(),
+                ));
+            }
+            return Ok(html_response(
+                StatusCode::NOT_FOUND,
+                error_page(
+                    "Route not found",
+                    state.config.watch && state.config.error_overlay,
+                ),
+            ));
+        }
     };
     if is_missing_static_asset(request_path, &route_match.route.path) {
         return Ok(html_response(
@@ -335,7 +378,15 @@ async fn render_page_ssg(
     let plugin_head = render_plugin_head(&state.config.plugin_head);
     let head_content =
         format!(r#"{asset_links}{plugin_head}<style data-ruvyxa-css>{styles}</style>"#);
-    let html = compose_document(&rendered, &head_content, &format!("{client_script}{hmr}"));
+    let html = compose_localized_document(
+        &rendered,
+        &head_content,
+        &format!("{client_script}{hmr}"),
+        state.config.i18n.as_ref(),
+        route,
+        request_path,
+        params,
+    );
 
     Ok(state.render_cache.put(cache_key, html).await)
 }
@@ -425,10 +476,14 @@ async fn render_isr_background(
     let plugin_head = render_plugin_head(&state.config.plugin_head);
     let head_content =
         format!(r#"{asset_links}{plugin_head}<style data-ruvyxa-css>{styles}</style>"#);
-    Ok(compose_document(
+    Ok(compose_localized_document(
         &rendered,
         &head_content,
         &format!("{client_script}{hmr}"),
+        state.config.i18n.as_ref(),
+        route,
+        request_path,
+        params,
     ))
 }
 
@@ -709,7 +764,15 @@ async fn render_page_ppr(
     let plugin_head = render_plugin_head(&state.config.plugin_head);
     let head_content =
         format!(r#"{asset_links}{plugin_head}<style data-ruvyxa-css>{styles}</style>"#);
-    let html = compose_document(&rendered, &head_content, &format!("{client_script}{hmr}"));
+    let html = compose_localized_document(
+        &rendered,
+        &head_content,
+        &format!("{client_script}{hmr}"),
+        state.config.i18n.as_ref(),
+        route,
+        request_path,
+        params,
+    );
 
     Ok(state.render_cache.put(cache_key, html).await)
 }
@@ -781,7 +844,15 @@ pub(crate) async fn render_page_pooled(
     let head_content =
         format!(r#"{asset_links}{plugin_head}<style data-ruvyxa-css>{styles}</style>"#);
 
-    let html = compose_document(&rendered, &head_content, &format!("{client_script}{hmr}"));
+    let html = compose_localized_document(
+        &rendered,
+        &head_content,
+        &format!("{client_script}{hmr}"),
+        state.config.i18n.as_ref(),
+        route,
+        request_path,
+        params,
+    );
 
     // Cache the fully rendered page for subsequent requests, and serve the very
     // allocation that was stored.
@@ -1125,10 +1196,14 @@ fn render_page(
     let head_content =
         format!(r#"{asset_links}{plugin_head}<style data-ruvyxa-css>{styles}</style>"#);
 
-    Ok(compose_document(
+    Ok(compose_localized_document(
         &rendered,
         &head_content,
         &format!("{client_script}{hmr}"),
+        config.i18n.as_ref(),
+        route,
+        request_path,
+        params,
     ))
 }
 

@@ -777,6 +777,7 @@ interface LinkProps extends Omit<AnchorHTMLAttributes<HTMLAnchorElement>, 'href'
   href: string // ปลายทาง URL
   replace?: boolean // ใช้ history.replaceState แทน pushState
   scroll?: boolean // scroll to top หลัง navigate (default: true)
+  viewTransition?: boolean // ใช้ browser View Transitions API เมื่อรองรับ
   prefetch?: LinkPrefetch // เมื่อ warm bundle (default: 'hover')
   children?: ReactNode
   ref?: Ref<HTMLAnchorElement>
@@ -869,6 +870,7 @@ interface RuvyxaRouter {
 interface NavigateOptions {
   replace?: boolean // history.replaceState
   scroll?: boolean // scroll to top (default: true)
+  viewTransition?: boolean // ใช้ browser View Transitions API เมื่อรองรับ
 }
 
 // usePathname
@@ -1016,7 +1018,7 @@ Ruvyxa ตรวจสอบ routes โดยอัตโนมัติ:
 npm run check
 ```
 
-หรือ `ruvyxa check` validate:
+หรือ `npm run check` validate:
 
 | การตรวจสอบ                      | Error code                |
 | ------------------------------- | ------------------------- |
@@ -1253,8 +1255,8 @@ app/blog/[slug]/
 เรียก CLI โดยตรง ไม่ต้องสมมติว่ามี package script:
 
 ```bash
-ruvyxa routes
-ruvyxa trace /blog/[slug]
+npm run routes
+npm run trace -- /blog/[slug]
 ```
 
 `routes` พิมพ์ route table ที่ค้นพบ ส่วน `trace` รับ route pattern ที่อยู่ในตาราง ไม่ใช่ชื่อ
@@ -1269,3 +1271,28 @@ ancestor directory มีชื่อขึ้นต้นด้วย `_` ห�
   components
 - **[04-rendering-strategies.md](./04-rendering-strategies.md)** — SSR, SSG, ISR, PPR, CSR
 - **[05-data-loading-cache.md](./05-data-loading-cache.md)** — โหลดข้อมูลและ cache
+
+# Locale routing และ View Transitions
+
+กำหนด locale แล้ววางหน้าที่แปลไว้ใต้ parameter ที่ตั้งชื่อไว้:
+
+```ts
+export default config({
+  i18n: {
+    locales: ['en', 'th'],
+    defaultLocale: 'th',
+    localeParam: 'lang',
+    detectLocale: true,
+    cookie: 'RUVYXA_LOCALE',
+  },
+})
+```
+
+`app/[lang]/about/page.tsx` จะถูกขยายตาม locale ตอน prerender request ที่ยังไม่มี prefix จะเลือกจาก
+cookie ก่อน ตามด้วย `Accept-Language` ที่มี quality weight แล้วจึง fallback ไป default locale หน้า
+ที่ render แล้วจะมี `<html lang>`, `hreflang` และ `x-default` อัตโนมัติ ระบบจะไม่ redirect API,
+asset, internal path หรือ URL ที่มี locale อยู่แล้ว
+
+ใช้ `<Link href="/about" viewTransition>` หรือ `router.push('/about', { viewTransition: true })`
+สำหรับ browser-native transition แบบ opt-in ถ้า browser ไม่รองรับหรือผู้ใช้เลือก reduced motion
+ระบบจะกลับไปใช้ navigation ปกติ

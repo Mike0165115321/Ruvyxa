@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use axum::http::StatusCode;
 use axum::response::Response;
 use ruvyxa_diagnostics::{Diagnostic, RuvyxaError};
-use ruvyxa_graph::{HydrationMode, RouteEntry, RouteParams};
+use ruvyxa_graph::{HydrationMode, I18nRouting, RouteEntry, RouteParams};
 use serde::Deserialize;
 
 use crate::{ServerConfig, html_response};
@@ -36,6 +36,92 @@ pub(crate) fn compose_document(rendered: &str, head_content: &str, hmr: &str) ->
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">{head_content}</head><body>{rendered}{hmr}</body></html>"
     )
+}
+
+pub(crate) fn compose_localized_document(
+    rendered: &str,
+    head_content: &str,
+    hmr: &str,
+    i18n: Option<&I18nRouting>,
+    route: &RouteEntry,
+    request_path: &str,
+    params: &RouteParams,
+) -> String {
+    localize_document(
+        &compose_document(rendered, head_content, hmr),
+        i18n,
+        &route.path,
+        request_path,
+        params,
+    )
+}
+
+/// Apply validated file-system locale metadata to a complete HTML document.
+/// Native rendering and production prerendering share this implementation.
+pub fn localize_document(
+    document: &str,
+    i18n: Option<&I18nRouting>,
+    route_path: &str,
+    request_path: &str,
+    params: &RouteParams,
+) -> String {
+    let Some((locale, locale_head)) =
+        crate::i18n::localized_head(i18n, route_path, request_path, params)
+    else {
+        return document.to_string();
+    };
+    let document = insert_before_ascii_case(document, "</head>", &locale_head);
+    set_document_lang(&document, &locale)
+}
+
+fn set_document_lang(document: &str, locale: &str) -> String {
+    let Some(html_index) = find_ascii_case(document, "<html") else {
+        return document.to_string();
+    };
+    let Some(relative_end) = document[html_index..].find('>') else {
+        return document.to_string();
+    };
+    let tag_end = html_index + relative_end;
+    let opening = &document[html_index..tag_end];
+    if let Some(relative_attr) = find_ascii_case(opening, " lang=") {
+        let equals = html_index + relative_attr + " lang".len();
+        let value_start = equals + 1;
+        let bytes = document.as_bytes();
+        if value_start >= tag_end {
+            return document.to_string();
+        }
+        let quote = bytes[value_start];
+        let value_end = if matches!(quote, b'\'' | b'"') {
+            document[value_start + 1..tag_end]
+                .find(char::from(quote))
+                .map(|index| value_start + 1 + index)
+        } else {
+            document[value_start..tag_end]
+                .find(char::is_whitespace)
+                .map(|index| value_start + index)
+                .or(Some(tag_end))
+        };
+        if let Some(value_end) = value_end {
+            let content_start = if matches!(quote, b'\'' | b'"') {
+                value_start + 1
+            } else {
+                value_start
+            };
+            let mut output = String::with_capacity(document.len() + locale.len());
+            output.push_str(&document[..content_start]);
+            output.push_str(locale);
+            output.push_str(&document[value_end..]);
+            return output;
+        }
+    }
+
+    let mut output = String::with_capacity(document.len() + locale.len() + 8);
+    output.push_str(&document[..tag_end]);
+    output.push_str(" lang=\"");
+    output.push_str(locale);
+    output.push('"');
+    output.push_str(&document[tag_end..]);
+    output
 }
 
 pub(crate) fn insert_after_opening_html(rendered: &str, head_content: &str) -> String {
@@ -746,5 +832,28 @@ mod tests {
 
         assert!(!script.contains("</script><img>"));
         assert_eq!(script.matches("</script>").count(), 1);
+    }
+
+    #[test]
+    fn localizes_existing_document_language_and_adds_alternates() {
+        let config = I18nRouting {
+            locales: vec!["en".into(), "th".into()],
+            default_locale: "en".into(),
+            locale_param: "lang".into(),
+            detect_locale: true,
+            cookie: "RUVYXA_LOCALE".into(),
+        };
+        let params = RouteParams::from([("lang".into(), serde_json::json!("th"))]);
+        let localized = localize_document(
+            "<!doctype html><html lang=\"en\"><head><title>About</title></head><body></body></html>",
+            Some(&config),
+            "/[lang]/about",
+            "/th/about",
+            &params,
+        );
+
+        assert!(localized.contains("<html lang=\"th\">"));
+        assert!(localized.contains("hreflang=\"en\" href=\"/en/about\""));
+        assert!(localized.contains("hreflang=\"x-default\" href=\"/en/about\""));
     }
 }

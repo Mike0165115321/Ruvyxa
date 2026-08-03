@@ -159,9 +159,9 @@ intentional precedence is understood.
 ## Verification
 
 ```bash
-ruvyxa check
-ruvyxa analyze
-ruvyxa build
+npm run check
+npm run analyze
+npm run build
 ```
 
 Verify generated WebP paths and the image manifest after a build. Do not use undocumented encoder
@@ -816,34 +816,41 @@ export default function Gallery() {
 ### Full Props Interface
 
 ```ts
-interface ImageProps {
+interface ImageBaseProps {
   src: string
   alt: string
-  width?: number
-  height?: number
   priority?: boolean
+  unoptimized?: boolean
+  loader?: ImageLoader
   loading?: 'lazy' | 'eager'
   quality?: number
-  format?: 'webp' | 'avif' | 'original'
+  dynamic?: boolean
   sizes?: string
-  className?: string
 }
+
+type ImageProps =
+  | (ImageBaseProps & { fill?: false | undefined; width: number; height: number })
+  | (ImageBaseProps & { fill: true; width?: number; height?: number })
+
+type ImageLoader = (props: { src: string; width?: number; quality?: number }) => string
 ```
 
 ### Props Reference
 
-| Prop        | Type                                 | Default                            | Description                                                 |
-| ----------- | ------------------------------------ | ---------------------------------- | ----------------------------------------------------------- |
-| `src`       | `string`                             | required                           | Path in `/public`, must start with `/`                      |
-| `alt`       | `string`                             | required                           | Accessibility text                                          |
-| `width`     | `number`                             | inferred from file                 | Intrinsic width in pixels                                   |
-| `height`    | `number`                             | inferred from file                 | Intrinsic height in pixels                                  |
-| `priority`  | `boolean`                            | `false`                            | Preload `<link>`, `loading="eager"`, `fetchpriority="high"` |
-| `loading`   | `"lazy"` \| `"eager"`                | `"lazy"`                           | Native lazy loading                                         |
-| `quality`   | `number`                             | config default (82)                | Override quality 1-100                                      |
-| `format`    | `"webp"` \| `"avif"` \| `"original"` | `"webp"`                           | Preferred output format                                     |
-| `sizes`     | `string`                             | `"(max-width: 768px) 100vw, 50vw"` | Sizes attribute for srcset                                  |
-| `className` | `string`                             | --                                 | CSS class                                                   |
+| Prop          | Type                  | Default                            | Description                                                 |
+| ------------- | --------------------- | ---------------------------------- | ----------------------------------------------------------- |
+| `src`         | `string`              | required                           | Path in `/public`, must start with `/`                      |
+| `alt`         | `string`              | required                           | Accessibility text                                          |
+| `width`       | `number`              | required unless `fill`             | Intrinsic width in pixels                                   |
+| `height`      | `number`              | required unless `fill`             | Intrinsic height in pixels                                  |
+| `priority`    | `boolean`             | `false`                            | Preload `<link>`, `loading="eager"`, `fetchpriority="high"` |
+| `fill`        | `boolean`             | `false`                            | Fill a positioned parent; dimensions become optional        |
+| `unoptimized` | `boolean`             | `false`                            | Keep a local source URL unchanged                           |
+| `loader`      | `ImageLoader`         | —                                  | Build an external image-CDN URL                             |
+| `loading`     | `"lazy"` \| `"eager"` | `"lazy"`                           | Native lazy loading                                         |
+| `quality`     | `number`              | —                                  | Passed to a custom loader or runtime endpoint               |
+| `dynamic`     | `boolean`             | `false`                            | Resize same-origin public images at runtime when enabled    |
+| `sizes`       | `string`              | `"(max-width: 768px) 100vw, 50vw"` | Sizes attribute for srcset                                  |
 
 ### Image Optimization Pipeline
 
@@ -1350,3 +1357,21 @@ separates a filename/discovery problem from a content-parser or image-build prob
 - [11-configuration.md](./11-configuration.md) -- Full image config
 - [14-plugins.md](./14-plugins.md) -- Content engine and sitemap
 - [15-official-packages.md](./15-official-packages.md) -- Search index
+
+# On-demand local images
+
+```ts
+export default config({
+  image: { onDemand: { enabled: true, maxWidth: 3840 } },
+})
+```
+
+```tsx
+<Image src="/uploads/hero.jpg" width={1600} height={900} dynamic sizes="100vw" />
+```
+
+`dynamic` is restricted to same-origin public paths. The runtime validates width and quality,
+decodes work off the async request loop, and keeps a bounded transformed-image cache. Remote URLs
+are not accepted by the endpoint. Cloudflare deployments use the platform image transform when the
+account supports it, while Vercel output config enables its native same-origin image API. Other
+platforms can keep build-time variants or use an explicit CDN loader.

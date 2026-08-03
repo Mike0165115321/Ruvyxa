@@ -281,6 +281,7 @@ mod tests {
         RouteManifest {
             app_dir: PathBuf::from("app"),
             routes: entries,
+            i18n: None,
         }
     }
 

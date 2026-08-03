@@ -1229,6 +1229,7 @@ mod tests {
                     render: RenderMeta::default(),
                 })
                 .collect(),
+            i18n: None,
         }
     }
 

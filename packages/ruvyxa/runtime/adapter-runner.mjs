@@ -78,7 +78,8 @@ try {
     writeResponse(failure('RUV2200', 'config.adapter must provide a build(context) function.'))
     process.exitCode = 1
   } else {
-    const output = await adapter.build({ root: projectRoot, outDir: outputDir })
+    const buildInfo = await loadBuildInfo(outputDir)
+    const output = await adapter.build({ root: projectRoot, outDir: outputDir, buildInfo })
     if (runnerMode === 'inspect') {
       writeResponse(success(inspectAdapter(adapter, output)))
     } else if (runnerMode === 'build') {
@@ -95,6 +96,17 @@ try {
     failure('RUV2200', error instanceof Error ? error.message : String(error), error?.stack),
   )
   process.exitCode = 1
+}
+
+async function loadBuildInfo(buildDir) {
+  try {
+    const value = JSON.parse(await readFile(path.join(buildDir, 'build.json'), 'utf8'))
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : undefined
+  } catch {
+    // Inspection can run before a build exists. Build metadata is additive,
+    // so adapters retain their previous behavior when it is unavailable.
+    return undefined
+  }
 }
 
 /** Return deployment capabilities without writing any adapter artifacts. */

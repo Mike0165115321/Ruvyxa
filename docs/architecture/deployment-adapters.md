@@ -379,3 +379,11 @@ adapter is found. `run_adapter` shells out to the adapter's Node.js entry point.
    `@ruvyxa/adapter-vercel` in `package.json` is sufficient. Convention over configuration.
 4. **Node adapter is the default** — Every Node.js deployment works with zero configuration.
    `ruvyxa build` with no adapter package installed still produces a runnable `server.js`.
+
+# Runtime policy handoff
+
+`BuildContext.buildInfo` is an optional read-only copy of `build.json`. First-party dynamic adapters
+embed only `buildInfo.runtime` plus the route manifest's i18n policy. Older/custom adapters remain
+source compatible because the field is additive. The Vercel adapter selects Build Output API edge
+metadata with `edge: true`; its generated function and route registry are compiled for the browser
+platform and contain no Node.js imports.

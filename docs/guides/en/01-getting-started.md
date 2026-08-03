@@ -262,6 +262,7 @@ export interface RuvyxaConfig {
     traces?: boolean // @default false
   }
   image?: ImageConfig
+  i18n?: I18nConfig
   security?: {
     actionLimit?: number // @default 1048576 (1MB)
     apiLimit?: number // @default 10485760 (10MB)
@@ -307,6 +308,7 @@ export interface ImageConfig {
   keepOriginal?: boolean // @default true
   variantWidths?: number[] // @default [640, 750, 828, 1080, 1200, 1920, 2048, 3840]
   workers?: number // @default 0 (auto)
+  onDemand?: boolean | { enabled?: boolean; maxWidth?: number }
 }
 ```
 
@@ -411,28 +413,43 @@ Every Ruvyxa project comes with these scripts:
     "dev": "ruvyxa dev",
     "build": "ruvyxa build",
     "start": "ruvyxa start",
+    "preview": "ruvyxa preview",
     "typecheck": "tsc --noEmit",
-    "check": "ruvyxa check"
+    "check": "ruvyxa check",
+    "routes": "ruvyxa routes",
+    "routes:json": "ruvyxa routes --json",
+    "analyze": "ruvyxa analyze",
+    "analyze:html": "ruvyxa analyze --html",
+    "add": "ruvyxa add",
+    "doctor": "ruvyxa doctor",
+    "clean": "ruvyxa clean",
+    "trace": "ruvyxa trace",
+    "bench": "ruvyxa bench",
+    "test:parity": "ruvyxa test:parity",
+    "plugin": "ruvyxa plugin"
   }
 }
 ```
 
-| Script        | CLI Command          | Exact invocation         | What it does                                      |
-| ------------- | -------------------- | ------------------------ | ------------------------------------------------- |
-| `dev`         | `ruvyxa dev`         | `npx ruvyxa dev`         | Start dev server with HMR                         |
-| `build`       | `ruvyxa build`       | `npx ruvyxa build`       | Production build to `.ruvyxa/`                    |
-| `start`       | `ruvyxa start`       | `npx ruvyxa start`       | Serve production build from `.ruvyxa/`            |
-| `typecheck`   | `tsc --noEmit`       | `npx tsc --noEmit`       | Type-check without emitting files                 |
-| `check`       | `ruvyxa check`       | `npx ruvyxa check`       | Validate routes, config, imports, parity          |
-| `preview`     | `ruvyxa preview`     | `npx ruvyxa preview`     | Serve production build locally (alias of `start`) |
-| `routes`      | `ruvyxa routes`      | `npx ruvyxa routes`      | Print the discovered route table                  |
-| `analyze`     | `ruvyxa analyze`     | `npx ruvyxa analyze`     | Validate routes, imports, and boundaries          |
-| `doctor`      | `ruvyxa doctor`      | `npx ruvyxa doctor`      | Diagnose project issues                           |
-| `clean`       | `ruvyxa clean`       | `npx ruvyxa clean`       | Remove configured generated build output          |
-| `trace`       | `ruvyxa trace`       | `npx ruvyxa trace`       | Inspect one route-manifest entry                  |
-| `bench`       | `ruvyxa bench`       | `npx ruvyxa bench`       | Benchmark discovery, analysis, and build          |
-| `test:parity` | `ruvyxa test:parity` | `npx ruvyxa test:parity` | Compare dev/prod routes and smoke-render pages    |
-| `plugin`      | `ruvyxa plugin`      | `npx ruvyxa plugin`      | Manage and scaffold plugins                       |
+| Script         | CLI Command             | Exact invocation                     | What it does                                        |
+| -------------- | ----------------------- | ------------------------------------ | --------------------------------------------------- |
+| `dev`          | `ruvyxa dev`            | `npm run dev`                        | Start dev server with HMR                           |
+| `build`        | `ruvyxa build`          | `npm run build`                      | Production build to `.ruvyxa/`                      |
+| `start`        | `ruvyxa start`          | `npm run start`                      | Serve production build from `.ruvyxa/`              |
+| `typecheck`    | `tsc --noEmit`          | `npm run typecheck`                  | Type-check without emitting files                   |
+| `check`        | `ruvyxa check`          | `npm run check`                      | Validate routes, config, imports, parity            |
+| `preview`      | `ruvyxa preview`        | `npm run preview`                    | Serve production build locally (alias of `start`)   |
+| `routes`       | `ruvyxa routes`         | `npm run routes`                     | Print the discovered route table                    |
+| `routes:json`  | `ruvyxa routes --json`  | `npm run routes:json`                | Print the route manifest as JSON                    |
+| `analyze`      | `ruvyxa analyze`        | `npm run analyze`                    | Validate routes, imports, and boundaries            |
+| `analyze:html` | `ruvyxa analyze --html` | `npm run analyze:html`               | Write an interactive HTML bundle report             |
+| `add`          | `ruvyxa add`            | `npm run add -- form`                | Scaffold a form, data table, or authentication flow |
+| `doctor`       | `ruvyxa doctor`         | `npm run doctor`                     | Diagnose project issues                             |
+| `clean`        | `ruvyxa clean`          | `npm run clean`                      | Remove configured generated build output            |
+| `trace`        | `ruvyxa trace`          | `npm run trace -- /about`            | Inspect one route-manifest entry                    |
+| `bench`        | `ruvyxa bench`          | `npm run bench`                      | Benchmark discovery, analysis, and build            |
+| `test:parity`  | `ruvyxa test:parity`    | `npm run test:parity`                | Compare dev/prod routes and smoke-render pages      |
+| `plugin`       | `ruvyxa plugin`         | `npm run plugin -- create my-plugin` | Create a publishable plugin package                 |
 
 ### Dependencies
 
@@ -600,7 +617,7 @@ Example output:
 ## Dev Server Startup Sequence (Diagram)
 
 ```
-ruvyxa dev
+npm run dev
     │
     ▼
 ┌─────────────┐
@@ -994,7 +1011,7 @@ export default function BlogPost({ params }: { params: { slug: string } }) {
 | `RUV1500` | SSG/ISR render failed              | Static generation error                              | Check error detail                                 |
 | `RUV1501` | Route action not found             | Missing action.ts in route                           | Create action.ts                                   |
 | `RUV1550` | PPR render failed                  | PPR streaming error                                  | Check error detail                                 |
-| `RUV1600` | Config validation error            | ruvyxa.config.ts format is invalid                   | Run `ruvyxa doctor`                                |
+| `RUV1600` | Config validation error            | ruvyxa.config.ts format is invalid                   | Run `npm run doctor`                               |
 | `RUV1601` | Config value out of range          | Field value out of acceptable range                  | Adjust value range                                 |
 | `RUV1602` | Config value exceeds maximum       | Field value exceeds limits                           | Reduce value                                       |
 | `RUV1700` | TypeScript plugin error            | Plugin runtime error                                 | Inspect plugin code                                |
@@ -1017,13 +1034,13 @@ export default function BlogPost({ params }: { params: { slug: string } }) {
 | Dev server won't start | `npm run doctor` — checks Node version, port, config    |
 | Routes not appearing   | `npm run routes` — prints matched routes                |
 | Strange build errors   | `npm run clean && npm run build` — fresh state          |
-| "Address in use" error | Change port: `ruvyxa dev --port 4000`                   |
+| "Address in use" error | Change port: `npm run dev -- --port 4000`               |
 | Dependency issues      | Delete `node_modules` + lockfile, reinstall             |
 | TypeScript errors      | `npm run typecheck` — pinpoints type issues             |
 | Bundle too large       | `npm run analyze` — find what's bloating the bundle     |
 | Adapter issues         | `npm run doctor` — verifies adapter configuration       |
 | HMR not working        | Check file is inside `app/`, not excluded by `_` prefix |
-| Config changes ignored | `ruvyxa dev` auto-restarts on config change             |
+| Config changes ignored | `npm run dev` auto-restarts on config change            |
 
 ### Port Already in Use
 
@@ -1034,8 +1051,8 @@ RUV1201: No available server port was found
 The dev server tries the configured port, then scans upward. If every port is busy:
 
 ```bash
-ruvyxa dev --port 4000    # Use specific port
-ruvyxa dev --port 0        # Use any available port (OS-assigned)
+npm run dev -- --port 4000    # Use specific port
+npm run dev -- --port 0        # Use any available port (OS-assigned)
 ```
 
 ### Config Not Loading
@@ -1175,24 +1192,23 @@ The generator rejects non-empty directories and unsafe Windows names before copy
 | `package.json`     | Dependency versions and runnable scripts.                  | Use its scripts as the canonical local workflow.  |
 
 The minimal template uses `app` as the application directory and `.ruvyxa` as generated output. Keep
-`.ruvyxa` out of source control: it is created by builds and can be regenerated with `ruvyxa clean`
-followed by `ruvyxa build`.
+`.ruvyxa` out of source control: it is created by builds and can be regenerated with `npm run clean`
+followed by `npm run build`.
 
 ### Learn by Checking One Fact at a Time
 
-The minimal starter defines `dev`, `build`, `start`, `typecheck`, and `check` scripts. Commands such
-as `routes`, `analyze`, `doctor`, `clean`, `trace`, and `bench` are CLI commands, not starter
-scripts. Invoke them directly unless your own project adds a script:
+Every application starter maps each framework CLI command to a matching package script. Pass command
+arguments after `--`, so npm forwards them to Ruvyxa:
 
 ```bash
 npm run dev
-ruvyxa routes
-ruvyxa doctor
-ruvyxa analyze --format human
+npm run routes
+npm run doctor
+npm run analyze -- --format human
 ```
 
-This distinction makes examples portable: `npm run <name>` only works when that exact script exists
-in the current project's `package.json`.
+This keeps examples portable: use `npm run <name>` from the generated project and put command
+arguments after `--`.
 
 ### A Useful First-hour Loop
 
@@ -1201,15 +1217,15 @@ After installing dependencies, use this short loop rather than changing configur
 ```bash
 npm run dev
 # in another terminal, after adding or renaming a page
-ruvyxa routes
+npm run routes
 # before committing a meaningful change
 npm run check
 ```
 
 `dev` owns file watching and HMR. `routes` only discovers and prints routes; it does not start a
 server. `check` runs TypeScript checking when a `tsconfig.json` is present and then runs the
-framework parity flow. If the generated output seems stale, use `ruvyxa clean` before rebuilding; do
-not delete dependencies or source files as part of that operation.
+framework parity flow. If the generated output seems stale, use `npm run clean` before rebuilding;
+do not delete dependencies or source files as part of that operation.
 
 ---
 

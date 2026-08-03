@@ -77,17 +77,18 @@ import { Image } from '@ruvyxa/react'
 
 **Props ที่สำคัญ:**
 
-| Prop          | Type          | ค่าเริ่มต้น | คำอธิบาย                             |
-| ------------- | ------------- | ----------- | ------------------------------------ |
-| `src`         | `string`      | —           | URL ภาพ รองรับเส้นทาง local PNG/JPEG |
-| `alt`         | `string`      | —           | ข้อความทดแทน (required)              |
-| `width`       | `number`      | —           | ความกว้างจริง (required ยกเว้น fill) |
-| `height`      | `number`      | —           | ความสูงจริง (required ยกเว้น fill)   |
-| `unoptimized` | `boolean`     | `false`     | ไม่แปลงเป็น WebP                     |
-| `priority`    | `boolean`     | `false`     | eager-load + fetchPriority high      |
-| `fill`        | `boolean`     | `false`     | เติมพื้นที่ parent                   |
-| `loader`      | `ImageLoader` | —           | ใช้ image CDN loader                 |
-| `quality`     | `number`      | —           | ส่งให้ custom loader                 |
+| Prop          | Type          | ค่าเริ่มต้น | คำอธิบาย                                                            |
+| ------------- | ------------- | ----------- | ------------------------------------------------------------------- |
+| `src`         | `string`      | —           | URL ภาพ รองรับเส้นทาง local PNG/JPEG                                |
+| `alt`         | `string`      | —           | ข้อความทดแทน (required)                                             |
+| `width`       | `number`      | —           | ความกว้างจริง (required ยกเว้น fill)                                |
+| `height`      | `number`      | —           | ความสูงจริง (required ยกเว้น fill)                                  |
+| `unoptimized` | `boolean`     | `false`     | ไม่แปลงเป็น WebP                                                    |
+| `priority`    | `boolean`     | `false`     | eager-load + fetchPriority high                                     |
+| `fill`        | `boolean`     | `false`     | เติมพื้นที่ parent                                                  |
+| `loader`      | `ImageLoader` | —           | ใช้ image CDN loader                                                |
+| `quality`     | `number`      | —           | ส่งให้ custom loader                                                |
+| `dynamic`     | `boolean`     | `false`     | resize รูป local same-origin ที่ runtime เมื่อเปิด `image.onDemand` |
 
 ### Picture
 
@@ -184,12 +185,13 @@ import { Link } from '@ruvyxa/react'
 
 **Props:**
 
-| Prop       | Type           | ค่าเริ่มต้น | คำอธิบาย                    |
-| ---------- | -------------- | ----------- | --------------------------- |
-| `href`     | `string`       | —           | URL ปลายทาง                 |
-| `replace`  | `boolean`      | `false`     | แทนที่ history entry        |
-| `scroll`   | `boolean`      | `true`      | เลื่อนไปด้านบนหลัง navigate |
-| `prefetch` | `LinkPrefetch` | `'hover'`   | โหมด warming bundle         |
+| Prop             | Type           | ค่าเริ่มต้น | คำอธิบาย                                     |
+| ---------------- | -------------- | ----------- | -------------------------------------------- |
+| `href`           | `string`       | —           | URL ปลายทาง                                  |
+| `replace`        | `boolean`      | `false`     | แทนที่ history entry                         |
+| `scroll`         | `boolean`      | `true`      | เลื่อนไปด้านบนหลัง navigate                  |
+| `viewTransition` | `boolean`      | `false`     | ใช้ browser View Transitions API เมื่อรองรับ |
+| `prefetch`       | `LinkPrefetch` | `'hover'`   | โหมด warming bundle                          |
 
 **LinkPrefetch:** `boolean \| 'hover' \| 'viewport' \| 'none'`
 
@@ -324,6 +326,12 @@ interface RuvyxaRouter {
   refresh(): void
   prefetch(href: string): void
   readonly pending: boolean
+}
+
+interface NavigateOptions {
+  replace?: boolean
+  scroll?: boolean
+  viewTransition?: boolean
 }
 ```
 
@@ -718,7 +726,7 @@ export default config({
 } satisfies RuvyxaConfig)
 ```
 
-### Re-exported Types (19 types)
+### Re-exported Types
 
 | Type                        | คำอธิบาย                                                   |
 | --------------------------- | ---------------------------------------------------------- |
@@ -731,6 +739,8 @@ export default config({
 | `RenderConfig`              | การตั้งค่ารูปแบบ render                                    |
 | `RenderStrategy`            | `'ssr' \| 'ssg' \| 'isr' \| 'csr' \| 'ppr'`                |
 | `ImageConfig`               | การตั้งค่ารูปภาพ                                           |
+| `I18nConfig`                | locale routing และการตรวจ locale จาก request               |
+| `OnDemandImageConfig`       | ขีดจำกัดการ resize รูปที่ runtime                          |
 | `PageProps`                 | Props ที่ส่งให้ page component                             |
 | `RouteParams`               | `Record<string, RouteParamValue>`                          |
 | `RouteParamValue`           | `string \| string[] \| undefined`                          |
@@ -1103,6 +1113,7 @@ interface BuildContext {
   root: string
   outDir: string
   chunkManifest?: string
+  buildInfo?: Readonly<Record<string, unknown>>
 }
 ```
 
@@ -1132,6 +1143,7 @@ interface RuvyxaConfig {
   render?: RenderConfig
   debug?: { overlay?: boolean; traces?: boolean }
   image?: ImageConfig
+  i18n?: I18nConfig
   security?: {
     actionLimit?: number
     apiLimit?: number
@@ -1202,6 +1214,20 @@ interface ImageConfig {
   keepOriginal?: boolean
   variantWidths?: number[]
   workers?: number
+  onDemand?: boolean | OnDemandImageConfig
+}
+
+interface OnDemandImageConfig {
+  enabled?: boolean
+  maxWidth?: number
+}
+
+interface I18nConfig {
+  locales: string[]
+  defaultLocale: string
+  localeParam?: string
+  detectLocale?: boolean
+  cookie?: string
 }
 ```
 
@@ -1269,10 +1295,11 @@ _เอกสารอ้างอิงสำหรับ Ruvyxa 1.0 — อั
 
 ## สิ่งที่คุณจะได้เรียนรู้ (What You Will Learn)
 
-## @ruvyxa/react/server
+## React server rendering
 
-- `renderToPipeableStream`
-- `renderToReadableStream`
+`@ruvyxa/react` ไม่มี export path `@ruvyxa/react/server` ใน public package. การ render ฝั่ง server
+เป็นหน้าที่ของ generated runtime ของ Ruvyxa; แอปควร import public React primitives จาก
+`@ruvyxa/react` และ server primitives จาก `@ruvyxa/core/server` เท่านั้น
 
 ## วิธีใช้ API Reference อย่างปลอดภัย
 

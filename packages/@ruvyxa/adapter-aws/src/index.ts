@@ -6,6 +6,7 @@ import {
   clientBuildOutput,
   IMMUTABLE_CACHE_CONTROL,
   PUBLIC_ASSET_CACHE_CONTROL,
+  runtimeBuildPolicy,
   standaloneServerSource,
   validateBuildContext,
 } from '@ruvyxa/core'
@@ -59,7 +60,10 @@ export function awsAdapter(options: AwsAdapterOptions = {}): Adapter {
         null,
         2,
       )
-      const serverSource = standaloneServerSource({ isrCache: 'tmp' })
+      const serverSource = standaloneServerSource({
+        isrCache: 'tmp',
+        runtimePolicy: runtimeBuildPolicy(ctx),
+      })
       const deployRoot = 'deploy/aws/.amplify-hosting'
 
       const projectArtifacts: AdapterOutput['artifacts'] =

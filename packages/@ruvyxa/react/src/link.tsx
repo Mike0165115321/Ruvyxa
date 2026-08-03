@@ -26,6 +26,8 @@ export interface LinkProps extends Omit<AnchorHTMLAttributes<HTMLAnchorElement>,
   replace?: boolean
   /** Scroll to the top after navigating. Defaults to `true`. */
   scroll?: boolean
+  /** Animate this navigation with the browser View Transitions API when available. */
+  viewTransition?: boolean
   /**
    * Warm the destination bundle ahead of the click.
    *
@@ -76,6 +78,7 @@ export function Link({
   href,
   replace = false,
   scroll = true,
+  viewTransition = false,
   prefetch = 'hover',
   children,
   onClick,
@@ -127,9 +130,9 @@ export function Link({
 
       const router = getRouterInstance()
       event.preventDefault()
-      void router.navigate(href, { replace, scroll })
+      void router.navigate(href, { replace, scroll, viewTransition })
     },
-    [href, onClick, replace, rest.download, scroll, target],
+    [href, onClick, replace, rest.download, scroll, target, viewTransition],
   )
 
   const shouldWarmOnPointer = prefetch === true || prefetch === 'hover'

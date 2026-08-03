@@ -35,6 +35,7 @@ export interface RuvyxaConfig {
     traces?: boolean
   }
   image?: ImageConfig
+  i18n?: I18nConfig
   security?: {
     /** Maximum server-action payload size in bytes. @default 1048576 */
     actionLimit?: number
@@ -210,6 +211,29 @@ export interface ImageConfig {
   variantWidths?: number[]
   /** Image conversion workers. Zero selects the available CPU count. @default 0 */
   workers?: number
+  /** Resize same-origin files from `public/` through the runtime image endpoint. */
+  onDemand?: boolean | OnDemandImageConfig
+}
+
+export interface OnDemandImageConfig {
+  /** Enable runtime image transforms. @default true when this object is present */
+  enabled?: boolean
+  /** Largest accepted output width. @default 3840 */
+  maxWidth?: number
+}
+
+/** File-system locale routing for routes such as `app/[lang]/about/page.tsx`. */
+export interface I18nConfig {
+  /** Supported BCP-47-style locale identifiers. */
+  locales: string[]
+  /** Fallback locale and the target used by the `x-default` alternate link. */
+  defaultLocale: string
+  /** Dynamic route parameter that carries the locale. @default "lang" */
+  localeParam?: string
+  /** Detect a preferred locale from cookie and Accept-Language. @default true */
+  detectLocale?: boolean
+  /** Locale preference cookie name. @default "RUVYXA_LOCALE" */
+  cookie?: string
 }
 
 // ─── Rendering Strategy ───────────────────────────────────────────────────────
@@ -624,6 +648,12 @@ export interface BuildContext {
   outDir: string
   /** Override the generated chunk manifest path when an adapter relocates client output. */
   chunkManifest?: string
+  /**
+   * Read-only metadata emitted by the Ruvyxa build. Adapters use this to carry
+   * validated runtime policy (for example middleware and i18n) into generated
+   * serverless/edge handlers without evaluating project config a second time.
+   */
+  buildInfo?: Readonly<Record<string, unknown>>
 }
 
 export interface AdapterOutput {

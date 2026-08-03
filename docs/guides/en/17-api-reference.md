@@ -46,6 +46,7 @@ interface ImageBaseProps extends Omit<ImgHTMLAttributes<...>, 'alt' | 'src' | 'w
   fill?: boolean
   loader?: ImageLoader
   quality?: number
+  dynamic?: boolean
   loading?: 'eager' | 'lazy'
   fetchPriority?: 'auto' | 'high' | 'low'
 }
@@ -68,6 +69,7 @@ interface ImageLoaderProps {
 | `fill`          | boolean     | `false`  | Fill positioned parent (`position: absolute; inset: 0`)     |
 | `loader`        | ImageLoader | —        | Custom CDN URL generator                                    |
 | `quality`       | number      | —        | Passed to custom loader                                     |
+| `dynamic`       | boolean     | `false`  | Use the enabled same-origin runtime image endpoint          |
 | `loading`       | string      | `'lazy'` | Override native loading                                     |
 | `fetchPriority` | string      | `'auto'` | Override native fetch priority                              |
 
@@ -203,6 +205,7 @@ interface LinkProps extends Omit<AnchorHTMLAttributes<HTMLAnchorElement>, 'href'
   href: string
   replace?: boolean
   scroll?: boolean
+  viewTransition?: boolean
   prefetch?: LinkPrefetch
   children?: ReactNode
   ref?: Ref<HTMLAnchorElement>
@@ -211,18 +214,20 @@ interface LinkProps extends Omit<AnchorHTMLAttributes<HTMLAnchorElement>, 'href'
 type LinkPrefetch = boolean | 'hover' | 'viewport' | 'none'
 ```
 
-| Prop       | Type         | Default   | Description                           |
-| ---------- | ------------ | --------- | ------------------------------------- |
-| `href`     | string       | —         | Destination URL, relative or absolute |
-| `replace`  | boolean      | `false`   | Replace history entry instead of push |
-| `scroll`   | boolean      | `true`    | Scroll to top after navigation        |
-| `prefetch` | LinkPrefetch | `'hover'` | When to warm the target bundle        |
+| Prop             | Type         | Default   | Description                                       |
+| ---------------- | ------------ | --------- | ------------------------------------------------- |
+| `href`           | string       | —         | Destination URL, relative or absolute             |
+| `replace`        | boolean      | `false`   | Replace history entry instead of push             |
+| `scroll`         | boolean      | `true`    | Scroll to top after navigation                    |
+| `viewTransition` | boolean      | `false`   | Use browser-native view transition when available |
+| `prefetch`       | LinkPrefetch | `'hover'` | When to warm the target bundle                    |
 
 ```tsx
 <Link href="/">Home</Link>
 <Link href="/blog/hello" prefetch="viewport">Preload on scroll into view</Link>
 <Link href="/settings" prefetch="none">No prefetch</Link>
 <Link href="/replace-me" replace>Replace current entry</Link>
+<Link href="/products" viewTransition>Animate navigation when supported</Link>
 ```
 
 ### Answer
@@ -382,6 +387,7 @@ interface RuvyxaRouter {
 interface NavigateOptions {
   replace?: boolean
   scroll?: boolean
+  viewTransition?: boolean
 }
 ```
 
@@ -679,7 +685,7 @@ export default config({
 })
 ```
 
-**Re-exported types** (19 total):
+**Re-exported config types:**
 
 ```typescript
 export type {
@@ -688,7 +694,9 @@ export type {
   CorsConfig,
   GetStaticParams,
   ImageConfig,
+  I18nConfig,
   MiddlewareConfig,
+  OnDemandImageConfig,
   PageProps,
   RateLimitConfig,
   RenderConfig,
@@ -785,6 +793,9 @@ function validateBuildContext(ctx: BuildContext, adapterName: string): asserts c
 
 function standaloneServerSource(options?: StandaloneServerOptions): string
 // Returns Node HTTP server source code
+
+function runtimeBuildPolicy(ctx: BuildContext): Readonly<Record<string, unknown>>
+// Returns validated build-time runtime policy for an adapter
 
 function withResponseHeader(response: Response, name: string, value: string): Response
 ```
@@ -991,6 +1002,7 @@ interface BuildContext {
   root: string
   outDir: string
   chunkManifest?: string
+  buildInfo?: Readonly<Record<string, unknown>>
 }
 ```
 
@@ -1020,6 +1032,7 @@ interface RuvyxaConfig {
   render?: RenderConfig
   debug?: { overlay?: boolean; traces?: boolean }
   image?: ImageConfig
+  i18n?: I18nConfig
   security?: {
     actionLimit?: number
     apiLimit?: number
@@ -1110,6 +1123,20 @@ interface ImageConfig {
   keepOriginal?: boolean
   variantWidths?: number[]
   workers?: number
+  onDemand?: boolean | OnDemandImageConfig
+}
+
+interface OnDemandImageConfig {
+  enabled?: boolean
+  maxWidth?: number
+}
+
+interface I18nConfig {
+  locales: string[]
+  defaultLocale: string
+  localeParam?: string
+  detectLocale?: boolean
+  cookie?: string
 }
 ```
 

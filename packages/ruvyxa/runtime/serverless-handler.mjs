@@ -50,6 +50,12 @@
  * @property {boolean} [securityHeaders=true]
  *   Apply Ruvyxa's non-breaking security headers unless the response already
  *   defines a value for that header.
+ * @property {{builtin?: object}} [middleware]
+ *   Validated built-in middleware policy emitted by the Ruvyxa build. The
+ *   Fetch-native implementation mirrors the Axum/Tower CORS, rate-limit,
+ *   timing, logging, and custom-header behavior without Node.js polyfills.
+ * @property {{locales: string[], defaultLocale: string, localeParam: string, detectLocale: boolean, cookie: string}} [i18n]
+ * @property {(request: Request, input: {src: string, width: number, quality: number}) => Promise<Response>} [optimizeImage]
  */
 
 /** Security defaults shared with the native and standalone runtimes. */
@@ -79,8 +85,12 @@ export function createHandler(options) {
     writePrerendered,
     supportedStrategies = ['ssr', 'ssg', 'csr', 'isr', 'ppr', 'api'],
     securityHeaders = true,
+    middleware,
+    i18n,
+    optimizeImage,
   } = options
   const pendingRevalidations = new Map()
+  const fetchMiddleware = createFetchMiddleware(middleware)
 
   // Pre-compile route patterns for matching. Sort by specificity so a
   // static segment always wins over a dynamic one at the same position —
@@ -96,7 +106,7 @@ export function createHandler(options) {
     .sort((left, right) => compareSpecificity(left.specificity, right.specificity))
 
   return async function handle(request, runtimeContext = {}) {
-    const response = await dispatch(request, runtimeContext)
+    const response = await fetchMiddleware(request, () => dispatch(request, runtimeContext))
     return securityHeaders ? withDefaultSecurityHeaders(response) : response
   }
 
@@ -124,8 +134,14 @@ export function createHandler(options) {
 
     // The request boundary above already decoded and normalized the path using
     // the same segment rules as the Rust development server.
+    if (pathname === '/__ruvyxa/image') {
+      return handleDynamicImage(request, runtimeContext.optimizeImage ?? optimizeImage)
+    }
+
     const match = matchRoute(compiledRoutes, pathname)
     if (!match) {
+      const redirect = localeRedirect(request, pathname, basePath, compiledRoutes, i18n)
+      if (redirect) return Response.redirect(new URL(redirect, request.url), 307)
       return new Response('Not Found', { status: 404 })
     }
 
@@ -269,7 +285,8 @@ export function createHandler(options) {
 
   async function renderPage(route, pathname, params) {
     const mod = await importPage(route.id)
-    const html = await mod.render({ path: pathname, params: params ?? {} })
+    const rendered = await mod.render({ path: pathname, params: params ?? {} })
+    const html = localizeHtmlDocument(rendered, route.path, pathname, params ?? {}, i18n)
     return new Response(html, {
       status: 200,
       headers: { 'content-type': 'text/html; charset=utf-8' },
@@ -283,7 +300,8 @@ export function createHandler(options) {
     const revalidation = Promise.resolve().then(async () => {
       try {
         const mod = await importPage(route.id)
-        const html = await mod.render({ path: pathname, params: params ?? {} })
+        const rendered = await mod.render({ path: pathname, params: params ?? {} })
+        const html = localizeHtmlDocument(rendered, route.path, pathname, params ?? {}, i18n)
         writePrerendered(pathname, html, route.render.revalidate ?? 60)
       } catch (error) {
         console.error(`[ruvyxa] ISR revalidation failed for ${pathname}:`, error)
@@ -294,6 +312,313 @@ export function createHandler(options) {
     pendingRevalidations.set(pathname, revalidation)
     return revalidation
   }
+}
+
+async function handleDynamicImage(request, optimizer) {
+  if (typeof optimizer !== 'function') return new Response('Not Found', { status: 404 })
+  if (!['GET', 'HEAD'].includes(request.method)) {
+    return new Response('Method Not Allowed', { status: 405, headers: { allow: 'GET, HEAD' } })
+  }
+  const url = new URL(request.url)
+  const src = url.searchParams.get('src')
+  const width = Number(url.searchParams.get('w'))
+  const quality = Number(url.searchParams.get('q') ?? 82)
+  if (
+    typeof src !== 'string' ||
+    !src.startsWith('/') ||
+    src.startsWith('//') ||
+    src.includes('\\') ||
+    !Number.isInteger(width) ||
+    width < 16 ||
+    width > 8192 ||
+    !Number.isInteger(quality) ||
+    quality < 1 ||
+    quality > 100
+  ) {
+    return new Response('Invalid image request', {
+      status: 400,
+      headers: { 'content-type': 'text/plain; charset=utf-8' },
+    })
+  }
+  return optimizer(request, { src, width, quality })
+}
+
+function localeRedirect(request, pathname, basePath, routes, config) {
+  if (
+    !config ||
+    config.detectLocale === false ||
+    !['GET', 'HEAD'].includes(request.method) ||
+    pathname.startsWith('/__ruvyxa') ||
+    pathname === '/api' ||
+    pathname.startsWith('/api/') ||
+    isStaticAssetPath(pathname) ||
+    pathLocale(pathname, config)
+  )
+    return null
+
+  const preferred = preferredLocale(request.headers, config)
+  for (const locale of [preferred, config.defaultLocale]) {
+    const candidate = pathname === '/' ? `/${locale}` : `/${locale}${pathname}`
+    const matched = matchRoute(routes, candidate)
+    if (matched?.route.kind === 'page') {
+      return `${basePath === '/' ? '' : basePath}${candidate}`
+    }
+  }
+  return null
+}
+
+function preferredLocale(headers, config) {
+  const locales = Array.isArray(config.locales) ? config.locales : []
+  const canonical = (value) =>
+    locales.find((locale) => locale.toLowerCase() === value.toLowerCase())
+  const cookie = headers.get('cookie') ?? ''
+  for (const part of cookie.split(';')) {
+    const separator = part.indexOf('=')
+    if (separator < 0 || part.slice(0, separator).trim() !== config.cookie) continue
+    const locale = canonical(part.slice(separator + 1).trim())
+    if (locale) return locale
+  }
+
+  const languages = (headers.get('accept-language') ?? '')
+    .split(',')
+    .map((entry) => {
+      const [language, ...parameters] = entry.trim().split(';')
+      const quality = parameters.map((part) => part.trim()).find((part) => part.startsWith('q='))
+      return { language, quality: quality ? Number(quality.slice(2)) : 1 }
+    })
+    .filter(({ language, quality }) => language && language !== '*' && quality > 0)
+    .sort((left, right) => right.quality - left.quality)
+  for (const { language } of languages) {
+    const exact = canonical(language)
+    if (exact) return exact
+    const primary = language.split('-')[0].toLowerCase()
+    const matched = locales.find((locale) => locale.split('-')[0].toLowerCase() === primary)
+    if (matched) return matched
+  }
+  return config.defaultLocale
+}
+
+function pathLocale(pathname, config) {
+  const first = pathname.replace(/^\//, '').split('/')[0]
+  return config.locales?.find((locale) => locale.toLowerCase() === first.toLowerCase()) ?? null
+}
+
+function localizeHtmlDocument(html, routePath, pathname, params, config) {
+  if (!config || typeof html !== 'string') return html
+  const marker = `[${config.localeParam}]`
+  if (routePath.split('/')[1] !== marker) return html
+  const locale = pathLocale(`/${String(params[config.localeParam] ?? '')}`, config)
+  if (!locale) return html
+  const rest = pathname.replace(/^\//, '').split('/').slice(1).join('/')
+  const localizedPath = (alternate) => (rest ? `/${alternate}/${rest}` : `/${alternate}`)
+  const links = [
+    ...config.locales.map(
+      (alternate) =>
+        `<link rel="alternate" hreflang="${escapeHtmlAttribute(alternate)}" href="${escapeHtmlAttribute(localizedPath(alternate))}">`,
+    ),
+    `<link rel="alternate" hreflang="x-default" href="${escapeHtmlAttribute(localizedPath(config.defaultLocale))}">`,
+  ].join('')
+  let document = html.replace(/<html(?:\s[^>]*)?>/i, (tag) => {
+    if (/\slang\s*=/i.test(tag))
+      return tag.replace(/\slang\s*=\s*(["']).*?\1/i, ` lang="${locale}"`)
+    return tag.replace(/>$/, ` lang="${locale}">`)
+  })
+  if (!document.includes('hreflang=')) {
+    document = /<\/head>/i.test(document)
+      ? document.replace(/<\/head>/i, `${links}</head>`)
+      : document.replace(/<body(?:\s[^>]*)?>/i, `${links}$&`)
+  }
+  return document
+}
+
+function escapeHtmlAttribute(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+}
+
+const MAX_TRACKED_RATE_LIMIT_KEYS = 10_000
+
+/** Compile validated built-in middleware into a Fetch-native wrapper. */
+function createFetchMiddleware(config) {
+  const builtin = config?.builtin
+  if (!builtin || typeof builtin !== 'object') {
+    return async (_request, next) => next()
+  }
+
+  const cors = builtin.cors && typeof builtin.cors === 'object' ? builtin.cors : null
+  const rate = builtin.rate && typeof builtin.rate === 'object' ? builtin.rate : null
+  const customHeaders = validHeaderEntries(builtin.headers)
+  const buckets = new Map()
+  let nextRequestId = 1
+
+  return async function applyFetchMiddleware(request, next) {
+    const started = nowMilliseconds()
+    const requestId =
+      normalizedRequestId(request.headers.get('x-request-id')) ??
+      `ruvyxa-${(nextRequestId++).toString(16)}`
+
+    let response
+    const preflight = corsPreflightResponse(request, cors)
+    if (preflight) {
+      response = preflight
+    } else {
+      const limited = rateLimitResponse(request, rate, buckets)
+      response = limited ?? (await next())
+      response = withCorsHeaders(response, request, cors)
+    }
+
+    const headers = new Headers(response.headers)
+    for (const [name, value] of customHeaders) headers.set(name, value)
+    const elapsed = Math.max(0, nowMilliseconds() - started)
+    if (builtin.timing === true) headers.set('x-response-time', `${Math.floor(elapsed)}ms`)
+    if (builtin.log === true) headers.set('x-request-id', requestId)
+
+    const result = new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    })
+    if (builtin.log === true) {
+      console.info(
+        `[ruvyxa] request_id=${requestId} method=${request.method} path=${new URL(request.url).pathname} ` +
+          `status=${result.status} duration_ms=${Math.floor(elapsed)}`,
+      )
+    }
+    return result
+  }
+}
+
+function validHeaderEntries(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+  const entries = []
+  for (const [name, headerValue] of Object.entries(value)) {
+    try {
+      const headers = new Headers([[name, String(headerValue)]])
+      entries.push([name, headers.get(name)])
+    } catch {
+      // Project config validation rejects these. Direct createHandler callers
+      // still fail closed instead of crashing every request at runtime.
+    }
+  }
+  return entries
+}
+
+function corsPreflightResponse(request, cors) {
+  if (!cors || request.method !== 'OPTIONS') return null
+  const requestedMethod = request.headers.get('access-control-request-method')
+  if (!requestedMethod || !isAllowedCorsOrigin(request.headers.get('origin'), cors)) return null
+  return withCorsHeaders(new Response(null, { status: 204 }), request, cors, true)
+}
+
+function withCorsHeaders(response, request, cors, preflight = false) {
+  if (!cors) return response
+  const headers = new Headers(response.headers)
+  const origin = request.headers.get('origin')
+  if (isAllowedCorsOrigin(origin, cors)) {
+    headers.set('access-control-allow-origin', origin)
+    appendVaryOrigin(headers)
+    const methods = Array.isArray(cors.methods) ? cors.methods : []
+    const allowedHeaders = Array.isArray(cors.headers) ? cors.headers : []
+    if (methods.length > 0) headers.set('access-control-allow-methods', methods.join(', '))
+    if (allowedHeaders.length > 0) {
+      headers.set('access-control-allow-headers', allowedHeaders.join(', '))
+    }
+    if (cors.credentials === true) headers.set('access-control-allow-credentials', 'true')
+    headers.set('access-control-max-age', String(cors.maxAge ?? 86400))
+  } else {
+    appendVaryOrigin(headers)
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
+}
+
+function isAllowedCorsOrigin(origin, cors) {
+  return (
+    typeof origin === 'string' &&
+    Array.isArray(cors.origins) &&
+    !(cors.credentials === true && cors.origins.includes('*')) &&
+    (cors.origins.includes('*') || cors.origins.includes(origin))
+  )
+}
+
+function appendVaryOrigin(headers) {
+  const values = (headers.get('vary') ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean)
+  if (!values.some((value) => value.toLowerCase() === 'origin')) values.push('Origin')
+  headers.set('vary', values.join(', '))
+}
+
+function rateLimitResponse(request, rate, buckets) {
+  if (!rate) return null
+  const max = Number(rate.max)
+  const windowSeconds = Number(rate.window)
+  if (!Number.isInteger(max) || max < 1 || !Number.isFinite(windowSeconds) || windowSeconds <= 0) {
+    return new Response('Rate limit configuration error', { status: 500 })
+  }
+
+  const now = Date.now()
+  const windowMs = windowSeconds * 1000
+  const key = rateLimitKey(request, rate.key)
+  let bucket = buckets.get(key)
+  if (bucket && now - bucket.startedAt >= windowMs) {
+    buckets.delete(key)
+    bucket = undefined
+  }
+  if (!bucket) {
+    if (buckets.size >= MAX_TRACKED_RATE_LIMIT_KEYS) {
+      for (const [trackedKey, tracked] of buckets) {
+        if (now - tracked.startedAt >= windowMs) buckets.delete(trackedKey)
+      }
+      if (buckets.size >= MAX_TRACKED_RATE_LIMIT_KEYS) {
+        return new Response('Rate limit exceeded', {
+          status: 429,
+          headers: { 'content-type': 'text/plain; charset=utf-8', 'retry-after': '1' },
+        })
+      }
+    }
+    bucket = { remaining: max, startedAt: now }
+    buckets.set(key, bucket)
+  }
+  if (bucket.remaining > 0) {
+    bucket.remaining -= 1
+    return null
+  }
+  const retryAfter = Math.max(1, Math.ceil((windowMs - (now - bucket.startedAt)) / 1000))
+  return new Response('Rate limit exceeded', {
+    status: 429,
+    headers: { 'content-type': 'text/plain; charset=utf-8', 'retry-after': String(retryAfter) },
+  })
+}
+
+function rateLimitKey(request, configuredKey) {
+  if (typeof configuredKey === 'string' && configuredKey.startsWith('header:')) {
+    return request.headers.get(configuredKey.slice('header:'.length)) ?? 'unknown'
+  }
+  // Edge runtimes do not expose a transport SocketAddr. These headers are set
+  // by the supported platforms at their trusted ingress; explicit `header:`
+  // remains available for custom deployments.
+  return (
+    request.headers.get('cf-connecting-ip') ??
+    request.headers.get('x-vercel-forwarded-for') ??
+    request.headers.get('x-real-ip') ??
+    'unknown'
+  )
+}
+
+function normalizedRequestId(value) {
+  return typeof value === 'string' && value.length > 0 && value.length <= 128 ? value : null
+}
+
+function nowMilliseconds() {
+  return globalThis.performance?.now?.() ?? Date.now()
 }
 
 function withDefaultSecurityHeaders(response) {

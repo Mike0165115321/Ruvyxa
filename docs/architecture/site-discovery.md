@@ -188,8 +188,13 @@ pub struct ImageOptimizationOptions {
     pub keep_original: bool,               // keep original beside WebP, default true
     pub variant_widths: Vec<u32>,          // responsive breakpoints
     pub parallelism: usize,                // 0 = Rayon global pool
+    pub on_demand: OnDemandImageOptions,   // optional runtime resize policy
 }
 ```
+
+`on_demand` accepts `false`, `true`, or `{ enabled, maxWidth }`. It is disabled by default; when
+enabled, the dev/server runtime accepts only bounded same-origin public-image requests and emits
+WebP. `maxWidth` defaults to 3840 and config validation restricts it to 16–8192.
 
 ### Default variant widths
 
@@ -198,7 +203,7 @@ pub const DEFAULT_VARIANT_WIDTHS: [u32; 8] = [640, 750, 828, 1080, 1200, 1920, 2
 ```
 
 Must stay identical to `DEFAULT_DEVICE_WIDTHS` in `packages/@ruvyxa/react/src/image.tsx`. Test
-`tests/packages/react/image-variants.test.mjs` asserts agreement.
+`packages/@ruvyxa/react/test/image-variants.test.mjs` asserts agreement.
 
 ---
 

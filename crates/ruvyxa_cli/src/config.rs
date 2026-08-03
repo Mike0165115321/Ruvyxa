@@ -18,7 +18,7 @@ use ruvyxa_dev_server::{
     MAX_ACTION_RATE_LIMIT_WINDOW_SECS, MAX_API_BODY_LIMIT_BYTES,
     MAX_PLUGIN_RESPONSE_BODY_LIMIT_BYTES, TrustedProxies,
 };
-use ruvyxa_graph::{DiscoverOptions, RenderStrategy, RouteManifest, discover_routes};
+use ruvyxa_graph::{DiscoverOptions, I18nRouting, RenderStrategy, RouteManifest, discover_routes};
 
 use crate::*;
 
@@ -44,6 +44,7 @@ pub(crate) struct ProjectConfig {
     pub(crate) debug: DebugConfigOptions,
     #[serde(default, rename = "image")]
     pub(crate) images: ImageOptimizationOptions,
+    pub(crate) i18n: Option<I18nConfigOptions>,
     #[serde(default)]
     pub(crate) security: SecurityConfigOptions,
     #[serde(default)]
@@ -69,6 +70,34 @@ pub(crate) struct ProjectConfig {
 pub(crate) struct ServerConfigOptions {
     pub(crate) host: Option<String>,
     pub(crate) port: Option<u16>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct I18nConfigOptions {
+    pub(crate) locales: Vec<String>,
+    pub(crate) default_locale: String,
+    pub(crate) locale_param: Option<String>,
+    pub(crate) detect_locale: Option<bool>,
+    pub(crate) cookie: Option<String>,
+}
+
+impl I18nConfigOptions {
+    pub(crate) fn routing(&self) -> I18nRouting {
+        I18nRouting {
+            locales: self.locales.clone(),
+            default_locale: self.default_locale.clone(),
+            locale_param: self
+                .locale_param
+                .clone()
+                .unwrap_or_else(|| "lang".to_string()),
+            detect_locale: self.detect_locale.unwrap_or(true),
+            cookie: self
+                .cookie
+                .clone()
+                .unwrap_or_else(|| "RUVYXA_LOCALE".to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -266,6 +295,16 @@ impl ProjectConfig {
             )?;
         }
         validate_trusted_proxy_ips(&self.security.trusted_proxy_ips)?;
+        if let Some(i18n) = &self.i18n {
+            validate_i18n(i18n)?;
+        }
+        if self.images.on_demand.enabled()
+            && !(16..=8192).contains(&self.images.on_demand.max_width())
+        {
+            anyhow::bail!(
+                "RUV1602 config field `image.onDemand.maxWidth` must be between 16 and 8192"
+            );
+        }
         parse_jsx_runtime(self.build.jsx_runtime.as_deref())?;
         Ok(())
     }
@@ -280,11 +319,90 @@ impl ProjectConfig {
     }
 
     pub(crate) fn discover_options(&self, root: &Path) -> DiscoverOptions {
-        DiscoverOptions::new(root.join(self.app_dir())).with_rendering_defaults(
-            self.rendering.default_strategy,
-            self.rendering.default_revalidate,
-        )
+        DiscoverOptions::new(root.join(self.app_dir()))
+            .with_rendering_defaults(
+                self.rendering.default_strategy,
+                self.rendering.default_revalidate,
+            )
+            .with_i18n(self.i18n.as_ref().map(I18nConfigOptions::routing))
     }
+}
+
+pub(crate) fn validate_i18n(config: &I18nConfigOptions) -> anyhow::Result<()> {
+    if config.locales.is_empty() || config.locales.len() > 32 {
+        anyhow::bail!("RUV1602 config field `i18n.locales` must contain between 1 and 32 locales");
+    }
+    let mut normalized = std::collections::BTreeSet::new();
+    for locale in &config.locales {
+        if !valid_locale(locale) {
+            anyhow::bail!("RUV1602 config field `i18n.locales` contains invalid locale `{locale}`");
+        }
+        if !normalized.insert(locale.to_ascii_lowercase()) {
+            anyhow::bail!(
+                "RUV1602 config field `i18n.locales` contains duplicate locale `{locale}`"
+            );
+        }
+    }
+    if !config
+        .locales
+        .iter()
+        .any(|locale| locale.eq_ignore_ascii_case(&config.default_locale))
+    {
+        anyhow::bail!(
+            "RUV1602 config field `i18n.defaultLocale` must be included in `i18n.locales`"
+        );
+    }
+    let locale_param = config.locale_param.as_deref().unwrap_or("lang");
+    if !valid_identifier(locale_param) {
+        anyhow::bail!(
+            "RUV1602 config field `i18n.localeParam` must be a JavaScript-style identifier"
+        );
+    }
+    let cookie = config.cookie.as_deref().unwrap_or("RUVYXA_LOCALE");
+    if cookie.is_empty()
+        || cookie.len() > 128
+        || !cookie.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
+    {
+        anyhow::bail!("RUV1602 config field `i18n.cookie` must be a valid HTTP cookie name");
+    }
+    Ok(())
+}
+
+fn valid_locale(locale: &str) -> bool {
+    !locale.is_empty()
+        && locale.len() <= 35
+        && locale.split('-').all(|part| {
+            !part.is_empty()
+                && part.len() <= 8
+                && part.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        })
+}
+
+fn valid_identifier(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    bytes
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || matches!(byte, b'_' | b'$'))
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$'))
 }
 
 pub(crate) fn validate_positive_limit<T>(field: &str, value: Option<T>) -> anyhow::Result<()>

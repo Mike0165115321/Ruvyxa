@@ -83,6 +83,10 @@ pub(crate) fn dev_server_config(
     server.plugin_head = collect_plugin_head(&config.plugins);
     server.default_render_strategy = config.rendering.default_strategy;
     server.default_revalidate = config.rendering.default_revalidate;
+    server.i18n = config.i18n.as_ref().map(I18nConfigOptions::routing);
+    server.dynamic_images.enabled = config.images.on_demand.enabled();
+    server.dynamic_images.max_width = config.images.on_demand.max_width();
+    server.dynamic_images.default_quality = config.images.quality.clamp(1, 100);
     Ok(server)
 }
 
@@ -146,6 +150,10 @@ pub(crate) fn production_server_config(
     server.plugin_head = collect_plugin_head(&config.plugins);
     server.default_render_strategy = config.rendering.default_strategy;
     server.default_revalidate = config.rendering.default_revalidate;
+    server.i18n = config.i18n.as_ref().map(I18nConfigOptions::routing);
+    server.dynamic_images.enabled = config.images.on_demand.enabled();
+    server.dynamic_images.max_width = config.images.on_demand.max_width();
+    server.dynamic_images.default_quality = config.images.quality.clamp(1, 100);
     Ok(server)
 }
 
@@ -343,11 +351,10 @@ pub(crate) fn command_runtime(command: &Command) -> Option<CliRuntime> {
     match command {
         Command::Dev(args) | Command::Start(args) | Command::Preview(args) => args.runtime,
         Command::Build(args) => args.runtime,
-        Command::Check(args)
-        | Command::Routes(args)
-        | Command::Clean(args)
-        | Command::TestParity(args) => args.runtime,
+        Command::Check(args) | Command::Clean(args) | Command::TestParity(args) => args.runtime,
+        Command::Routes(args) => args.runtime,
         Command::Analyze(args) => args.runtime,
+        Command::Add(args) => args.runtime,
         Command::Doctor(args) => args.runtime,
         Command::Trace(_) | Command::Bench(_) | Command::Plugin(_) => None,
     }

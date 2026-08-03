@@ -1023,8 +1023,8 @@ When a build or check reports a boundary diagnostic, avoid moving directives unt
 is understood:
 
 ```bash
-ruvyxa analyze --format human
-ruvyxa trace /the-affected-route
+npm run analyze -- --format human
+npm run trace -- /the-affected-route
 npm run check
 ```
 

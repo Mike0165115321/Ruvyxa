@@ -5,6 +5,7 @@ import {
   IMMUTABLE_CACHE_CONTROL,
   PUBLIC_ASSET_CACHE_CONTROL,
   publicAssetGlobs,
+  runtimeBuildPolicy,
   validateBuildContext,
 } from '@ruvyxa/core'
 
@@ -115,7 +116,7 @@ export function firebaseAdapter(options: FirebaseAdapterOptions = {}): Adapter {
           {
             kind: 'function',
             path: 'deploy/firebase/functions',
-            handlerSource: firebaseHandlerSource(functionName, region),
+            handlerSource: firebaseHandlerSource(functionName, region, runtimeBuildPolicy(ctx)),
           },
           {
             kind: 'file',
@@ -153,7 +154,11 @@ export function firebaseAdapter(options: FirebaseAdapterOptions = {}): Adapter {
 }
 
 /** Firebase Functions v2 wrapper around the shared Ruvyxa serverless handler. */
-function firebaseHandlerSource(functionName: string, region: string): string {
+function firebaseHandlerSource(
+  functionName: string,
+  region: string,
+  runtimePolicy: unknown,
+): string {
   return `import { onRequest } from 'firebase-functions/v2/https';
 import { createHandler, prerenderRelativePath } from './serverless-handler.mjs';
 import { loadRouteModule } from './route-modules.mjs';
@@ -161,6 +166,8 @@ import manifest from './manifest.mjs';
 import { readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+
+const runtimePolicy = ${JSON.stringify(runtimePolicy ?? {})};
 
 const prerenderDir = path.join(import.meta.dirname, 'prerender');
 const isrCacheDir = path.join(os.tmpdir(), 'ruvyxa-isr-cache');
@@ -173,6 +180,8 @@ const readEntry = (htmlPath, revalidate) => {
 
 const handler = createHandler({
   routes: manifest.routes,
+  middleware: runtimePolicy.middleware,
+  i18n: manifest.i18n,
   importPage: loadRouteModule,
   importApi: loadRouteModule,
   readPrerendered: (pathname, revalidate = 60) => {

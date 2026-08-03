@@ -150,9 +150,9 @@ This hook manages browser loading state; it does not make the server cache share
 
 ## Verification
 
-Use ruvyxa check, ruvyxa analyze, and ruvyxa trace <route> to verify the surrounding route. Use
-ruvyxa bench for workload-specific measurements. The repository does not establish universal
-latency, throughput, ROI, or deployment timelines.
+Use `npm run check`, `npm run analyze`, and `npm run trace -- <route>` to verify the surrounding
+route. Use `npm run bench` for workload-specific measurements. The repository does not establish
+universal latency, throughput, ROI, or deployment timelines.
 
 ---
 

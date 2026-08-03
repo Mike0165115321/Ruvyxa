@@ -1198,8 +1198,8 @@ worker to run the action. `security.actionLimit`, `security.actionRateLimit`, sa
 Fetch Metadata checks, and trusted-proxy settings therefore belong in the deployment/security
 review; they are not replaced by a schema's `parse` method.
 
-Use `ruvyxa analyze --format human` to check that action dependencies stay out of the client graph,
-then use `npm run check` for the project-level type/parity gate. Do not document or call a
+Use `npm run analyze -- --format human` to check that action dependencies stay out of the client
+graph, then use `npm run check` for the project-level type/parity gate. Do not document or call a
 `'use server'` directive as the action registration mechanism: route-local `action.ts`/`action.js`
 and exported action values are the current route convention.
 

@@ -200,6 +200,67 @@ describe('vercelAdapter', () => {
     assert.throws(() => vercelAdapter({ regions: [''] }), /RUV2001/)
   })
 
+  it('emits a Web-standard Edge Function with validated runtime policy', () => {
+    const adapter = vercelAdapter({ edge: true, regions: ['sin1'], projectOutput: false })
+    const output = adapter.build({
+      root: '.',
+      outDir: '.ruvyxa',
+      buildInfo: {
+        runtime: {
+          middleware: { builtin: { timing: true, rate: { max: 10, window: 60 } } },
+        },
+      },
+    })
+    assert.equal(output.target, 'edge')
+    assert.deepEqual(adapter.supports, ['ssr', 'ssg', 'csr', 'api'])
+
+    const vcConfigArtifact = output.artifacts?.find((item) => item.path.endsWith('.vc-config.json'))
+    const vcConfig = JSON.parse(String(vcConfigArtifact?.contents ?? '{}'))
+    assert.deepEqual(vcConfig, {
+      runtime: 'edge',
+      entrypoint: 'index.mjs',
+      regions: ['sin1'],
+    })
+
+    const functionArtifact = output.artifacts?.find((item) => item.kind === 'function')
+    const source = String(functionArtifact?.handlerSource ?? '')
+    assert.match(source, /middleware: runtimePolicy\.middleware/)
+    assert.match(source, /i18n: manifest\.i18n/)
+    assert.match(source, /supportedStrategies: \['ssr', 'ssg', 'csr', 'api'\]/)
+    assert.doesNotMatch(source, /node:/)
+    assert.doesNotMatch(source, /Buffer|process\.|readFileSync/)
+
+    assert.throws(() => vercelAdapter({ edge: true, runtime: 'nodejs22.x' }), /RUV2001/)
+    assert.throws(() => vercelAdapter({ edge: true, maxDuration: 30 }), /RUV2001/)
+  })
+
+  it('configures Vercel native same-origin image optimization on demand', () => {
+    const output = vercelAdapter({ projectOutput: false }).build({
+      root: '.',
+      outDir: '.ruvyxa',
+      buildInfo: {
+        runtime: {
+          image: { onDemand: true, maxWidth: 2048, sizes: [640, 828, 2048, 3840] },
+        },
+      },
+    })
+    const configArtifact = output.artifacts?.find((item) =>
+      item.path.endsWith('/output/config.json'),
+    )
+    const config = JSON.parse(String(configArtifact?.contents ?? '{}'))
+    assert.deepEqual(config.images, {
+      sizes: [640, 828, 2048],
+      domains: [],
+      minimumCacheTTL: 86400,
+      formats: ['image/avif', 'image/webp'],
+      localPatterns: [{ pathname: '^/(?!__ruvyxa/).*$' }],
+    })
+    const functionArtifact = output.artifacts?.find((item) => item.kind === 'function')
+    const source = String(functionArtifact?.handlerSource ?? '')
+    assert.match(source, /new URL\('\/_vercel\/image'/)
+    assert.match(source, /onDemand === true \? optimizeImage/)
+  })
+
   it('forwards streamed requests, repeated Set-Cookie headers, and binary responses', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'ruvyxa-vercel-handler-'))
     try {

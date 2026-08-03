@@ -210,3 +210,15 @@ connections.
   without process replacement.
 - The pool size fan-out to >1 workers only happens when the registry declares at least one HTTP
   hook. A build-only plugin sees a single worker regardless of the configured pool size.
+
+# Fetch-native parity boundary
+
+The build serializes the validated built-in policy into `build.json.runtime.middleware`.
+`adapter-runner.mjs` passes that immutable metadata through `BuildContext`; generated handlers embed
+it as inert JSON and compile an equivalent Web API stack. This path does not execute project config
+at runtime and does not ship the Tower implementation or Node polyfills to edge isolates.
+
+The Fetch-native limiter uses the native stack's 10,000-key bound. Platform-provided ingress IP
+headers are used for the default edge identity because Fetch exposes no transport socket; custom
+hosts should select an explicit trusted `header:<name>` key. CORS preflight remains outside rate
+limiting, matching Tower layer order.

@@ -65,19 +65,26 @@ type RuvyxaConfig = {
     port?: number
   }
   site?: {
-    sitemap?: {
-      defaults?: {
-        changefreq?: 'always' | 'hourly' | 'daily' | 'weekly' | 'monthly' | 'yearly' | 'never'
-        priority?: number
-      }
-      entries?: Array<{
-        path: string
-        changefreq?: string
-        priority?: number
-        lastmod?: string
-        images?: string[]
-      }>
-    }
+    url?: string
+    sitemap?:
+      | boolean
+      | {
+          exclude?: string[]
+          additionalPaths?: string[]
+          defaults?: {
+            changeFrequency?:
+              'always' | 'hourly' | 'daily' | 'weekly' | 'monthly' | 'yearly' | 'never'
+            priority?: number
+          }
+          entries?: Array<{
+            url: string
+            changeFrequency?: string
+            priority?: number
+            lastModified?: string | Date
+            images?: string[]
+          }>
+        }
+    robots?: boolean | { rules?: unknown; sitemap?: string | string[]; host?: string }
   }
   render?: {
     strategy?: 'ssr' | 'ssg' | 'isr' | 'csr' | 'ppr'
@@ -114,6 +121,14 @@ type RuvyxaConfig = {
     keepOriginal?: boolean
     variantWidths?: number[]
     workers?: number
+    onDemand?: boolean | { enabled?: boolean; maxWidth?: number }
+  }
+  i18n?: {
+    locales: string[]
+    defaultLocale: string
+    localeParam?: string
+    detectLocale?: boolean
+    cookie?: string
   }
   security?: {
     actionLimit?: number
@@ -129,13 +144,9 @@ type RuvyxaConfig = {
     workers?: number
     timeoutMs?: number
   }
-  plugins?: Array<{
-    name: string
-    options?: any
-    head?: Array<{ tag: string; attrs?: Record<string, string>; content?: string }>
-  }>
+  plugins?: RuvyxaPlugin[]
   adapter?: Adapter
-  adapterOptions?: Record<string, any>
+  adapterOptions?: Record<string, unknown>
 }
 ```
 
@@ -164,6 +175,7 @@ struct ProjectConfig {
     debug: DebugConfigOptions,
     #[serde(default, rename = "image")]
     images: ImageOptimizationOptions,
+    i18n: Option<I18nConfigOptions>,
     #[serde(default)]
     security: SecurityConfigOptions,
     #[serde(default)]
@@ -431,8 +443,8 @@ export default config({
 ```
 
 ```bash
-ruvyxa doctor --adapter node
-ruvyxa build --adapter node
+npm run doctor -- --adapter node
+npm run build -- --adapter node
 ```
 
 เมื่อไม่ได้เลือกผ่าน config object หรือ `--adapter` CLI จะตรวจ `RUVYXA_ADAPTER` และ environment ของ
@@ -479,7 +491,7 @@ export default config({
   build: { split: 'manual', treeShake: true },
   image: { quality: 90, lossless: true },
   security: { sameOrigin: true },
-  // เลือก named adapter ด้วย: ruvyxa build --adapter vercel
+  // เลือก named adapter ด้วย: npm run build -- --adapter vercel
 })
 ```
 
@@ -490,7 +502,7 @@ export default config({
 หากต้องการตรวจว่า Config ใช้ได้กับกฎปัจจุบัน ให้รัน:
 
 ```bash
-ruvyxa doctor
+npm run doctor
 ```
 
 CLI ปัจจุบันไม่มี flag `--config` สำหรับพิมพ์ configuration ที่ merge แล้ว; `doctor` จะตรวจ
@@ -546,30 +558,30 @@ adapter output ไม่ถูกต้อง ไม่ควรอนุมา�
 | RUV1602    | Invalid config structure          | plugin ชื่อซ้ำหรือชนิดข้อมูลไม่ถูกต้อง  | ตรวจ schema และชื่อ plugin                |
 | RUV1603    | Invalid adapter definition/output | adapter contract ไม่ถูกต้อง             | ตรวจ `build(context)` และผลลัพธ์          |
 
-| ปัญหาทั่วไป                    | สาเหตุ                                             | วิธีแก้                                                        |
-| ------------------------------ | -------------------------------------------------- | -------------------------------------------------------------- |
-| Config ไม่ถูกโหลด              | syntax error ในไฟล์                                | ตรวจ `config()` และ `,`                                        |
-| `site.url` error               | URL ไม่ใช่ origin                                  | ใช้เฉพาะ origin (`https://x.com` ไม่ใช่ `https://x.com/path`)  |
-| Port ถูกใช้                    | port ซ้ำ                                           | เปลี่ยน `server.port`                                          |
-| Unknown field                  | camelCase ผิด                                      | `sourcemap` ไม่ใช่ `sourceMap`                                 |
-| Plugin ไม่ทำงาน                | ชื่อ plugin ไม่ถูกต้อง                             | ตรวจชื่อในตาราง                                                |
-| Adapter auto-detect ผิด        | env var ไม่ตั้ง                                    | ใช้ `ruvyxa doctor/build --adapter <name>` หรือ adapter object |
-| CSS entries ไม่ inject         | path ผิด                                           | ตรวจว่า path มีอยู่จริง                                        |
-| Image optimization ไม่ได้      | image option ไม่ถูกต้องหรือ source ไม่ใช่ PNG/JPEG | ตรวจ `image.optimize`, `image.quality` และ build output        |
-| Security headers ไม่มา         | `headers: false`                                   | ตั้ง `headers: true`                                           |
-| middleware rate limit ไม่ work | ไม่ได้กำหนด `max`/`window`                         | เพิ่ม rate config                                              |
+| ปัญหาทั่วไป                    | สาเหตุ                                             | วิธีแก้                                                       |
+| ------------------------------ | -------------------------------------------------- | ------------------------------------------------------------- |
+| Config ไม่ถูกโหลด              | syntax error ในไฟล์                                | ตรวจ `config()` และ `,`                                       |
+| `site.url` error               | URL ไม่ใช่ origin                                  | ใช้เฉพาะ origin (`https://x.com` ไม่ใช่ `https://x.com/path`) |
+| Port ถูกใช้                    | port ซ้ำ                                           | เปลี่ยน `server.port`                                         |
+| Unknown field                  | camelCase ผิด                                      | `sourcemap` ไม่ใช่ `sourceMap`                                |
+| Plugin ไม่ทำงาน                | ชื่อ plugin ไม่ถูกต้อง                             | ตรวจชื่อในตาราง                                               |
+| Adapter auto-detect ผิด        | env var ไม่ตั้ง                                    | ใช้ `npm run doctor -- --adapter <name>` หรือ adapter object  |
+| CSS entries ไม่ inject         | path ผิด                                           | ตรวจว่า path มีอยู่จริง                                       |
+| Image optimization ไม่ได้      | image option ไม่ถูกต้องหรือ source ไม่ใช่ PNG/JPEG | ตรวจ `image.optimize`, `image.quality` และ build output       |
+| Security headers ไม่มา         | `headers: false`                                   | ตั้ง `headers: true`                                          |
+| middleware rate limit ไม่ work | ไม่ได้กำหนด `max`/`window`                         | เพิ่ม rate config                                             |
 
 ### Debug Config
 
 ```bash
 # ดูว่า config ไหนถูกโหลด
-RUVYXA_DEBUG=config ruvyxa dev
+RUVYXA_DEBUG=config npm run dev
 
 # ดู validation steps
-RUVYXA_DEBUG=validate ruvyxa dev
+RUVYXA_DEBUG=validate npm run dev
 
 # ดู plugin loading
-RUVYXA_DEBUG=plugin ruvyxa dev
+RUVYXA_DEBUG=plugin npm run dev
 ```
 
 ---
@@ -599,7 +611,7 @@ RUVYXA_DEBUG=plugin ruvyxa dev
 
 6. **ตรวจสอบ**
    - `npm run doctor` — ดูผล validation
-   - `npm run doctor --json` — ดู JSON output
+   - `npm run doctor -- --json` — ดู JSON output
 
 ---
 
@@ -648,9 +660,9 @@ boundary: ใช้ relative directory ภายในแอป ไม่ใช�
 overrides ของตัวเอง จึงไม่ควรเหมารวม precedence นี้ไปยัง config fields อื่น
 
 ```bash
-ruvyxa dev --port 4000 --runtime bun
-ruvyxa build --target static --adapter static
-ruvyxa doctor --adapter cloudflare --json
+npm run dev -- --port 4000 --runtime bun
+npm run build -- --target static --adapter static
+npm run doctor -- --adapter cloudflare --json
 ```
 
 ### Validate ก่อน Deploy
@@ -659,8 +671,8 @@ ruvyxa doctor --adapter cloudflare --json
 route/import boundaries เพราะรับผิดชอบคนละเรื่อง จึงไม่แทนกัน:
 
 ```bash
-ruvyxa doctor
-ruvyxa analyze --format human
+npm run doctor
+npm run analyze -- --format human
 npm run check
 ```
 
@@ -673,3 +685,22 @@ trusted-proxy IP/CIDR ที่ถูกต้อง หากค่าถูก
 ไฟล์ `ruvyxa.config.ts` จะถูก render เป็น JSON แล้ว CLI จึง parse และ validate ต่อ โดย struct ของ
 config ฝั่ง Rust ใช้ `deny_unknown_fields`; field ที่ไม่รองรับ เช่น `experimentalDocker` จะถูก
 ปฏิเสธด้วย diagnostic ของ config renderer (`RUV1602`) ทำให้ typo ไม่ถูกมองว่าเป็น setting ที่รองรับ
+
+# Config ขั้นสูงสำหรับ locale และรูปภาพ
+
+```ts
+export default config({
+  i18n: {
+    locales: ['en', 'th'],
+    defaultLocale: 'th',
+    localeParam: 'lang',
+    detectLocale: true,
+    cookie: 'RUVYXA_LOCALE',
+  },
+  image: { onDemand: { enabled: true, maxWidth: 3840 } },
+})
+```
+
+ระบบตรวจรูปแบบ locale, ปฏิเสธค่าซ้ำแบบไม่สนตัวพิมพ์ และบังคับให้ `defaultLocale` อยู่ใน `locales`
+ส่วน `localeParam` ต้องเป็น JavaScript identifier ค่า width สูงสุดของ on-demand image
+ต้องอยู่ระหว่าง 16–8192 pixels และ endpoint นี้ปิดเป็นค่าเริ่มต้น

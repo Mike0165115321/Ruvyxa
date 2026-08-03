@@ -1,10 +1,11 @@
 # คำสั่ง CLI
 
 แพ็กเกจ `ruvyxa` ติดตั้ง Ruvyxa CLI โดยนิยามคำสั่งและ flag อยู่ที่ `crates/ruvyxa_cli/src/main.rs`
-ดังนั้นผลจาก `--help` ของ binary ที่ติดตั้งคือข้อมูลอ้างอิงของ flag ที่ถูกต้องที่สุด
+ดังนั้นผลจาก `--help` ของ binary ที่ติดตั้งคือข้อมูลอ้างอิงของ flag ที่ถูกต้องที่สุด บรรทัด syntax
+ด้านล่างแสดง CLI ภายใน แต่ใน application ให้ใช้ `npm run` script ที่ตรงกับตัวอย่างนั้น
 
 ```bash
-ruvyxa --help
+npm run
 ```
 
 > Flag เป็นของแต่ละคำสั่ง ไม่ใช่ global flag: ไม่มี `--verbose`, `--no-color`, `--open` หรือ flag
@@ -49,9 +50,9 @@ ruvyxa dev [--root <PATH>] [--host <HOST>] [--port <PORT>] [--runtime <node|bun>
 และ server
 
 ```bash
-ruvyxa dev
-ruvyxa dev --port 4000
-ruvyxa dev --root ../other-app --runtime bun
+npm run dev
+npm run dev -- --port 4000
+npm run dev -- --root ../other-app --runtime bun
 ```
 
 ## `ruvyxa build`
@@ -66,9 +67,9 @@ ruvyxa build [--root <PATH>] [--target <node|bun|edge|static>] \
 `firebase` และ `aws` หรือใช้ชื่อ npm package ที่ถูกต้องได้
 
 ```bash
-ruvyxa build
-ruvyxa build --target static
-ruvyxa build --adapter vercel
+npm run build
+npm run build -- --target static
+npm run build -- --adapter vercel
 ```
 
 โฟลเดอร์ output กำหนดด้วย `outDir` (starter ใช้ `.ruvyxa`) ดูรายละเอียดขั้นตอน build ได้ที่
@@ -85,7 +86,7 @@ ruvyxa check [--root <PATH>] [--runtime <node|bun>]
 
 ```bash
 npm run check
-ruvyxa check --runtime bun
+npm run check -- --runtime bun
 ```
 
 ## `ruvyxa start` และ `ruvyxa preview`
@@ -101,7 +102,7 @@ ruvyxa preview [--root <PATH>] [--host <HOST>] [--port <PORT>] [--runtime <node|
 ```bash
 npm run build
 npm run start
-ruvyxa preview --port 4173
+npm run preview -- --port 4173
 ```
 
 ## `ruvyxa routes`
@@ -113,7 +114,7 @@ ruvyxa routes [--root <PATH>] [--runtime <node|bun>]
 แสดง routes ที่ค้นพบจาก application directory ตาม config ใช้ตรวจ route paths หรือหา conflict
 
 ```bash
-ruvyxa routes
+npm run routes
 ```
 
 ## `ruvyxa analyze`
@@ -127,8 +128,8 @@ ruvyxa analyze [--root <PATH>] [--runtime <node|bun>] \
 output และ `--output` เขียนรายงานตาม format ที่เลือกลงไฟล์
 
 ```bash
-ruvyxa analyze
-ruvyxa analyze --format sarif --output reports/ruvyxa.sarif
+npm run analyze
+npm run analyze -- --format sarif --output reports/ruvyxa.sarif
 ```
 
 ## `ruvyxa doctor`
@@ -142,8 +143,8 @@ ruvyxa doctor [--root <PATH>] [--target <node|bun|edge|static>] \
 report แบบ JSON
 
 ```bash
-ruvyxa doctor
-ruvyxa doctor --adapter cloudflare --json
+npm run doctor
+npm run doctor -- --adapter cloudflare --json
 ```
 
 ## `ruvyxa clean`
@@ -155,7 +156,7 @@ ruvyxa clean [--root <PATH>] [--runtime <node|bun>]
 ลบเฉพาะ generated build directory ตาม config ของ Ruvyxa ไม่ลบ dependencies หรือไฟล์ project อื่น
 
 ```bash
-ruvyxa clean
+npm run clean
 ```
 
 ## `ruvyxa trace`
@@ -167,8 +168,8 @@ ruvyxa trace <ROUTE> [--root <PATH>]
 ต้องระบุ `<ROUTE>` คำสั่งจะสร้าง manifest ปัจจุบันและแสดง entry ที่ตรงกัน
 
 ```bash
-ruvyxa trace /
-ruvyxa trace /blog/[slug]
+npm run trace -- /
+npm run trace -- /blog/[slug]
 ```
 
 ## `ruvyxa bench`
@@ -180,8 +181,8 @@ ruvyxa bench [--root <PATH>] [--samples <COUNT>] [--json]
 ค่าเริ่มต้นของ `--samples` คือ `3`; ใช้ `--json` เมื่อให้ CI หรือเครื่องมืออื่นอ่านผล
 
 ```bash
-ruvyxa bench --samples 5
-ruvyxa bench --json
+npm run bench -- --samples 5
+npm run bench -- --json
 ```
 
 ## `ruvyxa test:parity`
@@ -194,8 +195,8 @@ ruvyxa test:parity [--root <PATH>] [--runtime <node|bun>]
 เดียวกับที่ `ruvyxa check` เรียกใช้
 
 ```bash
-ruvyxa test:parity
-ruvyxa parity
+npm run test:parity
+npm run test:parity
 ```
 
 ## `ruvyxa plugin create`
@@ -208,45 +209,58 @@ ruvyxa plugin create <NAME> [--root <PATH>] [--dir <PATH>]
 ชื่อเดียวกับ plugin
 
 ```bash
-ruvyxa plugin create my-plugin
-ruvyxa plugin create @acme/analytics --dir packages/analytics
+npm run plugin -- create my-plugin
+npm run plugin -- create @acme/analytics --dir packages/analytics
 ```
 
 ดู TypeScript plugin contract ได้ที่ [Plugins](./14-plugins.md)
 
 ## Scripts ใน Minimal Starter
 
-Minimal starter ปัจจุบันมี scripts ดังนี้
+Application starter ทุกแบบมี scripts ดังนี้
 
 ```json
 {
   "dev": "ruvyxa dev",
   "build": "ruvyxa build",
   "start": "ruvyxa start",
+  "preview": "ruvyxa preview",
   "typecheck": "tsc --noEmit",
-  "check": "ruvyxa check"
+  "check": "ruvyxa check",
+  "routes": "ruvyxa routes",
+  "routes:json": "ruvyxa routes --json",
+  "analyze": "ruvyxa analyze",
+  "analyze:html": "ruvyxa analyze --html",
+  "add": "ruvyxa add",
+  "doctor": "ruvyxa doctor",
+  "clean": "ruvyxa clean",
+  "trace": "ruvyxa trace",
+  "bench": "ruvyxa bench",
+  "test:parity": "ruvyxa test:parity",
+  "plugin": "ruvyxa plugin"
 }
 ```
 
-คำสั่งที่ไม่มี script ให้เรียกผ่าน `ruvyxa` โดยตรง เช่น `ruvyxa analyze --format json`
+ใช้ `npm run <script>` จากใน application directory และใส่ argument หลัง `--` เพื่อให้ npm ส่งต่อเข้า
+Ruvyxa เช่น `npm run analyze -- --format json`
 
 ## Recipes สำหรับใช้งานจริง
 
-ตัวอย่างด้านล่างใช้คำสั่ง CLI โดยตรงสำหรับคำสั่งที่ minimal starter ยังไม่มี script ให้ เปลี่ยน
-`../my-app` เป็น path ของโปรเจกต์ตามจริงได้
+ตัวอย่างด้านล่างใช้ package scripts ของ starter ให้เปลี่ยน `../my-app` เป็น path ของโปรเจกต์
+ตามจริงได้
 
 ### เปิดโปรเจกต์บน Port อื่น
 
 เมื่อมี service อื่นใช้ port เดิมอยู่ ให้ระบุ port ที่ต้องการ:
 
 ```bash
-ruvyxa dev --port 4000
+npm run dev -- --port 4000
 ```
 
 หากต้องการให้เครื่องอื่นในเครือข่ายเข้าถึงได้ ให้ระบุ host ด้วย:
 
 ```bash
-ruvyxa dev --host 0.0.0.0 --port 4000
+npm run dev -- --host 0.0.0.0 --port 4000
 ```
 
 เปิด terminal นี้ค้างไว้ระหว่างพัฒนา เพราะ HMR และ route watching ทำงานอยู่ใน process เดียวกัน
@@ -256,9 +270,9 @@ ruvyxa dev --host 0.0.0.0 --port 4000
 ใช้ `--root` เพื่อสั่ง CLI กับ project อื่นโดยไม่ต้อง `cd`:
 
 ```bash
-ruvyxa dev --root ../my-app
-ruvyxa routes --root ../my-app
-ruvyxa analyze --root ../my-app --format human
+npm run dev -- --root ../my-app
+npm run routes -- --root ../my-app
+npm run analyze -- --root ../my-app --format human
 ```
 
 `--root` มีผลต่อคำสั่งนั้นเท่านั้น ใน script จึงควรส่ง flag นี้ให้ทุกคำสั่งที่ต้องใช้
@@ -268,9 +282,9 @@ ruvyxa analyze --root ../my-app --format human
 หาก project ตั้งค่า Node อยู่ แต่ต้องการทดสอบด้วย Bun ให้ใช้ runtime override ของคำสั่งนั้น:
 
 ```bash
-ruvyxa dev --runtime bun
-ruvyxa build --runtime bun
-ruvyxa check --runtime bun
+npm run dev -- --runtime bun
+npm run build -- --runtime bun
+npm run check -- --runtime bun
 ```
 
 คำสั่งนี้ไม่แก้ `ruvyxa.config.ts` และไม่เปลี่ยน environment ถาวร
@@ -287,8 +301,8 @@ npm run start
 หากต้องการระบุ target อย่างชัดเจน:
 
 ```bash
-ruvyxa build --target node
-ruvyxa start --port 3001
+npm run build -- --target node
+npm run start -- --port 3001
 ```
 
 `start` และ `preview` อ่าน build ที่มีอยู่แล้ว จึงไม่ build ให้อัตโนมัติ
@@ -298,8 +312,8 @@ ruvyxa start --port 3001
 ใช้ static target เมื่อ routes และ adapter ที่เลือก รองรับผลลัพธ์ของแอป:
 
 ```bash
-ruvyxa build --target static --adapter static
-ruvyxa preview --port 4173
+npm run build -- --target static --adapter static
+npm run preview -- --port 4173
 ```
 
 หาก route strategy ไม่รองรับ platform adapter ระบบจะรายงาน incompatibility ระหว่าง build ดู
@@ -310,9 +324,9 @@ ruvyxa preview --port 4173
 `--adapter` เหมาะกับ CI หรือการทดลอง target โดยไม่ต้องแก้ config:
 
 ```bash
-ruvyxa build --adapter vercel
-ruvyxa build --adapter cloudflare
-ruvyxa build --adapter @acme/ruvyxa-adapter-node
+npm run build -- --adapter vercel
+npm run build -- --adapter cloudflare
+npm run build -- --adapter @acme/ruvyxa-adapter-node
 ```
 
 ตัวอย่างสุดท้ายเป็นชื่อ package ซึ่งต้อง resolve ได้ใน environment ที่รัน build
@@ -329,9 +343,9 @@ npm run check
 รันเฉพาะ parity:
 
 ```bash
-ruvyxa test:parity
+npm run test:parity
 # alias ที่เท่ากัน
-ruvyxa parity
+npm run test:parity
 ```
 
 ### ตรวจ URL หรือ Route ที่มีปัญหา
@@ -339,9 +353,9 @@ ruvyxa parity
 เริ่มจากดู route table แล้วตรวจ route ที่สนใจ:
 
 ```bash
-ruvyxa routes
-ruvyxa trace /about
-ruvyxa trace /blog/[slug]
+npm run routes
+npm run trace -- /about
+npm run trace -- /blog/[slug]
 ```
 
 `trace` รับ route pattern ไม่ใช่ชื่อไฟล์ สำหรับ dynamic page ให้ใช้ `/blog/[slug]` ไม่ใช่ URL จริง
@@ -352,8 +366,8 @@ ruvyxa trace /blog/[slug]
 ใช้ JSON เมื่อโปรแกรมอื่นจะอ่านผล และใช้ SARIF เมื่อ code-scanning tool รองรับ:
 
 ```bash
-ruvyxa analyze --format json --output reports/ruvyxa-analysis.json
-ruvyxa analyze --format sarif --output reports/ruvyxa.sarif
+npm run analyze -- --format json --output reports/ruvyxa-analysis.json
+npm run analyze -- --format sarif --output reports/ruvyxa.sarif
 ```
 
 สร้าง directory ปลายทางก่อนหากยังไม่มี และใช้ `--format human` เมื่ออยากอ่านใน terminal
@@ -363,9 +377,9 @@ ruvyxa analyze --format sarif --output reports/ruvyxa.sarif
 รัน `doctor` ก่อน deploy ครั้งแรก หรือหลังเปลี่ยน runtime/adapter:
 
 ```bash
-ruvyxa doctor
-ruvyxa doctor --target edge
-ruvyxa doctor --adapter cloudflare --json
+npm run doctor
+npm run doctor -- --target edge
+npm run doctor -- --adapter cloudflare --json
 ```
 
 `--adapter` ตรวจ adapter contract โดยไม่สร้าง build artifacts
@@ -375,8 +389,8 @@ ruvyxa doctor --adapter cloudflare --json
 เมื่อต้องการสร้าง local build ใหม่ ให้ล้าง output ของ Ruvyxa แล้ว build อีกครั้ง:
 
 ```bash
-ruvyxa clean
-ruvyxa build
+npm run clean
+npm run build
 ```
 
 คำสั่งนี้จำกัดอยู่ที่ output directory ตาม config ไม่ลบ `node_modules`, source files หรือ cache
@@ -387,8 +401,8 @@ directory อื่นโดยพลการ
 ระบุจำนวน sample ให้คงที่เมื่อเปรียบเทียบการเปลี่ยนแปลงสองชุด:
 
 ```bash
-ruvyxa bench --samples 5
-ruvyxa bench --samples 5 --json
+npm run bench -- --samples 5
+npm run bench -- --samples 5 --json
 ```
 
 ควรเปรียบเทียบในเครื่อง, dependency state และจำนวน sample เดียวกัน เพราะ benchmark เป็นสัญญาณ เฉพาะ
@@ -399,13 +413,13 @@ environment ที่รัน
 กำหนด directory ของ package ได้อย่างชัดเจน:
 
 ```bash
-ruvyxa plugin create analytics --root . --dir packages/analytics
+npm run plugin -- create analytics --root . --dir packages/analytics
 ```
 
 หากเป็น standalone project ใช้ค่าเริ่มต้นได้:
 
 ```bash
-ruvyxa plugin create my-plugin
+npm run plugin -- create my-plugin
 ```
 
 จากนั้นดู [Plugins](./14-plugins.md) เพื่อเขียนและ register package ที่สร้างขึ้น
@@ -416,8 +430,8 @@ ruvyxa plugin create my-plugin
 
 ```bash
 npm run check
-ruvyxa analyze --format sarif --output reports/ruvyxa.sarif
-ruvyxa build --adapter node
+npm run analyze -- --format sarif --output reports/ruvyxa.sarif
+npm run build -- --adapter node
 ```
 
 อย่าเพิ่ม flag ที่ CLI ปัจจุบันไม่มี เช่น `--verbose`, `--no-cache` หรือ `--sourcemap`
@@ -433,15 +447,15 @@ output ขึ้นมาเอง เพราะ routes, config และ adap
 
 ```bash
 # รันจาก application root
-ruvyxa routes
-ruvyxa dev
+npm run routes
+npm run dev
 ```
 
 หากแอปอยู่ใน directory ข้างเคียง ใช้ลำดับเดิมโดยส่ง `--root` ให้ทั้งสองคำสั่ง:
 
 ```bash
-ruvyxa routes --root ../my-app
-ruvyxa dev --root ../my-app
+npm run routes -- --root ../my-app
+npm run dev -- --root ../my-app
 ```
 
 ใช้ `routes` ก่อน `dev` เมื่อไม่แน่ใจว่า page ถูกค้นพบหรือไม่ เพราะ `routes` แค่รายงาน route table
@@ -454,10 +468,10 @@ HMR
 static checks:
 
 ```bash
-ruvyxa routes
-ruvyxa trace /blog/[slug]
-ruvyxa analyze --format human
-ruvyxa check
+npm run routes
+npm run trace -- /blog/[slug]
+npm run analyze -- --format human
+npm run check
 ```
 
 แทน `/blog/[slug]` ด้วย pattern ที่ `routes` แสดง `trace` รับ route pattern นี้ ไม่รับชื่อ component
@@ -469,9 +483,9 @@ file หรือ URL ที่ใส่ parameter จริง `analyze` ตร
 เมื่อจะย้ายแอปไปยัง platform ใหม่ ให้ตรวจ target และ adapter ที่เลือกก่อน:
 
 ```bash
-ruvyxa doctor --target edge
-ruvyxa doctor --target edge --adapter cloudflare --json
-ruvyxa build --target edge --adapter cloudflare
+npm run doctor -- --target edge
+npm run doctor -- --target edge --adapter cloudflare --json
+npm run build -- --target edge --adapter cloudflare
 ```
 
 สองคำสั่งแรกเป็น diagnostics คำสั่งสุดท้ายจึงเป็นขั้นที่ build และเรียก adapter ที่เลือก หาก project
@@ -485,8 +499,8 @@ environment สำหรับ deploy
 
 ```bash
 mkdir -p reports
-ruvyxa analyze --format json --output reports/ruvyxa-analysis.json
-ruvyxa analyze --format sarif --output reports/ruvyxa.sarif
+npm run analyze -- --format json --output reports/ruvyxa-analysis.json
+npm run analyze -- --format sarif --output reports/ruvyxa.sarif
 ```
 
 บน PowerShell ให้สร้าง directory ด้วย `New-Item -ItemType Directory -Force reports` แทน
@@ -498,10 +512,10 @@ ruvyxa analyze --format sarif --output reports/ruvyxa.sarif
 หลังเปลี่ยน config หรือ adapter และต้องการ generated output ชุดใหม่ ให้ใช้ลำดับนี้:
 
 ```bash
-ruvyxa doctor --adapter vercel
-ruvyxa clean
-ruvyxa build --adapter vercel
-ruvyxa preview
+npm run doctor -- --adapter vercel
+npm run clean
+npm run build -- --adapter vercel
+npm run preview
 ```
 
 `clean` ลบเฉพาะ output directory ที่ Ruvyxa กำหนด ไม่ใช่การ reset dependencies และไม่แทนคำสั่งของ
@@ -513,9 +527,9 @@ package manager เช่น `npm install` วาง `preview` เป็นข�
 วัดก่อนและหลังการเปลี่ยนแปลงที่เจาะจง โดยใช้จำนวน sample และรูปแบบ output เดียวกัน:
 
 ```bash
-ruvyxa bench --samples 10 --json
+npm run bench -- --samples 10 --json
 # แก้เฉพาะจุดหนึ่ง แล้วรันคำสั่งเดิมอีกครั้ง
-ruvyxa bench --samples 10 --json
+npm run bench -- --samples 10 --json
 ```
 
 เก็บ JSON สองชุดใน CI หรือเทียบในเครื่อง อย่าสรุปว่าเป็น regression โดยตรงจากผลที่ใช้ runtime,
@@ -523,17 +537,18 @@ dependency tree หรือจำนวน sample คนละชุด
 
 ### ดู Help แทนการเดา Flag
 
-CLI เป็นแหล่งที่ปลอดภัยที่สุดสำหรับตรวจ syntax ล่าสุดของคำสั่ง:
+Package scripts และ help ของ CLI เฉพาะคำสั่งเป็นแหล่งที่ปลอดภัยที่สุดสำหรับตรวจ syntax ล่าสุด:
 
 ```bash
-ruvyxa --help
-ruvyxa build --help
-ruvyxa analyze --help
-ruvyxa plugin create --help
+npm run
+npm run build -- --help
+npm run analyze -- --help
+npm run plugin -- create --help
 ```
 
-เปิดดู help ของคำสั่งนั้นก่อนใส่ลง script โดยเฉพาะ `--format` เป็นของ `analyze`, `--json` เป็นของ
-`doctor` และ `bench`, และ `--dir` เป็นของ `plugin create`
+ใช้ `npm run` เพื่อดูรายการ script ของ starter ก่อน แล้วเปิดดู help ของคำสั่งนั้นก่อนใส่ลง
+automation โดยเฉพาะ `--format` เป็นของ `analyze`, `--json` เป็นของ `doctor` และ `bench`, และ `--dir`
+เป็นของ `plugin create`
 
 ## ขั้นตอนถัดไป
 
@@ -554,3 +569,23 @@ CLI commands แสดง diagnostics จาก route graph และ bundler �
 - `ruvyxa dev`: Boots the Axum server with HMR and persistent JS workers.
 - `ruvyxa build`: Triggers Oxc compilation, Tree-shaking, and CSS fnv1a_64 hashing.
 - `ruvyxa test:parity`: Evaluates behavioral drift between development and production routes.
+
+# เครื่องมือ DX ที่เพิ่มใน CLI ปัจจุบัน
+
+```bash
+npm run routes:json
+npm run analyze:html
+npm run analyze:html -- --output .ruvyxa/reports/bundles.html
+npm run add -- form
+npm run add -- data-table
+npm run add -- auth
+```
+
+`analyze:html` สร้างรายงาน interactive แบบไฟล์เดียวที่ `.ruvyxa/analyze.html` โดยใช้
+`--output <file>` เพื่อกำหนดตำแหน่งอื่น ส่วน CI ควรใช้ JSON หรือ SARIF ต่อไป คำสั่ง `add`
+ตรวจปลายทางทุกไฟล์ก่อนเขียน จึงไม่ทิ้ง scaffold ที่สร้างค้างครึ่งหนึ่งเมื่อมีชื่อชน และจะไม่
+เขียนทับถ้าไม่ได้ระบุ `--force` สำหรับ auth ระบบจะแสดง dependency และขั้นตอนถัดไปของ `@ruvyxa/auth`
+ทุกครั้ง จึงต้องติดตั้งก่อนใช้งานไฟล์ authentication ที่สร้างขึ้น
+
+ขณะรัน `ruvyxa dev` เปิด `/__ruvyxa/devtools` เพื่อดู routes, สถานะ LRU render cache, bundle, เวลา
+Server Action และ uptime ได้ endpoint นี้ไม่ถูก register ใน production server

@@ -216,6 +216,7 @@ pub(crate) fn canonical_option_name(option: &str) -> Option<&'static str> {
         "output" => Some("output"),
         "samples" => Some("samples"),
         "json" => Some("json"),
+        "html" => Some("html"),
         _ => None,
     }
 }
@@ -265,6 +266,7 @@ pub(crate) fn canonical_command_name(command: &str) -> Option<&'static str> {
         "test:parity" => Some("test:parity"),
         "parity" => Some("parity"),
         "plugin" => Some("plugin"),
+        "add" => Some("add"),
         "help" => Some("help"),
         _ => None,
     }

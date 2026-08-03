@@ -2,10 +2,11 @@
 
 The `ruvyxa` package installs the Ruvyxa CLI. Its command surface is defined in
 `crates/ruvyxa_cli/src/main.rs`; the command help shown by the installed binary is the authoritative
-source for flags.
+source for flags. Command signatures below name the underlying CLI; in an application, use the
+matching `npm run` script shown in each example.
 
 ```bash
-ruvyxa --help
+npm run
 ```
 
 > Flags are command-specific. `--root` and `--runtime` are not global flags, and the CLI does not
@@ -50,9 +51,9 @@ Use it while developing an application. Host and port are optional; the final de
 project configuration and server configuration.
 
 ```bash
-ruvyxa dev
-ruvyxa dev --port 4000
-ruvyxa dev --root ../other-app --runtime bun
+npm run dev
+npm run dev -- --port 4000
+npm run dev -- --root ../other-app --runtime bun
 ```
 
 ## `ruvyxa build`
@@ -68,9 +69,9 @@ ruvyxa build [--root <PATH>] [--target <node|bun|edge|static>] \
 also accepted and resolved by the adapter runner.
 
 ```bash
-ruvyxa build
-ruvyxa build --target static
-ruvyxa build --adapter vercel
+npm run build
+npm run build -- --target static
+npm run build -- --adapter vercel
 ```
 
 The output directory is configured by `outDir` (the starter uses `.ruvyxa`). For the detailed build
@@ -88,7 +89,7 @@ This is the project readiness command. It runs `tsc --noEmit` when the project c
 
 ```bash
 npm run check
-ruvyxa check --runtime bun
+npm run check -- --runtime bun
 ```
 
 ## `ruvyxa start` and `ruvyxa preview`
@@ -104,7 +105,7 @@ command for the local-preview workflow, not a command that builds automatically.
 ```bash
 npm run build
 npm run start
-ruvyxa preview --port 4173
+npm run preview -- --port 4173
 ```
 
 ## `ruvyxa routes`
@@ -117,7 +118,7 @@ Print the routes discovered from the configured application directory. Use it to
 before building or to investigate a route conflict.
 
 ```bash
-ruvyxa routes
+npm run routes
 ```
 
 ## `ruvyxa analyze`
@@ -131,8 +132,8 @@ The command validates routes, imports, and server/client boundaries. `auto` pres
 or piped-output behavior; `--output` writes the selected report to a file.
 
 ```bash
-ruvyxa analyze
-ruvyxa analyze --format sarif --output reports/ruvyxa.sarif
+npm run analyze
+npm run analyze -- --format sarif --output reports/ruvyxa.sarif
 ```
 
 ## `ruvyxa doctor`
@@ -146,8 +147,8 @@ Use `--adapter` to inspect an adapter without writing its artifacts. `--json` em
 compatibility report as JSON.
 
 ```bash
-ruvyxa doctor
-ruvyxa doctor --adapter cloudflare --json
+npm run doctor
+npm run doctor -- --adapter cloudflare --json
 ```
 
 ## `ruvyxa clean`
@@ -160,7 +161,7 @@ Removes the configured generated build directory. It is intentionally scoped to 
 to dependencies or arbitrary project files.
 
 ```bash
-ruvyxa clean
+npm run clean
 ```
 
 ## `ruvyxa trace`
@@ -172,8 +173,8 @@ ruvyxa trace <ROUTE> [--root <PATH>]
 `<ROUTE>` is required. The command discovers the current manifest and prints the matching entry.
 
 ```bash
-ruvyxa trace /
-ruvyxa trace /blog/[slug]
+npm run trace -- /
+npm run trace -- /blog/[slug]
 ```
 
 ## `ruvyxa bench`
@@ -186,8 +187,8 @@ The default sample count is `3`. Use JSON when a CI job or another tool needs to
 benchmark result.
 
 ```bash
-ruvyxa bench --samples 5
-ruvyxa bench --json
+npm run bench -- --samples 5
+npm run bench -- --json
 ```
 
 ## `ruvyxa test:parity`
@@ -200,8 +201,8 @@ This compares dev and production route manifests and smoke-renders page routes. 
 check used by `ruvyxa check`.
 
 ```bash
-ruvyxa test:parity
-ruvyxa parity
+npm run test:parity
+npm run test:parity
 ```
 
 ## `ruvyxa plugin create`
@@ -214,46 +215,58 @@ ruvyxa plugin create <NAME> [--root <PATH>] [--dir <PATH>]
 directory named after the plugin.
 
 ```bash
-ruvyxa plugin create my-plugin
-ruvyxa plugin create @acme/analytics --dir packages/analytics
+npm run plugin -- create my-plugin
+npm run plugin -- create @acme/analytics --dir packages/analytics
 ```
 
 See [Plugins](./14-plugins.md) for the TypeScript plugin contract.
 
 ## Starter Scripts
 
-The minimal starter currently defines these scripts:
+Every application starter defines these scripts:
 
 ```json
 {
   "dev": "ruvyxa dev",
   "build": "ruvyxa build",
   "start": "ruvyxa start",
+  "preview": "ruvyxa preview",
   "typecheck": "tsc --noEmit",
-  "check": "ruvyxa check"
+  "check": "ruvyxa check",
+  "routes": "ruvyxa routes",
+  "routes:json": "ruvyxa routes --json",
+  "analyze": "ruvyxa analyze",
+  "analyze:html": "ruvyxa analyze --html",
+  "add": "ruvyxa add",
+  "doctor": "ruvyxa doctor",
+  "clean": "ruvyxa clean",
+  "trace": "ruvyxa trace",
+  "bench": "ruvyxa bench",
+  "test:parity": "ruvyxa test:parity",
+  "plugin": "ruvyxa plugin"
 }
 ```
 
-Run commands that do not have a package script directly with `ruvyxa`, for example
-`ruvyxa analyze --format json`.
+Use `npm run <script>` from the application directory. Put command arguments after `--` so npm
+forwards them to Ruvyxa: `npm run analyze -- --format json`.
 
 ## Practical Recipes
 
-The recipes below deliberately use direct CLI invocations for commands that are not scripts in the
-minimal starter. Replace `../my-app` with the path to your project when needed.
+The recipes below use the starter package scripts. Replace `../my-app` with the path to your project
+when needed.
 
 ### Start a Project on a Different Port
 
 Use this when another local service already owns your usual port:
 
 ```bash
-ruvyxa dev --port 4000
+npm run dev -- --port 4000
 ```
 
 To make the server reachable from another device on your network, choose a host explicitly:
 
 ```bash
-ruvyxa dev --host 0.0.0.0 --port 4000
+npm run dev -- --host 0.0.0.0 --port 4000
 ```
 
 Keep the terminal open while developing; HMR and route watching run in that process.
@@ -263,9 +276,9 @@ Keep the terminal open while developing; HMR and route watching run in that proc
 `--root` makes it unnecessary to change directories before using the CLI:
 
 ```bash
-ruvyxa dev --root ../my-app
-ruvyxa routes --root ../my-app
-ruvyxa analyze --root ../my-app --format human
+npm run dev -- --root ../my-app
+npm run routes -- --root ../my-app
+npm run analyze -- --root ../my-app --format human
 ```
 
 The root is resolved per command, so pass it to every command in a script rather than assuming a
@@ -277,9 +290,9 @@ When a project is configured for Node but you need to test it with Bun, use the 
 override:
 
 ```bash
-ruvyxa dev --runtime bun
-ruvyxa build --runtime bun
-ruvyxa check --runtime bun
+npm run dev -- --runtime bun
+npm run build -- --runtime bun
+npm run check -- --runtime bun
 ```
 
 The override applies only to that invocation. It does not edit `ruvyxa.config.ts` or the
@@ -297,8 +310,8 @@ npm run start
 To be explicit about the output target, run:
 
 ```bash
-ruvyxa build --target node
-ruvyxa start --port 3001
+npm run build -- --target node
+npm run start -- --port 3001
 ```
 
 `start` and `preview` read an existing build; neither command performs a build implicitly.
@@ -308,8 +321,8 @@ ruvyxa start --port 3001
 Use the static target only when the application and selected adapter support the routes being built:
 
 ```bash
-ruvyxa build --target static --adapter static
-ruvyxa preview --port 4173
+npm run build -- --target static --adapter static
+npm run preview -- --port 4173
 ```
 
 If a route strategy is not supported by the platform adapter, the build reports that
@@ -320,9 +333,9 @@ incompatibility. See [Deployment](./13-deployment.md) for adapter-node output an
 `--adapter` is useful in CI or when evaluating a deployment target temporarily:
 
 ```bash
-ruvyxa build --adapter vercel
-ruvyxa build --adapter cloudflare
-ruvyxa build --adapter @acme/ruvyxa-adapter-node
+npm run build -- --adapter vercel
+npm run build -- --adapter cloudflare
+npm run build -- --adapter @acme/ruvyxa-adapter-node
 ```
 
 The last form is a package name; it must be resolvable by the adapter runner in the project
@@ -340,9 +353,9 @@ It type-checks with `tsc --noEmit` when the project contains `tsconfig.json`, th
 and render parity flow. To run just the parity portion:
 
 ```bash
-ruvyxa test:parity
+npm run test:parity
 # equivalent alias
-ruvyxa parity
+npm run test:parity
 ```
 
 ### Inspect Routes Before Debugging a URL
@@ -350,9 +363,9 @@ ruvyxa parity
 First list the discovered URL table, then inspect the route that matters:
 
 ```bash
-ruvyxa routes
-ruvyxa trace /about
-ruvyxa trace /blog/[slug]
+npm run routes
+npm run trace -- /about
+npm run trace -- /blog/[slug]
 ```
 
 `trace` takes the route pattern, not a source filename. For a dynamic page, use `/blog/[slug]`, not
@@ -364,8 +377,8 @@ Use JSON when another program will consume the result, or SARIF when a code-scan
 it:
 
 ```bash
-ruvyxa analyze --format json --output reports/ruvyxa-analysis.json
-ruvyxa analyze --format sarif --output reports/ruvyxa.sarif
+npm run analyze -- --format json --output reports/ruvyxa-analysis.json
+npm run analyze -- --format sarif --output reports/ruvyxa.sarif
 ```
 
 Create the destination directory first if it does not exist. Use `--format human` for a readable
@@ -376,9 +389,9 @@ terminal report.
 Run `doctor` before a first deployment or after changing runtime/adapter settings:
 
 ```bash
-ruvyxa doctor
-ruvyxa doctor --target edge
-ruvyxa doctor --adapter cloudflare --json
+npm run doctor
+npm run doctor -- --target edge
+npm run doctor -- --adapter cloudflare --json
 ```
 
 `--adapter` inspects the adapter contract without materializing its build artifacts.
@@ -388,8 +401,8 @@ ruvyxa doctor --adapter cloudflare --json
 When a local build needs to be regenerated, clean the configured Ruvyxa output and build again:
 
 ```bash
-ruvyxa clean
-ruvyxa build
+npm run clean
+npm run build
 ```
 
 This command is limited to the configured output directory. It does not delete `node_modules`,
@@ -400,8 +413,8 @@ source files, or arbitrary cache directories.
 Use a fixed number of samples when comparing two local changes:
 
 ```bash
-ruvyxa bench --samples 5
-ruvyxa bench --samples 5 --json
+npm run bench -- --samples 5
+npm run bench -- --samples 5 --json
 ```
 
 Treat a benchmark as a local signal: use the same machine, dependency state, and sample count when
@@ -412,13 +425,13 @@ comparing runs.
 For a monorepo, choose the package directory explicitly:
 
 ```bash
-ruvyxa plugin create analytics --root . --dir packages/analytics
+npm run plugin -- create analytics --root . --dir packages/analytics
 ```
 
 For a standalone project, the default is enough:
 
 ```bash
-ruvyxa plugin create my-plugin
+npm run plugin -- create my-plugin
 ```
 
 Then follow [Plugins](./14-plugins.md) to implement and register the generated package.
@@ -429,8 +442,8 @@ The CLI commands can be used directly in a CI job after dependencies are install
 
 ```bash
 npm run check
-ruvyxa analyze --format sarif --output reports/ruvyxa.sarif
-ruvyxa build --adapter node
+npm run analyze -- --format sarif --output reports/ruvyxa.sarif
+npm run build -- --adapter node
 ```
 
 Do not add unsupported flags such as `--verbose`, `--no-cache`, or `--sourcemap`; they are not part
@@ -449,15 +462,15 @@ changes:
 
 ```bash
 # from the application root
-ruvyxa routes
-ruvyxa dev
+npm run routes
+npm run dev
 ```
 
 If the app is in a sibling directory, the same workflow is:
 
 ```bash
-ruvyxa routes --root ../my-app
-ruvyxa dev --root ../my-app
+npm run routes -- --root ../my-app
+npm run dev -- --root ../my-app
 ```
 
 Use `routes` before `dev` when you are unsure whether a page was discovered. Do not expect it to
@@ -470,10 +483,10 @@ For a route issue, move from broad discovery to the route-specific manifest entr
 static checks:
 
 ```bash
-ruvyxa routes
-ruvyxa trace /blog/[slug]
-ruvyxa analyze --format human
-ruvyxa check
+npm run routes
+npm run trace -- /blog/[slug]
+npm run analyze -- --format human
+npm run check
 ```
 
 Replace `/blog/[slug]` with the pattern printed by `routes`. `trace` needs that route pattern; it
@@ -486,9 +499,9 @@ flow. None of these commands edits source files.
 When moving an app to a platform target, inspect the selected target and adapter first:
 
 ```bash
-ruvyxa doctor --target edge
-ruvyxa doctor --target edge --adapter cloudflare --json
-ruvyxa build --target edge --adapter cloudflare
+npm run doctor -- --target edge
+npm run doctor -- --target edge --adapter cloudflare --json
+npm run build -- --target edge --adapter cloudflare
 ```
 
 The first two commands are diagnostics. The final command is the one that builds and invokes the
@@ -502,8 +515,8 @@ part of the job, then select a format that the next tool understands:
 
 ```bash
 mkdir -p reports
-ruvyxa analyze --format json --output reports/ruvyxa-analysis.json
-ruvyxa analyze --format sarif --output reports/ruvyxa.sarif
+npm run analyze -- --format json --output reports/ruvyxa-analysis.json
+npm run analyze -- --format sarif --output reports/ruvyxa.sarif
 ```
 
 In PowerShell, create the directory with `New-Item -ItemType Directory -Force reports` instead of
@@ -515,10 +528,10 @@ actually needs both. Keep `npm run check` as a separate gate for the type-check 
 Use this sequence after a configuration or adapter change when you want fresh generated output:
 
 ```bash
-ruvyxa doctor --adapter vercel
-ruvyxa clean
-ruvyxa build --adapter vercel
-ruvyxa preview
+npm run doctor -- --adapter vercel
+npm run clean
+npm run build -- --adapter vercel
+npm run preview
 ```
 
 `clean` removes only Ruvyxa's configured output directory. It is not a dependency reset, and it does
@@ -530,9 +543,9 @@ what `build` has already generated.
 Benchmark before and after a focused change using the same sample count and output form:
 
 ```bash
-ruvyxa bench --samples 10 --json
+npm run bench -- --samples 10 --json
 # make one focused change, then run the same command again
-ruvyxa bench --samples 10 --json
+npm run bench -- --samples 10 --json
 ```
 
 Save the two JSON results in your CI system or compare them locally. Avoid treating two runs with
@@ -540,17 +553,18 @@ different runtimes, dependency trees, or sample counts as a direct regression co
 
 ### Get Help Without Guessing a Flag
 
-The CLI itself is the safest way to confirm a command's current syntax:
+The package scripts and command-specific CLI help are the safest way to confirm current syntax:
 
 ```bash
-ruvyxa --help
-ruvyxa build --help
-ruvyxa analyze --help
-ruvyxa plugin create --help
+npm run
+npm run build -- --help
+npm run analyze -- --help
+npm run plugin -- create --help
 ```
 
-Use command-specific help before putting a command in a script. In particular, `--format` belongs to
-`analyze`, `--json` belongs to `doctor` and `bench`, and `--dir` belongs to `plugin create`.
+Use `npm run` to list the available starter scripts, then command-specific help before putting a
+command in automation. In particular, `--format` belongs to `analyze`, `--json` belongs to `doctor`
+and `bench`, and `--dir` belongs to `plugin create`.
 
 ## Next Steps
 
@@ -572,3 +586,26 @@ The `ruvyxa doctor` command evaluates the selected deployment adapter and its re
 - `ruvyxa dev`: Boots the Axum server with HMR and persistent JS workers.
 - `ruvyxa build`: Triggers Oxc compilation, Tree-shaking, and CSS fnv1a_64 hashing.
 - `ruvyxa test:parity`: Evaluates behavioral drift between development and production routes.
+
+# Current DX additions
+
+The current CLI also exposes the following additive developer workflows:
+
+```bash
+npm run routes:json
+npm run analyze:html
+npm run analyze:html -- --output .ruvyxa/reports/bundles.html
+npm run add -- form
+npm run add -- data-table
+npm run add -- auth
+```
+
+`analyze:html` writes a self-contained interactive report to `.ruvyxa/analyze.html` unless
+`--output <file>` selects a different location; JSON and SARIF remain the preferred CI formats.
+`add` checks every destination before writing so a conflict never leaves a half-created scaffold. It
+will not overwrite existing files unless `--force` is explicit. The auth scaffold always prints the
+`@ruvyxa/auth` dependency and next-step reminder, so install it before using the generated
+authentication files.
+
+While `ruvyxa dev` is running, `/__ruvyxa/devtools` shows routes, LRU render-cache state, bundle
+metrics, Server Action timings, and uptime. It is not registered by the production server.

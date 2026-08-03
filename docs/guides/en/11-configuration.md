@@ -69,19 +69,26 @@ type RuvyxaConfig = {
     port?: number
   }
   site?: {
-    sitemap?: {
-      defaults?: {
-        changefreq?: 'always' | 'hourly' | 'daily' | 'weekly' | 'monthly' | 'yearly' | 'never'
-        priority?: number
-      }
-      entries?: Array<{
-        path: string
-        changefreq?: string
-        priority?: number
-        lastmod?: string
-        images?: string[]
-      }>
-    }
+    url?: string
+    sitemap?:
+      | boolean
+      | {
+          exclude?: string[]
+          additionalPaths?: string[]
+          defaults?: {
+            changeFrequency?:
+              'always' | 'hourly' | 'daily' | 'weekly' | 'monthly' | 'yearly' | 'never'
+            priority?: number
+          }
+          entries?: Array<{
+            url: string
+            changeFrequency?: string
+            priority?: number
+            lastModified?: string | Date
+            images?: string[]
+          }>
+        }
+    robots?: boolean | { rules?: unknown; sitemap?: string | string[]; host?: string }
   }
   render?: {
     strategy?: 'ssr' | 'ssg' | 'isr' | 'csr' | 'ppr'
@@ -118,6 +125,14 @@ type RuvyxaConfig = {
     keepOriginal?: boolean
     variantWidths?: number[]
     workers?: number
+    onDemand?: boolean | { enabled?: boolean; maxWidth?: number }
+  }
+  i18n?: {
+    locales: string[]
+    defaultLocale: string
+    localeParam?: string
+    detectLocale?: boolean
+    cookie?: string
   }
   security?: {
     actionLimit?: number
@@ -133,13 +148,9 @@ type RuvyxaConfig = {
     workers?: number
     timeoutMs?: number
   }
-  plugins?: Array<{
-    name: string
-    options?: any
-    head?: Array<{ tag: string; attrs?: Record<string, string>; content?: string }>
-  }>
+  plugins?: RuvyxaPlugin[]
   adapter?: Adapter
-  adapterOptions?: Record<string, any>
+  adapterOptions?: Record<string, unknown>
 }
 ```
 
@@ -168,6 +179,7 @@ struct ProjectConfig {
     debug: DebugConfigOptions,
     #[serde(default, rename = "image")]
     images: ImageOptimizationOptions,
+    i18n: Option<I18nConfigOptions>,
     #[serde(default)]
     security: SecurityConfigOptions,
     #[serde(default)]
@@ -288,25 +300,26 @@ server: {
 ```ts
 site: {
   sitemap: {
-    defaults: { changefreq: "weekly", priority: 0.5 },
+    defaults: { changeFrequency: "weekly", priority: 0.5 },
     entries: [
-      { path: "/", changefreq: "daily", priority: 1.0 },
+      { url: "/", changeFrequency: "daily", priority: 1.0 },
     ],
   },
 }
 ```
 
-| Property               | Type              | Default                | Description                  |
-| ---------------------- | ----------------- | ---------------------- | ---------------------------- |
-| `defaults.changefreq`  | enum              | `"weekly"`             | Default change frequency     |
-| `defaults.priority`    | number (0.0-1.0)  | `0.5`                  | Default priority             |
-| `entries[].path`       | string            | --                     | Route path                   |
-| `entries[].changefreq` | string            | inherits from defaults | Per-route override           |
-| `entries[].priority`   | number            | inherits from defaults | Per-route override           |
-| `entries[].lastmod`    | string (ISO 8601) | --                     | Last modification date       |
-| `entries[].images`     | string[]          | --                     | Image URLs for sitemap:image |
+| Property                    | Type             | Default                | Description                   |
+| --------------------------- | ---------------- | ---------------------- | ----------------------------- |
+| `defaults.changeFrequency`  | enum             | `"weekly"`             | Default change frequency      |
+| `defaults.priority`         | number (0.0-1.0) | `0.5`                  | Default priority              |
+| `entries[].url`             | string           | --                     | Root-relative or absolute URL |
+| `entries[].changeFrequency` | string           | inherits from defaults | Per-route override            |
+| `entries[].priority`        | number           | inherits from defaults | Per-route override            |
+| `entries[].lastModified`    | string or Date   | --                     | Last modification date        |
+| `entries[].images`          | string[]         | --                     | Image URLs for sitemap:image  |
 
-Rust: `SiteConfigOptions` in `site_discovery.rs`. Requires the `sitemap` plugin.
+Rust: `SiteConfigOptions` in `site_discovery.rs`. Sitemap generation is built in; no plugin is
+required.
 
 Changefreq values and meanings:
 
@@ -1006,18 +1019,17 @@ middleware: {
 ### plugins
 
 ```ts
-plugins: [
-  { name: 'sitemap' },
-  { name: 'requireEnv', options: { variables: ['DATABASE_URL'], strict: true } },
-]
+import { definePlugin } from 'ruvyxa/plugin'
+
+plugins: [definePlugin({ name: 'require-env', build: { onComplete() {} } })]
 ```
 
-| Property    | Value                                                            |
-| ----------- | ---------------------------------------------------------------- |
-| TS type     | `Array<{ name: string; options?: any; head?: Array<{...}> }>`    |
-| Rust field  | `plugins: Vec<BuildPluginConfig>`                                |
-| Rust struct | `BuildPluginConfig { name: String, head: Vec<PluginHeadEntry> }` |
-| Default     | `[]` (empty vec)                                                 |
+| Property     | Value                                 |
+| ------------ | ------------------------------------- |
+| TS type      | `RuvyxaPlugin[]`                      |
+| Rust field   | `plugins: Vec<BuildPluginConfig>`     |
+| Runtime rule | Every plugin provides `register(api)` |
+| Default      | `[]`                                  |
 
 Plugin `head` entries contribute elements to every rendered document's `<head>`:
 
@@ -1051,9 +1063,9 @@ For a named built-in or installed third-party adapter, select it at the command 
 putting a string in the config object:
 
 ```bash
-ruvyxa doctor --adapter vercel
-ruvyxa build --adapter vercel
-ruvyxa build --adapter @scope/ruvyxa-adapter-node
+npm run doctor -- --adapter vercel
+npm run build -- --adapter vercel
+npm run build -- --adapter @scope/ruvyxa-adapter-node
 ```
 
 When neither the config object nor `--adapter` selects an adapter, the CLI may use `RUVYXA_ADAPTER`
@@ -1083,7 +1095,7 @@ export default config({
 
 | Property   | Value                                        |
 | ---------- | -------------------------------------------- |
-| TS type    | `Record<string, any>`                        |
+| TS type    | `Record<string, unknown>`                    |
 | Rust field | `adapter_options: Option<serde_json::Value>` |
 | Default    | `None`                                       |
 
@@ -1233,8 +1245,8 @@ export default config({
   server: { host: '0.0.0.0', port: 3000 },
   site: {
     sitemap: {
-      defaults: { changefreq: 'weekly', priority: 0.5 },
-      entries: [{ path: '/', changefreq: 'daily', priority: 1.0 }],
+      defaults: { changeFrequency: 'weekly', priority: 0.5 },
+      entries: [{ url: '/', changeFrequency: 'daily', priority: 1.0 }],
     },
   },
   build: {
@@ -1271,7 +1283,7 @@ export default config({
     { name: 'securityHeaders' },
     { name: 'requireEnv', options: { variables: ['DATABASE_URL'] } },
   ],
-  // Select a named adapter with: ruvyxa build --adapter vercel
+  // Select a named adapter with: npm run build -- --adapter vercel
   adapterOptions: { regions: ['iad1'] },
 })
 ```
@@ -1280,10 +1292,10 @@ export default config({
 
 ## Doctor Command
 
-Run `ruvyxa doctor` to validate your config against all rules:
+Run `npm run doctor` to validate your config against all rules:
 
 ```
-> ruvyxa doctor
+> npm run doctor
 
   Config valid
   Port 3000 available
@@ -1319,7 +1331,7 @@ Run `ruvyxa doctor` to validate your config against all rules:
 
 6. **Inspection**
    - `npm run doctor` — View validation results
-   - `npm run doctor --json` — View JSON output
+   - `npm run doctor -- --json` — View JSON output
 
 ---
 
@@ -1371,9 +1383,9 @@ corresponding server configuration. Build target and adapter have their own CLI 
 generalize that precedence to unrelated config fields.
 
 ```bash
-ruvyxa dev --port 4000 --runtime bun
-ruvyxa build --target static --adapter static
-ruvyxa doctor --adapter cloudflare --json
+npm run dev -- --port 4000 --runtime bun
+npm run build -- --target static --adapter static
+npm run doctor -- --adapter cloudflare --json
 ```
 
 ### Validate Before Deploying
@@ -1382,8 +1394,8 @@ Use `doctor` to inspect configuration/runtime/adapter compatibility and `analyze
 boundaries. Their concerns differ, so a successful one does not replace the other:
 
 ```bash
-ruvyxa doctor
-ruvyxa analyze --format human
+npm run doctor
+npm run analyze -- --format human
 npm run check
 ```
 
@@ -1406,3 +1418,24 @@ The `ruvyxa.config.ts` file is rendered to JSON and then parsed/validated by the
 config structs use `deny_unknown_fields`; an unsupported field such as `experimentalDocker` is
 rejected with the current config-renderer diagnostic (`RUV1602`). This prevents a typo from being
 silently treated as a supported setting.
+
+# Advanced routing and image config
+
+```ts
+export default config({
+  i18n: {
+    locales: ['en', 'th'],
+    defaultLocale: 'en',
+    localeParam: 'lang',
+    detectLocale: true,
+    cookie: 'RUVYXA_LOCALE',
+  },
+  image: {
+    onDemand: { enabled: true, maxWidth: 3840 },
+  },
+})
+```
+
+Locale identifiers are validated, case-insensitive duplicates are rejected, and `defaultLocale` must
+be present in `locales`. `localeParam` must be a JavaScript identifier. On-demand image width must
+be between 16 and 8192 pixels; the endpoint remains disabled by default.

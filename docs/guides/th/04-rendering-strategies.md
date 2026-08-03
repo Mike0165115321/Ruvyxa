@@ -1186,8 +1186,8 @@ export default async function Status() {
 deployment adapter ที่เลือก ให้ตรวจ manifest จริง แทนการเดาจาก directory output:
 
 ```bash
-ruvyxa routes
-ruvyxa trace /status
+npm run routes
+npm run trace -- /status
 ```
 
 ### Hydration เป็นการตัดสินใจแยกกัน

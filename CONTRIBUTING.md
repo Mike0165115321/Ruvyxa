@@ -194,7 +194,7 @@ Diagnostic::new("RUV1011", "Your error title")
 1. Create `packages/@ruvyxa/adapter-<name>/`.
 2. Implement the `Adapter` interface from `@ruvyxa/core`.
 3. Add a `package.json` with `@ruvyxa/core` as a dependency.
-4. Document its user-facing setup in `docs/guides/en/deployment.md`.
+4. Document its user-facing setup in `docs/guides/en/13-deployment.md`.
 5. Add its release checks to `docs/developer-guide.md`.
 
 ---

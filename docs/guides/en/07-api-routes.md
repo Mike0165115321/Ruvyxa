@@ -1436,9 +1436,9 @@ When an endpoint returns an unexpected result, establish which route was discove
 handler code:
 
 ```bash
-ruvyxa routes
-ruvyxa trace /api/products/[id]
-ruvyxa analyze --format human
+npm run routes
+npm run trace -- /api/products/[id]
+npm run analyze -- --format human
 ```
 
 The route manifest separates page and API entries, and the analyzer treats API import graphs as

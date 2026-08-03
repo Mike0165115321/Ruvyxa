@@ -1,6 +1,29 @@
 # Changelog
 
-## v1.0.26 (2026-08-01)
+## v1.0.26 (2026-08-03)
+
+### Developer experience
+
+- Added a self-contained interactive `ruvyxa analyze --html` report, `routes --json`, and a
+  development-only `/__ruvyxa/devtools` dashboard for routes, LRU cache state, bundle metrics,
+  Server Action timing, and uptime.
+- Added atomic `ruvyxa add form|data-table|auth` scaffolds and the dependency-free `@ruvyxa/testing`
+  package with loader, action, and cache mocks.
+
+### Runtime and routing
+
+- Added validated file-system i18n routing with locale detection, prerender expansion, automatic
+  document language and hreflang output, and native/serverless parity.
+- Added opt-in browser-native View Transitions, React 19 stable action API coverage, and bounded
+  same-origin on-demand image optimization with Cloudflare image-transform integration.
+- Carried validated built-in middleware policy into standalone, serverless, Cloudflare Workers, and
+  Vercel Edge artifacts through Fetch-native CORS, rate limiting, timing, logging, and headers.
+  Vercel now supports an explicit `edge: true` mode without Node.js polyfills.
+
+### Documentation
+
+- Added production-shaped Prisma and Drizzle ORM starters in English and Thai and documented the new
+  CLI, runtime, adapter, image, routing, and testing contracts.
 
 ### Bundler Correctness
 

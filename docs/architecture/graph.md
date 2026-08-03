@@ -21,6 +21,26 @@ violations, missing exports)
 pub struct RouteManifest {
     pub app_dir: PathBuf,
     pub routes: Vec<RouteEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub i18n: Option<I18nRouting>,
+}
+```
+
+`i18n` is present only when the project config enables locale routing. It carries the validated
+policy used by discovery, native serving, and deployment runtimes; consumers do not re-parse raw
+config.
+
+### I18nRouting
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct I18nRouting {
+    pub locales: Vec<String>,
+    pub default_locale: String,
+    pub locale_param: String,
+    pub detect_locale: bool,
+    pub cookie: String,
 }
 ```
 
@@ -240,11 +260,13 @@ pub struct DiscoverOptions {
     pub app_dir: PathBuf,
     pub default_render_strategy: Option<RenderStrategy>,
     pub default_revalidate: Option<u64>,
+    pub i18n: Option<I18nRouting>,
 }
 ```
 
 `with_rendering_defaults()` applies a project-wide default when the auto-detected strategy is SSR.
-This lets `ruvyxa.config.ts` set `render.strategy: "ssg"` for all routes.
+This lets `ruvyxa.config.ts` set `render.strategy: "ssg"` for all routes. `with_i18n()` attaches the
+config-validated locale routing policy to the resulting manifest.
 
 ## Module Graph Collection
 

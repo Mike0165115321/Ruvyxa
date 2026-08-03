@@ -41,3 +41,9 @@ This adapter supports SSR, API, SSG, and CSR routes via the Edge runtime (`--tar
 PPR are rejected because the assets binding is read-only and the adapter does not configure a
 persistent KV or Durable Object cache. Static assets are served through the assets binding; dynamic
 routes use compiled edge modules loaded from a static registry in the Worker bundle.
+
+Validated built-in middleware is embedded into the Worker and runs with Fetch/Web APIs—CORS, rate
+limiting, timing, logging, and custom response headers therefore match the native server without
+Node.js polyfills. When `image.onDemand` is enabled, the Worker delegates same-origin image
+transforms to Cloudflare's `fetch(..., { cf: { image } })`; the Cloudflare account must have image
+transformations enabled.

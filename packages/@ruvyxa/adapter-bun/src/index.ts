@@ -1,5 +1,10 @@
 import type { Adapter, AdapterOutput, BuildContext } from '@ruvyxa/core'
-import { clientBuildOutput, standaloneServerSource, validateBuildContext } from '@ruvyxa/core'
+import {
+  clientBuildOutput,
+  runtimeBuildPolicy,
+  standaloneServerSource,
+  validateBuildContext,
+} from '@ruvyxa/core'
 
 /**
  * Options for the Bun adapter.
@@ -62,7 +67,7 @@ export function bunAdapter(options: BunAdapterOptions = {}): Adapter {
           {
             kind: 'function',
             path: 'deploy/bun/server',
-            handlerSource: standaloneServerSource(),
+            handlerSource: standaloneServerSource({ runtimePolicy: runtimeBuildPolicy(ctx) }),
           },
           // Static publish directory served by the standalone server. An
           // API-only app has no prerendered pages; the server still runs.

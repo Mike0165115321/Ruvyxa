@@ -17,6 +17,22 @@ pub type RouteParams = BTreeMap<String, serde_json::Value>;
 pub struct RouteManifest {
     pub app_dir: PathBuf,
     pub routes: Vec<RouteEntry>,
+    /// Optional file-system locale routing policy copied from project config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub i18n: Option<I18nRouting>,
+}
+
+/// Validated locale-routing policy shared by discovery, native serving, and
+/// deployment runtimes. Validation belongs to the config boundary; consumers
+/// can therefore use these values without interpreting raw user input again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct I18nRouting {
+    pub locales: Vec<String>,
+    pub default_locale: String,
+    pub locale_param: String,
+    pub detect_locale: bool,
+    pub cookie: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -139,6 +155,7 @@ pub struct DiscoverOptions {
     pub app_dir: PathBuf,
     pub default_render_strategy: Option<RenderStrategy>,
     pub default_revalidate: Option<u64>,
+    pub i18n: Option<I18nRouting>,
 }
 
 impl DiscoverOptions {
@@ -147,6 +164,7 @@ impl DiscoverOptions {
             app_dir: app_dir.into(),
             default_render_strategy: None,
             default_revalidate: None,
+            i18n: None,
         }
     }
 
@@ -159,6 +177,11 @@ impl DiscoverOptions {
         self.default_revalidate = default_revalidate;
         self
     }
+
+    pub fn with_i18n(mut self, i18n: Option<I18nRouting>) -> Self {
+        self.i18n = i18n;
+        self
+    }
 }
 
 pub fn discover_routes(options: DiscoverOptions) -> Result<RouteManifest> {
@@ -166,6 +189,7 @@ pub fn discover_routes(options: DiscoverOptions) -> Result<RouteManifest> {
         app_dir,
         default_render_strategy,
         default_revalidate,
+        i18n,
     } = options;
 
     if !app_dir.exists() {
@@ -239,7 +263,11 @@ pub fn discover_routes(options: DiscoverOptions) -> Result<RouteManifest> {
     });
     detect_conflicts(&routes)?;
 
-    Ok(RouteManifest { app_dir, routes })
+    Ok(RouteManifest {
+        app_dir,
+        routes,
+        i18n,
+    })
 }
 
 pub fn write_manifest(manifest: &RouteManifest, output_file: &Path) -> Result<()> {

@@ -1521,8 +1521,8 @@ stylesheet; กฎกว้าง ๆ ควรอยู่ใน global CSS ท
 4. รัน route/analysis ตามปกติหลังเปลี่ยน shared style entry
 
 ```bash
-ruvyxa analyze --format human
-ruvyxa trace /
+npm run analyze -- --format human
+npm run trace -- /
 npm run build
 ```
 

@@ -872,7 +872,7 @@ These files are served directly by your adapter (Vercel, Netlify, Cloudflare, No
 
 ### Build Output Schema
 
-After `ruvyxa build`, the `.ruvyxa/` directory contains:
+After `npm run build`, the `.ruvyxa/` directory contains:
 
 ```
 .ruvyxa/
@@ -1255,8 +1255,8 @@ the server or selected deployment adapter. Test the actual manifest instead of i
 generated directory layout:
 
 ```bash
-ruvyxa routes
-ruvyxa trace /status
+npm run routes
+npm run trace -- /status
 ```
 
 ### Hydration Is an Independent Choice

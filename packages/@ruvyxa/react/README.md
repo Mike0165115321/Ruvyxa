@@ -19,10 +19,27 @@ import { Image } from '@ruvyxa/react'
 ;<Image src="/hero.png" alt="Product overview" width={1600} height={900} priority />
 ```
 
-`Image` rewrites local PNG/JPEG URLs to Ruvyxa's single build-time WebP output, requires intrinsic
-dimensions unless `fill` is used, and applies sensible loading defaults. Remote URLs are unchanged.
-Use `Picture` with `sources` for browser-native art direction, or a per-image `loader` to send an
-image URL to an external CDN—neither option adds an image transformation endpoint to Ruvyxa.
+`Image` rewrites local PNG/JPEG URLs to Ruvyxa's build-time WebP output, requires intrinsic
+dimensions unless `fill` is used, and applies sensible loading defaults. With
+`image.onDemand: true`, add `dynamic` to request bounded same-origin runtime resizing through
+`/__ruvyxa/image`; remote URLs are deliberately unchanged to prevent the endpoint becoming an open
+proxy. Use `Picture` with `sources` for browser-native art direction, or a per-image `loader` for an
+external CDN.
+
+## View transitions
+
+```tsx
+<Link href="/products" viewTransition>
+  Products
+</Link>
+```
+
+`Link` and `router.push()` support `viewTransition: true`. Ruvyxa uses the stable browser View
+Transitions API when present, respects `prefers-reduced-motion`, and falls back to ordinary client
+navigation. It does not require React Canary's experimental `<ViewTransition>` component.
+
+Ruvyxa targets React 19 and exercises the stable `useActionState` and `useFormStatus` APIs in its
+compatibility suite.
 
 ## SEO, GEO, and AEO primitives
 

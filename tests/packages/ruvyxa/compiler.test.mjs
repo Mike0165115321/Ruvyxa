@@ -1650,6 +1650,49 @@ export const marker = 'reached'
     })
   })
 
+  it('serializes validated i18n routing and on-demand image controls', async () => {
+    await withFixture(async ({ root }) => {
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `export default {
+          i18n: {
+            locales: ['en', 'th'],
+            defaultLocale: 'th',
+            localeParam: 'lang',
+            detectLocale: true,
+            cookie: 'RUVYXA_LOCALE',
+          },
+          image: { onDemand: { enabled: true, maxWidth: 2048 } },
+        }`,
+      )
+
+      const config = await runJson(configRenderer, [root], {})
+      assert.deepEqual(config.config.i18n, {
+        locales: ['en', 'th'],
+        defaultLocale: 'th',
+        localeParam: 'lang',
+        detectLocale: true,
+        cookie: 'RUVYXA_LOCALE',
+      })
+      assert.deepEqual(config.config.image, {
+        onDemand: { enabled: true, maxWidth: 2048 },
+      })
+    })
+  })
+
+  it('rejects malformed on-demand image config at the renderer boundary', async () => {
+    await withFixture(async ({ root }) => {
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `export default { image: { onDemand: { enabled: 'yes', maxWidth: 2048 } } }`,
+      )
+
+      const result = await runJsonResult(configRenderer, [root], {})
+      assert.equal(result.exitCode, 1)
+      assert.match(result.parsed.message, /config\.image\.onDemand\.enabled must be boolean/)
+    })
+  })
+
   it('forwards the site block that drives robots.txt and sitemap.xml', async () => {
     await withFixture(async ({ root }) => {
       await writeFile(

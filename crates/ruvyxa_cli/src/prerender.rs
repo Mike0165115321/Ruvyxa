@@ -115,6 +115,7 @@ pub(crate) async fn prerender_static_routes(
     fs::create_dir_all(prerender_dir)?;
     let client_assets = Arc::new(load_prerender_client_assets(client_dir));
     let shared_styles = Arc::<str>::from(styles);
+    let i18n = manifest.i18n.clone();
 
     let parallelism = prerender_parallelism(build.parallelism, routes_to_prerender.len());
     let jsx_runtime = parse_jsx_runtime(build.jsx_runtime.as_deref())?;
@@ -235,6 +236,13 @@ pub(crate) async fn prerender_static_routes(
                             path: route.path.clone(),
                             params: RouteParams::new(),
                         }]
+                    } else if let Some(paths) =
+                        locale_static_paths(manifest.i18n.as_ref(), &route.path)
+                    {
+                        // A locale-only dynamic route has a finite path set in
+                        // config, so users do not need boilerplate
+                        // getStaticParams() just to enumerate locales.
+                        paths
                     } else {
                         // Dynamic route without getStaticParams — skip (will be rendered at request time)
                         continue;
@@ -293,6 +301,7 @@ pub(crate) async fn prerender_static_routes(
                 let client_assets = client_assets.clone();
                 let styles = shared_styles.clone();
                 let artifact_cache = artifact_cache.clone();
+                let i18n = i18n.clone();
                 pending.spawn(async move {
                     render_prerender_job(
                         worker_pool.as_deref(),
@@ -303,6 +312,7 @@ pub(crate) async fn prerender_static_routes(
                         &styles,
                         &job,
                         &artifact_cache,
+                        i18n.as_ref(),
                     )
                     .await
                     .map(|route| (index, route))
@@ -384,6 +394,7 @@ pub(crate) async fn render_prerender_job(
     styles: &str,
     job: &PrerenderJob,
     artifact_cache: &PrerenderArtifactCache,
+    i18n: Option<&ruvyxa_graph::I18nRouting>,
 ) -> anyhow::Result<PrerenderedRoute> {
     let Some(html_path) = prerender_html_path(prerender_dir, &job.render_path) else {
         anyhow::bail!(
@@ -475,6 +486,13 @@ pub(crate) async fn render_prerender_job(
         }
     };
 
+    let html = ruvyxa_dev_server::localize_document(
+        &html,
+        i18n,
+        &job.route_path,
+        &job.render_path,
+        &job.params,
+    );
     fs::write(&html_path, html)?;
     Ok(PrerenderedRoute {
         path: job.render_path.clone(),
@@ -698,6 +716,33 @@ pub(crate) fn route_has_dynamic_segments(route_path: &str) -> bool {
     route_path
         .split('/')
         .any(|segment| segment.starts_with('[') && segment.ends_with(']'))
+}
+
+pub(crate) fn locale_static_paths(
+    i18n: Option<&ruvyxa_graph::I18nRouting>,
+    route_path: &str,
+) -> Option<Vec<StaticRouteParams>> {
+    let i18n = i18n?;
+    let marker = format!("[{}]", i18n.locale_param);
+    let dynamic = route_path
+        .split('/')
+        .filter(|segment| segment.starts_with('[') && segment.ends_with(']'))
+        .collect::<Vec<_>>();
+    if dynamic.as_slice() != [marker.as_str()] {
+        return None;
+    }
+    Some(
+        i18n.locales
+            .iter()
+            .map(|locale| StaticRouteParams {
+                path: route_path.replace(&marker, locale),
+                params: RouteParams::from([(
+                    i18n.locale_param.clone(),
+                    serde_json::Value::String(locale.clone()),
+                )]),
+            })
+            .collect(),
+    )
 }
 
 /// Generate the output HTML file path for a pre-rendered route.

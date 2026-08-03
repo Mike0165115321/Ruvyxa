@@ -43,3 +43,13 @@ assets and pre-rendered pages are served through Vercel's static output; dynamic
 by serverless functions. Function output contains a compiled `.mjs` static route registry. ISR
 checks file age against `revalidate` and coalesces concurrent stale refreshes within a warm function
 instance.
+
+Use `vercelAdapter({ edge: true })` to emit a Web-standard Edge Function instead. Edge mode supports
+SSR, SSG, CSR, and API routes and embeds the validated built-in middleware policy without Node.js
+imports. ISR and PPR are rejected in Edge mode because this adapter's ISR cache requires the
+writable Node.js temporary directory. Do not combine `edge: true` with `runtime` or `maxDuration`.
+
+When `image.onDemand` is enabled, the adapter emits the Build Output API `images` allowlist and
+forwards Ruvyxa's validated same-origin image request to Vercel's native `/_vercel/image` service.
+Configured responsive widths are bounded by `image.onDemand.maxWidth`; remote domains remain
+disabled.

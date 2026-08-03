@@ -7,7 +7,7 @@ import type { CSSProperties, ImgHTMLAttributes, ReactElement, SourceHTMLAttribut
  * `crates/ruvyxa_cli/src/image_optimizer.rs`: the build emits a WebP at each of
  * these widths and this component references them by URL. A mismatch would make
  * the browser request a variant the build never produced.
- * `tests/packages/react/image-variants.test.mjs` asserts the two lists agree.
+ * `packages/@ruvyxa/react/test/image-variants.test.mjs` asserts the two lists agree.
  */
 export const DEFAULT_DEVICE_WIDTHS = [640, 750, 828, 1080, 1200, 1920, 2048, 3840] as const
 
@@ -39,6 +39,8 @@ interface ImageBaseProps extends Omit<
   loader?: ImageLoader
   /** Passed to a custom loader; local build output always uses configured build quality. */
   quality?: number
+  /** Resize this same-origin public image through Ruvyxa's runtime endpoint. */
+  dynamic?: boolean
   /** Overrides the default lazy loading when the image is not priority. */
   loading?: 'eager' | 'lazy'
   /** Overrides the default fetch priority when the image is not priority. */
@@ -87,6 +89,7 @@ export function Image({
   fill = false,
   loader,
   quality,
+  dynamic = false,
   decoding = 'async',
   loading,
   fetchPriority,
@@ -95,8 +98,17 @@ export function Image({
   style,
   ...attributes
 }: ImageProps): ReactElement {
-  const outputSrc = resolveImageUrl({ src, width, quality, unoptimized, loader })
-  const outputSrcSet = resolveSrcSet({ src, srcSet, sizes, width, unoptimized, loader })
+  const outputSrc = resolveImageUrl({ src, width, quality, unoptimized, loader, dynamic })
+  const outputSrcSet = resolveSrcSet({
+    src,
+    srcSet,
+    sizes,
+    width,
+    quality,
+    unoptimized,
+    loader,
+    dynamic,
+  })
   const outputStyle = fill ? fillStyle(style) : style
 
   return (
@@ -146,15 +158,27 @@ function resolveImageUrl({
   quality,
   unoptimized,
   loader,
+  dynamic,
 }: {
   src: string
   width?: number
   quality?: number
   unoptimized?: boolean
   loader?: ImageLoader
+  dynamic?: boolean
 }): string {
   if (loader) return loader({ src, width, quality })
+  if (dynamic && !unoptimized && isLocalRuntimeImage(src)) {
+    return runtimeImageUrl(src, runtimeImageWidth(width ?? 1080), quality)
+  }
   return unoptimized ? src : webpUrl(src)
+}
+
+function runtimeImageWidth(width: number): number {
+  return (
+    DEFAULT_DEVICE_WIDTHS.find((candidate) => candidate >= width) ??
+    DEFAULT_DEVICE_WIDTHS[DEFAULT_DEVICE_WIDTHS.length - 1]
+  )
 }
 
 /**
@@ -177,6 +201,8 @@ function resolveSrcSet({
   width,
   unoptimized,
   loader,
+  dynamic,
+  quality,
 }: {
   src: string
   srcSet?: string
@@ -184,13 +210,27 @@ function resolveSrcSet({
   width?: number
   unoptimized?: boolean
   loader?: ImageLoader
+  dynamic?: boolean
+  quality?: number
 }): string | undefined {
   if (srcSet) {
-    if (loader || unoptimized) return srcSet
+    if (loader || unoptimized || dynamic) return srcSet
     return rewriteLocalSrcSet(srcSet)
   }
 
-  if (loader || unoptimized || !sizes || !width) return srcSet
+  if (loader || unoptimized || !sizes) return srcSet
+
+  if (dynamic && isLocalRuntimeImage(src)) {
+    const widths: number[] = width
+      ? DEFAULT_DEVICE_WIDTHS.filter((deviceWidth) => deviceWidth < width)
+      : [...DEFAULT_DEVICE_WIDTHS]
+    if (width) widths.push(width)
+    return [...new Set(widths)]
+      .map((deviceWidth) => `${runtimeImageUrl(src, deviceWidth, quality)} ${deviceWidth}w`)
+      .join(', ')
+  }
+
+  if (!width) return srcSet
 
   const base = webpUrl(src)
   // `webpUrl` only rewrites a local PNG/JPEG to `.webp`; it returns everything
@@ -204,6 +244,17 @@ function resolveSrcSet({
   )
   entries.push(`${base} ${width}w`)
   return entries.join(', ')
+}
+
+function isLocalRuntimeImage(src: string): boolean {
+  const path = src.split(/[?#]/, 1)[0]
+  return src.startsWith('/') && !src.startsWith('//') && /\.(?:png|jpe?g|webp)$/i.test(path)
+}
+
+function runtimeImageUrl(src: string, width: number, quality?: number): string {
+  const path = src.split(/[?#]/, 1)[0]
+  const query = `src=${encodeURIComponent(path)}&w=${Math.max(1, Math.round(width))}`
+  return `/__ruvyxa/image?${query}${quality !== undefined ? `&q=${Math.round(quality)}` : ''}`
 }
 
 /**

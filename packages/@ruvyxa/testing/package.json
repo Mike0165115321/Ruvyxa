@@ -1,0 +1,34 @@
+{
+  "name": "@ruvyxa/testing",
+  "version": "1.0.25",
+  "description": "Framework-native loader, action, and cache test doubles for Ruvyxa applications.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "src", "README.md"],
+  "keywords": ["ruvyxa", "testing", "vitest", "jest", "server-actions"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thirawat27/ruvyxa.git",
+    "directory": "packages/@ruvyxa/testing"
+  },
+  "bugs": {
+    "url": "https://github.com/thirawat27/ruvyxa/issues"
+  },
+  "homepage": "https://github.com/thirawat27/ruvyxa#readme",
+  "engines": { "node": ">=22.12.0" },
+  "publishConfig": { "access": "public" },
+  "peerDependencies": { "@ruvyxa/core": "^1.0.25" },
+  "devDependencies": { "@ruvyxa/core": "workspace:^" },
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }
+  },
+  "scripts": {
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "format": "tsc -p tsconfig.json --noEmit",
+    "prepack": "pnpm run build"
+  }
+}

@@ -841,6 +841,8 @@ export interface LinkProps extends Omit<AnchorHTMLAttributes<HTMLAnchorElement>,
   replace?: boolean
   /** Scroll to the top after navigating. Defaults to `true`. */
   scroll?: boolean
+  /** Animate with the browser View Transitions API when available. */
+  viewTransition?: boolean
   /**
    * Warm the destination bundle ahead of the click.
    * `"hover"` (default): prefetch on pointer enter or focus
@@ -958,6 +960,8 @@ export interface NavigateOptions {
   replace?: boolean
   /** Scroll to the top after navigating. Defaults to `true`. */
   scroll?: boolean
+  /** Animate with the browser View Transitions API when available. */
+  viewTransition?: boolean
 }
 ```
 
@@ -1136,7 +1140,7 @@ The full route manifest is written during build and contains:
 
 ## Route Validation
 
-When you run `ruvyxa check` or `ruvyxa dev`, Ruvyxa validates your route tree. Ambiguous routes
+When you run `npm run check` or `npm run dev`, Ruvyxa validates your route tree. Ambiguous routes
 produce an error.
 
 ```
@@ -1339,8 +1343,8 @@ app/blog/[slug]/
 Use the CLI, not an assumed package script, to inspect discovery:
 
 ```bash
-ruvyxa routes
-ruvyxa trace /blog/[slug]
+npm run routes
+npm run trace -- /blog/[slug]
 ```
 
 `routes` prints the discovered table. `trace` accepts the route pattern shown by the table rather
@@ -1356,3 +1360,28 @@ check its entry-file name and whether an ancestor directory starts with `_` or `
 - **[04-rendering-strategies.md](./04-rendering-strategies.md)** — SSR, SSG, ISR, PPR, CSR
 - **[06-server-actions.md](./06-server-actions.md)** — Server actions for mutations
 - **[07-api-routes.md](./07-api-routes.md)** — Building API endpoints with `route.ts`
+
+# Locale routing and view transitions
+
+Configure locale routing and place localized pages below the named locale parameter:
+
+```ts
+export default config({
+  i18n: {
+    locales: ['en', 'th'],
+    defaultLocale: 'en',
+    localeParam: 'lang',
+    detectLocale: true,
+    cookie: 'RUVYXA_LOCALE',
+  },
+})
+```
+
+`app/[lang]/about/page.tsx` is expanded for configured locales during prerendering. Unprefixed page
+requests use the locale cookie first, then weighted `Accept-Language`, then the default locale.
+Rendered locale pages receive `<html lang>` plus alternate `hreflang` and `x-default` links. API,
+asset, internal, and already-localized paths are never redirected.
+
+Use `<Link href="/about" viewTransition>` or `router.push('/about', { viewTransition: true })` for
+an opt-in browser-native transition. Unsupported browsers and reduced-motion preferences use the
+ordinary navigation path.

@@ -3,6 +3,7 @@ import {
   clientBuildOutput,
   headersFileContents,
   projectRelativeOutDir,
+  runtimeBuildPolicy,
   validateBuildContext,
 } from '@ruvyxa/core'
 
@@ -52,15 +53,37 @@ const DEFAULT_COMPATIBILITY_DATE = '2025-09-01'
  * Static assets (client bundles, pre-rendered pages for SSG/CSR) are served
  * by Cloudflare's `assets` binding; the Worker only handles dynamic routes.
  */
-function workerHandlerSource(): string {
+function workerHandlerSource(runtimePolicy: unknown): string {
   return `import { createHandler } from './serverless-handler.mjs';
 import { loadRouteModule } from './route-modules.mjs';
 // A JS module, not a JSON import: import attributes for JSON are not uniformly
 // available across bundlers and Worker compatibility dates.
 import manifest from './manifest.mjs';
 
+const runtimePolicy = ${JSON.stringify(runtimePolicy ?? {})};
+
+async function optimizeImage(request, { src, width, quality }) {
+  if (width > (runtimePolicy.image?.maxWidth ?? 3840)) {
+    return new Response('Image width exceeds configured maximum', { status: 400 });
+  }
+  const source = new URL(src, request.url);
+  const transformed = await fetch(source, {
+    cf: { image: { width, quality, fit: 'scale-down', format: 'auto' } },
+  });
+  const headers = new Headers(transformed.headers);
+  headers.set('cache-control', 'public, max-age=86400, stale-while-revalidate=604800');
+  return new Response(transformed.body, {
+    status: transformed.status,
+    statusText: transformed.statusText,
+    headers,
+  });
+}
+
 const handler = createHandler({
   routes: manifest.routes,
+  middleware: runtimePolicy.middleware,
+  i18n: manifest.i18n,
+  optimizeImage: runtimePolicy.image?.onDemand === true ? optimizeImage : undefined,
   importPage: loadRouteModule,
   importApi: loadRouteModule,
   readPrerendered: (pathname) => {
@@ -121,6 +144,7 @@ export function cloudflareAdapter(options: CloudflareAdapterOptions = {}): Adapt
       // Config files are committed or read on other machines; never embed the
       // absolute build-machine outDir in them.
       const relativeOutDir = projectRelativeOutDir(ctx)
+      const runtimePolicy = runtimeBuildPolicy(ctx)
 
       const wranglerConfig = JSON.stringify(
         {
@@ -162,7 +186,7 @@ export function cloudflareAdapter(options: CloudflareAdapterOptions = {}): Adapt
           {
             kind: 'function',
             path: 'deploy/cloudflare/worker',
-            handlerSource: workerHandlerSource(),
+            handlerSource: workerHandlerSource(runtimePolicy),
           },
           // Wrangler config pointing at the Worker + assets
           {

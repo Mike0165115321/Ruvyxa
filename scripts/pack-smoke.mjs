@@ -23,6 +23,7 @@ const packages = [
   '@ruvyxa/auth',
   '@ruvyxa/database',
   '@ruvyxa/realtime',
+  '@ruvyxa/testing',
   '@ruvyxa/adapter-aws',
   '@ruvyxa/adapter-node',
   '@ruvyxa/adapter-vercel',
@@ -70,7 +71,11 @@ for (const file of readdirSync(destination).filter((name) => name.endsWith('.tgz
   assert(!serialized.includes('workspace:'), `${file} contains workspace protocol`)
   assert(!listing.includes('.test.'), `${file} includes test files`)
 
-  if (['@ruvyxa/auth', '@ruvyxa/database', '@ruvyxa/realtime'].includes(packageJson.name)) {
+  if (
+    ['@ruvyxa/auth', '@ruvyxa/database', '@ruvyxa/realtime', '@ruvyxa/testing'].includes(
+      packageJson.name,
+    )
+  ) {
     assert(listing.includes('package/dist/index.js'), `${packageJson.name} missing dist/index.js`)
     assert(listing.includes('package/dist/index.d.ts'), `${packageJson.name} missing declarations`)
   }

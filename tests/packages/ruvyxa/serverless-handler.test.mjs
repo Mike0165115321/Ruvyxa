@@ -275,6 +275,152 @@ describe('serverless handler request validation', () => {
   })
 })
 
+describe('Fetch-native built-in middleware parity', () => {
+  const route = { id: 'api', path: '/api', kind: 'api', file: 'api.ts', render: {} }
+
+  function middlewareHandler(middleware) {
+    return createHandler({
+      routes: [route],
+      middleware,
+      importPage: async () => ({}),
+      importApi: async () => ({ GET: () => new Response('ok') }),
+    })
+  }
+
+  it('applies CORS, timing, request IDs, and configured response headers', async () => {
+    const handler = middlewareHandler({
+      builtin: {
+        cors: {
+          origins: ['https://app.example'],
+          methods: ['GET', 'OPTIONS'],
+          headers: ['Content-Type'],
+          credentials: true,
+          maxAge: 3600,
+        },
+        timing: true,
+        log: true,
+        headers: { 'x-app': 'ruvyxa' },
+      },
+    })
+    const response = await handler(
+      new Request('https://worker.example/api', {
+        headers: { origin: 'https://app.example', 'x-request-id': 'known-request' },
+      }),
+    )
+
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('access-control-allow-origin'), 'https://app.example')
+    assert.equal(response.headers.get('access-control-allow-credentials'), 'true')
+    assert.match(response.headers.get('vary'), /Origin/i)
+    assert.match(response.headers.get('x-response-time'), /^\d+ms$/)
+    assert.equal(response.headers.get('x-request-id'), 'known-request')
+    assert.equal(response.headers.get('x-app'), 'ruvyxa')
+  })
+
+  it('answers valid preflight before routing and varies rejected origins', async () => {
+    const handler = middlewareHandler({
+      builtin: {
+        cors: { origins: ['https://app.example'], methods: ['GET'], maxAge: 60 },
+      },
+    })
+    const preflight = await handler(
+      new Request('https://worker.example/missing', {
+        method: 'OPTIONS',
+        headers: {
+          origin: 'https://app.example',
+          'access-control-request-method': 'GET',
+        },
+      }),
+    )
+    assert.equal(preflight.status, 204)
+    assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://app.example')
+
+    const rejected = await handler(
+      new Request('https://worker.example/api', { headers: { origin: 'https://evil.example' } }),
+    )
+    assert.equal(rejected.headers.get('access-control-allow-origin'), null)
+    assert.match(rejected.headers.get('vary'), /Origin/i)
+  })
+
+  it('enforces bounded window rate limits with platform and explicit header keys', async () => {
+    const handler = middlewareHandler({
+      builtin: { rate: { max: 1, window: 60, key: 'header:x-tenant' } },
+    })
+    const request = (tenant) =>
+      new Request('https://worker.example/api', { headers: { 'x-tenant': tenant } })
+
+    assert.equal((await handler(request('a'))).status, 200)
+    const limited = await handler(request('a'))
+    assert.equal(limited.status, 429)
+    assert.equal(limited.headers.get('retry-after'), '60')
+    assert.equal((await handler(request('b'))).status, 200)
+  })
+})
+
+describe('serverless i18n and dynamic image parity', () => {
+  const i18n = {
+    locales: ['en', 'th', 'fr-FR'],
+    defaultLocale: 'en',
+    localeParam: 'lang',
+    detectLocale: true,
+    cookie: 'RUVYXA_LOCALE',
+  }
+
+  it('redirects to a supported locale and injects lang and hreflang metadata', async () => {
+    const route = pageRoute('localized-about', '/[lang]/about')
+    const handler = createHandler({
+      routes: [route],
+      i18n,
+      importPage: async () => ({
+        render: async () => '<!doctype html><html><head></head><body>About</body></html>',
+      }),
+      importApi: async () => ({}),
+    })
+
+    const redirected = await handler(
+      new Request('https://example.com/about', {
+        headers: { 'accept-language': 'fr-CA,th;q=.8' },
+      }),
+    )
+    assert.equal(redirected.status, 307)
+    assert.equal(redirected.headers.get('location'), 'https://example.com/fr-FR/about')
+
+    const localized = await handler(new Request('https://example.com/th/about'))
+    const html = await localized.text()
+    assert.match(html, /<html lang="th">/)
+    assert.match(html, /hreflang="fr-FR" href="\/fr-FR\/about"/)
+    assert.match(html, /hreflang="x-default" href="\/en\/about"/)
+  })
+
+  it('validates image requests before invoking a platform optimizer', async () => {
+    const calls = []
+    const handler = createHandler({
+      routes: [],
+      importPage: async () => ({}),
+      importApi: async () => ({}),
+      optimizeImage: async (_request, input) => {
+        calls.push(input)
+        return new Response('image', { headers: { 'content-type': 'image/webp' } })
+      },
+    })
+
+    const optimized = await handler(
+      new Request('https://example.com/__ruvyxa/image?src=%2Fhero.jpg&w=640&q=75'),
+    )
+    assert.equal(optimized.status, 200)
+    assert.deepEqual(calls, [{ src: '/hero.jpg', width: 640, quality: 75 }])
+    assert.equal(
+      (
+        await handler(
+          new Request('https://example.com/__ruvyxa/image?src=https://evil.test/a.jpg&w=640'),
+        )
+      ).status,
+      400,
+    )
+    assert.equal(calls.length, 1)
+  })
+})
+
 describe('prerender cache path mapping', () => {
   it('maps ordinary request paths to the build writer layout', () => {
     assert.equal(prerenderRelativePath('/'), 'index.html')

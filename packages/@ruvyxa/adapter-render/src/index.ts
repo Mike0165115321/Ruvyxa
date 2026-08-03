@@ -1,5 +1,10 @@
 import type { Adapter, AdapterArtifact, AdapterOutput, BuildContext } from '@ruvyxa/core'
-import { clientBuildOutput, standaloneServerSource, validateBuildContext } from '@ruvyxa/core'
+import {
+  clientBuildOutput,
+  runtimeBuildPolicy,
+  standaloneServerSource,
+  validateBuildContext,
+} from '@ruvyxa/core'
 
 /** Options for Render deployments. */
 export interface RenderAdapterOptions {
@@ -53,7 +58,7 @@ export function renderAdapter(options: RenderAdapterOptions = {}): Adapter {
           {
             kind: 'function',
             path: 'deploy/render/server',
-            handlerSource: standaloneServerSource(),
+            handlerSource: standaloneServerSource({ runtimePolicy: runtimeBuildPolicy(ctx) }),
           },
           { kind: 'static-site', path: 'deploy/render/public', optional: true },
           {

@@ -192,7 +192,7 @@ object ใหม่ทุก render ใน `deps` หากไม่ต้อง
 - ทดสอบ producer failure ทั้งกรณีมีและไม่มี stale value
 - ทดสอบหลาย worker หากระบบต้องการ cache coherence ข้าม process
 - ห้ามใส่ secret หรือข้อมูลส่วนตัวลงใน key ที่แสดงใน log หรือ diagnostics
-- ใช้ `ruvyxa trace` และ `ruvyxa analyze` ตรวจ flow รอบ cache; ไม่มี cache-inspection CLI เฉพาะ
+- ใช้ `npm run trace` และ `npm run analyze` ตรวจ flow รอบ cache; ไม่มี cache-inspection CLI เฉพาะ
 
 ## สรุป
 
@@ -200,7 +200,7 @@ object ใหม่ทุก render ใน `deps` หากไม่ต้อง
 2. ใช้ `cache(key).ttl().swr().get()` สำหรับ cache producer
 3. ใช้ `invalidateCache()` หรือ `invalidate()` ใน action สำหรับ invalidation
 4. Cache เป็น in-memory ต่อ worker และไม่ใช่ distributed Redis/Memcached provider
-5. วัดผลบน workload จริงด้วย `ruvyxa bench` แทนการใช้ค่า latency สำเร็จรูปในเอกสาร
+5. วัดผลบน workload จริงด้วย `npm run bench` แทนการใช้ค่า latency สำเร็จรูปในเอกสาร
 
 ---
 

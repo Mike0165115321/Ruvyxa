@@ -1,5 +1,10 @@
 import type { Adapter, AdapterArtifact, AdapterOutput, BuildContext } from '@ruvyxa/core'
-import { clientBuildOutput, standaloneServerSource, validateBuildContext } from '@ruvyxa/core'
+import {
+  clientBuildOutput,
+  runtimeBuildPolicy,
+  standaloneServerSource,
+  validateBuildContext,
+} from '@ruvyxa/core'
 
 /** Options for Railway deployments. */
 export interface RailwayAdapterOptions {
@@ -50,7 +55,7 @@ export function railwayAdapter(options: RailwayAdapterOptions = {}): Adapter {
           {
             kind: 'function',
             path: 'deploy/railway/server',
-            handlerSource: standaloneServerSource(),
+            handlerSource: standaloneServerSource({ runtimePolicy: runtimeBuildPolicy(ctx) }),
           },
           { kind: 'static-site', path: 'deploy/railway/public', optional: true },
           {

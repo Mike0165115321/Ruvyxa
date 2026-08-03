@@ -29,24 +29,32 @@ export function Card() {
 ## CLI
 
 ```bash
-npx ruvyxa dev --root .          # Development server with HMR
-npx ruvyxa build --root .        # Production build (--target node|edge|static)
-npx ruvyxa start --root .        # Serve production build
-npx ruvyxa preview --root .      # Alias for start
-npx ruvyxa check --root .        # App-level production readiness checks
-npx ruvyxa routes --root .       # Show discovered routes
-npx ruvyxa analyze --root .      # Structured validation JSON
-npx ruvyxa doctor --root .       # Check project health and environment
-npx ruvyxa trace <path>          # Inspect route matching
-npx ruvyxa bench --root .        # Benchmark discovery, validation, builds
-npx ruvyxa test:parity --root .  # Dev/prod route parity check
-npx ruvyxa clean --root .        # Remove .ruvyxa/ output
+npm run dev                       # Development server with HMR
+npm run build                     # Production build (--target node|edge|static)
+npm run start                     # Serve production build
+npm run preview                   # Alias for start
+npm run check                     # App-level production readiness checks
+npm run routes                    # Show discovered routes
+npm run routes:json                # Machine-readable route tree
+npm run analyze:html               # Interactive self-contained bundle report
+npm run add -- form               # Scaffold form + validated Server Action
+npm run add -- data-table         # Scaffold a typed client data table
+npm run add -- auth               # Scaffold an @ruvyxa/auth flow
+npm run doctor                    # Check project health and environment
+npm run trace -- <path>           # Inspect route matching
+npm run bench                     # Benchmark discovery, validation, builds
+npm run test:parity               # Dev/prod route parity check
+npm run clean                     # Remove .ruvyxa/ output
 ```
 
 Human-facing commands print the same compact TUI style used by the native server: headings, aligned
 fields, status labels, and color only on real terminals. Use `check` as the app-level production
 readiness gate. Structured commands such as `analyze`, `trace`, and `bench --json` remain
 machine-readable.
+
+During `npm run dev`, open `/__ruvyxa/devtools` for the registered route tree, render-cache state,
+Server Action timings, bundle metrics, and server uptime. The endpoint is development-only and its
+data endpoint enforces the dev server's origin policy.
 
 Production builds emit route-level client bundles concurrently and keep manifest output
 deterministic.

@@ -8,16 +8,16 @@ rollback orchestration.
 
 ```bash
 # Validate the project and inspect a target
-ruvyxa check
-ruvyxa doctor --adapter node
+npm run check
+npm run doctor -- --adapter node
 
 # Build the framework output and invoke the selected adapter
-ruvyxa build --adapter node
+npm run build -- --adapter node
 
 # Serve an existing production build
-ruvyxa start
+npm run start
 # Or inspect it locally
-ruvyxa preview
+npm run preview
 ```
 
 `start` and `preview` serve an existing build. They do not mean “build, stage, health-check, and
@@ -87,7 +87,7 @@ relative `outputDir`. It supports `ssg` and `csr`; a static host cannot execute 
 API routes. Dynamic SSG routes use the framework's `getStaticParams`/`staticParams` metadata.
 
 ```bash
-ruvyxa build --adapter static
+npm run build -- --adapter static
 # publish the generated .ruvyxa/deploy/static/ artifact according to the adapter output
 ```
 
@@ -127,9 +127,9 @@ CI should validate and build the artifact; deployment is a separate provider-spe
 ```yaml
 steps:
   - run: pnpm install --frozen-lockfile
-  - run: pnpm exec ruvyxa check
-  - run: pnpm exec ruvyxa doctor --adapter node
-  - run: pnpm exec ruvyxa build --adapter node
+  - run: npm run check
+  - run: npm run doctor -- --adapter node
+  - run: npm run build -- --adapter node
   - uses: actions/upload-artifact@v4
     with:
       name: ruvyxa-node-build
@@ -138,7 +138,7 @@ steps:
 
 ## Verification and performance
 
-Use `ruvyxa analyze` for bundle inspection and `ruvyxa bench` for measurements on the actual
+Use `npm run analyze` for bundle inspection and `npm run bench` for measurements on the actual
 application and deployment shape. The repository does not provide universal targets for TTFB,
 throughput, bundle size, image size, ROI, or timeline; record workload, hardware, adapter, and
 sample size with any project-specific result.
@@ -147,7 +147,7 @@ sample size with any project-specific result.
 
 | Symptom                     | First verification                                                                           |
 | --------------------------- | -------------------------------------------------------------------------------------------- |
-| Adapter not found           | Check the selected name and package installation; run `ruvyxa doctor --adapter <name>`.      |
+| Adapter not found           | Check the selected name and package installation; run `npm run doctor -- --adapter <name>`.  |
 | Strategy unsupported        | Compare the route strategy with the adapter's `supports` field.                              |
 | Static route missing        | Confirm the route is `ssg`/`csr` and dynamic routes expose `getStaticParams`/`staticParams`. |
 | Output is not served        | Run `build` first; `start` and `preview` do not create a build.                              |
@@ -407,6 +407,8 @@ interface BuildContext {
   outDir: string
   /** Override chunk manifest path. */
   chunkManifest?: string
+  /** Validated build metadata available to adapters without re-evaluating config. */
+  buildInfo?: Readonly<Record<string, unknown>>
 }
 
 interface AdapterOutput {
@@ -769,7 +771,7 @@ export default config({
 
 ```toml
 [build]
-  command = "npx ruvyxa build"
+  command = "npm run build"
   publish = ".netlify/dist"
   functions = ".netlify/functions"
 
@@ -1328,7 +1330,7 @@ dist/
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
     "builder": "nixpacks",
-    "buildCommand": "npx ruvyxa build"
+    "buildCommand": "npm run build"
   },
   "deploy": {
     "startCommand": "node dist/server.js",
@@ -1386,7 +1388,7 @@ services:
   - type: web
     name: my-app
     env: node
-    buildCommand: npx ruvyxa build
+    buildCommand: npm run build
     startCommand: node dist/server.js
     healthCheckPath: /health
     plan: starter
@@ -1438,7 +1440,7 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
-RUN npx ruvyxa build
+RUN npm run build
 
 # ---- Runner Stage ----
 FROM node:22-alpine AS runner
@@ -1533,7 +1535,7 @@ netlify env:set DATABASE_URL postgres://...
 netlify env:set RUVYXA_PUBLIC_URL https://example.com
 
 # CI
-DATABASE_URL=${{ secrets.DATABASE_URL }} npx ruvyxa build
+DATABASE_URL=${{ secrets.DATABASE_URL }} npm run build
 ```
 
 ### Security Hardening
@@ -1638,8 +1640,8 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
       - run: npm ci
-      - run: npx ruvyxa check
-      - run: npx ruvyxa test:parity
+      - run: npm run check
+      - run: npm run test:parity
       - run: npm run typecheck
 
   build:
@@ -1652,7 +1654,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
       - run: npm ci
-      - run: npx ruvyxa build
+      - run: npm run build
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
@@ -1705,14 +1707,14 @@ check:
   stage: check
   script:
     - npm ci
-    - npx ruvyxa check
-    - npx ruvyxa test:parity
+    - npm run check
+    - npm run test:parity
 
 build:
   stage: build
   script:
     - npm ci
-    - npx ruvyxa build
+    - npm run build
   artifacts:
     paths:
       - .ruvyxa/
@@ -1721,8 +1723,7 @@ build:
 deploy:
   stage: deploy
   script:
-    - npx ruvyxa build
-    - npx ruvyxa plugin deploy
+    - npm run build
   only:
     - main
   environment:
@@ -1909,3 +1910,19 @@ the selected adapter's package explicitly does so.
 - **[12-cli-commands.md](./12-cli-commands.md)** — build and deploy commands
 - **[14-plugins.md](./14-plugins.md)** — sitemap, robots, and deploy plugins
 - **[16-error-handling.md](./16-error-handling.md)** — deploy error codes
+
+# Fetch-native middleware and Edge targets
+
+Validated built-in middleware policy is serialized into `build.json` and embedded into generated
+runtime artifacts. CORS, rate limiting, timing, logging, and custom headers therefore use the same
+config in native development, standalone Node/Bun, serverless adapters, Cloudflare Workers, and
+Vercel Edge.
+
+```ts
+adapter: vercelAdapter({ edge: true, regions: ['sin1'] })
+```
+
+Vercel Edge supports SSR, SSG, CSR, and API routes. Select the default Node serverless mode for ISR
+or PPR because those strategies use the adapter's writable temporary cache. Cloudflare supports SSR,
+SSG, CSR, and API routes; persistent ISR/PPR needs an explicit KV or Durable Object design and is
+rejected instead of silently degrading.

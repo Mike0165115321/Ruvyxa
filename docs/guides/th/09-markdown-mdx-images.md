@@ -155,9 +155,9 @@ export function ArticleSeo() {
 ## การตรวจสอบ
 
 ```bash
-ruvyxa check
-ruvyxa analyze
-ruvyxa build
+npm run check
+npm run analyze
+npm run build
 ```
 
 หลัง build ให้ตรวจ WebP paths และ image manifest ที่สร้างขึ้น ห้ามใช้ชื่อ encoder ที่ไม่มีใน source
@@ -1212,61 +1212,52 @@ interface ImageProps extends Omit<
   src: string
   alt: string
 
-  // Dimensions
-  width?: number
-  height?: number
+  // Dimensions: ต้องมี เว้นแต่ fill: true
+  width: number
+  height: number
+  fill?: boolean
 
   // Loading behavior
   priority?: boolean
   loading?: 'lazy' | 'eager'
-  lazy?: boolean
 
   // Quality and format
   quality?: number // 1-100
-  format?: 'webp' | 'avif' | 'auto' // default: auto
+  dynamic?: boolean // resize same-origin public image ที่ runtime
+  unoptimized?: boolean // คง URL ต้นฉบับของรูป local
+  loader?: ImageLoader // สร้าง URL สำหรับ external CDN
 
   // Responsive
   sizes?: string // CSS sizes media query
-  srcSet?: never // auto-generated, cannot override
+  srcSet?: string // override srcset ของ browser ได้
 
   // Styling
-  objectFit?: 'cover' | 'contain' | 'fill' | 'none' | 'scale-down'
-  objectPosition?: string // CSS object-position
   className?: string
   style?: React.CSSProperties
 
-  // Placeholder
-  placeholder?: 'blur' | 'empty'
-  blurDataURL?: string // base64-encoded blur image
-
-  // Debug
-  onLoad?: (event: React.SyntheticEvent<HTMLImageElement>) => void
-  onError?: (event: React.SyntheticEvent<HTMLImageElement>) => void
+  // Native <img> attributes เช่น onLoad และ onError ส่งผ่านได้
 }
 ```
 
 ### Props Reference Table
 
-| Prop             | ชนิด                         | Required | Default   | คำอธิบาย                                  |
-| ---------------- | ---------------------------- | -------- | --------- | ----------------------------------------- |
-| `src`            | `string`                     | ✅       | -         | Path หรือ URL ของรูป                      |
-| `alt`            | `string`                     | ✅       | -         | ข้อความ alternative (accessibility)       |
-| `width`          | `number`                     | ❌       | auto      | ความกว้างต้นฉบับ (px)                     |
-| `height`         | `number`                     | ❌       | auto      | ความสูงต้นฉบับ (px)                       |
-| `priority`       | `boolean`                    | ❌       | `false`   | Preload + eager loading (LCP)             |
-| `loading`        | `'lazy' \| 'eager'`          | ❌       | `'lazy'`  | วิธีโหลด                                  |
-| `lazy`           | `boolean`                    | ❌       | `true`    | เปิด/ปิด lazy loading                     |
-| `quality`        | `number`                     | ❌       | `80`      | คุณภาพ (1-100, สูง = ไฟล์ใหญ่)            |
-| `format`         | `'webp' \| 'avif' \| 'auto'` | ❌       | `'auto'`  | รูปแบบ output                             |
-| `sizes`          | `string`                     | ❌       | -         | CSS sizes attribute                       |
-| `objectFit`      | `string`                     | ❌       | -         | CSS object-fit                            |
-| `objectPosition` | `string`                     | ❌       | -         | CSS object-position                       |
-| `className`      | `string`                     | ❌       | -         | CSS class name                            |
-| `style`          | `React.CSSProperties`        | ❌       | -         | Inline styles                             |
-| `placeholder`    | `'blur' \| 'empty'`          | ❌       | `'empty'` | แสดง placeholder ขณะโหลด                  |
-| `blurDataURL`    | `string`                     | ❌       | -         | Base64 blur (ใช้กับ `placeholder='blur'`) |
-| `onLoad`         | `function`                   | ❌       | -         | Callback เมื่อโหลดเสร็จ                   |
-| `onError`        | `function`                   | ❌       | -         | Callback เมื่อโหลด error                  |
+| Prop          | ชนิด                  | Required | Default  | คำอธิบาย                                                  |
+| ------------- | --------------------- | -------- | -------- | --------------------------------------------------------- |
+| `src`         | `string`              | ✅       | -        | Path หรือ URL ของรูป                                      |
+| `alt`         | `string`              | ✅       | -        | ข้อความ alternative (accessibility)                       |
+| `width`       | `number`              | ใช่*     | -        | ความกว้างต้นฉบับ (px), *ไม่จำเป็นเมื่อ `fill`             |
+| `height`      | `number`              | ใช่*     | -        | ความสูงต้นฉบับ (px), *ไม่จำเป็นเมื่อ `fill`               |
+| `priority`    | `boolean`             | ❌       | `false`  | Preload + eager loading (LCP)                             |
+| `loading`     | `'lazy' \| 'eager'`   | ❌       | `'lazy'` | วิธีโหลด                                                  |
+| `quality`     | `number`              | ❌       | -        | ส่งให้ custom loader หรือ runtime endpoint                |
+| `dynamic`     | `boolean`             | ❌       | `false`  | resize รูป local same-origin ที่ runtime เมื่อเปิด config |
+| `unoptimized` | `boolean`             | ❌       | `false`  | คง URL รูป local ไม่ให้ rewrite                           |
+| `loader`      | `ImageLoader`         | ❌       | -        | สร้าง URL ของ external CDN                                |
+| `sizes`       | `string`              | ❌       | -        | CSS sizes attribute                                       |
+| `className`   | `string`              | ❌       | -        | CSS class name                                            |
+| `style`       | `React.CSSProperties` | ❌       | -        | Inline styles                                             |
+| `onLoad`      | `function`            | ❌       | -        | Callback เมื่อโหลดเสร็จ                                   |
+| `onError`     | `function`            | ❌       | -        | Callback เมื่อโหลด error                                  |
 
 ### Priority Loading (LCP Optimization)
 
@@ -1284,7 +1275,6 @@ export default function HeroBanner() {
         height={1080}
         priority
         quality={85}
-        format="avif"
         sizes="100vw"
       />
       <div className="hero-overlay">
@@ -1296,19 +1286,20 @@ export default function HeroBanner() {
 }
 ```
 
-**Ruvyxa เจอ `priority` = `true` แล้วทำ:**
+**เมื่อ `priority` เป็น `true` `Image` จะ:**
 
-1. เพิ่ม `<link rel="preload" as="image" href="/assets/hero.abc123.avif">` ใน `<head>`
-2. สำหรับทุกรูปแบบที่ตั้งไว้ (WebP + AVIF) — สร้าง preload links ทั้งหมด
-3. ตั้ง `loading="eager"` อัตโนมัติ
-4. เพิ่ม `fetchpriority="high"` attribute
-5. จัดลำดับความสำคัญใน build pipeline ให้ประมวลผลก่อนรูปอื่น
+1. ตั้ง `loading="eager"` แทนค่า lazy ปกติ
+2. ตั้ง `fetchpriority="high"` เพื่อให้ browser จัดลำดับการโหลด
+3. ใช้ URL WebP และ responsive `srcset` ชุดเดียวกับรูป local ปกติ
+
+การ preload เพิ่มเติมเป็น responsibility ของ React/browser integration และไม่ควรพึ่งชื่อไฟล์หรือ
+การสร้าง AVIF ที่ framework ไม่ได้รองรับ
 
 [!TIP] ใช้ `priority` เฉพาะรูปที่อยู่เหนือ fold (above-the-fold) เท่านั้น — ประมาณ 1-3 รูปต่อหน้า
 
 ### Lazy Loading (Default)
 
-รูปอื่น ๆ ทั้งหมดใช้ IntersectionObserver API:
+รูปที่ไม่ใช้ `priority` ส่ง `loading="lazy"` ให้ browser โดยตรง:
 
 ```tsx
 // components/gallery.tsx
@@ -1332,7 +1323,7 @@ export default function PhotoGallery({ images }: { images: GalleryImage[] }) {
             width={img.width}
             height={img.height}
             loading={index < 2 ? 'eager' : 'lazy'}
-            objectFit="cover"
+            style={{ objectFit: 'cover' }}
             sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
           />
         </div>
@@ -1364,13 +1355,14 @@ export default function PhotoGallery({ images }: { images: GalleryImage[] }) {
 ```html
 <img
   alt="รูปสินค้า"
-  src="/assets/main.abc123.webp"
+  src="/images/product/main.webp"
   srcset="
-    /assets/main.abc123-640w.webp   640w,
-    /assets/main.abc123-960w.webp   960w,
-    /assets/main.abc123-1280w.webp 1280w,
-    /assets/main.abc123-1920w.webp 1920w,
-    /assets/main.abc123-2560w.webp 2560w
+    /images/product/main-640w.webp   640w,
+    /images/product/main-750w.webp   750w,
+    /images/product/main-828w.webp   828w,
+    /images/product/main-1080w.webp 1080w,
+    /images/product/main-1200w.webp 1200w,
+    /images/product/main-1920w.webp 1920w
   "
   sizes="(max-width: 480px) 100vw, (max-width: 768px) 50vw, (max-width: 1200px) 33vw, 25vw"
   loading="lazy"
@@ -1387,29 +1379,9 @@ export default function PhotoGallery({ images }: { images: GalleryImage[] }) {
 
 ### Placeholder Blur
 
-```tsx
-import { Image } from '@ruvyxa/react'
-
-export default function BlurExample() {
-  return (
-    <div className="article-image">
-      <Image
-        src="/images/blog/cover.jpg"
-        alt="ภาพปกบทความ"
-        width={1200}
-        height={600}
-        placeholder="blur"
-        blurDataURL="data:image/webp;base64,UklGRnoCAABXRUJQVlA4WAoAAAA..."
-      />
-    </div>
-  )
-}
-```
-
-Ruvyxa สร้าง `blurDataURL` อัตโนมัติตอน build:
-
-- ถ้าไม่ระบุ → Ruvyxa สร้าง base64 8x8 px version ให้
-- ถ้าระบุ → ใช้ที่ระบุ (ต้องเป็น data URL)
+`Image` ไม่มี `placeholder` หรือ `blurDataURL` ใน public API และ build จะไม่สร้าง blur asset
+อัตโนมัติ หากต้องการ blur-up effect ให้ทำด้วย CSS/องค์ประกอบของแอป หรือใช้ image CDN loader ที่
+รองรับ placeholder โดยคง `width` และ `height` ไว้เพื่อลด layout shift
 
 ### External URL Images
 
@@ -1424,14 +1396,14 @@ Ruvyxa สร้าง `blurDataURL` อัตโนมัติตอน build:
 
 **ข้อจำกัดรูปจาก external URL:**
 
-| คุณสมบัติ            | Local (`public/`) | External (CDN)    |
-| -------------------- | ----------------- | ----------------- |
-| WebP/AVIF conversion | ✅                | ❌ (คง original)  |
-| Responsive sizes     | ✅                | ❌                |
-| Cache hash (blake3)  | ✅                | ❌                |
-| Optimization         | ✅                | ❌                |
-| Placeholder blur     | ✅                | ❌                |
-| การทำงาน             | full pipeline     | ข้าม optimization |
+| คุณสมบัติ           | Local (`public/`) | External (CDN)    |
+| ------------------- | ----------------- | ----------------- |
+| WebP conversion     | ✅                | ❌ (คง original)  |
+| Responsive sizes    | ✅                | ❌                |
+| Cache hash (blake3) | ✅                | ❌                |
+| Optimization        | ✅                | ❌                |
+| Placeholder blur    | ไม่มี built-in    | ไม่มี built-in    |
+| การทำงาน            | full pipeline     | ข้าม optimization |
 
 **แนะนำ:** ใช้ CDN image service (Cloudinary, imgix, Cloudflare Images) สำหรับ external optimization
 
@@ -1594,64 +1566,45 @@ Source: public/images/blog/hero.jpg
 ├── hero.a1b2c3d4.webp               // original size
 ├── hero.a1b2c3d4.avif
 ├── hero.a1b2c3d4-640w.webp
-├── hero.a1b2c3d4-640w.avif
-├── hero.a1b2c3d4-960w.webp
-├── hero.a1b2c3d4-960w.avif
-├── hero.a1b2c3d4-1280w.webp
-├── hero.a1b2c3d4-1280w.avif
-├── hero.a1b2c3d4-1920w.webp
-├── hero.a1b2c3d4-1920w.avif
-├── hero.a1b2c3d4-2560w.webp
-├── hero.a1b2c3d4-2560w.avif
-├── placeholder/
-│   └── hero.a1b2c3d4-blur.webp
-└── manifest.json
+├── hero.webp
+├── hero-640w.webp
+├── hero-750w.webp
+├── hero-828w.webp
+├── hero-1080w.webp
+├── hero-1200w.webp
+├── hero-1920w.webp
+├── hero-2048w.webp
+└── hero-3840w.webp
 ```
 
 ### Image Config — Every Field
 
 ```ts
 // ruvyxa.config.ts — image config
-import { defineConfig } from 'ruvyxa/config'
+import { config } from 'ruvyxa/config'
 
-export default defineConfig({
+export default config({
   image: {
-    formats: ['webp', 'avif'], // รูปแบบ output
-    sizes: [640, 960, 1280, 1920, 2560], // responsive widths
+    optimize: true, // แปลง local PNG/JPEG เป็น WebP
+    variantWidths: [640, 750, 828, 1080, 1200, 1920, 2048, 3840],
     quality: 85, // WebP quality (1-100)
-    avifQuality: 70, // AVIF quality (1-100)
-    lazy: true, // default lazy loading
-    placeholder: 'blur', // 'blur' | 'empty'
-    encoder: {
-      jpeg: 'mozjpeg', // mozjpeg | guetzli | libjpeg
-      png: 'oxipng', // oxipng | pngquant | libpng
-      jpegQuality: 80, // mozjpeg/libjpeg quality
-      pngQuality: 85, // pngquant quality (lossy)
-      pngCompressionLevel: 3, // oxipng level (0-6)
-    },
-    cache: {
-      enabled: true,
-      directory: '.ruvyxa/cache/images',
-    },
+    lossless: false,
+    keepOriginal: true,
+    workers: 0,
+    onDemand: { enabled: true, maxWidth: 3840 },
   },
 })
 ```
 
-| Field                         | TypeScript Type                       | Default                  | Validation                   |
-| ----------------------------- | ------------------------------------- | ------------------------ | ---------------------------- |
-| `formats`                     | `('webp' \| 'avif')[]`                | `['webp', 'avif']`       | ต้องมีอย่างน้อย 1 รายการ     |
-| `sizes`                       | `number[]`                            | `[640, 1280, 1920]`      | แต่ละค่าต้อง > 0 และ < 10000 |
-| `quality`                     | `number`                              | `80`                     | 1-100                        |
-| `avifQuality`                 | `number`                              | `65`                     | 1-100                        |
-| `lazy`                        | `boolean`                             | `true`                   | -                            |
-| `placeholder`                 | `'blur' \| 'empty'`                   | `'empty'`                | -                            |
-| `encoder.jpeg`                | `'mozjpeg' \| 'guetzli' \| 'libjpeg'` | `'mozjpeg'`              | -                            |
-| `encoder.png`                 | `'oxipng' \| 'pngquant' \| 'libpng'`  | `'oxipng'`               | -                            |
-| `encoder.jpegQuality`         | `number`                              | `80`                     | 1-100                        |
-| `encoder.pngQuality`          | `number`                              | `85`                     | 1-100 (pngquant only)        |
-| `encoder.pngCompressionLevel` | `number`                              | `3`                      | 0-6 (oxipng only)            |
-| `cache.enabled`               | `boolean`                             | `true`                   | -                            |
-| `cache.directory`             | `string`                              | `'.ruvyxa/cache/images'` | must be relative             |
+| Field           | TypeScript Type     | Default               | Validation                             |
+| --------------- | ------------------- | --------------------- | -------------------------------------- |
+| `optimize`      | `boolean`           | `true`                | แปลง local PNG/JPEG เป็น WebP          |
+| `variantWidths` | `number[]`          | device widths มาตรฐาน | breakpoint สำหรับ srcset               |
+| `quality`       | `number`            | `82`                  | 1-100                                  |
+| `lossless`      | `boolean`           | `false`               | ใช้ lossless WebP                      |
+| `keepOriginal`  | `boolean`           | `true`                | เก็บ PNG/JPEG ต้นฉบับ                  |
+| `workers`       | `number`            | `0`                   | 0 = จำนวน CPU                          |
+| `onDemand`      | `boolean \| object` | `false`               | เปิด runtime resize สำหรับ same-origin |
 
 ---
 
@@ -1986,7 +1939,6 @@ import Counter from '../../../components/counter.tsx'
   height={630}
   priority
   quality={85}
-  format="avif"
 />
 
 <nav class="toc">
@@ -2107,9 +2059,9 @@ export default function BlogIndexPage() {
 
 ```ts
 // ruvyxa.config.ts
-import { defineConfig } from 'ruvyxa/config'
+import { config } from 'ruvyxa/config'
 
-export default defineConfig({
+export default config({
   site: {
     url: 'https://blog.ruvyxa.dev',
     sitemap: {
@@ -2121,12 +2073,10 @@ export default defineConfig({
     },
   },
   image: {
-    formats: ['webp', 'avif'],
-    sizes: [640, 960, 1280, 1920],
+    optimize: true,
+    variantWidths: [640, 750, 828, 1080, 1200, 1920],
     quality: 85,
-    avifQuality: 70,
-    lazy: true,
-    placeholder: 'blur',
+    onDemand: { enabled: true, maxWidth: 3840 },
   },
   css: {
     entries: ['src/styles/blog.css'],
@@ -2361,3 +2311,21 @@ npm run build
 
 ยืนยันก่อนว่า `page.mdx` ถูกค้นพบ แล้วจึงตรวจ route manifest และ build ตามลำดับ วิธีนี้แยกปัญหา
 filename/discovery ออกจาก content parser หรือ image build ได้
+
+# รูป local แบบ On-demand
+
+```ts
+export default config({
+  image: { onDemand: { enabled: true, maxWidth: 3840 } },
+})
+```
+
+```tsx
+<Image src="/uploads/hero.jpg" width={1600} height={900} dynamic sizes="100vw" />
+```
+
+`dynamic` รับเฉพาะ path ใน public ที่เป็น same-origin runtime ตรวจ width/quality, ย้ายงาน decode
+ออกจาก async request loop และใช้ cache ที่จำกัดจำนวนกับขนาด ห้ามส่ง remote URL เข้ามาที่ endpoint บน
+Cloudflare จะใช้ image transform ของแพลตฟอร์มเมื่อ account เปิดฟีเจอร์นี้ ส่วน Vercel จะสร้าง config
+สำหรับ native same-origin image API แพลตฟอร์มอื่นใช้ build-time variants หรือ CDN loader
+ที่ระบุเองได้

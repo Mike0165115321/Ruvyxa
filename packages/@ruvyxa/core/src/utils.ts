@@ -118,6 +118,14 @@ export function clientBuildOutput(ctx: BuildContext): {
   }
 }
 
+/** Return the validated runtime policy serialized into build metadata. */
+export function runtimeBuildPolicy(ctx: BuildContext): Readonly<Record<string, unknown>> {
+  const runtime = ctx.buildInfo?.runtime
+  return runtime && typeof runtime === 'object' && !Array.isArray(runtime)
+    ? (runtime as Readonly<Record<string, unknown>>)
+    : {}
+}
+
 /**
  * Return `ctx.outDir` as a project-root-relative POSIX path.
  *

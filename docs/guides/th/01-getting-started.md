@@ -31,7 +31,7 @@ Ruvyxa รองรับ JavaScript runtime สองตัว: **Node** (ค�
 
 ```bash
 # ใช้ Bun แทน Node
-ruvyxa dev --runtime bun
+npm run dev -- --runtime bun
 ```
 
 ### Bun runtime
@@ -276,6 +276,7 @@ export interface RuvyxaConfig {
     traces?: boolean // @default false
   }
   image?: ImageConfig
+  i18n?: I18nConfig
   security?: {
     actionLimit?: number // @default 1048576 (1MB)
     apiLimit?: number // @default 10485760 (10MB)
@@ -321,6 +322,7 @@ export interface ImageConfig {
   keepOriginal?: boolean // @default true
   variantWidths?: number[] // @default [640, 750, 828, 1080, 1200, 1920, 2048, 3840]
   workers?: number // @default 0 (auto)
+  onDemand?: boolean | { enabled?: boolean; maxWidth?: number }
 }
 ```
 
@@ -497,7 +499,11 @@ const settings: RuvyxaConfig = {
     keepOriginal: true, // keep PNG/JPEG
     variantWidths: [640, 750, 828, 1080, 1200, 1920, 2048, 3840],
     workers: 0, // 0 = CPU count
+    onDemand: { enabled: false, maxWidth: 3840 }, // runtime resize สำหรับรูป local same-origin
   },
+
+  // ─── Locale routing ──────────────────────────────────────────
+  // i18n: { locales: ['en', 'th'], defaultLocale: 'en' },
 
   // ─── Security ─────────────────────────────────────────────────
   security: {
@@ -552,7 +558,7 @@ const settings: RuvyxaConfig = {
   },
 
   // ─── Adapter ──────────────────────────────────────────────────
-  // Named adapters are selected with `ruvyxa build --adapter <name>`; config.adapter is an object.
+  // Named adapters are selected with `npm run build -- --adapter <name>`; config.adapter is an object.
   adapter: undefined,
   adapterOptions: {},
   plugins: [],
@@ -638,12 +644,16 @@ declare module '*.module.sass' {
     "typecheck": "tsc --noEmit",
     "preview": "ruvyxa preview",
     "routes": "ruvyxa routes",
+    "routes:json": "ruvyxa routes --json",
     "analyze": "ruvyxa analyze",
+    "analyze:html": "ruvyxa analyze --html",
+    "add": "ruvyxa add",
     "doctor": "ruvyxa doctor",
     "clean": "ruvyxa clean",
     "trace": "ruvyxa trace",
     "bench": "ruvyxa bench",
-    "test:parity": "ruvyxa test:parity"
+    "test:parity": "ruvyxa test:parity",
+    "plugin": "ruvyxa plugin"
   },
   "dependencies": {
     "@ruvyxa/react": "workspace:*",
@@ -652,29 +662,32 @@ declare module '*.module.sass' {
     "ruvyxa": "workspace:*"
   },
   "devDependencies": {
-    "@types/react": "^19.1.0",
-    "@types/react-dom": "^19.1.0",
-    "typescript": "^5.7.0"
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "typescript": "^7.0.2"
   }
 }
 ```
 
-| คำสั่ง        | CLI จริง             | หน้าที่                                               |
-| ------------- | -------------------- | ----------------------------------------------------- |
-| `dev`         | `ruvyxa dev`         | เริ่ม dev server พร้อม HMR                            |
-| `build`       | `ruvyxa build`       | Build สำหรับ production ไปที่ `.ruvyxa/`              |
-| `start`       | `ruvyxa start`       | เสิร์ฟ production build                               |
-| `typecheck`   | `tsc --noEmit`       | ตรวจ TypeScript โดยไม่สร้างไฟล์                       |
-| `check`       | `ruvyxa check`       | typecheck + parity + smoke render                     |
-| `preview`     | `ruvyxa preview`     | เสิร์ฟ production build แบบ local (alias ของ `start`) |
-| `routes`      | `ruvyxa routes`      | แสดง route table                                      |
-| `analyze`     | `ruvyxa analyze`     | รายงานวิเคราะห์ bundle + boundaries                   |
-| `doctor`      | `ruvyxa doctor`      | วินิจฉัย project setup                                |
-| `clean`       | `ruvyxa clean`       | ลบ `.ruvyxa/` และ cache                               |
-| `trace`       | `ruvyxa trace`       | ดู route manifest entry                               |
-| `bench`       | `ruvyxa bench`       | ทดสอบ route discovery + build                         |
-| `test:parity` | `ruvyxa test:parity` | เปรียบเทียบ routes dev/prod                           |
-| `plugin`      | `ruvyxa plugin`      | จัดการและสร้างโครงสร้างของ plugin                     |
+| คำสั่ง         | คำสั่งที่ใช้                 | หน้าที่                                                |
+| -------------- | ---------------------------- | ------------------------------------------------------ |
+| `dev`          | `npm run dev`                | เริ่ม dev server พร้อม HMR                             |
+| `build`        | `npm run build`              | Build สำหรับ production ไปที่ `.ruvyxa/`               |
+| `start`        | `npm run start`              | เสิร์ฟ production build                                |
+| `typecheck`    | `npm run typecheck`          | ตรวจ TypeScript โดยไม่สร้างไฟล์                        |
+| `check`        | `npm run check`              | typecheck + parity + smoke render                      |
+| `preview`      | `npm run preview`            | เสิร์ฟ production build แบบ local (alias ของ `start`)  |
+| `routes`       | `npm run routes`             | แสดง route table                                       |
+| `routes:json`  | `npm run routes:json`        | แสดง route manifest เป็น JSON                          |
+| `analyze`      | `npm run analyze`            | รายงานวิเคราะห์ bundle + boundaries                    |
+| `analyze:html` | `npm run analyze:html`       | สร้างรายงาน bundle แบบ interactive HTML                |
+| `add`          | `npm run add -- form`        | สร้าง scaffold สำหรับ `form`, `data-table` หรือ `auth` |
+| `doctor`       | `npm run doctor`             | วินิจฉัย project setup                                 |
+| `clean`        | `npm run clean`              | ลบ `.ruvyxa/` และ cache                                |
+| `trace`        | `npm run trace -- /about`    | ดู route manifest entry                                |
+| `bench`        | `npm run bench`              | ทดสอบ route discovery + build                          |
+| `test:parity`  | `npm run test:parity`        | เปรียบเทียบ routes dev/prod                            |
+| `plugin`       | `npm run plugin -- create x` | สร้าง package plugin ที่พร้อมเผยแพร่                   |
 
 ---
 
@@ -744,7 +757,7 @@ Adapter names ที่รู้จัก: `node`, `bun`, `static`, `vercel`, `n
 
 ## ลำดับการเริ่มต้น dev server
 
-เมื่อรัน `ruvyxa dev` เกิดอะไรขึ้นตามลำดับ:
+เมื่อรัน `npm run dev` เกิดอะไรขึ้นตามลำดับ:
 
 ### เฟส 1: Config load
 
@@ -814,7 +827,7 @@ Adapter names ที่รู้จัก: `node`, `bun`, `static`, `vercel`, `n
 ## ลำดับการเริ่มต้น dev server (แผนภาพ)
 
 ```
-ruvyxa dev
+npm run dev
     │
     ▼
 ┌─────────────┐
@@ -899,6 +912,7 @@ interface RuvyxaConfig {
   render?: RenderConfig
   debug?: { overlay?: boolean; traces?: boolean }
   image?: ImageConfig
+  i18n?: I18nConfig
   security?: {
     actionLimit?: number
     apiLimit?: number
@@ -937,6 +951,7 @@ interface ImageConfig {
   keepOriginal?: boolean // default: true
   variantWidths?: number[] // default: [640, 750, 828, 1080, 1200, 1920, 2048, 3840]
   workers?: number // default: 0 (CPU count)
+  onDemand?: boolean | { enabled?: boolean; maxWidth?: number }
 }
 ```
 
@@ -1016,7 +1031,7 @@ Ruvyxa ใช้ **Radix Tree** (compressed trie) สำหรับการจ
 | `RUV1500` | SSG/ISR render failed              | Static generation error                                         | ดู error detail                                                |
 | `RUV1501` | Route action not found             | ขาด action.ts ใน route                                          | สร้าง action.ts                                                |
 | `RUV1550` | PPR render failed                  | PPR streaming error                                             | ดู error detail                                                |
-| `RUV1600` | Config validation error            | ruvyxa.config.ts ผิด format                                     | รัน `ruvyxa doctor`                                            |
+| `RUV1600` | Config validation error            | ruvyxa.config.ts ผิด format                                     | รัน `npm run doctor`                                           |
 | `RUV1601` | Config value out of range          | Field value ไม่อยู่ในช่วงที่ยอมรับ                              | ปรับค่าให้อยู่ในช่วง                                           |
 | `RUV1602` | Config value exceeds maximum       | Field value เกินขีดจำกัด                                        | ลดค่าลง                                                        |
 | `RUV1700` | TypeScript plugin error            | Plugin runtime error                                            | ตรวจสอบ plugin code                                            |
@@ -1042,7 +1057,7 @@ Error: Address already in use (os error 10048)
 
 ```bash
 # 1. เปลี่ยน port
-ruvyxa dev --port 4000
+npm run dev -- --port 4000
 
 # 2. หรือ kill process ที่ใช้ port 3000
 # Windows:
@@ -1087,11 +1102,11 @@ Error: RUV1300: Client hydration bundling failed
 
 ```bash
 # clean + rebuild
-ruvyxa clean
+npm run clean
 npm run build
 
 # ตรวจ routes, imports และ boundaries
-ruvyxa analyze
+npm run analyze
 ```
 
 ### TypeScript error หลังสร้างโปรเจค
@@ -1520,23 +1535,22 @@ directory ที่มีไฟล์อยู่แล้วและชื่�
 | `package.json`     | versions ของ dependencies และ scripts ที่รันได้         | ใช้ scripts ในไฟล์นี้เป็น workflow หลัก               |
 
 Minimal template ใช้ `app` เป็น application directory และ `.ruvyxa` เป็น generated output อย่า
-commit `.ruvyxa`: build สร้างใหม่ได้เสมอด้วย `ruvyxa clean` แล้วตามด้วย `ruvyxa build`
+commit `.ruvyxa`: build สร้างใหม่ได้เสมอด้วย `npm run clean` แล้วตามด้วย `npm run build`
 
 ### ตรวจทีละข้อ แทนการเดา
 
-Minimal starter มี scripts `dev`, `build`, `start`, `typecheck` และ `check` เท่านั้น ส่วน `routes`,
-`analyze`, `doctor`, `clean`, `trace` และ `bench` เป็น CLI commands ไม่ใช่ starter scripts จึงเรียก
-ตรง ๆ เว้นแต่ project ของคุณเพิ่ม script เหล่านั้นเอง:
+Application starter ทุกแบบ map framework CLI ทุกคำสั่งไว้เป็น package script แล้ว หากคำสั่งมี
+argument ให้ใส่หลัง `--` เพื่อส่งต่อให้ Ruvyxa:
 
 ```bash
 npm run dev
-ruvyxa routes
-ruvyxa doctor
-ruvyxa analyze --format human
+npm run routes
+npm run doctor
+npm run analyze -- --format human
 ```
 
-ข้อแตกต่างนี้ทำให้ตัวอย่างย้ายข้าม project ได้: `npm run <name>` ใช้ได้ก็ต่อเมื่อมี script
-ชื่อนั้นใน `package.json` ของ project ปัจจุบัน
+ตัวอย่างจึงย้ายข้าม starter ได้: ใช้ `npm run <name>` ใน project ที่สร้างขึ้น และใส่ argument
+ของคำสั่งหลัง `--`
 
 ### Loop ที่ใช้ได้ในชั่วโมงแรก
 
@@ -1545,14 +1559,14 @@ ruvyxa analyze --format human
 ```bash
 npm run dev
 # เปิด terminal อีกอันหลังเพิ่มหรือเปลี่ยนชื่อ page
-ruvyxa routes
+npm run routes
 # ก่อน commit การเปลี่ยนแปลงสำคัญ
 npm run check
 ```
 
 `dev` ดูแล file watching และ HMR ส่วน `routes` แค่ค้นหาและพิมพ์ routes ไม่ได้เปิด server และ `check`
 จะตรวจ TypeScript เมื่อมี `tsconfig.json` แล้วรัน framework parity flow หาก generated output ดูเก่า
-ให้ใช้ `ruvyxa clean` ก่อน build ใหม่ ไม่ต้องลบ dependencies หรือ source files
+ให้ใช้ `npm run clean` ก่อน build ใหม่ ไม่ต้องลบ dependencies หรือ source files
 
 ---
 

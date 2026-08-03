@@ -6,8 +6,10 @@ This package is installed automatically as an optional dependency of `ruvyxa` on
 Application users should install `ruvyxa`, not this package directly.
 
 ```bash
-npm install ruvyxa
-npx ruvyxa doctor
+npm create ruvyxa@latest my-app
+cd my-app
+npm install
+npm run doctor
 ```
 
 The package exists so npm can resolve a platform-specific binary without requiring Rust or Cargo on

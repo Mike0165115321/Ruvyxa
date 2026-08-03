@@ -152,16 +152,22 @@ my-app/
 
 ## Key CLI Commands
 
-| Command              | Description                               |
-| -------------------- | ----------------------------------------- |
-| `ruvyxa dev`         | Development server with HMR               |
-| `ruvyxa build`       | Production build → `.ruvyxa/`             |
-| `ruvyxa start`       | Serve production build                    |
-| `ruvyxa check`       | TypeScript check + dev/prod parity        |
-| `ruvyxa routes`      | Print route table                         |
-| `ruvyxa analyze`     | Validate routes, imports, boundaries      |
-| `ruvyxa doctor`      | Check environment and project setup       |
-| `ruvyxa test:parity` | Dev/prod route comparison + smoke renders |
+| Command              | Description                                                   |
+| -------------------- | ------------------------------------------------------------- |
+| `ruvyxa dev`         | Development server with HMR                                   |
+| `ruvyxa build`       | Production build → `.ruvyxa/`                                 |
+| `ruvyxa check`       | App-level production-readiness checks                         |
+| `ruvyxa start`       | Serve production build                                        |
+| `ruvyxa preview`     | Preview an existing production build locally                  |
+| `ruvyxa routes`      | Print route table (`--json` emits its manifest)               |
+| `ruvyxa analyze`     | Validate routes/imports/boundaries; can emit interactive HTML |
+| `ruvyxa add`         | Scaffold a form, data table, or authentication flow           |
+| `ruvyxa doctor`      | Check environment and project setup                           |
+| `ruvyxa clean`       | Remove generated Ruvyxa build output                          |
+| `ruvyxa trace`       | Inspect one route manifest entry by path                      |
+| `ruvyxa bench`       | Benchmark route discovery, analysis, and production build     |
+| `ruvyxa test:parity` | Dev/prod route comparison + smoke renders                     |
+| `ruvyxa plugin`      | Create a publishable plugin package                           |
 
 ---
 

@@ -86,6 +86,7 @@ async function sanitizeConfig(config) {
     'render',
     'debug',
     'image',
+    'i18n',
     'security',
     'cache',
     'site',
@@ -116,6 +117,15 @@ async function sanitizeConfig(config) {
     'keepOriginal',
     'variantWidths',
     'workers',
+    'onDemand',
+  ])
+  assertKnownKeys(config.image?.onDemand, 'config.image.onDemand', ['enabled', 'maxWidth'])
+  assertKnownKeys(config.i18n, 'config.i18n', [
+    'locales',
+    'defaultLocale',
+    'localeParam',
+    'detectLocale',
+    'cookie',
   ])
   assertKnownKeys(config.security, 'config.security', [
     'actionLimit',
@@ -253,6 +263,14 @@ async function sanitizeConfig(config) {
       keepOriginal: booleanValue(config.image?.keepOriginal),
       variantWidths: numberArrayValue(config.image?.variantWidths),
       workers: numberValue(config.image?.workers),
+      onDemand: imageOnDemandValue(config.image?.onDemand),
+    }),
+    i18n: objectValue(config.i18n, {
+      locales: stringArrayValue(config.i18n?.locales),
+      defaultLocale: stringValue(config.i18n?.defaultLocale),
+      localeParam: stringValue(config.i18n?.localeParam),
+      detectLocale: booleanValue(config.i18n?.detectLocale),
+      cookie: stringValue(config.i18n?.cookie),
     }),
     security: objectValue(config.security, {
       actionLimit: numberValue(config.security?.actionLimit),
@@ -311,6 +329,13 @@ function assertConfigValueShape(config) {
       variantWidths: 'number[]',
       workers: 'number',
     },
+    i18n: {
+      locales: 'string[]',
+      defaultLocale: 'string',
+      localeParam: 'string',
+      detectLocale: 'boolean',
+      cookie: 'string',
+    },
     security: {
       actionLimit: 'number',
       apiLimit: 'number',
@@ -328,6 +353,12 @@ function assertConfigValueShape(config) {
     plugins: 'array',
   })
   assertSiteShape(config.site)
+  assertImageOnDemandShape(config.image?.onDemand)
+}
+
+function assertImageOnDemandShape(value) {
+  if (value === undefined || typeof value === 'boolean') return
+  assertShape(value, 'config.image.onDemand', { enabled: 'boolean', maxWidth: 'number' })
 }
 
 function assertSiteShape(site) {
@@ -540,6 +571,16 @@ function siteValue(site) {
 function siteSettingValue(value) {
   if (typeof value === 'boolean') return value
   return isObject(value) ? safeJsonValue(value) : undefined
+}
+
+function imageOnDemandValue(value) {
+  if (typeof value === 'boolean') return value
+  return isObject(value)
+    ? objectValue(value, {
+        enabled: booleanValue(value.enabled),
+        maxWidth: numberValue(value.maxWidth),
+      })
+    : undefined
 }
 
 function assertShape(value, field, shape) {

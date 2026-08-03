@@ -77,6 +77,38 @@ describe('Image responsive srcset', () => {
       undefined,
     )
   })
+
+  it('builds same-origin on-demand URLs without accepting remote sources', () => {
+    const dynamic = renderImage({
+      src: '/uploads/avatar.png?v=2',
+      alt: 'Avatar',
+      width: 828,
+      height: 828,
+      sizes: '100vw',
+      quality: 75,
+      dynamic: true,
+    })
+    assert.equal(dynamic.src, '/__ruvyxa/image?src=%2Fuploads%2Favatar.png&w=828&q=75')
+    assert.match(dynamic.srcSet, /w=640&q=75 640w/)
+    assert.equal(
+      renderImage({
+        src: 'https://cdn.example/avatar.png',
+        alt: '',
+        width: 828,
+        height: 828,
+        dynamic: true,
+      }).src,
+      'https://cdn.example/avatar.png',
+    )
+    const snapped = renderImage({
+      src: '/uploads/hero.jpg',
+      alt: 'Hero',
+      width: 1600,
+      height: 900,
+      dynamic: true,
+    })
+    assert.match(snapped.src, /w=1920/)
+  })
 })
 
 describe('device width list parity with the Rust optimizer', () => {

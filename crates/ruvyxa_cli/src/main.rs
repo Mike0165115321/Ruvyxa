@@ -19,6 +19,8 @@ use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::{Parser, Subcommand, ValueEnum};
 use ruvyxa_dev_server::serve;
 
+mod add;
+mod analyzer_html;
 mod artifact_cache;
 mod build;
 mod build_output;
@@ -38,6 +40,8 @@ mod ui;
 // Re-exported crate-wide, not merely imported here: the modules below refer to
 // each other through `crate::*`, and a plain `use` would keep those names
 // private to this file.
+pub(crate) use add::*;
+pub(crate) use analyzer_html::*;
 pub(crate) use artifact_cache::*;
 pub(crate) use build::*;
 pub(crate) use build_output::*;
@@ -93,9 +97,11 @@ enum Command {
     #[command(about = "Preview an existing production build locally")]
     Preview(ServerArgs),
     #[command(about = "Print the discovered route table")]
-    Routes(ProjectArgs),
+    Routes(RoutesArgs),
     #[command(about = "Validate routes, imports, and server/client boundaries")]
     Analyze(AnalyzeArgs),
+    #[command(about = "Scaffold framework-native forms, data tables, or authentication flows")]
+    Add(AddArgs),
     #[command(about = "Check project setup, dependencies, and runtime compatibility")]
     Doctor(DoctorArgs),
     #[command(about = "Remove generated Ruvyxa build output")]
@@ -126,6 +132,20 @@ struct ProjectArgs {
 }
 
 #[derive(Debug, Clone, Parser)]
+struct RoutesArgs {
+    #[arg(long, default_value = ".")]
+    root: PathBuf,
+
+    /// JavaScript runtime used to evaluate project configuration.
+    #[arg(long, value_enum, ignore_case = true)]
+    runtime: Option<CliRuntime>,
+
+    /// Emit the route manifest as JSON for editor and automation consumers.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Clone, Parser)]
 struct AnalyzeArgs {
     #[arg(long, default_value = ".")]
     root: PathBuf,
@@ -141,6 +161,35 @@ struct AnalyzeArgs {
     /// Write the report to a file instead of standard output.
     #[arg(long)]
     output: Option<PathBuf>,
+
+    /// Build a self-contained interactive HTML bundle report.
+    #[arg(long)]
+    html: bool,
+}
+
+#[derive(Debug, Clone, Parser)]
+struct AddArgs {
+    /// One or more additive scaffolds to create.
+    #[arg(required = true, value_enum, ignore_case = true)]
+    templates: Vec<AddTemplate>,
+
+    #[arg(long, default_value = ".")]
+    root: PathBuf,
+
+    /// JavaScript runtime used to evaluate project configuration.
+    #[arg(long, value_enum, ignore_case = true)]
+    runtime: Option<CliRuntime>,
+
+    /// Replace scaffold-owned files that already exist.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum AddTemplate {
+    Form,
+    DataTable,
+    Auth,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -149,6 +198,7 @@ enum AnalyzeFormat {
     Human,
     Json,
     Sarif,
+    Html,
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -374,6 +424,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Routes(args) => print_routes(args).context("route discovery failed")?,
         Command::Analyze(args) => analyze(args).context("analyze failed")?,
+        Command::Add(args) => scaffold_add(args).context("scaffold failed")?,
         Command::Doctor(args) => doctor(args).context("doctor failed")?,
         Command::Clean(args) => clean(args).context("clean failed")?,
         Command::Trace(args) => trace(args).context("trace failed")?,

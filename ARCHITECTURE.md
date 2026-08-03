@@ -175,16 +175,22 @@ my-app/
 
 ### Key CLI Commands
 
-| Command              | Description                               |
-| -------------------- | ----------------------------------------- |
-| `ruvyxa dev`         | Development server with HMR               |
-| `ruvyxa build`       | Production build → `.ruvyxa/`             |
-| `ruvyxa start`       | Serve production build                    |
-| `ruvyxa check`       | TypeScript check + dev/prod parity        |
-| `ruvyxa routes`      | Print route table                         |
-| `ruvyxa analyze`     | Validate routes, imports, boundaries      |
-| `ruvyxa doctor`      | Check environment and project setup       |
-| `ruvyxa test:parity` | Dev/prod route comparison + smoke renders |
+| Command              | Description                                                   |
+| -------------------- | ------------------------------------------------------------- |
+| `ruvyxa dev`         | Development server with HMR                                   |
+| `ruvyxa build`       | Production build → `.ruvyxa/`                                 |
+| `ruvyxa check`       | App-level production-readiness checks                         |
+| `ruvyxa start`       | Serve production build                                        |
+| `ruvyxa preview`     | Preview an existing production build locally                  |
+| `ruvyxa routes`      | Print route table (`--json` emits its manifest)               |
+| `ruvyxa analyze`     | Validate routes/imports/boundaries; can emit interactive HTML |
+| `ruvyxa add`         | Scaffold a form, data table, or authentication flow           |
+| `ruvyxa doctor`      | Check environment and project setup                           |
+| `ruvyxa clean`       | Remove generated Ruvyxa build output                          |
+| `ruvyxa trace`       | Inspect one route manifest entry by path                      |
+| `ruvyxa bench`       | Benchmark route discovery, analysis, and production build     |
+| `ruvyxa test:parity` | Dev/prod route comparison + smoke renders                     |
+| `ruvyxa plugin`      | Create a publishable plugin package                           |
 
 ---
 
@@ -252,6 +258,7 @@ in a sibling module, and the modules reach each other through crate-root re-expo
 | `prerender`                                        | static HTML generation, job planning, path safety                                |
 | `artifact_cache`                                   | content-addressed caching of every build artifact                                |
 | `plugins`                                          | the TypeScript build-plugin worker bridge                                        |
+| `add`                                              | additive form, data-table, and authentication scaffolding                        |
 | `config`                                           | `ruvyxa.config.*` loading and validation                                         |
 | `runtime_config`                                   | args + config → `ServerConfig`, adapter and runtime selection                    |
 | `cli_args`                                         | argument spelling normalization, plugin scaffolding                              |
@@ -274,7 +281,7 @@ struct Cli {
 No global flags (`root`, `verbose`, etc.) — each subcommand carries its own args. Clap v4 with
 styled ANSI output.
 
-### Command Enum (13 variants)
+### Command Enum (14 variants)
 
 | Variant      | Args Struct   | Purpose                                                                                                |
 | ------------ | ------------- | ------------------------------------------------------------------------------------------------------ |
@@ -283,8 +290,9 @@ styled ANSI output.
 | `Check`      | `ProjectArgs` | `tsc --noEmit` + parity test; production readiness gate                                                |
 | `Start`      | `ServerArgs`  | Axum production server from `.ruvyxa/` output                                                          |
 | `Preview`    | `ServerArgs`  | Same as `Start` — alias for local preview of production build                                          |
-| `Routes`     | `ProjectArgs` | Discover and print route table (kind, path, file, strategy)                                            |
-| `Analyze`    | `AnalyzeArgs` | Validate routes, imports, server/client boundary; output as Human, JSON, or SARIF                      |
+| `Routes`     | `RoutesArgs`  | Discover and print route table (kind, path, file, strategy; `--json` emits the manifest)               |
+| `Analyze`    | `AnalyzeArgs` | Validate routes, imports, server/client boundary; output as Human, JSON, SARIF, or interactive HTML    |
+| `Add`        | `AddArgs`     | Additive scaffolds for a validated form, data table, or authentication flow                            |
 | `Doctor`     | `DoctorArgs`  | Full project diagnostics: versions, tools, adapter compatibility, dependency check                     |
 | `Clean`      | `ProjectArgs` | Remove `.ruvyxa/` output directory                                                                     |
 | `Trace`      | `TraceArgs`   | Inspect one route manifest entry by route path, print as JSON                                          |
@@ -296,9 +304,11 @@ styled ANSI output.
 
 ```
 struct ProjectArgs          { root: PathBuf, runtime: Option<CliRuntime> }
+struct RoutesArgs           { root: PathBuf, runtime: Option<CliRuntime>, json: bool }
 struct ServerArgs           { root: PathBuf, host: Option<String>, port: Option<u16>, runtime: Option<CliRuntime> }
 struct BuildArgs            { root: PathBuf, target: Option<BuildTarget>, adapter: Option<String>, runtime: Option<CliRuntime> }
-struct AnalyzeArgs          { root: PathBuf, runtime: Option<CliRuntime>, format: AnalyzeFormat, output: Option<PathBuf> }
+struct AnalyzeArgs          { root: PathBuf, runtime: Option<CliRuntime>, format: AnalyzeFormat, output: Option<PathBuf>, html: bool }
+struct AddArgs              { templates: Vec<AddTemplate>, root: PathBuf, runtime: Option<CliRuntime>, force: bool }
 struct DoctorArgs           { root: PathBuf, target: Option<BuildTarget>, adapter: Option<String>, runtime: Option<CliRuntime>, json: bool }
 struct TraceArgs            { route: String, root: PathBuf }
 struct BenchArgs            { root: PathBuf, samples: usize, json: bool }
@@ -312,7 +322,7 @@ struct PluginArgs           { command: PluginCommand }
 ```
 BuildTarget  → Node | Bun | Edge | Static
 CliRuntime   → Node | Bun
-AnalyzeFormat → Auto | Human | Json | Sarif
+AnalyzeFormat → Auto | Human | Json | Sarif | Html
 ```
 
 `BuildTarget` is also `serde::Deserialize` and stored as `config.runtime`. The CLI `--runtime` flag
@@ -465,6 +475,26 @@ violations, missing exports)
 pub struct RouteManifest {
     pub app_dir: PathBuf,
     pub routes: Vec<RouteEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub i18n: Option<I18nRouting>,
+}
+```
+
+`i18n` is present only when the project config enables locale routing. It carries the validated
+policy used by discovery, native serving, and deployment runtimes; consumers do not re-parse raw
+config.
+
+#### I18nRouting
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct I18nRouting {
+    pub locales: Vec<String>,
+    pub default_locale: String,
+    pub locale_param: String,
+    pub detect_locale: bool,
+    pub cookie: String,
 }
 ```
 
@@ -684,11 +714,13 @@ pub struct DiscoverOptions {
     pub app_dir: PathBuf,
     pub default_render_strategy: Option<RenderStrategy>,
     pub default_revalidate: Option<u64>,
+    pub i18n: Option<I18nRouting>,
 }
 ```
 
 `with_rendering_defaults()` applies a project-wide default when the auto-detected strategy is SSR.
-This lets `ruvyxa.config.ts` set `render.strategy: "ssg"` for all routes.
+This lets `ruvyxa.config.ts` set `render.strategy: "ssg"` for all routes. `with_i18n()` attaches the
+config-validated locale routing policy to the resulting manifest.
 
 ### Module Graph Collection
 
@@ -1242,17 +1274,20 @@ pub enum JavaScriptRuntime { Node, Bun }
 
 ### Framework Endpoints
 
-| Route                                  | Method | Handler            | Purpose                                                 |
-| -------------------------------------- | ------ | ------------------ | ------------------------------------------------------- |
-| `/__ruvyxa/hmr`                        | GET    | `hmr_ws`           | HMR WebSocket — broadcasts file-change JSON to browsers |
-| `/__ruvyxa/client`                     | GET    | `client_bundle`    | On-demand compiled client JS bundles per route          |
-| `/__ruvyxa/hydration-loader.js`        | GET    | `hydration_loader` | Client hydration loader script                          |
-| `/__ruvyxa/client/route-manifest.json` | GET    | `client_manifest`  | Live route table for browser router                     |
-| `/__ruvyxa/action`                     | POST   | `action_endpoint`  | Server action dispatch                                  |
-| `/__ruvyxa/trace`                      | GET    | `trace_endpoint`   | Runtime route trace (debug only)                        |
+| Route                                  | Method | Handler                  | Purpose                                                          |
+| -------------------------------------- | ------ | ------------------------ | ---------------------------------------------------------------- |
+| `/__ruvyxa/hmr`                        | GET    | `hmr_ws`                 | HMR WebSocket — broadcasts file-change JSON to browsers          |
+| `/__ruvyxa/client`                     | GET    | `client_bundle`          | On-demand compiled client JS bundles per route                   |
+| `/__ruvyxa/hydration-loader.js`        | GET    | `hydration_loader`       | Client hydration loader script                                   |
+| `/__ruvyxa/client/route-manifest.json` | GET    | `client_manifest`        | Live route table for browser router                              |
+| `/__ruvyxa/image`                      | GET    | `dynamic_image_endpoint` | Bounded same-origin WebP resize when `image.onDemand` is enabled |
+| `/__ruvyxa/action`                     | POST   | `action_endpoint`        | Server action dispatch                                           |
+| `/__ruvyxa/trace`                      | GET    | `trace_endpoint`         | Runtime route trace (debug only)                                 |
+| `/__ruvyxa/devtools`                   | GET    | `devtools_dashboard`     | Development dashboard (only while watching)                      |
+| `/__ruvyxa/devtools/data`              | GET    | `devtools_data`          | Development dashboard data (only while watching)                 |
 
 Reserved paths (collision rejection): `/__ruvyxa/hmr`, `/__ruvyxa/client`, `/__ruvyxa/action`,
-`/__ruvyxa/trace`.
+`/__ruvyxa/trace`, `/__ruvyxa/devtools`, `/__ruvyxa/devtools/data`, and `/__ruvyxa/image`.
 
 ---
 
@@ -2659,8 +2694,13 @@ pub struct ImageOptimizationOptions {
     pub keep_original: bool,               // keep original beside WebP, default true
     pub variant_widths: Vec<u32>,          // responsive breakpoints
     pub parallelism: usize,                // 0 = Rayon global pool
+    pub on_demand: OnDemandImageOptions,   // optional runtime resize policy
 }
 ```
+
+`on_demand` accepts `false`, `true`, or `{ enabled, maxWidth }`. It is disabled by default; when
+enabled, the dev/server runtime accepts only bounded same-origin public-image requests and emits
+WebP. `maxWidth` defaults to 3840 and config validation restricts it to 16–8192.
 
 #### Default variant widths
 
@@ -2669,7 +2709,7 @@ pub const DEFAULT_VARIANT_WIDTHS: [u32; 8] = [640, 750, 828, 1080, 1200, 1920, 2
 ```
 
 Must stay identical to `DEFAULT_DEVICE_WIDTHS` in `packages/@ruvyxa/react/src/image.tsx`. Test
-`tests/packages/react/image-variants.test.mjs` asserts agreement.
+`packages/@ruvyxa/react/test/image-variants.test.mjs` asserts agreement.
 
 ---
 

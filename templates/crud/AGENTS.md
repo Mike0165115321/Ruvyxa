@@ -37,6 +37,16 @@ npm run build       # ruvyxa build
 npm run start       # ruvyxa start
 npm run check       # ruvyxa check (typecheck + parity + smoke render)
 npm run typecheck   # tsc --noEmit
+npm run preview     # ruvyxa preview
+npm run routes      # ruvyxa routes
+npm run analyze     # ruvyxa analyze
+npm run add -- form # ruvyxa add form
+npm run doctor      # ruvyxa doctor
+npm run clean       # ruvyxa clean
+npm run trace -- /  # ruvyxa trace /
+npm run bench       # ruvyxa bench
+npm run test:parity # ruvyxa test:parity
+npm run plugin -- create my-plugin # ruvyxa plugin create my-plugin
 ```
 
 ## Checks

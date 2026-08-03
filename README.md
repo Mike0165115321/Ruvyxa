@@ -185,14 +185,17 @@
 
 ### CLI & diagnostics
 
-- **13 verified commands** — `dev`, `build`, `check`, `start`, `preview`, `routes`, `analyze`,
-  `doctor`, `clean`, `trace`, `bench`, and `test:parity`.
-- **`build`** — production output supports `--target node`, `edge`, or `static`. Pre-renders SSG,
-  ISR, PPR, and CSR pages at build time via parallel worker pool (`MAX_PRERENDER_PARALLELISM: 2`).
+- **14 verified commands** — `dev`, `build`, `check`, `start`, `preview`, `routes`, `analyze`,
+  `add`, `doctor`, `clean`, `trace`, `bench`, `test:parity`, and `plugin`.
+- **`build`** — production output supports `--target node`, `bun`, `edge`, or `static`. Pre-renders
+  SSG, ISR, PPR, and CSR pages at build time via parallel worker pool
+  (`MAX_PRERENDER_PARALLELISM: 2`).
 - **`check`** — type checking, production build, dev/prod route parity, and page smoke rendering in
   one command.
-- **`analyze`** — human, JSON, or SARIF 2.1.0 validation of routes, imports, and server/client
-  boundaries (`--format sarif --output reports/ruvyxa.sarif`).
+- **`analyze`** — human, JSON, SARIF 2.1.0, or a self-contained interactive HTML validation report
+  for routes, imports, and server/client boundaries (`--format sarif --output reports/ruvyxa.sarif`;
+  `--html`).
+- **`add`** — scaffold an additive, framework-native `form`, `data-table`, or `auth` flow.
 - **`doctor`** — project health plus deploy-target inspection: adapter runtime, platform,
   capabilities, and every route unsupported by the selected adapter (`--json` for CI).
 - **`bench`** — benchmark route discovery, analysis, validation, and production builds.
@@ -218,7 +221,7 @@
 npm create ruvyxa@latest my-app
 cd my-app
 npm install
-npx ruvyxa dev
+npm run dev
 ```
 
 Choose a focused starter when you want more than the minimal route:
@@ -554,21 +557,22 @@ cache examples.
 
 ## CLI
 
-| Command                | Purpose                                                                            |
-| ---------------------- | ---------------------------------------------------------------------------------- |
-| `ruvyxa dev`           | Start the development server with HMR and file watching                            |
-| `ruvyxa build`         | Build production output to `.ruvyxa/` (supports `--target node`, `edge`, `static`) |
-| `ruvyxa check`         | Run app-level production readiness checks (typecheck, build, parity, smoke)        |
-| `ruvyxa start`         | Serve production output with the same runtime semantics as dev                     |
-| `ruvyxa preview`       | Alias for `ruvyxa start` (preview production build locally)                        |
-| `ruvyxa routes`        | Print the discovered route table                                                   |
-| `ruvyxa analyze`       | Validate routes, imports, and server/client boundaries (structured JSON)           |
-| `ruvyxa doctor`        | Check project health, dependencies, environment, and Ruvyxa CLI status             |
-| `ruvyxa trace <path>`  | Print route matching details for a URL                                             |
-| `ruvyxa bench`         | Benchmark route discovery, analysis, validation, and production builds             |
-| `ruvyxa test:parity`   | Compare dev/prod routes and smoke-render page routes                               |
-| `ruvyxa plugin create` | Scaffold a publishable plugin package                                              |
-| `ruvyxa clean`         | Remove `.ruvyxa/` build output                                                     |
+| Command                | Purpose                                                                                   |
+| ---------------------- | ----------------------------------------------------------------------------------------- |
+| `ruvyxa dev`           | Start the development server with HMR and file watching                                   |
+| `ruvyxa build`         | Build production output to `.ruvyxa/` (supports `--target node`, `bun`, `edge`, `static`) |
+| `ruvyxa check`         | Run app-level production readiness checks (typecheck, build, parity, smoke)               |
+| `ruvyxa start`         | Serve production output with the same runtime semantics as dev                            |
+| `ruvyxa preview`       | Alias for `ruvyxa start` (preview production build locally)                               |
+| `ruvyxa routes`        | Print the discovered route table (`--json` for the manifest)                              |
+| `ruvyxa analyze`       | Validate routes, imports, and server/client boundaries (human/JSON/SARIF/HTML)            |
+| `ruvyxa add`           | Scaffold a `form`, `data-table`, or `auth` flow                                           |
+| `ruvyxa doctor`        | Check project health, dependencies, environment, and Ruvyxa CLI status                    |
+| `ruvyxa trace <path>`  | Print route matching details for a URL                                                    |
+| `ruvyxa bench`         | Benchmark route discovery, analysis, validation, and production builds                    |
+| `ruvyxa test:parity`   | Compare dev/prod routes and smoke-render page routes                                      |
+| `ruvyxa plugin create` | Scaffold a publishable plugin package                                                     |
+| `ruvyxa clean`         | Remove `.ruvyxa/` build output                                                            |
 
 ---
 

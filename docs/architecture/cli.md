@@ -14,6 +14,7 @@ in a sibling module, and the modules reach each other through crate-root re-expo
 | `prerender`                                        | static HTML generation, job planning, path safety                                |
 | `artifact_cache`                                   | content-addressed caching of every build artifact                                |
 | `plugins`                                          | the TypeScript build-plugin worker bridge                                        |
+| `add`                                              | additive form, data-table, and authentication scaffolding                        |
 | `config`                                           | `ruvyxa.config.*` loading and validation                                         |
 | `runtime_config`                                   | args + config → `ServerConfig`, adapter and runtime selection                    |
 | `cli_args`                                         | argument spelling normalization, plugin scaffolding                              |
@@ -36,7 +37,7 @@ struct Cli {
 No global flags (`root`, `verbose`, etc.) — each subcommand carries its own args. Clap v4 with
 styled ANSI output.
 
-## Command Enum (13 variants)
+## Command Enum (14 variants)
 
 | Variant      | Args Struct   | Purpose                                                                                                |
 | ------------ | ------------- | ------------------------------------------------------------------------------------------------------ |
@@ -45,8 +46,9 @@ styled ANSI output.
 | `Check`      | `ProjectArgs` | `tsc --noEmit` + parity test; production readiness gate                                                |
 | `Start`      | `ServerArgs`  | Axum production server from `.ruvyxa/` output                                                          |
 | `Preview`    | `ServerArgs`  | Same as `Start` — alias for local preview of production build                                          |
-| `Routes`     | `ProjectArgs` | Discover and print route table (kind, path, file, strategy)                                            |
-| `Analyze`    | `AnalyzeArgs` | Validate routes, imports, server/client boundary; output as Human, JSON, or SARIF                      |
+| `Routes`     | `RoutesArgs`  | Discover and print route table (kind, path, file, strategy; `--json` emits the manifest)               |
+| `Analyze`    | `AnalyzeArgs` | Validate routes, imports, server/client boundary; output as Human, JSON, SARIF, or interactive HTML    |
+| `Add`        | `AddArgs`     | Additive scaffolds for a validated form, data table, or authentication flow                            |
 | `Doctor`     | `DoctorArgs`  | Full project diagnostics: versions, tools, adapter compatibility, dependency check                     |
 | `Clean`      | `ProjectArgs` | Remove `.ruvyxa/` output directory                                                                     |
 | `Trace`      | `TraceArgs`   | Inspect one route manifest entry by route path, print as JSON                                          |
@@ -58,9 +60,11 @@ styled ANSI output.
 
 ```
 struct ProjectArgs          { root: PathBuf, runtime: Option<CliRuntime> }
+struct RoutesArgs           { root: PathBuf, runtime: Option<CliRuntime>, json: bool }
 struct ServerArgs           { root: PathBuf, host: Option<String>, port: Option<u16>, runtime: Option<CliRuntime> }
 struct BuildArgs            { root: PathBuf, target: Option<BuildTarget>, adapter: Option<String>, runtime: Option<CliRuntime> }
-struct AnalyzeArgs          { root: PathBuf, runtime: Option<CliRuntime>, format: AnalyzeFormat, output: Option<PathBuf> }
+struct AnalyzeArgs          { root: PathBuf, runtime: Option<CliRuntime>, format: AnalyzeFormat, output: Option<PathBuf>, html: bool }
+struct AddArgs              { templates: Vec<AddTemplate>, root: PathBuf, runtime: Option<CliRuntime>, force: bool }
 struct DoctorArgs           { root: PathBuf, target: Option<BuildTarget>, adapter: Option<String>, runtime: Option<CliRuntime>, json: bool }
 struct TraceArgs            { route: String, root: PathBuf }
 struct BenchArgs            { root: PathBuf, samples: usize, json: bool }
@@ -74,7 +78,7 @@ struct PluginArgs           { command: PluginCommand }
 ```
 BuildTarget  → Node | Bun | Edge | Static
 CliRuntime   → Node | Bun
-AnalyzeFormat → Auto | Human | Json | Sarif
+AnalyzeFormat → Auto | Human | Json | Sarif | Html
 ```
 
 `BuildTarget` is also `serde::Deserialize` and stored as `config.runtime`. The CLI `--runtime` flag
