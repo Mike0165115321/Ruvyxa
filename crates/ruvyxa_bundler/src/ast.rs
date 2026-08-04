@@ -1,9 +1,14 @@
 //! Lightweight AST facts used by the Ruvyxa Bundler pipeline.
 //!
 //! This is intentionally smaller than a full JavaScript parser, but it gives
-//! the resolver and transformer a shared structured view of imports, exports,
-//! JSX, decorators, and TypeScript-only syntax instead of duplicating ad hoc
-//! line scans in each stage.
+//! the resolver and transformer a shared structured view of imports, env
+//! reads, JSX, decorators, and TypeScript-only syntax instead of duplicating
+//! ad hoc line scans in each stage.
+//!
+//! Every field here has a production reader. A fact nothing consumes is still
+//! allocated for every module in the graph and retained for the run, so it is
+//! removed rather than kept "in case": the named-export list was collected on
+//! every scan and read only by its own tests.
 //!
 //! ## One walk, one answer
 //!
@@ -48,7 +53,6 @@ pub enum ImportKind {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModuleAst {
     pub imports: Vec<ImportEdge>,
-    pub exports: Vec<String>,
     /// Every statically-known `process.env.NAME` / `process.env["NAME"]` read,
     /// in source order and unfiltered. See the module docs on policy.
     pub env_reads: Vec<String>,
@@ -164,9 +168,6 @@ fn scan_code(source: &str, start: usize, end: usize, ast: &mut ModuleAst) {
             "export" => {
                 if let Some(edge) = export_edge(source, index, end) {
                     ast.imports.push(edge);
-                }
-                if let Some(name) = export_name(source, index, end) {
-                    ast.exports.push(name);
                 }
                 if export_declares_default(source, index, end) {
                     ast.has_default_export = true;
@@ -455,26 +456,6 @@ fn named_clause_exports_default(source: &str, brace: usize, end: usize) -> bool 
         }
     }
     false
-}
-
-fn export_name(source: &str, after_keyword: usize, end: usize) -> Option<String> {
-    let bytes = &source.as_bytes()[..end];
-    let mut index = skip_whitespace_and_comments(bytes, after_keyword);
-    for optional in ["default", "async"] {
-        if word_at(source, index, end) == Some(optional) {
-            index = skip_whitespace_and_comments(bytes, index + optional.len());
-        }
-    }
-    let kind = word_at(source, index, end)?;
-    if !matches!(kind, "function" | "class" | "const" | "let" | "var") {
-        return None;
-    }
-    index = skip_whitespace_and_comments(bytes, index + kind.len());
-    if bytes.get(index) == Some(&b'*') {
-        index = skip_whitespace_and_comments(bytes, index + 1);
-    }
-    let end = skip_identifier(bytes, index);
-    (end > index).then(|| source[index..end].to_string())
 }
 
 /// Whether the bytes at `index` begin a `process.env` member access.
@@ -835,7 +816,7 @@ export default function Page(props: Props) { return <main /> }
         assert!(ast.has_enums);
         assert!(ast.has_typescript);
         assert!(ast.has_jsx);
-        assert!(ast.exports.contains(&"Page".to_string()));
+        assert!(ast.has_default_export);
     }
 
     #[test]

@@ -152,7 +152,7 @@
   and configurable `robots.txt`, while public files or exact routes can take ownership.
 - **Client loader hook** — `useRuvyxaLoader` loads client-side data and returns
   `{ data, loading, error, refetch }` with built-in race-condition handling and mount-safety checks.
-  See the [client loader guide](docs/guides/en/05-data-loading-cache.md#client-side-loading).
+  See the [client loader guide](docs/en/05-data-actions-api.md).
 
 ### Security
 
@@ -178,7 +178,7 @@
   Content Engine (Markdown/MDX to API + `llms.txt`), OpenAPI generator, Bundle Budget enforcer,
   PWA/Manifest, Sitemap, RSS Feeds, SEO Robots, Redirects, Security Headers, and more. All plugins
   operate within strict execution limits and are fully extensible. See the
-  [Plugins Architecture](docs/guides/en/14-plugins.md).
+  [Plugins & Middleware](docs/en/08-plugins-middleware.md).
 - **Official state packages** — `@ruvyxa/database` provides a typed adapter facade, `@ruvyxa/auth`
   provides secure provider-driven sessions, and `@ruvyxa/realtime` connects opted-in server actions
   to the native self-hosted WebSocket transport with explicit deployment guards.
@@ -202,8 +202,8 @@
 - **`test:parity`** — compare dev/prod routes and smoke-render page routes.
 - **First-Class Diagnostics** — Over 50 detailed `RUV####` error codes spanning Boundary Violations
   (RUV1000s), Server/Render Errors (RUV1100s), Build/Compilation (RUV1300s), and Official Packages
-  (RUV3000s). See the [Complete Error Catalog](docs/guides/en/16-error-handling.md) for exact file
-  locations, causes, and suggested fixes.
+  (RUV3000s). See the [Complete Error Catalog](docs/en/16-troubleshooting-upgrades.md) for exact
+  file locations, causes, and suggested fixes.
 
 ### Deploy Anywhere (10 Adapters)
 
@@ -211,7 +211,7 @@
   `crud`, and `api-backend` available through `--template`.
 - **10 Deployment Adapters** — Zero-config native output for Vercel, Netlify, Cloudflare, Node.js,
   Bun, Static, AWS Amplify, Firebase, Railway, and Render. See the
-  [Deployment Guide](docs/guides/en/13-deployment.md) for platform-specific configurations.
+  [Deployment Guide](docs/en/15-deploy-run-and-operate.md) for platform-specific configurations.
 
 ---
 
@@ -253,7 +253,7 @@ my-app/
 ```
 
 First time using Ruvyxa? Check out the
-**[Tutorial: Build a Mini Blog](docs/guides/en/01-getting-started.md#tutorial-build-a-mini-blog)**
+**[Tutorial: Build a Mini Blog](docs/en/02-create-your-first-app.md#build-one-working-vertical-slice)**
 in the Getting Started guide for a step-by-step introduction to Routing, Server Components, and
 Dynamic Routes.
 
@@ -317,22 +317,23 @@ Ruvyxa release candidate, then run
 
 ## Documentation
 
-| Guide                                                             | Description                               |
-| ----------------------------------------------------------------- | ----------------------------------------- |
-| [User Guide](docs/index.md)                                       | Build and deploy a Ruvyxa app — EN & TH   |
-| [Developer Guide](docs/developer-guide.md)                        | Develop, test, and package the framework  |
-| [Architecture Overview](docs/architecture/overview.md)            | System architecture and module reference  |
-| [Getting Started](docs/guides/en/01-getting-started.md)           | Create your first Ruvyxa app              |
-| [Routing](docs/guides/en/02-routing.md)                           | File-system routes, layouts, route groups |
-| [Rendering Strategies](docs/guides/en/04-rendering-strategies.md) | SSR, SSG, ISR, CSR, PPR                   |
-| [Data Loading & Cache](docs/guides/en/05-data-loading-cache.md)   | Loaders, cache(), TTL, invalidation       |
-| [Server Actions](docs/guides/en/06-server-actions.md)             | Type-safe mutations with validation       |
-| [API Reference](docs/guides/en/17-api-reference.md)               | Complete @ruvyxa/react + @ruvyxa/core API |
-| [Architecture: Graph](docs/architecture/graph.md)                 | Route discovery and validation            |
-| [Architecture: Bundler](docs/architecture/bundler.md)             | TypeScript compilation and linking        |
-| [Architecture: Dev Server](docs/architecture/dev-server.md)       | Axum server, HMR, worker pool             |
-| [Architecture: Diagnostics](docs/architecture/diagnostics.md)     | Error codes, SARIF output                 |
-| [Architecture: Security](docs/architecture/security.md)           | Boundary enforcement, env safety          |
+| Guide                                                         | Description                                      |
+| ------------------------------------------------------------- | ------------------------------------------------ |
+| [Documentation Home](docs/README.md)                          | Full manual — English and Thai editions          |
+| [Introduction](docs/en/01-introduction.md)                    | What Ruvyxa is and when to use it                |
+| [Create Your First App](docs/en/02-create-your-first-app.md)  | Scaffold, run, and build a first vertical slice  |
+| [Project Structure](docs/en/03-project-structure.md)          | `app/`, `public/`, config, and generated output  |
+| [Routing & Rendering](docs/en/04-routing-rendering.md)        | File-system routes, layouts, SSR/SSG/ISR/CSR/PPR |
+| [Data, Actions & API](docs/en/05-data-actions-api.md)         | Loaders, `cache()`, server actions, API routes   |
+| [Configuration](docs/en/07-configuration.md)                  | `ruvyxa.config.ts` and environment variables     |
+| [Plugins & Middleware](docs/en/08-plugins-middleware.md)      | Plugin hooks and the middleware chain            |
+| [CLI](docs/en/10-cli.md)                                      | Every command, flag, and exit code               |
+| [Architecture](docs/en/11-architecture.md)                    | Graph, bundler, dev server, diagnostics          |
+| [Development & Testing](docs/en/12-development-testing.md)    | Develop, test, and package the framework         |
+| [Security](docs/en/13-security.md)                            | Boundary enforcement and env safety              |
+| [Deploy, Run & Operate](docs/en/15-deploy-run-and-operate.md) | Adapters and platform-specific configuration     |
+| [Troubleshooting](docs/en/16-troubleshooting-upgrades.md)     | Diagnostic catalog and upgrade notes             |
+| [Public API Reference](docs/en/17-public-api-reference.md)    | Complete `@ruvyxa/react` + `@ruvyxa/core` API    |
 
 ---
 
@@ -356,7 +357,8 @@ pnpm -r test
 ```
 
 Standalone JavaScript and TypeScript tests live under `tests/` and are routed by each package's
-`test` script. See the [Developer Guide](docs/developer-guide.md) for the verification layout.
+`test` script. See [Development & Testing](docs/en/12-development-testing.md) for the verification
+layout.
 
 ---
 
@@ -550,8 +552,8 @@ export default config({
 Dynamic routes can export a `staticParams` array for known values or use `getStaticParams(context)`
 for asynchronous discovery. `getStaticParams` may return `{ params, cache: '10m' }` to persist the
 result until its TTL expires; changes to the route or imported dependencies invalidate it early. See
-the [rendering guide](docs/guides/en/04-rendering-strategies.md) for scalar shorthand, context, and
-cache examples.
+the [rendering guide](docs/en/04-routing-rendering.md) for scalar shorthand, context, and cache
+examples.
 
 ---
 

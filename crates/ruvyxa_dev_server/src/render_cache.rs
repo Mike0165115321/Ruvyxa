@@ -427,21 +427,22 @@ impl RenderCache {
         before - entries.len()
     }
 
+    /// Drop an entry whose TTL has passed.
+    ///
+    /// Both maps are locked for the whole removal, in the same order `put`
+    /// takes them. Releasing `entries` first left a window where a concurrent
+    /// `put` of the same key could re-insert it and push it onto `order`, only
+    /// for this call to then remove it from `order` alone — leaving a key that
+    /// eviction could never reach. The eviction loop recovers from that by
+    /// clearing the whole cache, so the cost of the race was a silent flush of
+    /// every cached render, not a leak.
     async fn remove_if_expired(&self, key: &str) {
-        let removed = {
-            let mut entries = self.entries.write().await;
-            if entries
-                .get(key)
-                .is_some_and(|entry| entry.created_at.elapsed() > self.ttl)
-            {
-                entries.remove(key);
-                true
-            } else {
-                false
-            }
-        };
-
-        if removed {
+        let mut entries = self.entries.write().await;
+        if entries
+            .get(key)
+            .is_some_and(|entry| entry.created_at.elapsed() > self.ttl)
+        {
+            entries.remove(key);
             self.order.write().await.remove(key);
         }
     }

@@ -32,6 +32,12 @@ const RESERVED_OAUTH_PARAMETERS = new Set([
 /** Create an isolated auth runtime, its direct Request handler, and its Ruvyxa plugin. */
 export function createAuth(options: AuthOptions): AuthRuntime {
   const settings = normalizeOptions(options)
+  // `basePath` is fixed for the lifetime of the runtime, so the OAuth route
+  // pattern is compiled once here rather than on every request that reaches
+  // the auth handler.
+  const oauthPathPattern = new RegExp(
+    `^${escapeRegex(settings.basePath)}/oauth/([^/]+)/(start|callback)$`,
+  )
   const plugin = createAuthPlugin({
     basePath: settings.basePath,
     handle,
@@ -76,7 +82,7 @@ export function createAuth(options: AuthOptions): AuthRuntime {
       const result = await login(loginMatch, await readJson(request), request)
       return json(result.session, { headers: result.headers })
     }
-    const oauthMatch = matchOAuthPath(url.pathname, settings.basePath)
+    const oauthMatch = matchOAuthPath(url.pathname, oauthPathPattern)
     if (oauthMatch) {
       const provider = oauthProvider(settings.providers[oauthMatch.provider], oauthMatch.provider)
       if (oauthMatch.phase === 'start' && request.method === 'GET') {
@@ -849,10 +855,8 @@ function matchPath(pathname: string, prefix: string): string | null {
   return value && !value.includes('/') ? safeDecodeComponent(value) : null
 }
 
-function matchOAuthPath(pathname: string, basePath: string) {
-  const match = pathname.match(
-    new RegExp(`^${escapeRegex(basePath)}/oauth/([^/]+)/(start|callback)$`),
-  )
+function matchOAuthPath(pathname: string, pattern: RegExp) {
+  const match = pathname.match(pattern)
   if (!match) return null
   const provider = safeDecodeComponent(match[1]!)
   return provider ? { provider, phase: match[2] as 'start' | 'callback' } : null

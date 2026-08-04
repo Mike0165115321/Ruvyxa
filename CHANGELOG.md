@@ -1,5 +1,43 @@
 # Changelog
 
+## v1.0.27 (2026-08-04)
+
+### Fixed
+
+- Markdown and MDX pages no longer gain graph edges from imports shown inside fenced code examples.
+  Every other reader masked those examples before scanning; the import-edge walk did not, so a
+  documented `import './config'` pulled a real module into the page's client graph and could raise
+  RUV1007, RUV1008, or RUV1010 against code the page never runs. Source masking now happens where
+  the file is read, so no reader can skip it.
+- Fixed a window in the dev-server render cache where an entry expiring at the same moment as a
+  write of the same key could leave that key out of the recency list. The eviction path recovered by
+  clearing the entire cache, so the symptom was an unexplained loss of every cached render.
+
+### Performance
+
+- Route discovery and validation now read and scan each module once per run. A page was read three
+  times and scanned four; a component shared by many routes was re-read for each of them, because
+  rendering-strategy detection built a throwaway edge cache per route. Diagnostics and detected
+  strategies are unchanged.
+- Rendering-strategy detection no longer reads and masks a page's entire reachable dependency graph
+  before the rules that answer from the page's own exports. Pages that declare `"use client"`,
+  `ppr`, `revalidate`, or `getStaticParams` now skip that walk entirely. A page matching one of
+  those rules also keeps its declared strategy when a dependency cannot be read, instead of falling
+  back to SSR.
+- The auth runtime compiles its OAuth route pattern once per `createAuth()` instead of once per
+  request that reaches the auth handler.
+
+### Internal
+
+- `pnpm release:validate` now verifies every relative Markdown link and heading anchor in the
+  repository. The 1.0.26 documentation restructure left 25 dead links behind, including two on the
+  `create-ruvyxa` npm package page, and nothing in the toolchain could see them. All are repointed
+  at their successors under `docs/en/`.
+- Removed the named-export list from the bundler's module facts. It was collected on every scan and
+  read only by its own tests.
+- `@ruvyxa/testing` now declares its `@ruvyxa/core` peer range as `workspace:^`, matching every
+  other package, so releases cannot leave it pinned to an older minor.
+
 ## v1.0.26 (2026-08-03)
 
 ### Developer experience

@@ -14,7 +14,7 @@ pnpm --dir examples/demo dev
 ```
 
 Then open `http://localhost:3000`. For a standalone published-package application, see the
-[User Guide](../../docs/index.md), including the CI/Vercel-safe build scripts.
+[User Guide](../../docs/README.md), including the CI/Vercel-safe build scripts.
 
 ## Routes to explore
 

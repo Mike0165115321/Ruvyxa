@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use ruvyxa_diagnostics::{Diagnostic, Result, RuvyxaError, normalized_canonical_path};
 use serde::{Deserialize, Serialize};
@@ -201,6 +202,9 @@ pub fn discover_routes(options: DiscoverOptions) -> Result<RouteManifest> {
     }
 
     let mut routes = Vec::new();
+    // Shared across every route: layouts and shared components are reachable
+    // from many pages, and rendering-strategy detection walks that graph.
+    let mut cache = ModuleCache::default();
 
     for entry in WalkDir::new(&app_dir)
         .into_iter()
@@ -246,7 +250,7 @@ pub fn discover_routes(options: DiscoverOptions) -> Result<RouteManifest> {
             runtime: RuntimeTarget::Node,
             render: if kind == RouteKind::Page {
                 apply_rendering_defaults(
-                    detect_render_strategy(&app_dir, &file, &path, &layout_chain),
+                    detect_render_strategy(&app_dir, &file, &path, &layout_chain, &mut cache),
                     default_render_strategy,
                     default_revalidate,
                 )
@@ -313,20 +317,14 @@ pub fn validate_app(root: &Path, manifest: &RouteManifest) -> Result<ValidationR
     let mut validated_server: BTreeSet<PathBuf> = BTreeSet::new();
     // Shared across every route so a layout or component reached from many
     // routes is read and scanned once, not once per route.
-    let mut module_edges = ModuleEdges::default();
+    let mut cache = ModuleCache::default();
 
     for route in &manifest.routes {
         match route.kind {
             RouteKind::Page => {
-                let source = fs::read_to_string(&route.file)?;
-                let is_content_page = matches!(
-                    route
-                        .file
-                        .extension()
-                        .and_then(|extension| extension.to_str()),
-                    Some("md" | "mdx")
-                );
-                if !is_content_page && !ruvyxa_bundler::ast::has_default_export(&source) {
+                let page = cache.require(&route.file)?;
+                let is_content_page = is_markdown_route(&route.file);
+                if !is_content_page && !page.ast.has_default_export {
                     diagnostics.push(
                         Diagnostic::new("RUV1004", "Page is missing a default export")
                             .explain(
@@ -337,26 +335,32 @@ pub fn validate_app(root: &Path, manifest: &RouteManifest) -> Result<ValidationR
                     );
                 }
 
-                let mut graph = collect_relative_graph(&route.file, &mut module_edges);
+                let mut graph = collect_relative_graph(&route.file, &mut cache);
                 for layout in &route.layout_chain {
                     if let Some(layout) = resolve_layout_file(&manifest.app_dir, layout) {
-                        graph.extend(collect_relative_graph(&layout, &mut module_edges));
+                        graph.extend(collect_relative_graph(&layout, &mut cache));
                     }
                 }
                 for module in graph {
                     client_modules.insert(module.clone());
-                    // Skip if already validated — avoids redundant fs::read + canonicalize.
+                    // Skip if already validated — the cache makes the re-read
+                    // free, but the diagnostics would be emitted twice.
                     if validated_client.insert(module.clone()) {
-                        validate_client_module(&canonical_root, &module, &mut diagnostics)?;
+                        validate_client_module(
+                            &canonical_root,
+                            &module,
+                            &mut cache,
+                            &mut diagnostics,
+                        )?;
                     }
                 }
             }
             RouteKind::Api => {
-                let graph = collect_relative_graph(&route.file, &mut module_edges);
+                let graph = collect_relative_graph(&route.file, &mut cache);
                 for module in graph {
                     server_modules.insert(module.clone());
                     if validated_server.insert(module.clone()) {
-                        validate_server_module(&module, &mut diagnostics)?;
+                        validate_server_module(&module, &mut cache, &mut diagnostics)?;
                     }
                 }
             }
@@ -364,11 +368,11 @@ pub fn validate_app(root: &Path, manifest: &RouteManifest) -> Result<ValidationR
 
         for module in &route.server_modules {
             let module = PathBuf::from(module);
-            let graph = collect_relative_graph(&module, &mut module_edges);
+            let graph = collect_relative_graph(&module, &mut cache);
             for module in graph {
                 server_modules.insert(module.clone());
                 if validated_server.insert(module.clone()) {
-                    validate_server_module(&module, &mut diagnostics)?;
+                    validate_server_module(&module, &mut cache, &mut diagnostics)?;
                 }
             }
         }
@@ -377,7 +381,7 @@ pub fn validate_app(root: &Path, manifest: &RouteManifest) -> Result<ValidationR
             let module = PathBuf::from(module);
             client_modules.insert(module.clone());
             if validated_client.insert(module.clone()) {
-                validate_client_module(&canonical_root, &module, &mut diagnostics)?;
+                validate_client_module(&canonical_root, &module, &mut cache, &mut diagnostics)?;
             }
         }
     }
@@ -403,20 +407,18 @@ pub fn validate_app(root: &Path, manifest: &RouteManifest) -> Result<ValidationR
 fn validate_client_module(
     canonical_root: &Path,
     file: &Path,
+    cache: &mut ModuleCache,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<()> {
-    let Ok(source) = fs::read_to_string(file) else {
+    let Some(module) = cache.module(file) else {
         return Ok(());
     };
-    let source = if is_markdown_route(file) {
-        markdown_without_code_examples(&source)
-    } else {
-        source
-    };
 
-    if import_specifiers(&source)
+    if module
+        .ast
+        .imports
         .iter()
-        .any(|specifier| is_server_only_specifier(specifier))
+        .any(|edge| is_server_only_specifier(&edge.specifier))
     {
         diagnostics.push(
             Diagnostic::new("RUV1007", "Server-only module imported into client graph")
@@ -426,7 +428,7 @@ fn validate_client_module(
         );
     }
 
-    for env_name in private_env_reads(&source) {
+    for env_name in private_env_reads(&module.ast) {
         diagnostics.push(
             Diagnostic::new("RUV1008", "Private environment variable used in client graph")
                 .explain(format!(
@@ -533,19 +535,20 @@ fn markdown_without_code_examples(source: &str) -> String {
     output
 }
 
-fn validate_server_module(file: &Path, diagnostics: &mut Vec<Diagnostic>) -> Result<()> {
-    let Ok(source) = fs::read_to_string(file) else {
+fn validate_server_module(
+    file: &Path,
+    cache: &mut ModuleCache,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<()> {
+    let Some(module) = cache.module(file) else {
         return Ok(());
     };
-    let source = if is_markdown_route(file) {
-        markdown_without_code_examples(&source)
-    } else {
-        source
-    };
 
-    if import_specifiers(&source)
+    if module
+        .ast
+        .imports
         .iter()
-        .any(|specifier| specifier == "client-only")
+        .any(|edge| edge.specifier == "client-only")
     {
         diagnostics.push(
             Diagnostic::new("RUV1009", "Client-only module imported into server graph")
@@ -560,65 +563,146 @@ fn validate_server_module(file: &Path, diagnostics: &mut Vec<Diagnostic>) -> Res
     Ok(())
 }
 
-/// Resolved relative-import edges per module, reused across graph walks.
+/// One module's source and the facts derived from a single scan of it.
 ///
-/// The reachable set is still computed per entry, so every caller gets exactly
-/// the set it got before. What is shared is the expensive part: reading and
-/// scanning a file to learn its edges. Without this, a layout and every
-/// component it pulls in are re-read once per route in the manifest, so the work
-/// grew as `routes × shared modules` while always producing the same answer.
-#[derive(Default)]
-struct ModuleEdges {
-    edges: BTreeMap<PathBuf, Vec<PathBuf>>,
+/// `ast.rs` states the contract this upholds: "callers that also need imports
+/// should call `parse_module` once and read both facts off the result." Route
+/// validation needs three facts per module — imports, env reads, and whether a
+/// default export exists — and used to reach each through its own
+/// `source -> T` helper that called `parse_module` internally.
+struct ParsedModule {
+    /// Source as the validators see it: Markdown/MDX already has its fenced
+    /// examples blanked out.
+    source: Arc<str>,
+    ast: ruvyxa_bundler::ast::ModuleAst,
 }
 
-impl ModuleEdges {
-    /// Relative imports declared by `file`, resolved to paths.
-    ///
-    /// An unreadable file caches an empty edge list, matching the previous
-    /// behavior of skipping it, and stops the retry on every later walk.
-    fn of(&mut self, file: &Path) -> &[PathBuf] {
-        if !self.edges.contains_key(file) {
-            let resolved = match fs::read_to_string(file) {
-                Ok(source) => import_specifiers(&source)
-                    .into_iter()
-                    .filter(|specifier| specifier.starts_with('.'))
-                    .filter_map(|specifier| resolve_relative_import(file, &specifier))
-                    .collect(),
-                Err(_) => Vec::new(),
-            };
-            self.edges.insert(file.to_path_buf(), resolved);
+/// Per-run cache of everything derived from a module's source text.
+///
+/// Reading and scanning a file is the expensive part of route discovery and
+/// validation, and both walk overlapping graphs: a layout, and every component
+/// it pulls in, is reachable from every route beneath it. Keying that work by
+/// canonical path collapses it to once per file per run instead of growing as
+/// `routes × shared modules`.
+///
+/// Reading through one place also makes the Markdown decision unskippable.
+/// Masking used to be applied by each caller, and the edge walk was the one
+/// that forgot: an `import './helpers'` shown inside a fenced example in a
+/// `.md` page became a real graph edge, pulling that module into the client
+/// graph and raising boundary diagnostics against code the page never runs.
+/// Masking now happens at the single point where source is read, so no caller
+/// can skip it.
+#[derive(Default)]
+struct ModuleCache {
+    /// Memoized `normalized_canonical_path`, so the same route file reached
+    /// through a walk path and through a resolved import is one entry, and the
+    /// canonicalize syscall runs once per distinct spelling.
+    canonical: BTreeMap<PathBuf, PathBuf>,
+    modules: BTreeMap<PathBuf, Option<Arc<ParsedModule>>>,
+    /// Masked code, built lazily: only rendering-strategy detection needs it,
+    /// and it is a full second pass over the source.
+    masked: BTreeMap<PathBuf, Arc<str>>,
+    edges: BTreeMap<PathBuf, Arc<[PathBuf]>>,
+}
+
+impl ModuleCache {
+    fn canonical(&mut self, file: &Path) -> PathBuf {
+        if let Some(canonical) = self.canonical.get(file) {
+            return canonical.clone();
         }
-        &self.edges[file]
+        let canonical = normalized_canonical_path(file);
+        self.canonical.insert(file.to_path_buf(), canonical.clone());
+        canonical
+    }
+
+    /// Source and parsed facts for `file`, or `None` when it cannot be read.
+    ///
+    /// An unreadable file caches the `None`, matching the previous behavior of
+    /// skipping it, and stops the retry on every later walk.
+    fn module(&mut self, file: &Path) -> Option<Arc<ParsedModule>> {
+        let key = self.canonical(file);
+        if let Some(cached) = self.modules.get(&key) {
+            return cached.clone();
+        }
+
+        let parsed = fs::read_to_string(&key).ok().map(|source| {
+            let source = if is_markdown_route(&key) {
+                markdown_without_code_examples(&source)
+            } else {
+                source
+            };
+            Arc::new(ParsedModule {
+                ast: ruvyxa_bundler::ast::parse_module(&source),
+                source: Arc::from(source),
+            })
+        });
+        self.modules.insert(key, parsed.clone());
+        parsed
+    }
+
+    /// Like [`ModuleCache::module`], but reports why the read failed.
+    ///
+    /// A file the manifest lists as a route must exist; treating it as an
+    /// empty module would silently drop its diagnostics.
+    fn require(&mut self, file: &Path) -> Result<Arc<ParsedModule>> {
+        if let Some(module) = self.module(file) {
+            return Ok(module);
+        }
+        // Only reached on the error path, so re-reading to recover the real
+        // `io::Error` costs nothing in the common case.
+        Err(fs::read_to_string(file).unwrap_err().into())
+    }
+
+    /// Source with strings, template text, comments, and regex literals blanked.
+    fn masked(&mut self, file: &Path) -> Option<Arc<str>> {
+        let key = self.canonical(file);
+        if let Some(cached) = self.masked.get(&key) {
+            return Some(cached.clone());
+        }
+
+        let module = self.module(&key)?;
+        let masked: Arc<str> = Arc::from(code_without_strings_and_comments(&module.source));
+        self.masked.insert(key, masked.clone());
+        Some(masked)
+    }
+
+    /// Relative imports declared by `file`, resolved to paths.
+    fn edges(&mut self, file: &Path) -> Arc<[PathBuf]> {
+        let key = self.canonical(file);
+        if let Some(cached) = self.edges.get(&key) {
+            return cached.clone();
+        }
+
+        let resolved: Arc<[PathBuf]> = match self.module(&key) {
+            Some(module) => module
+                .ast
+                .import_specifiers()
+                .into_iter()
+                .filter(|specifier| specifier.starts_with('.'))
+                .filter_map(|specifier| resolve_relative_import(&key, &specifier))
+                .collect(),
+            None => Arc::from([] as [PathBuf; 0]),
+        };
+        self.edges.insert(key, resolved.clone());
+        resolved
     }
 }
 
-fn collect_relative_graph(entry: &Path, edges: &mut ModuleEdges) -> BTreeSet<PathBuf> {
+fn collect_relative_graph(entry: &Path, cache: &mut ModuleCache) -> BTreeSet<PathBuf> {
     let mut visited = BTreeSet::new();
     // Normalize the entry exactly like resolved imports so a cycle back to
     // the entry file compares equal instead of being visited twice.
-    let mut queue = VecDeque::from([normalized_canonical_path(entry)]);
+    let mut queue = VecDeque::from([cache.canonical(entry)]);
 
     while let Some(file) = queue.pop_front() {
         if !visited.insert(file.clone()) {
             continue;
         }
 
-        queue.extend(edges.of(&file).iter().cloned());
+        queue.extend(cache.edges(&file).iter().cloned());
     }
 
     visited
-}
-
-/// Import specifiers declared by a module, as the bundler sees them.
-///
-/// Route validation must walk the same graph the bundler will actually build.
-/// This used to be a private line-oriented matcher fed by its own source-masking
-/// pass, so `check` and `build` could disagree about which modules a page
-/// reaches — a multi-line `from`/specifier split, for one, was invisible here but
-/// visible to the bundler. Delegating removes the second answer entirely.
-fn import_specifiers(source: &str) -> Vec<String> {
-    ruvyxa_bundler::ast::parse_module(source).import_specifiers()
 }
 
 fn resolve_relative_import(from: &Path, specifier: &str) -> Option<PathBuf> {
@@ -651,12 +735,11 @@ fn resolve_relative_import(from: &Path, specifier: &str) -> Option<PathBuf> {
 /// disagree about which env vars a module touches. This used to be a private
 /// marker search over a privately-masked copy of the source: a second answer to
 /// the same question, kept in step with the bundler only by hand.
-fn private_env_reads(source: &str) -> Vec<String> {
-    ruvyxa_bundler::ast::parse_module(source)
-        .env_reads
-        .into_iter()
+fn private_env_reads(ast: &ruvyxa_bundler::ast::ModuleAst) -> impl Iterator<Item = &str> {
+    ast.env_reads
+        .iter()
         .filter(|name| !name.starts_with("RUVYXA_PUBLIC_"))
-        .collect()
+        .map(String::as_str)
 }
 
 fn relative_starts_with_server(relative: &Path) -> bool {
@@ -851,19 +934,13 @@ fn detect_render_strategy(
     file: &Path,
     route_path: &str,
     layout_chain: &[String],
+    cache: &mut ModuleCache,
 ) -> RenderMeta {
-    let Ok(source) = fs::read_to_string(file) else {
+    let Some(page) = cache.module(file) else {
         return RenderMeta::default();
     };
-    let source = if is_markdown_route(file) {
-        markdown_without_code_examples(&source)
-    } else {
-        source
-    };
-
-    let code = code_without_strings_and_comments(&source);
-    let Some(reachable_code) = render_reachable_code(app_dir, file, layout_chain) else {
-        // An unreadable route dependency must never be guessed to be static.
+    let source = Arc::clone(&page.source);
+    let Some(code) = cache.masked(file) else {
         return RenderMeta::default();
     };
 
@@ -919,13 +996,24 @@ fn detect_render_strategy(
     }
 
     // 5. Static routes with no dynamic data markers can be pre-rendered.
-    if !route_has_dynamic_segments(route_path) && !has_dynamic_data_markers(&reachable_code) {
-        return RenderMeta {
-            strategy: RenderStrategy::Ssg,
-            hydrate,
-            hydration,
-            ..Default::default()
-        };
+    //
+    // The reachable graph is only read here. Rules 1-4 answer from the page's
+    // own exports, so reading and masking every dependency ahead of them was
+    // work whose result was discarded for every page that opts into a strategy
+    // explicitly.
+    if !route_has_dynamic_segments(route_path) {
+        // A dependency that cannot be read cannot be cleared of data markers,
+        // so an unreadable graph leaves the route dynamic rather than guessing
+        // it static.
+        let reachable_code = render_reachable_code(app_dir, file, layout_chain, cache);
+        if reachable_code.is_some_and(|code| !has_dynamic_data_markers(&code)) {
+            return RenderMeta {
+                strategy: RenderStrategy::Ssg,
+                hydrate,
+                hydration,
+                ..Default::default()
+            };
+        }
     }
 
     // 6. Default: SSR
@@ -967,23 +1055,21 @@ fn parse_hydration_mode(source: &str) -> HydrationMode {
 /// Return all statically reachable route and layout source after stripping strings/comments.
 /// Route-level rendering exports are intentionally handled from the page source only, while data
 /// markers in any dependency make automatic SSG unsafe.
-fn render_reachable_code(app_dir: &Path, file: &Path, layout_chain: &[String]) -> Option<String> {
-    let mut edges = ModuleEdges::default();
-    let mut files = collect_relative_graph(file, &mut edges);
+fn render_reachable_code(
+    app_dir: &Path,
+    file: &Path,
+    layout_chain: &[String],
+    cache: &mut ModuleCache,
+) -> Option<String> {
+    let mut files = collect_relative_graph(file, cache);
     for layout in layout_chain {
         let layout = resolve_layout_file(app_dir, layout)?;
-        files.extend(collect_relative_graph(&layout, &mut edges));
+        files.extend(collect_relative_graph(&layout, cache));
     }
 
     let mut code = String::new();
     for path in files {
-        let source = fs::read_to_string(&path).ok()?;
-        let source = if is_markdown_route(&path) {
-            markdown_without_code_examples(&source)
-        } else {
-            source
-        };
-        code.push_str(&code_without_strings_and_comments(&source));
+        code.push_str(&cache.masked(&path)?);
         code.push('\n');
     }
     Some(code)
@@ -1140,6 +1226,18 @@ mod tests {
 
     use super::*;
 
+    /// Scanner tests assert on source text directly. Production reads both
+    /// facts off one cached `ModuleAst`; these shadow the module-level helpers
+    /// so the assertions stay about the scanner rather than the cache.
+    fn private_env_reads(source: &str) -> Vec<String> {
+        let ast = ruvyxa_bundler::ast::parse_module(source);
+        super::private_env_reads(&ast).map(str::to_owned).collect()
+    }
+
+    fn import_specifiers(source: &str) -> Vec<String> {
+        ruvyxa_bundler::ast::parse_module(source).import_specifiers()
+    }
+
     #[test]
     fn discovers_static_nested_and_dynamic_pages() {
         let temp = tempfile::tempdir().unwrap();
@@ -1189,6 +1287,37 @@ mod tests {
                 .routes
                 .iter()
                 .all(|route| route.render.strategy == RenderStrategy::Ssg)
+        );
+    }
+
+    #[test]
+    fn markdown_code_examples_do_not_create_graph_edges() {
+        // A fenced example is display text. It used to reach the edge walk
+        // unmasked — every other reader masked it first — so a documented
+        // `import './config'` pulled a real module into the page's client
+        // graph and raised boundary diagnostics against code the page never
+        // runs.
+        let temp = tempfile::tempdir().unwrap();
+        let app = temp.path().join("app");
+        fs::create_dir_all(&app).unwrap();
+        fs::write(
+            app.join("config.ts"),
+            "export const url = process.env.DATABASE_URL;\n",
+        )
+        .unwrap();
+        fs::write(
+            app.join("page.md"),
+            "# Guide\n\nConfigure the database:\n\n```ts\nimport './config';\n```\n",
+        )
+        .unwrap();
+
+        let manifest = discover_routes(DiscoverOptions::new(&app)).unwrap();
+        let report = validate_app(temp.path(), &manifest).unwrap();
+
+        assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+        assert_eq!(
+            report.client_modules, 1,
+            "only the page itself is reachable"
         );
     }
 
@@ -1685,14 +1814,14 @@ mod tests {
         )
         .unwrap();
 
-        let mut edges = ModuleEdges::default();
-        let cold = collect_relative_graph(&app.join("page.tsx"), &mut edges);
+        let mut cache = ModuleCache::default();
+        let cold = collect_relative_graph(&app.join("page.tsx"), &mut cache);
         // `shared.ts` is memoized by now; walking a second entry through it must
         // not short-circuit into a partial graph.
-        let warm_blog = collect_relative_graph(&app.join("blog/page.tsx"), &mut edges);
-        let warm_layout = collect_relative_graph(&app.join("layout.tsx"), &mut edges);
+        let warm_blog = collect_relative_graph(&app.join("blog/page.tsx"), &mut cache);
+        let warm_layout = collect_relative_graph(&app.join("layout.tsx"), &mut cache);
         // Repeating the first entry on a fully warm cache must be idempotent.
-        let warm_repeat = collect_relative_graph(&app.join("page.tsx"), &mut edges);
+        let warm_repeat = collect_relative_graph(&app.join("page.tsx"), &mut cache);
 
         assert_eq!(cold, warm_repeat, "a warm walk must match the cold walk");
         let shared = normalized_canonical_path(&app.join("shared.ts"));
@@ -1709,7 +1838,8 @@ mod tests {
         }
 
         // Every entry above still resolves through one read of `shared.ts`.
-        assert!(edges.edges.contains_key(&shared));
+        assert!(cache.edges.contains_key(&shared));
+        assert!(cache.modules.contains_key(&shared));
     }
 
     #[test]

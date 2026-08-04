@@ -64,8 +64,6 @@ fn parses_multiline_module_edges_without_string_comment_or_member_false_positive
             ("./data.cjs", ImportKind::Require),
         ]
     );
-    assert!(ast.exports.contains(&"loadLazy".to_string()));
-    assert!(ast.exports.contains(&"loadData".to_string()));
 }
 
 #[test]
@@ -90,7 +88,6 @@ fn transforms_fragments_member_tags_namespaced_tags_and_spread_props() {
     let ast = parse_module(ADVANCED_JSX);
     assert!(ast.has_jsx);
     assert!(ast.has_typescript);
-    assert!(ast.exports.contains(&"Page".to_string()));
 
     let output = transform(ADVANCED_JSX, true).expect("advanced JSX fixture should compile");
     assert!(
