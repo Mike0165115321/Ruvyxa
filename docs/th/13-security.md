@@ -1,0 +1,43 @@
+# Security
+
+security เป็นหลายชั้น: framework validation และ default ลดความเสี่ยง แต่ application authorization,
+secret storage, upstream network control และ infrastructure policy ยังเป็นความรับผิดชอบของคุณ
+
+## Control ที่ framework บังคับ
+
+- boundary validation ปฏิเสธ private environment access และ server-only import ใน client code;
+  browser-safe value ต้องมี prefix `RUVYXA_PUBLIC_`
+- จำกัดขนาด body ของ action/API ได้ใน `security` action rate limit ตั้ง maximum/window ได้; action
+  input schema ทำงานก่อน action handler
+- `security.trustedProxyIps` เป็น allow-list สำหรับ forwarded IP/protocol header; loopback proxy
+  ได้รับความเชื่อถือโดยปริยาย อย่าเชื่อ forwarded header จาก client ทั่วไป
+- first-party `redirects` plugin validate destination ต่อ scheme-relative, backslash และ
+  invalid-origin form ที่ไม่ปลอดภัย `securityHeaders` validate CSP directive map และให้ HSTS เป็น
+  default
+- auth code มี signed/session/provider runtime และ rate-limit store contract แต่ durable storage และ
+  cookie/origin decision ที่ขึ้นกับ deployment เป็นงานของ application
+
+## Application checklist
+
+- validate ทุก API body, route parameter และ action input size limit ไม่ใช่ semantic validation
+- authorize ทุก data read/write ใน handler; `ActionContext.user` เป็น optional และไม่ได้
+  authenticate caller เอง
+- เก็บ `RUVYXA_AUTH_SECRET`, OAuth secret และ database credential นอก source control ห้ามใช้
+  `RUVYXA_PUBLIC_` สำหรับสิ่งเหล่านี้
+- ระบุ CORS origin/method/header ให้ชัดเมื่อใช้ `middleware.builtin.cors`; อย่าเปิด credentialed
+  cross-origin access โดยไม่มี origin list ที่ review
+- ใช้ route-scoped CSP, frame, referrer, COOP/COEP/CORP และ permissions policy ผ่าน
+  `securityHeaders` หลังตรวจ asset ที่ต้องใช้
+- อย่าให้ structured log มี token, cookie, authorization header, request body หรือข้อมูลส่วนบุคคล
+  observability plugin log method/path/status/timing ไม่ใช่ redaction solution ทั่วไป
+
+## Infrastructure checklist
+
+terminate TLS, จำกัด inbound network, ตั้ง process memory/time limit, patch Node/Rust/dependency
+และให้ secret manager ใส่เฉพาะ proxy address/CIDR ที่รู้จักใน `trustedProxyIps` ทดสอบ authentication
+redirect ด้วย production origin ไม่พบหลักฐานว่ามี CSRF middleware ในตัว, generic rate limiting
+สำหรับ arbitrary API route, malware scanning, WAF หรือ automatic dependency-vulnerability
+remediation; เพิ่ม control เหล่านี้เมื่อ threat model ต้องการ
+
+**ก่อนหน้า:** [Development และ testing](12-development-testing.md) · **ถัดไป:**
+[Observability และ performance](14-observability-performance.md)

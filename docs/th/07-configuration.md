@@ -1,0 +1,103 @@
+# Configuration และ environment
+
+`ruvyxa.config.ts` ถูกประเมินโดย configuration renderer แล้ว validate ใช้ `config()` จาก
+`ruvyxa/config` เพื่อเขียนแบบ typed ชื่อ configuration ด้านล่างมาจาก `RuvyxaConfig` และ nested
+source type ของมัน
+
+## Option หลัก
+
+| Key                                                                      | Type / ค่าเริ่มต้น                             | ผลกระทบ                                 |
+| ------------------------------------------------------------------------ | ---------------------------------------------- | --------------------------------------- |
+| `appDir`, `outDir`                                                       | string                                         | ตำแหน่ง app source และ generated output |
+| `runtime`                                                                | `node \| bun \| edge \| static`, ปริยาย `node` | นโยบาย runtime/target                   |
+| `server.host`, `server.port`                                             | string, number                                 | address ที่ dev/start ฟัง               |
+| `build.minify`, `map`, `treeShake`, `manifest`, `warm`, `prerenderCache` | boolean; cache ปริยาย true                     | พฤติกรรม compiler/build artifact        |
+| `build.split`                                                            | `single \| route \| manual`                    | นโยบาย bundle splitting                 |
+| `build.workers`                                                          | number                                         | build parallelism                       |
+| `render.strategy`, `render.revalidate`                                   | strategy, seconds                              | นโยบาย page rendering ปริยาย            |
+| `cache.routes`, `cache.css`, `cache.dir`                                 | boolean/string                                 | setting route/CSS/cache directory       |
+
+## แผนที่ option แบบครบกลุ่ม
+
+| กลุ่ม         | Key                                                                                                                    | การตัดสินใจเชิงปฏิบัติการ                                                                                                                                                                                      |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Root          | `appDir`, `outDir`, `runtime`, `react`, `typescript.strict`                                                            | ใช้ default จนกว่าจะต้องเปลี่ยน source/output layout หรือ target `runtime` คือ `node`, `bun`, `edge` หรือ `static`; CLI target override ได้                                                                    |
+| CSS และ debug | `css.entries`, `debug.overlay`, `debug.traces`                                                                         | `entries` สำหรับ global style แบบ project-relative ที่ไม่มี module import debug flag เปลี่ยน development diagnostic ไม่ใช่ production access control                                                           |
+| Build         | `minify`, `map`, `treeShake`, `split`, `workers`, `jsx`, `target`, `manifest`, `warm`, `prerenderCache`                | `split` เป็น `single`, `route` หรือ `manual`; `jsx` เป็น `classic` หรือ `automatic`; target เป็น `es2018`, `es2019`, `es2020`, `es2022` หรือ `esnext` ใช้ source map อย่างตั้งใจเพราะอาจเปิดเผย source content |
+| Rendering     | `render.strategy`, `render.revalidate`                                                                                 | Strategy คือ `ssr`, `ssg`, `isr`, `csr` หรือ `ppr` strategy ปริยายคือ SSR และ revalidation ปริยาย 60 วินาที                                                                                                    |
+| Image         | `optimize`, `quality`, `lossless`, `keepOriginal`, `variantWidths`, `workers`, `onDemand.enabled`, `onDemand.maxWidth` | Default คือ optimize true, quality 82, lossless false, keep-original true, standard width ที่ระบุ และ worker 0 (จำนวน CPU ที่ใช้ได้) on-demand image แบบ object เปิดโดยปริยายและ max width 3840                |
+| i18n          | `locales`, `defaultLocale`, `localeParam`, `detectLocale`, `cookie`                                                    | `locales` และ `defaultLocale` จำเป็นเมื่อกำหนด i18n param ปริยาย `lang`, detection true, cookie `RUVYXA_LOCALE`                                                                                                |
+| Site          | `site.url`, `site.sitemap`, `site.robots`                                                                              | Sitemap ตั้ง `exclude`, `additionalPaths`, `defaults` และ `entries` ที่เพิ่ม metadata ได้; robots ตั้ง rule, sitemap URL และ host ได้                                                                          |
+| Middleware    | `builtin.cors`, `builtin.timing`, `builtin.log`, `builtin.rate`, `builtin.headers`, `workers`, `timeoutMs`             | CORS มี origins/methods/headers/credentials/maxAge built-in rate ต้องมี `max`, `window`, `key` แบบเลือกได้ plugin worker 1–8; timeout ปริยาย 30,000 ms และสูงสุด 300,000                                       |
+| Integration   | `adapter`, `adapterOptions`, `plugins`                                                                                 | ใช้ adapter สำหรับ build output และ array ของ `RuvyxaPlugin` สำหรับ extension                                                                                                                                  |
+
+## Production configuration example
+
+เริ่มจาก configuration ที่แคบนี้ แล้วเพิ่มเฉพาะ feature ที่ application ทดสอบแล้ว value ทั้งหมดเป็น
+option name ที่รองรับ ให้แทน origin ตัวอย่างก่อน release
+
+```ts
+import { config } from 'ruvyxa/config'
+import { requireEnv, securityHeaders } from 'ruvyxa/plugins'
+
+export default config({
+  site: { url: 'https://app.example.com', sitemap: true, robots: true },
+  build: { minify: true, map: false, treeShake: true, split: 'route', prerenderCache: true },
+  security: { actionLimit: 1_048_576, apiLimit: 10_485_760, sameOrigin: true, fetchMeta: true },
+  plugins: [
+    requireEnv(['DATABASE_URL', 'RUVYXA_AUTH_SECRET']),
+    securityHeaders({ contentSecurityPolicy: { 'default-src': ["'self'"] } }),
+  ],
+})
+```
+
+`requireEnv` validate name ตอนท้าย production build จึงต้องตั้ง required value ใน build environment
+เดียวกัน มันไม่อ่าน secret เข้า browser code CSP มักต้องเพิ่ม source สำหรับ analytics, image, font
+หรือ API; ทดสอบทุก route หลังจำกัด policy
+
+```ts
+import { config } from 'ruvyxa/config'
+
+export default config({
+  build: { minify: true, map: false, treeShake: true, split: 'route', prerenderCache: true },
+  render: { strategy: 'ssr', revalidate: 60 },
+  image: {
+    optimize: true,
+    quality: 82,
+    variantWidths: [640, 1200],
+    onDemand: { enabled: true, maxWidth: 1920 },
+  },
+  i18n: { locales: ['en', 'th'], defaultLocale: 'en' },
+})
+```
+
+## Security, middleware, site และ plugin
+
+`security.actionLimit` ปริยาย 1,048,576 byte; `security.apiLimit` ปริยาย 10,485,760 byte;
+`security.pluginLimit` ปริยาย 33,554,432 และจำกัดสูงสุด 268,435,456 `security.actionRateLimit`
+ปริยาย 600 request ใน 60 วินาที `trustedProxyIps` รับ IPv4/IPv6 แบบ exact หรือ CIDR range; เฉพาะ
+non-loopback proxy ที่ตั้งค่าเท่านั้นที่ส่ง forwarded client/protocol header ได้
+
+`middleware` มี built-in (`cors`, `timing`, `log`, `rate`, `headers`) และ TypeScript plugin
+`workers` (1–8) กับ `timeoutMs` (ปริยาย 30,000, สูงสุด 300,000) `site` ตั้งค่า `sitemap.xml` และ
+`robots.txt` ตอน build; exact app route หรือไฟล์ชื่อเดียวกันใน `public/` จะระงับ core generator
+`plugins` คือ array ของ `RuvyxaPlugin`
+
+## Environment variable
+
+| Variable                                                                                                         | วัตถุประสงค์ที่ยืนยันจากหลักฐาน                 |
+| ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| `RUVYXA_SITE_URL`                                                                                                | fallback canonical origin ของ site discovery    |
+| `RUVYXA_RUNTIME`                                                                                                 | CLI/runtime override ที่ dev/build ใช้          |
+| `RUVYXA_ADAPTER`                                                                                                 | build adapter selection override                |
+| `RUVYXA_BUILD_CACHE_DIR`                                                                                         | shared build cache directory override           |
+| `RUVYXA_RENDER_CACHE_SIZE`                                                                                       | render-cache capacity                           |
+| `RUVYXA_WORKER_POOL_SIZE`, `RUVYXA_WORKER_TIMEOUT_MS`, `RUVYXA_WORKER_MAX_CONCURRENCY`, `RUVYXA_MEMORY_LIMIT_MB` | worker-pool operational control                 |
+| `RUVYXA_PUBLIC_*`                                                                                                | browser-safe value ที่ inject เพื่อใช้ใน client |
+
+variable ภายในที่ขึ้นต้นหรือลงท้ายด้วย double underscore เป็น runtime transport detail ไม่ใช่
+application configuration ห้ามตั้งเอง ค่าเช่น `RUVYXA_AUTH_SECRET` ปรากฏใน auth scaffolder; ให้ใช้
+private environment source และอย่าเปิดเผยด้วย public prefix
+
+**ก่อนหน้า:** [UI, navigation, metadata และ asset](06-ui-navigation-metadata-and-assets.md) ·
+**ถัดไป:** [Plugin และ middleware](08-plugins-middleware.md)

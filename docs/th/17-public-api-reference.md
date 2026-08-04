@@ -1,0 +1,52 @@
+# Public API reference
+
+reference นี้แสดง stable exported surface ที่พบใน package entry point โดยตั้งใจแยก implementation
+detail ใน Rust/runtime file ออกจาก API ที่ application import
+
+## `ruvyxa`, `ruvyxa/server` และ `ruvyxa/config`
+
+| Export                               | Signature / วัตถุประสงค์                                                             |
+| ------------------------------------ | ------------------------------------------------------------------------------------ |
+| `config`                             | `<T extends RuvyxaConfig>(config: T) => T`; typed config identity helper             |
+| `loader`                             | `(handler: LoaderHandler<T>) => Loader<T>`; handler รับ `params`, `request`, `cache` |
+| `action`                             | Builder: `.input(schema)`, `.realtime(channels?)`, `.handler(fn)`                    |
+| `cache`                              | `(key) => CacheBuilder`; `.ttl(string)`, `.swr(string)`, `.get(producer)`            |
+| `invalidateCache`, `cacheStats`      | ลบ cache entry แบบ exact/prefix/all; รายงาน `{ size, maxEntries }`                   |
+| `json`, `redirect`, `notFound`       | Response helper; redirect อนุญาตเฉพาะ status 3xx                                     |
+| `definePlugin`, `withResponseHeader` | plugin definition และ response-header helper                                         |
+| `standaloneServerSource`             | source generator สำหรับ standalone server artifact                                   |
+
+type มี `RuvyxaConfig`, `PageProps`, `GetStaticParams`, `RenderStrategy`, `Adapter`,
+`MiddlewareConfig`, `ImageConfig`, `I18nConfig`, `SiteConfig` และ plugin contract ใช้ import จาก
+`ruvyxa` สำหรับ public primitive และ `ruvyxa/config` หรือ `ruvyxa/plugin` เพื่อสื่อ intent ชัดเจน
+
+## `@ruvyxa/react`
+
+| Export family    | ชื่อหลัก                                                                                                  |
+| ---------------- | --------------------------------------------------------------------------------------------------------- |
+| Navigation       | `Link`, `useRouter`, `usePathname`, `useParams`, `useSearchParams`, `useSelectedRoute`, `useRouteContext` |
+| Rendering error  | `RuvyxaErrorBoundary`, `notFound`, `isNotFoundError`, `RouteErrorProps`                                   |
+| Metadata/content | `Seo`, `Meta`, `MetaFactory`, `Answer`                                                                    |
+| Browser/runtime  | `hydrate`, `reportHydrationError`, `useRuvyxaLoader`                                                      |
+| Asset            | `Image`                                                                                                   |
+
+`useRuvyxaLoader<T>(loader, { enabled?, deps? })` คืน `{ data, loading, error, refetch }`
+`hydrate({ root?, onError? })` dispatch hydration event และติดตั้ง reporting ที่เลือกได้
+`notFound()` จาก package นี้ throw เสมอ จึงคืน `never`
+
+## Public package อื่น
+
+| Package             | Integration ที่ export                                                                      |
+| ------------------- | ------------------------------------------------------------------------------------------- |
+| `@ruvyxa/auth`      | `createAuth`, provider, store, client/plugin entry point, auth type/error                   |
+| `@ruvyxa/database`  | `createDatabase`, operation/type, `prismaAdapter`, `dynamoAdapter`, `defineDatabaseAdapter` |
+| `@ruvyxa/realtime`  | plugin entry point; client export `createRealtimeClient`                                    |
+| `@ruvyxa/testing`   | `mockLoader`, `mockAction`, `mockCache`                                                     |
+| `@ruvyxa/adapter-*` | typed build adapter package                                                                 |
+
+สำหรับ option/default detail ให้ดู [Configuration](07-configuration.md) และ exported TypeScript
+declaration ใน package ที่ติดตั้ง ชื่อ public API ที่แสดงถูกยืนยันจาก source; runtime name
+ที่ขึ้นต้น `RUVYXA_` และมี double underscore ไม่ใช่ application API
+
+**ก่อนหน้า:** [Troubleshooting และ compatibility เมื่ออัปเกรด](16-troubleshooting-upgrades.md) ·
+**ถัดไป:** [ขอบเขตเอกสารและแหล่งข้อมูล](18-documentation-scope-and-sources.md)

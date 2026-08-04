@@ -1,0 +1,128 @@
+# คู่มือ platform adapter
+
+หน้านี้บันทึก deployment artifact ที่ first-party adapter สร้างจริง มันบอกว่า Ruvyxa เขียนอะไรและ
+command ใดใช้เริ่มมัน แต่ไม่สร้างขั้นตอน dashboard, account, DNS, IAM หรือ billing ของ provider
+ที่ไม่มีใน repository นี้ path ของ artifact ทุกอันอยู่ใต้ `outDir`; เมื่อใช้ default ให้ใช้
+`.ruvyxa` แทน `<outDir>`
+
+## เลือกและตรวจ adapter
+
+ใช้ CLI เลือกแบบชั่วคราวระหว่างประเมิน host หรือ import typed adapter ใน `ruvyxa.config.ts`
+
+```bash
+ruvyxa doctor --adapter railway
+ruvyxa build --adapter railway
+```
+
+```ts
+import { config } from 'ruvyxa/config'
+import { railwayAdapter } from '@ruvyxa/adapter-railway'
+
+export default config({ adapter: railwayAdapter() })
+```
+
+CLI ตรวจ Vercel, Netlify, Cloudflare, Railway, Render และ AWS จาก build-environment marker variable
+ได้เมื่อไม่ได้ตั้ง `RUVYXA_ADAPTER` ให้ระบุ `--adapter` ชัดเจนระหว่าง release test
+
+## แผนที่ capability และ artifact
+
+| Adapter          | Target และ route ที่รองรับ                           | Generated handoff                                                                     |
+| ---------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Node             | Node; SSR, SSG, CSR, ISR, PPR, API                   | standalone server และ static directory แบบ optional                                   |
+| Bun              | Bun/Node-compatible; SSR, SSG, CSR, ISR, PPR, API    | standalone Bun server และ static directory แบบ optional                               |
+| Static           | Static; SSG และ CSR เท่านั้น                         | static publish directory และ `_headers` SSR, ISR, PPR, API route จะไม่ผ่าน validation |
+| Vercel           | Serverless หรือ edge; route strategy และ API ทั้งหมด | Vercel Build Output API static/function artifact                                      |
+| Netlify          | Serverless; route strategy และ API ทั้งหมด           | publish directory, handler function, deploy config, Frameworks API artifact           |
+| Cloudflare       | Edge; route strategy และ API ทั้งหมด                 | Worker, asset directory, Wrangler config, header                                      |
+| Railway / Render | Node; route strategy และ API ทั้งหมด                 | standalone server, public directory แบบ optional, generated project config            |
+| Firebase / AWS   | Serverless; route strategy และ API ทั้งหมด           | Hosting/static พร้อม generated function/compute bundle และ provider config            |
+
+native realtime ต้องใช้ long-lived Node/Bun output มันใช้ได้กับ Node, Bun, Railway และ Render
+แต่ปฏิเสธ AWS, Cloudflare, Firebase, Netlify, static และ Vercel ดู
+[การเชื่อมต่อ](09-integrations-auth-data-and-realtime.md)
+
+## Node และ Bun: copy standalone app
+
+build ด้วย adapter แล้ว copy ทั้ง `deploy/node/` หรือ `deploy/bun/` ไป runtime image หรือ host อย่า
+copy เฉพาะ server file: public asset เป็น sibling artifact standalone server ทั้งคู่ไม่ต้องใช้
+Ruvyxa CLI หรือ native binary ตอน runtime
+
+```bash
+ruvyxa build --adapter node
+PORT=3000 HOST=0.0.0.0 node .ruvyxa/deploy/node/server/index.mjs
+
+ruvyxa build --adapter bun
+PORT=3000 HOST=0.0.0.0 bun .ruvyxa/deploy/bun/server/index.mjs
+```
+
+generated server ทั้งคู่ใช้ `PORT=3000` และ `HOST=0.0.0.0` เป็น default adapter แต่ละตัวสร้าง
+`start.mjs` ที่เริ่มผ่าน Ruvyxa CLI ที่ติดตั้งด้วย; เลือก standalone command เมื่อ runtime image
+ไม่ควรมี CLI
+
+## Static hosting: publish เฉพาะ static output
+
+```bash
+ruvyxa build --target static
+```
+
+publish folder ปริยายคือ `<outDir>/static/` `staticAdapter({ outputDir })` รับเฉพาะ relative
+directory ที่ไม่ว่างและไม่ทับ protected build folder ให้ publish folder นั้น `_headers`
+ถูกสร้างสำหรับ host ที่รู้จักไฟล์นี้; host ที่ไม่สนใจไม่ได้รับผล หาก build ปฏิเสธ route ให้คง route
+เป็น static/CSR หรือเลือก server-capable adapter—อย่า publish static build ที่ทำ SSR/API behavior
+ของคุณไม่ได้
+
+## Vercel, Netlify และ Cloudflare
+
+| Platform   | Artifact ที่แน่นอน                                                                             | รายละเอียดเชิงปฏิบัติการ                                                                                                                                                                         |
+| ---------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Vercel     | `<outDir>/deploy/vercel/.vercel/output/`; project-root `.vercel/output/` โดยปริยาย             | มี static file, `__ruvyxa_handler.func`, function config และ route config serverless เป็น default; `vercelAdapter({ edge: true })` เลือก edge output                                             |
+| Netlify    | `<outDir>/deploy/netlify/` พร้อม project-root `.netlify/v1/` Frameworks API artifact โดยปริยาย | ISR/PPR ไม่อยู่ใน static publish เพื่อให้ request ไป function และ revalidate ได้ root `netlify.toml` สร้างเฉพาะ `projectConfig: true` และไม่เขียนทับ                                             |
+| Cloudflare | `<outDir>/deploy/cloudflare/worker`, `assets/` และ `wrangler.jsonc`                            | Worker จัดการ dynamic traffic และ assets binding serve static file ใช้ `wrangler deploy -c .ruvyxa/deploy/cloudflare/wrangler.jsonc` `projectConfig: true` เขียน root config เฉพาะเมื่อไม่มีไฟล์ |
+
+ให้ส่ง private environment value ผ่าน secret mechanism ของ host เหล่านี้ อย่า publish deploy
+directory เป็น generic static site: provider config ที่สร้างคือสิ่งที่ route dynamic traffic ไป
+runtime
+
+## Railway และ Render
+
+`railwayAdapter()` เขียน root `railway.json` โดยปริยาย; `renderAdapter()` เขียน root `render.yaml`
+โดยปริยาย ทั้งคู่ไม่เขียนทับ user-maintained file configuration ที่สร้างใช้ `npm run build` และเริ่ม
+handler เหล่านี้:
+
+```text
+node .ruvyxa/deploy/railway/server/index.mjs
+node .ruvyxa/deploy/render/server/index.mjs
+```
+
+Railway config ที่สร้างใช้ Railpack และ `ON_FAILURE` ที่มี 10 retry Render Blueprint สร้าง Node
+`22.12.0` web service handler ทั้งคู่ bind `0.0.0.0` และอ่าน `PORT` หากคุณดูแล provider file เอง
+ให้ใช้ `projectConfig: false` และคง build/start relationship เดียวกัน
+
+## Firebase และ AWS Amplify Hosting
+
+`firebaseAdapter()` สร้าง `<outDir>/deploy/firebase/public`, Functions bundle, function
+`package.json` และ `firebase.json`; root `firebase.json` ถูกสร้างโดยปริยายแต่ไม่เขียนทับ README ที่
+adapter สร้างให้ handoff command ที่ยืนยันแล้ว:
+
+```bash
+ruvyxa build --adapter firebase
+firebase deploy --only hosting,functions
+```
+
+`awsAdapter()` เขียน Amplify `.amplify-hosting/` static-plus-compute bundle โดยปริยายที่ project
+root และใต้ `<outDir>/deploy/aws/` deploy manifest route static asset ไป static hosting และ dynamic
+traffic ไป compute resource `default` compute runtime ปริยายคือ `nodejs22.x`; เลือก `nodejs20.x`
+หรือ `nodejs24.x` ได้ ตั้ง `projectOutput: false` เฉพาะเมื่อ build system อื่นเก็บ deploy artifact
+
+## Provider handoff checklist
+
+- deploy adapter artifact ไม่ใช่ raw application source file
+- ให้ private environment value ตอน build/runtime ตามที่ app ต้องใช้
+- ตั้ง provider health probe ไป application route ที่คุณ implement
+- review `netlify.toml`, `wrangler.jsonc`, `railway.json`, `render.yaml` และ `firebase.json`
+  ที่มีอยู่; adapter ตั้งใจ preserve
+- รัน [Release-readiness playbook](19-release-readiness-playbook.md) แล้ว probe static, dynamic,
+  API, authenticated และ error route แยกกันหลัง deploy
+
+**ก่อนหน้า:** [Release-readiness playbook](19-release-readiness-playbook.md) · **ถัดไป:**
+[Practical recipes](21-practical-recipes.md)
