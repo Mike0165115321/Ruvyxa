@@ -27,6 +27,24 @@
 - The auth runtime compiles its OAuth route pattern once per `createAuth()` instead of once per
   request that reaches the auth handler.
 
+### Documentation
+
+- Removed the pinned framework version from the English and Thai documentation homes. It named the
+  release the docs were written for and went stale on every bump.
+- Corrected `ARCHITECTURE.md` against the code it describes. Eleven documented Rust APIs did not
+  exist under any name — `RuvyxaCompiler`, `check_boundary`, `produce_iife`,
+  `produce_server_module`, `WorkerPool` with crossbeam channels, `compile_all`, `rewrite_env_vars`,
+  `validate_route_path`, `BundleProfile`, and a `ModuleRegistry`/`SharedCache`/`DiagnosticCollector`
+  lock hierarchy for types the workspace never defined. Each is now the real signature, plus
+  corrected `BundleOptions`, `BundleInput`, and `CompiledModule` structs, the real emit layout, and
+  the actual lock ordering.
+- Repointed the stale documentation paths in `CONTRIBUTING.md`, and dropped the `docs/` links from
+  the `create-ruvyxa` README: that directory is not in the published tarball, so they resolved in
+  git and 404'd on npm.
+- Added `@ruvyxa/testing` to the README package table, dropped a hardcoded export count, and
+  replaced the "Complete Error Catalog" claim — the linked page is a symptom table covering a
+  fraction of the 60+ codes, not a catalog.
+
 ### Internal
 
 - `pnpm release:validate` now verifies every relative Markdown link and heading anchor in the

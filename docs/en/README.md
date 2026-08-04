@@ -2,7 +2,7 @@
 
 Ruvyxa is a React web framework whose CLI, Rust route/build pipeline, and TypeScript runtime work
 together to discover `app/` routes, compile them, and serve or package the result. This guide
-describes the behavior implemented in this repository at version `1.0.26`.
+describes the behavior implemented in this repository at the revision you are reading it from.
 
 ## Read by role
 

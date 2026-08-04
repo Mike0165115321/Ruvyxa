@@ -200,10 +200,11 @@
   capabilities, and every route unsupported by the selected adapter (`--json` for CI).
 - **`bench`** — benchmark route discovery, analysis, validation, and production builds.
 - **`test:parity`** — compare dev/prod routes and smoke-render page routes.
-- **First-Class Diagnostics** — Over 50 detailed `RUV####` error codes spanning Boundary Violations
+- **First-Class Diagnostics** — Over 60 `RUV####` error codes spanning Boundary Violations
   (RUV1000s), Server/Render Errors (RUV1100s), Build/Compilation (RUV1300s), and Official Packages
-  (RUV3000s). See the [Complete Error Catalog](docs/en/16-troubleshooting-upgrades.md) for exact
-  file locations, causes, and suggested fixes.
+  (RUV3000s). Every diagnostic carries its own explanation and suggested fix at the point it is
+  raised; see [Troubleshooting](docs/en/16-troubleshooting-upgrades.md) for the common symptoms and
+  their evidence-backed fixes.
 
 ### Deploy Anywhere (10 Adapters)
 
@@ -643,10 +644,11 @@ as a deployment entrypoint.
 | [`ruvyxa`](packages/ruvyxa)                                         | CLI, runtime bridge, and public framework entrypoints                      |
 | [`create-ruvyxa`](packages/create-ruvyxa)                           | Minimal app scaffolder (4 starters)                                        |
 | [`@ruvyxa/core`](packages/@ruvyxa/core)                             | Typed config, server APIs, cache helpers, responses, and adapter contracts |
-| [`@ruvyxa/react`](packages/@ruvyxa/react)                           | React components, hooks, SEO, error boundary, hydration (59 exports)       |
+| [`@ruvyxa/react`](packages/@ruvyxa/react)                           | React components, hooks, SEO, error boundary, hydration                    |
 | [`@ruvyxa/auth`](packages/@ruvyxa/auth)                             | Provider-driven authentication (GitHub, Google, Discord, magic link)       |
 | [`@ruvyxa/database`](packages/@ruvyxa/database)                     | Typed database adapter facade (Prisma, DynamoDB)                           |
 | [`@ruvyxa/realtime`](packages/@ruvyxa/realtime)                     | WebSocket transport for opted-in server actions                            |
+| [`@ruvyxa/testing`](packages/@ruvyxa/testing)                       | Dependency-free loader, action, and cache test doubles                     |
 | [`@ruvyxa/adapter-node`](packages/@ruvyxa/adapter-node)             | Node deployment adapter                                                    |
 | [`@ruvyxa/adapter-vercel`](packages/@ruvyxa/adapter-vercel)         | Vercel serverless adapter                                                  |
 | [`@ruvyxa/adapter-cloudflare`](packages/@ruvyxa/adapter-cloudflare) | Cloudflare edge adapter                                                    |
@@ -657,6 +659,9 @@ as a deployment entrypoint.
 | [`@ruvyxa/adapter-render`](packages/@ruvyxa/adapter-render)         | Render Web Service and Blueprint adapter                                   |
 | [`@ruvyxa/adapter-firebase`](packages/@ruvyxa/adapter-firebase)     | Firebase Hosting and Cloud Functions v2 adapter                            |
 | [`@ruvyxa/adapter-aws`](packages/@ruvyxa/adapter-aws)               | AWS Amplify Hosting static and compute adapter                             |
+
+`ruvyxa` also resolves one of five `@ruvyxa/cli-<platform>` packages as an optional dependency. They
+carry the prebuilt native CLI for a single target and are not imported directly.
 
 ---
 

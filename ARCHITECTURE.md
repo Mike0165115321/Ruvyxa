@@ -258,11 +258,12 @@ in a sibling module, and the modules reach each other through crate-root re-expo
 | `prerender`                                        | static HTML generation, job planning, path safety                                |
 | `artifact_cache`                                   | content-addressed caching of every build artifact                                |
 | `plugins`                                          | the TypeScript build-plugin worker bridge                                        |
-| `add`                                              | additive form, data-table, and authentication scaffolding                        |
+| `add`                                              | the `adds` command's form, data-table, and authentication scaffolding            |
 | `config`                                           | `ruvyxa.config.*` loading and validation                                         |
 | `runtime_config`                                   | args + config → `ServerConfig`, adapter and runtime selection                    |
 | `cli_args`                                         | argument spelling normalization, plugin scaffolding                              |
 | `commands`                                         | `routes`, `analyze`, `check`, `doctor`, `clean`, `trace`, `bench`, `test:parity` |
+| `analyzer_html`                                    | the self-contained `analyze --html` report                                       |
 | `environment`                                      | toolchain and dependency probing for `doctor`                                    |
 | `ui`                                               | progress bars, tables, colouring, byte/duration formatting                       |
 | `image_optimizer`, `image_usage`, `site_discovery` | asset and discovery-file generation                                              |
@@ -744,16 +745,23 @@ The same call answers the other two source questions this crate asks. `has_defau
 whether a file is a real page (RUV1004), and `env_reads` feeds the private-env check (RUV1008); both
 were previously separate walks over the same bytes.
 
-#### Edge memoization
+#### Module memoization
 
 `collect_relative_graph()` is called once per route and once per layout in each route's chain, so a
 layout or shared component reachable from many routes would otherwise be read and scanned once per
-route. `ModuleEdges` memoizes the resolved edges of each file across those walks.
+route. `ModuleCache` memoizes, per canonical path, everything derived from one read of a file: its
+source, its `ModuleAst`, its masked code, and its resolved import edges. Route discovery and route
+validation each hold one for the whole run.
 
-It caches **edges, not reachable sets**. The BFS still runs per entry, so every caller receives
+It caches **modules, not reachable sets**. The BFS still runs per entry, so every caller receives
 exactly the set it would have computed alone; only the file read and scan are shared. Caching whole
 reachable sets would be wrong here — a second walk arriving at an already-visited module would
 short-circuit and return a partial graph.
+
+Reading through one place is also what keeps Markdown masking honest. `.md` and `.mdx` sources have
+their fenced examples blanked before anything scans them, so a documented `import './config'` cannot
+become a real graph edge. That decision lives in `ModuleCache`, not at each call site, because when
+it lived at the call sites the edge walk was the one that skipped it.
 
 ### Source File → URL Mapping
 
@@ -815,21 +823,26 @@ pub enum BundleTarget {
 }
 ```
 
-#### BundleProfile
+#### BundleOptions
 
 ```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BundleProfile {
-    pub target: BundleTarget,
-    pub es_target: EsTarget,
-    pub jsx_runtime: JsxRuntime,
-    pub split_strategy: SplitStrategy,
+#[derive(Debug, Clone)]
+pub struct BundleOptions {
     pub minify: bool,
-    pub source_maps: bool,
-    pub env: HashMap<String, String>,
+    pub source_map: bool,
+    pub tree_shaking: bool,
+    pub jsx_runtime: JsxRuntime,
+    pub es_target: EsTarget,
+    pub split_strategy: SplitStrategy,
+    pub emit_chunk_manifest: bool,
+    pub collect_module_manifest: bool,
 }
 ```
+
+`collect_module_manifest` gathers the module graph for multi-route coordination without writing a
+user-facing chunk manifest; `emit_chunk_manifest` is the one that produces the file. Defaults:
+`minify` and `tree_shaking` on, `source_map` off, `EsTarget::Es2022`, `JsxRuntime::Automatic`,
+`SplitStrategy::Single`.
 
 #### EsTarget
 
@@ -875,30 +888,34 @@ pub enum SplitStrategy {
 }
 ```
 
-#### BundleOptions
+#### BundleOutput
 
 ```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BundleOptions {
-    pub profiles: Vec<BundleProfile>,
-    pub entries: Vec<BundleInput>,
-    pub base: PathBuf,
-    pub out_dir: PathBuf,
-    pub route_manifest: Option<RouteManifest>,
-    pub node_modules_externals: bool,
+#[derive(Debug, Clone)]
+pub struct BundleOutput {
+    pub code: String,
+    pub source_map: Option<String>,
+    pub diagnostics: Vec<Diagnostic>,
+    pub stats: BundleStats,
+    pub chunk_manifest: Option<ChunkManifest>,
+    pub chunks: Vec<OutputChunk>,
+    // …
 }
 ```
 
 #### BundleInput
 
 ```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct BundleInput {
-    pub name: String,
-    pub path: PathBuf,
+    pub entry: PathBuf,
+    pub project_root: PathBuf,
+    pub app_dir: PathBuf,
+    pub layouts: Vec<PathBuf>,
+    pub request_path: String,
     pub target: BundleTarget,
+    pub options: BundleOptions,
+    pub specials: RouteSpecials,
 }
 ```
 
@@ -907,24 +924,24 @@ pub struct BundleInput {
 ### Pipeline
 
 ```
-BundleOptions
+bundle(BundleInput)                  — or bundle_with_context / bundle_with_shared_modules
   ↓
-resolve_entries()         — normalize paths, check file existence
+prepare_bundle()                     — resolve, compile, and check, producing a PreparedBundle
+    resolver::resolve_graph()        — entry + layouts → module graph, tsconfig paths, externals
+    compiler::CompiledModule::new()  — Oxc transform (JSX, TS), then one AST scan per module
+    boundary::check()                — server/client violations; hard ones abort, rest collected
   ↓
-build_resolver()          — create OxcResolver with custom extensions
+bundle_prepared()                    — reusable across routes sharing a PreparedBundle
+    chunking                         — split by SplitStrategy, emit shared chunks
+    linker::link / link_parallel     — IIFE for client, CommonJS for server
+    minifier                         — Oxc minifier when `minify`
+    sourcemap::SourceMapBuilder      — when `source_map`
   ↓
-create_compiler()         — init OxcCompiler with options
-  ↓
-compile_modules()         — parse → transform (JSX, TS, env) → collect
-  ↓
-check_boundary()          — validate server/client import graph boundaries
-  ↓
-link_modules()            — IIFE wrap for client, CJS/ESM for server
-  ↓
-minify()                  — Oxc minifier
-  ↓
-emit()                    — write to out_dir
+BundleOutput { code, source_map, diagnostics, stats, chunk_manifest, chunks }
 ```
+
+`bundle()` returns the output; writing it to `out_dir` belongs to the CLI's `client_bundle` and
+`build_output` modules, not the bundler.
 
 ---
 
@@ -973,10 +990,14 @@ fact a consumer needs is now recorded during the one pass and read off `ModuleAs
 | Fact                          | Field                | Consumer                                     |
 | ----------------------------- | -------------------- | -------------------------------------------- |
 | Import edges                  | `imports`            | resolver, chunking, boundary, `ruvyxa_graph` |
-| Exported names                | `exports`            | linker                                       |
 | Runtime default export        | `has_default_export` | route validation (RUV1004)                   |
 | `process.env` reads           | `env_reads`          | boundary (RUV1008), route validation         |
 | JSX / TS / decorators / enums | `has_*`              | compiler transform plan                      |
+
+Every field has a production reader, and that is enforced rather than assumed: a fact nothing
+consumes is still allocated for every module in the graph and retained for the run. The named-export
+list used to sit in this table with the linker listed as its consumer; the linker did not read it,
+and it was removed rather than kept for a hypothetical caller.
 
 `ast::masked_code()` covers the one consumer that needs code _text_ rather than facts: rendering
 strategy detection matches on markers like `export const revalidate` and `fetch(`. It blanks
@@ -1028,34 +1049,43 @@ wholesale.
 #### Oxc Pipeline
 
 ```rust
-pub struct RuvyxaCompiler {
-    inner: OxcCompiler,
-    options: BundleOptions,
-}
+pub fn transform(source: &str, has_jsx: bool) -> Result<String, String>;
 
-fn compile_file(&self, input: &BundleInput) -> Result<CompiledModule> {
-    // 1. OxcParser: source → AST
-    // 2. OxcTransformer: JSX → React.createElement (classic) / jsx() (automatic)
-    // 3. TypeScript stripping (no type checking)
-    // 4. OxcCodegen: AST → output code
+pub fn transform_with_options(
+    source: &str,
+    has_jsx: bool,
+    jsx_runtime: JsxRuntime,
+) -> Result<String, String> {
+    // 1. strip_decorators: accepted, removed, no runtime helper injected
+    // 2. Parser: source → AST (TypeScript always on, JSX per `has_jsx`)
+    // 3. SemanticBuilder (with_enum_eval) → TS/JSX transform
+    // 4. Codegen: AST → output code
 }
 ```
+
+There is no compiler struct. Transformation is a free function over source text, and the compiled
+result is owned by `CompiledModule`, which parses the AST once at construction.
 
 #### CompiledModule
 
 ```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct CompiledModule {
-    pub name: String,
-    pub code: String,
-    pub map: Option<String>,
-    pub deps: Vec<String>,
-    pub exports: Vec<String>,
+    pub path: PathBuf,
+    pub js: Arc<str>,
+    pub ast: Arc<ast::ModuleAst>,
+    pub deps: Arc<[PathBuf]>,
+    pub dependency_aliases: Arc<BTreeMap<String, PathBuf>>,
+    pub is_external: bool,
+    pub cache_hit: bool,
 }
 ```
 
-The `name` field matches `BundleInput.name`. Dependencies are resolved to absolute paths during
-compilation and tracked for circular detection.
+Dependencies are resolved to absolute paths during compilation and tracked for circular detection.
+The `Arc` fields are the point: one module appears in the full graph, the entry's static closure,
+and one closure per emitted chunk at the same time, and each of those used to carry its own copy of
+the generated JavaScript. `ast` is parsed in `CompiledModule::new`, the single place a compiled
+module comes into existence, so no later stage re-walks `js`.
 
 ---
 
@@ -1064,12 +1094,16 @@ compilation and tracked for circular detection.
 #### `check_boundary()`
 
 ```rust
-pub fn check_boundary(
-    module: &CompiledModule,
-    graph: &[CompiledModule],
-    base: &Path,
-) -> Result<Vec<Diagnostic>>
+pub fn check(
+    modules: &[CompiledModule],
+    input: &BundleInput,
+    out: &mut Vec<Diagnostic>,
+) -> Result<()>
 ```
+
+Non-fatal diagnostics are appended to `out`; a hard violation — one that would produce broken output
+— returns `BundleError::Diagnostic` and aborts the bundle. SSR and Edge targets enforce only the
+client-only rule, since that output runs on the server.
 
 #### Rules enforced
 
@@ -1103,36 +1137,26 @@ not reported as missing one.
 
 ### Linking Strategy
 
+```rust
+pub fn link(modules: &[CompiledModule], input: &BundleInput) -> Result<String>;
+pub fn link_parallel(modules: &[CompiledModule], input: &BundleInput) -> Result<String>;
+```
+
+Both run `detect_cycles` first, then delegate to a shared inner implementation that never re-checks.
+`ordered_project_modules` fixes emission order; output capacity is pre-calculated from each module's
+source plus wrapper overhead so the concatenation does not reallocate.
+
 #### Client: IIFE
 
-```rust
-fn produce_iife(module: &CompiledModule) -> String {
-    let deps = module.deps.iter().map(|d| format!("\"{}\"", d)).collect::<Vec<_>>().join(", ");
-    let factory = &module.code;
-    format!(
-        "(function({{ {} }}) {{ {} }})",
-        deps, factory
-    )
-}
-```
+Each module becomes `__ruvyxa.define("<id>", function(module, exports) { … })`, and the bundle
+closes over a small registry that resolves an id to its evaluated `module.exports` on first require.
+`module_id` derives the id from the project-relative path.
 
-All client bundles are wrapped in IIFEs and concatenated with a lightweight module registry
-(`__ruvyxa_modules`):
+#### Server: CommonJS
 
-#### Server: CJS
-
-```rust
-fn produce_server_module(module: &CompiledModule) -> String {
-    let requires = module.deps.iter()
-        .map(|d| format!("var _{} = require('{}');", d.replace('/', '_'), d))
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!("'use strict';\n{}\n{}", requires, module.code)
-}
-```
-
-Server modules use CommonJS (`require`/`module.exports`) for Node.js compatibility. ESM output is
-optional via `BundleProfile.es_target`.
+Server modules use `require`/`module.exports` for Node.js compatibility. The target — not a separate
+option — selects this: `BundleTarget::Ssr` and `BundleTarget::Edge` link as CommonJS,
+`BundleTarget::Client` as the IIFE registry above.
 
 ---
 
@@ -1162,25 +1186,26 @@ fn minify(source: &str, target: EsTarget) -> String {
 }
 ```
 
-Source maps are generated alongside minified output if `BundleProfile.source_maps` is `true`.
+Source maps are generated alongside minified output if `BundleOptions.source_map` is `true`.
 
 ---
 
 ### Emit
 
-```rust
-pub fn emit(options: &BundleOptions, modules: &[CompiledModule]) -> Result<()> {
-    // Structure:
-    //   out_dir/
-    //     client/
-    //       <entry-name>.js
-    //       <entry-name>.js.map
-    //     server/
-    //       <entry-name>.js
-    //       <entry-name>.js.map
-    //     chunks/
-    //       <chunk-hash>.js
-}
+The bundler returns a `BundleOutput`; writing it is the CLI's job (`client_bundle` and
+`build_output`). Client bundles are content-addressed, which is what makes the immutable
+`Cache-Control` on `/_ruvyxa/` safe — a changed file is a different filename, never a stale hit.
+
+```
+.ruvyxa/
+  client/<blake3-hash>.js     # per-route bundles and shared chunks
+  server/app/…                # compiled route modules
+  server/styles/…
+  assets/                     # copied and optimized public assets
+  prerender/                  # SSG/ISR HTML
+  cache/                      # content-addressed build artifact cache
+  manifest.json               # route manifest
+  build.json                  # build metadata, security defaults, render summary
 ```
 
 ---
@@ -2075,30 +2100,34 @@ Multiple Tokio runtimes exist:
 #### Mechanism
 
 ```rust
-pub struct WorkerPool {
-    workers: Vec<WorkerHandle>,
-    sender: crossbeam_channel::Sender<WorkerTask>,
-    receiver: crossbeam_channel::Receiver<WorkerResult>,
+pub struct NodeWorkerPool {
+    workers: StdRwLock<Vec<Arc<Worker>>>,
+    worker_script: PathBuf,
+    env: BTreeMap<String, String>,
+    runtime: JavaScriptRuntime,
+    next_worker: AtomicU64,
+    response_timeout: Duration,
+    isolated_renders_per_worker: Option<usize>,
 }
 ```
 
 #### Why Not Tokio `spawn_blocking`
 
-`spawn_blocking` uses Tokio's blocking thread pool. This pool is unbounded by default and shared
-with all other blocking operations. A burst of SSR renders could exhaust the pool, stalling other
-blocking tasks (e.g., file I/O). A dedicated bounded pool provides isolation.
+Rendering does not happen in this process at all. Each worker is a long-lived Node or Bun
+**subprocess** speaking JSON lines over stdin/stdout, so the work is neither a blocking Rust call
+nor something `spawn_blocking` could host. Keeping the processes alive is the point: spawning a
+runtime per render dominated the render itself.
 
-#### Bounded Channels
+#### Dispatch
 
-```
-Sender (bounded, 2× worker_count) → Workers pull tasks
-                                   → Workers push results
-Receiver (bounded, 2× worker_count) ← Results
-```
-
-Bounded channels provide backpressure. If all workers are busy and the queue is full, `dispatch()`
-blocks the server accept loop — this is intentional: it signals overload to the client via
-connection queueing rather than accepting more work than can be handled.
+- `next_worker.fetch_add(1, Relaxed) % workers.len()` — round-robin, no lock on the hot path.
+- `REQUEST_COUNTER` stamps each request with a monotonic id; `pending` maps that id to the caller
+  awaiting it, so one worker can have several renders in flight over a single pipe.
+- Every wait is a `tokio::time::timeout(response_timeout, …)`. A worker that stops answering fails
+  its own request instead of stalling the server; the dev server and the build use different
+  timeouts.
+- `isolated_renders_per_worker` retires a worker after N isolated prerenders so per-render module
+  graphs cannot accumulate. It is `None` for the dev server, which never requests isolated imports.
 
 ---
 
@@ -2106,21 +2135,25 @@ connection queueing rather than accepting more work than can be handled.
 
 #### Where
 
-- File compilation during build (multiple `.tsx` / `.ts` files)
-- Module graph analysis (traversal is parallelized per-module)
-- Static path generation (one path per rayon job)
+- `compiler.rs` — one job per module in a resolved graph
+- `resolver.rs` — resolving a module's specifiers
+- `chunking.rs` — planning and emitting chunks
+- `linker.rs` — `link_parallel`, wrapping modules before concatenation
+- `ruvyxa_cli/image_optimizer.rs` — one job per generated image variant
 
 #### Mechanism
 
 ```rust
 use rayon::prelude::*;
 
-fn compile_all(inputs: &[BundleInput]) -> Vec<CompiledModule> {
-    inputs.par_iter()
-        .map(|input| compile_file(input))
-        .collect()
-}
+let results: Vec<Result<CompiledModuleOutput>> = graph
+    .par_iter()
+    .map(|module| compile_module(module, input, cache, build_hooks))
+    .collect();
 ```
+
+Errors are collected rather than short-circuited, so one failing module does not race the others
+into an arbitrary winner: the whole batch completes, then the first error is returned.
 
 #### Why rayon (not manual threads)
 
@@ -2144,77 +2177,77 @@ fn compile_all(inputs: &[BundleInput]) -> Vec<CompiledModule> {
 
 ### Domain 4: Shared State Concurrency
 
-#### Module Registry
+Every lock below is a `tokio::sync` lock held across `.await` points, not a `std::sync` one.
+
+#### Render cache
 
 ```rust
-pub type ModuleRegistry = Arc<RwLock<HashMap<String, CompiledModule>>>;
+pub struct RenderCache {
+    entries: RwLock<HashMap<Arc<str>, CacheEntry>>,
+    order: RwLock<RecencyList>,
+    capacity: usize,
+    ttl: Duration,
+    hits: AtomicU64,
+    misses: AtomicU64,
+}
 ```
 
-- Readers (workers rendering routes): `read()` lock — multiple concurrent reads.
-- Writer (HMR updating a module): `write()` lock — exclusive, blocks readers.
-- Granularity: per-module lock? No — single `RwLock` over the entire registry. HMR updates are rare
-  (one file change at a time). The write lock is held briefly (insert one entry). Readers contend
-  for the read lock but do not block each other.
+- Two locks, not one: a cache hit takes `entries` for reading and `order` for writing (to promote
+  the key). A single lock would serialize concurrent hits on different keys.
+- `hits`/`misses` are `AtomicU64` with `Relaxed` ordering — they are reported, never branched on.
+- The two maps must agree on which keys exist. Any operation that removes a key holds **both** locks
+  for the whole removal. Releasing `entries` first leaves a window where a concurrent `put` of the
+  same key re-inserts it and pushes it onto `order`, after which the removal drops it from `order`
+  alone — an entry eviction can never reach again.
 
-#### Diagnostic Collector
+#### HMR dependency tracker
 
 ```rust
-pub type SharedCollector = Arc<Mutex<DiagnosticCollector>>;
+Arc<RwLock<BTreeMap<PathBuf, BTreeSet<String>>>>   // file  → route ids
+Arc<RwLock<BTreeMap<String, BTreeSet<PathBuf>>>>   // route → files
 ```
 
-- `Mutex`, not `RwLock`: writes are more frequent than reads during the build phase.
-- Contention is low: diagnostics are pushed in sequence, not in tight loops.
+Two directions of the same relation. Readers (a file-change event resolving affected routes)
+outnumber writers (a render recording what it touched), so `RwLock` rather than `Mutex`.
 
-#### Cache
+#### Worker pool
 
 ```rust
-pub type SharedCache = Arc<Mutex<LruCache<String, CacheEntry>>>;
+static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+pending: Mutex<BTreeMap<String, PendingResponse>>,
+child:   Mutex<Option<Child>>,
 ```
 
-- `Mutex` protects LRU internals (linked list reordering on access).
-- Cache hits are fast (microseconds). Mutex hold time is negligible.
+- Request IDs are monotonic and generated without a lock; they are never reused.
+- `pending` correlates a response line from the worker's stdout with the caller awaiting it.
+  `Mutex`, not `RwLock`: every access mutates.
+- `child` is the subprocess handle, held so a restart cannot race two live workers.
 
----
-
-### Lock Ordering
+#### Lock ordering
 
 ```
-ModuleRegistry (RwLock) → never acquired while holding
-  DiagnosticCollector (Mutex) or
-  SharedCache (Mutex)
-
-Acquire order:
-  1. SharedCache
-  2. ModuleRegistry (read or write)
-  3. DiagnosticCollector
+Acquire order (never the reverse):
+  1. RenderCache::entries
+  2. RenderCache::order
 ```
 
-Enforced by code review. Deadlock is impossible if this order is maintained (no cycle in the
-resource allocation graph).
-
----
-
-### Atomic Operations
-
-```rust
-static NEXT_TASK_ID: AtomicU64 = AtomicU64::new(0);
-```
-
-Task IDs are monotonically increasing, generated without a mutex. No ABA problem (IDs are never
-reused).
+That is the only place in the dev server where two locks are held at once, so it is the only
+ordering that has to be maintained. Every other lock above is a leaf: it is taken, used, and
+released without acquiring another.
 
 ---
 
 ### Concurrency by Crate
 
-| Crate                | Sync primitives                       | Threading model                   |
-| -------------------- | ------------------------------------- | --------------------------------- |
-| `ruvyxa_graph`       | None (pure functions)                 | Sequential                        |
-| `ruvyxa_bundler`     | `rayon`                               | Parallel (file-level)             |
-| `ruvyxa_dev_server`  | `Arc<RwLock>`, `Arc<Mutex>`, channels | Mixed (async I/O + thread pool)   |
-| `ruvyxa_middleware`  | `Arc<PluginHost>`                     | Async (Tokio tower layers)        |
-| `ruvyxa_diagnostics` | `Arc<Mutex>`                          | Sequential                        |
-| `ruvyxa_cli`         | Tokio runtime                         | Async (main) + sequential (build) |
+| Crate                | Sync primitives                             | Threading model                   |
+| -------------------- | ------------------------------------------- | --------------------------------- |
+| `ruvyxa_graph`       | None (single-threaded, `&mut` caches)       | Sequential                        |
+| `ruvyxa_bundler`     | `rayon`                                     | Parallel (file-level)             |
+| `ruvyxa_dev_server`  | `tokio` `RwLock`/`Mutex`, atomics, channels | Mixed (async I/O + worker pool)   |
+| `ruvyxa_middleware`  | `Arc<PluginHost>`                           | Async (Tokio tower layers)        |
+| `ruvyxa_diagnostics` | None (owned values)                         | Sequential                        |
+| `ruvyxa_cli`         | Tokio runtime                               | Async (main) + sequential (build) |
 
 ---
 
@@ -2229,9 +2262,9 @@ reused).
 3. **`rayon` over async compilation** — Compilation is pure CPU work with no I/O waiting. `rayon` is
    more efficient than `tokio::task::spawn_blocking` for CPU parallelism because it uses
    work-stealing and avoids Tokio's task scheduling overhead.
-4. **Granular `RwLock` per registry** — HMR updates are write-heavy but infrequent. Multiple
-   concurrent reads (from the worker pool) do not block each other. A single `Mutex` would serialize
-   all reads.
+4. **`RwLock` where reads dominate** — HMR dependency lookups and render-cache hits are read-mostly
+   and concurrent. A `Mutex` would serialize them; `RwLock` lets them proceed together and reserves
+   exclusion for the rare write.
 
 ---
 
@@ -3163,22 +3196,23 @@ the actual domain).
 
 ```rust
 pub struct RateLimitConfig {
-    pub requests: u64,              // max requests per window
-    pub window_secs: u64,            // time window in seconds
-    pub key_by: RateLimitKey,        // Ip | Header(name) | Session
-}
-
-pub enum RateLimitKey {
-    Ip,                              // Client IP address
-    Header(String),                  // Custom header (e.g. X-Api-Key)
-    Session,                         // Session cookie (requires session middleware)
+    pub requests: u64,     // max requests per window
+    pub window_secs: u64,  // time window in seconds
+    pub key_by: String,    // "ip" (default) or "header:<name>"
 }
 ```
 
+`key_by` is a string, not an enum, because it crosses the TypeScript config boundary as one. Any
+value that is not `header:<name>` falls back to the transport peer address.
+
+That fallback is deliberate: forwarded headers are client-supplied. `X-Forwarded-For` is only
+trusted when a deployment opts in explicitly with `key: "header:x-forwarded-for"`, behind a proxy
+that overwrites it.
+
 #### Default Store
 
-In-memory: `HashMap<String, (Instant, u64)>`. Cleanup runs every `window_secs` via lazy sweep. Max
-100,000 tracked keys.
+In-memory: `Arc<Mutex<BTreeMap<String, …>>>` holding a window start and a counter per key, swept
+lazily as requests arrive.
 
 #### Response on Limit
 
@@ -3214,10 +3248,10 @@ All POST requests to `/_ruvyxa/action/*` require:
 
 ### 4. Server/Client Boundary
 
-Enforced at bundle time by `ruxyva_bundler::boundary`:
+Enforced at bundle time by `ruvyxa_bundler::boundary`:
 
 ```rust
-pub fn check_boundary(module: &CompiledModule, graph: &[CompiledModule], base: &Path) -> Result<Vec<Diagnostic>>
+pub fn check(modules: &[CompiledModule], input: &BundleInput, out: &mut Vec<Diagnostic>) -> Result<()>
 ```
 
 | Check                                | Condition                                                                                              | Severity |
@@ -3254,15 +3288,22 @@ found in a client-accessible module.
 
 #### Implementation
 
+There is no rewrite pass. The reads are **detected**, not replaced, and a private one in a client
+graph fails the build instead of being silently blanked:
+
 ```rust
-fn rewrite_env_vars(code: &str, env: &HashMap<String, String>, target: BundleTarget) -> String {
-    // For client target:
-    //   Match process.env.RUVYXA_PUBLIC_<NAME> → replace with env value
-    //   Match process.env.<NAME> (non-public) → replace with "undefined"
-    // For server target:
-    //   Replace process.env.<NAME> → env.get(NAME) or "undefined"
-}
+// crates/ruvyxa_bundler/src/boundary.rs
+module.ast.env_reads
+    .iter()
+    .filter(|name| name.as_str() != "NODE_ENV" && !name.starts_with("RUVYXA_PUBLIC_"))
 ```
+
+`NODE_ENV` is exempt because it is substituted at build time; `RUVYXA_PUBLIC_*` is public by
+contract. The Node-side compiler (`packages/ruvyxa/runtime/compiler.mjs`) applies the identical
+filter so the two halves of the build cannot disagree about what counts as private.
+
+Failing rather than rewriting is the safer default: a blanked-out read turns a missing secret into a
+confusing runtime `undefined`, while a build error names the file and the variable.
 
 ---
 
@@ -3299,15 +3340,23 @@ Configurable via `ruvyxa.config.ts` `security.headers` field.
 #### Safe paths
 
 ```rust
-fn validate_route_path(path: &str) -> Result<()> {
-    // Reject: .., ~, \0, null bytes
-    // Reject: absolute paths (/etc/passwd)
-    // Reject: Windows drive letters
-    // Reject: path traversal via encoded slashes
-}
+fn route_segment(segment: &str, is_last: bool) -> Result<String>;
+fn validate_dynamic_name(name: &str) -> Result<()>;
 ```
 
-Route paths are validated during `discover_routes()` to prevent directory traversal.
+Route URLs are not user input — they are derived from directory names under `app/`, one segment at a
+time by `route_path_from_dir`. Validation is therefore about well-formed routes, not traversal:
+
+- `[name]`, `[...name]`, and `[[...name]]` are the only bracket forms; any other use of `[` or `]`
+  is RUV1002.
+- A parameter name must be non-empty, bracket-free, and must not begin with `.`, which is what keeps
+  `[..]` and `[.]` from becoming traversal-shaped segments.
+- A catch-all must be the final segment; a child segment after it is RUV1002.
+- `(group)` and `@slot` segments are stripped from the URL rather than validated as parameters.
+
+Traversal is prevented separately, at the point where a request path is turned back into a file:
+prerender output paths go through `prerenderRelativePath`, which rejects anything escaping the
+prerender root.
 
 ---
 

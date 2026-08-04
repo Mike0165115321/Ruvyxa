@@ -177,8 +177,8 @@ When adding a new error that users will see:
 1. Choose the next available `RUV####` code in the relevant range.
 2. Create a `Diagnostic` with `code`, `title`, `explanation`, and `suggested_fix`.
 3. Add the file location with `.at_file()`.
-4. Document it in `docs/developer-guide.md` (and the relevant English guide under `docs/guides/en/`
-   when users need the fix).
+4. Add it to `docs/en/16-troubleshooting-upgrades.md` and its Thai counterpart when users need the
+   symptom and fix, not just the message at the point it is raised.
 
 ```rust
 Diagnostic::new("RUV1011", "Your error title")
@@ -194,8 +194,9 @@ Diagnostic::new("RUV1011", "Your error title")
 1. Create `packages/@ruvyxa/adapter-<name>/`.
 2. Implement the `Adapter` interface from `@ruvyxa/core`.
 3. Add a `package.json` with `@ruvyxa/core` as a dependency.
-4. Document its user-facing setup in `docs/guides/en/13-deployment.md`.
-5. Add its release checks to `docs/developer-guide.md`.
+4. Document its user-facing setup in `docs/en/15-deploy-run-and-operate.md` and its Thai
+   counterpart, following `docs/en/20-platform-adapter-guide.md`.
+5. Add its release checks to `docs/en/19-release-readiness-playbook.md`.
 
 ---
 
