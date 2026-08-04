@@ -34,6 +34,11 @@ dashmap = "6.2.1"
 futures-core = "0.3.33"
 grass = "0.13.4"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
+# SIMD (AVX2/SSE4.1/NEON) convolution resize. `default-features = false` is
+# load-bearing: the `image` feature turns on that crate's default features,
+# which drags in `rav1e`/`ravif` and their build chain for an AVIF encoder
+# nothing here uses. Buffers are handed over as raw slices instead.
+fast_image_resize = { version = "6.1.0", default-features = false, features = ["rayon"] }
 markdown = "1.0.0"
 notify = "8.2.0"
 # Pinned exactly and kept in lockstep with `oxc-transform` in

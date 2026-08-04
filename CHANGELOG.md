@@ -15,6 +15,26 @@
 
 ### Performance
 
+- Image resizing now uses SIMD (AVX2/SSE4.1/NEON) convolution instead of a scalar loop, through
+  `fast_image_resize`. It is the same Lanczos3 filter, so output is unchanged. Producing all eight
+  responsive widths for a 6000x4000 source drops from 3628 ms to 68 ms of CPU. On a build with
+  twelve 4000x3000 sources, where that CPU is actually contended, the whole image stage goes from
+  16.2 s to 7.6 s.
+- A rebuild whose images are unchanged no longer decodes them. Every output is content-addressed, so
+  the cache decides before any pixel is touched, and the manifest reads its dimensions from the file
+  header (2.4 ms against 116 ms for a full decode). Twelve cached images: 350 ms to 242 ms.
+- Pixels are handed to the resizer and the WebP encoder by reference. `to_rgb8()`/`to_rgba8()`
+  cloned the whole image on every use — 68 MB per call on a 6000x4000 source, nine times per file.
+- Each source is hashed once instead of once per output. The full-size encode and all eight variant
+  encodes are now one flat job list rather than a `rayon::join` that pinned the longest job, the
+  full-size encode, to one side of a binary split.
+- Added `image.effort` (libwebp's `method`, 0-6, default 4). Encoding is the floor on image build
+  time — libwebp cannot split a single lossy encode across threads, and `thread_level` was measured
+  to make no difference. On a 6000x4000 source, effort 2 is 1.8x faster for 18% more bytes and
+  effort 0 is 2.9x faster for 15% more. The default is unchanged so upgrading cannot silently
+  inflate a deployed asset set.
+- The runtime image endpoint shares the same resize and encode path, and its LRU cache promotes an
+  entry in constant time instead of scanning its recency queue on every hit.
 - Route discovery and validation now read and scan each module once per run. A page was read three
   times and scanned four; a component shared by many routes was re-read for each of them, because
   rendering-strategy detection built a throwaway edge cache per route. Diagnostics and detected

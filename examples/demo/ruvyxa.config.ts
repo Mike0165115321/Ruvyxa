@@ -59,7 +59,7 @@ const settings: RuvyxaConfig = {
     workers: 2,
   },
   image: {
-    optimize: false,
+    optimize: true,
     quality: 82,
     lossless: false,
     workers: 0,

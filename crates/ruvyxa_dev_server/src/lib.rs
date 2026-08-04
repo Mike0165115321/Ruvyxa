@@ -38,6 +38,15 @@ use tracing::{error, info, warn};
 mod devtools;
 mod dynamic_image;
 mod env_file;
+
+/// Pixel conversion, SIMD resizing, and WebP encoding.
+///
+/// Public because the build-time optimizer in `ruvyxa_cli` runs the same
+/// pipeline over the same formats. Two copies would be free to drift on the
+/// details that decide output bytes — pixel layout, filter, encoder settings —
+/// and a build/runtime mismatch there is invisible until someone compares two
+/// renderings of the same asset.
+pub mod image_codec;
 #[cfg(test)]
 use env_file::parse_env_source;
 pub use env_file::project_env;

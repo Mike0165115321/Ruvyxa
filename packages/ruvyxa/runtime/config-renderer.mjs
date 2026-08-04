@@ -117,6 +117,7 @@ async function sanitizeConfig(config) {
     'keepOriginal',
     'variantWidths',
     'workers',
+    'effort',
     'onDemand',
   ])
   assertKnownKeys(config.image?.onDemand, 'config.image.onDemand', ['enabled', 'maxWidth'])
@@ -263,6 +264,7 @@ async function sanitizeConfig(config) {
       keepOriginal: booleanValue(config.image?.keepOriginal),
       variantWidths: numberArrayValue(config.image?.variantWidths),
       workers: numberValue(config.image?.workers),
+      effort: numberValue(config.image?.effort),
       onDemand: imageOnDemandValue(config.image?.onDemand),
     }),
     i18n: objectValue(config.i18n, {
@@ -328,6 +330,7 @@ function assertConfigValueShape(config) {
       keepOriginal: 'boolean',
       variantWidths: 'number[]',
       workers: 'number',
+      effort: 'number',
     },
     i18n: {
       locales: 'string[]',

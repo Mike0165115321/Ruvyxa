@@ -1,9 +1,10 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use image::GenericImageView;
 
+use crate::image_codec::{Pixels, WebpSettings, encode_webp, scaled_height};
 use crate::static_assets::{contained_public_asset, is_safe_relative_path};
 
 const MAX_SOURCE_BYTES: u64 = 20 * 1024 * 1024;
@@ -33,22 +34,54 @@ pub(crate) struct DynamicImageCache {
     inner: Mutex<CacheInner>,
 }
 
+/// Recency is a monotonic counter rather than a queue.
+///
+/// Promoting a key used to scan the order queue for it and remove it by index,
+/// which is linear in the cache size on every hit and every insert. Stamping the
+/// entry instead makes a hit O(1); eviction pays the scan, and only when the
+/// cache is actually over its bound.
+struct CacheEntry {
+    bytes: Arc<[u8]>,
+    used_at: u64,
+}
+
 #[derive(Default)]
 struct CacheInner {
-    entries: HashMap<String, Arc<[u8]>>,
-    order: VecDeque<String>,
+    entries: HashMap<String, CacheEntry>,
+    clock: u64,
     bytes: usize,
+}
+
+impl CacheInner {
+    fn tick(&mut self) -> u64 {
+        self.clock = self.clock.wrapping_add(1);
+        self.clock
+    }
+
+    fn evict_until_within_bounds(&mut self) {
+        while self.entries.len() > MAX_CACHE_ENTRIES || self.bytes > MAX_CACHE_BYTES {
+            let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.used_at)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            if let Some(removed) = self.entries.remove(&oldest) {
+                self.bytes = self.bytes.saturating_sub(removed.bytes.len());
+            }
+        }
+    }
 }
 
 impl DynamicImageCache {
     fn get(&self, key: &str) -> Option<Arc<[u8]>> {
         let mut inner = self.inner.lock().ok()?;
-        let value = inner.entries.get(key)?.clone();
-        if let Some(index) = inner.order.iter().position(|entry| entry == key) {
-            inner.order.remove(index);
-        }
-        inner.order.push_back(key.to_string());
-        Some(value)
+        let stamp = inner.tick();
+        let entry = inner.entries.get_mut(key)?;
+        entry.used_at = stamp;
+        Some(Arc::clone(&entry.bytes))
     }
 
     fn insert(&self, key: String, value: Arc<[u8]>) -> Arc<[u8]> {
@@ -59,22 +92,18 @@ impl DynamicImageCache {
             return value;
         }
         if let Some(previous) = inner.entries.remove(&key) {
-            inner.bytes = inner.bytes.saturating_sub(previous.len());
-            if let Some(index) = inner.order.iter().position(|entry| entry == &key) {
-                inner.order.remove(index);
-            }
+            inner.bytes = inner.bytes.saturating_sub(previous.bytes.len());
         }
         inner.bytes = inner.bytes.saturating_add(value.len());
-        inner.order.push_back(key.clone());
-        inner.entries.insert(key, value.clone());
-        while inner.entries.len() > MAX_CACHE_ENTRIES || inner.bytes > MAX_CACHE_BYTES {
-            let Some(oldest) = inner.order.pop_front() else {
-                break;
-            };
-            if let Some(removed) = inner.entries.remove(&oldest) {
-                inner.bytes = inner.bytes.saturating_sub(removed.len());
-            }
-        }
+        let used_at = inner.tick();
+        inner.entries.insert(
+            key,
+            CacheEntry {
+                bytes: Arc::clone(&value),
+                used_at,
+            },
+        );
+        inner.evict_until_within_bounds();
         value
     }
 }
@@ -150,30 +179,28 @@ pub(crate) async fn optimize(
         if u64::from(source_width) * u64::from(source_height) > MAX_SOURCE_PIXELS {
             return Err(DynamicImageError::TooLarge);
         }
+        // Borrows the decoded buffer when it is already RGB8/RGBA8, which is
+        // what both PNG and JPEG decode to. A request for the source's own
+        // width then reaches the encoder without a single pixel copy.
+        let pixels = Pixels::from_image(&decoded);
         let target_width = width.min(source_width).max(1);
-        let resized = if target_width == source_width {
-            decoded
-        } else {
-            decoded.resize(
-                target_width,
-                source_height,
-                image::imageops::FilterType::Lanczos3,
-            )
+        let settings = WebpSettings {
+            quality,
+            lossless: false,
+            // Runtime transforms are on the request path, where latency is what
+            // the user feels; the build has a cache to amortize a slower,
+            // smaller encode and this does not.
+            effort: 2,
         };
-        let (width, height) = resized.dimensions();
-        let encoded = if resized.color().has_alpha() {
-            let pixels = resized.to_rgba8();
-            webp::Encoder::from_rgba(pixels.as_raw(), width, height)
-                .encode_simple(false, f32::from(quality))
-                .map_err(|_| DynamicImageError::Decode)?
-                .to_vec()
+        let encoded = if target_width == source_width {
+            encode_webp(&pixels, settings)
         } else {
-            let pixels = resized.to_rgb8();
-            webp::Encoder::from_rgb(pixels.as_raw(), width, height)
-                .encode_simple(false, f32::from(quality))
-                .map_err(|_| DynamicImageError::Decode)?
-                .to_vec()
-        };
+            let height = scaled_height(source_width, source_height, target_width);
+            pixels
+                .resize(target_width, height)
+                .and_then(|resized| encode_webp(&resized, settings))
+        }
+        .map_err(|_| DynamicImageError::Decode)?;
         Ok::<Vec<u8>, DynamicImageError>(encoded)
     })
     .await

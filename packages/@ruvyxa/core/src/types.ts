@@ -211,6 +211,19 @@ export interface ImageConfig {
   variantWidths?: number[]
   /** Image conversion workers. Zero selects the available CPU count. @default 0 */
   workers?: number
+  /**
+   * WebP encoder effort, 0 (fastest, largest files) to 6 (slowest, smallest).
+   *
+   * Encoding is the floor on build time for large images: it cannot be split
+   * across threads, so a single 6000x4000 source spends roughly 2.2s here at
+   * the default. Lowering this is the only way to go faster, and it costs
+   * bytes — measured on that source, effort 2 is ~1.8x faster for ~18% more
+   * output, effort 0 is ~2.9x faster for ~15% more.
+   *
+   * Results are cached by source and settings, so this mostly affects cold
+   * builds and CI. @default 4
+   */
+  effort?: number
   /** Resize same-origin files from `public/` through the runtime image endpoint. */
   onDemand?: boolean | OnDemandImageConfig
 }
