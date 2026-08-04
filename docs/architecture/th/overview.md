@@ -10,7 +10,7 @@ Rust ควบคู่กับการเข้าถึงระบบนิ
 ```
 ┌──────────────────────────────────────────────────────────┐
 │                     ruvyxa_cli                           │
-│  (clap command dispatch, config loading, build orchestr) │
+│  (14 คำสั่ง CLI, config loading, build orchestration)    │
 ├─────────┬──────────┬──────────────┬───────────┬─────────┤
 │ruvyxa_   │ruvyxa_   │ruvyxa_dev_   │ruvyxa_    │ruvyxa_  │
 │graph     │bundler   │server        │middleware │diag-    │

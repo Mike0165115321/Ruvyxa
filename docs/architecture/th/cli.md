@@ -25,6 +25,7 @@ pub enum Command {
     Preview(ServerArgs),          // --root, --host, --port
     Routes(ProjectArgs),          // --root
     Analyze(ProjectArgs),         // --root
+    Add(AddArgs),                 // --root, --template, --force
     Doctor(ProjectArgs),          // --root
     Clean(ProjectArgs),           // --root
     Trace(TraceArgs),             // <route> --root
@@ -36,6 +37,7 @@ pub enum Command {
 pub struct ProjectArgs { pub root: PathBuf }            // default "."
 pub struct ServerArgs { pub root: PathBuf, pub host: Option<String>, pub port: Option<u16>, pub runtime: Option<CliRuntime> }
 pub struct BuildArgs { pub root: PathBuf, pub target: Option<BuildTarget>, pub adapter: Option<String>, pub runtime: Option<CliRuntime> }
+pub struct AddArgs { pub templates: Vec<AddTemplate>, pub root: PathBuf, pub runtime: Option<CliRuntime>, pub force: bool }
 pub struct TraceArgs { pub route: String, pub root: PathBuf }
 pub struct BenchArgs { pub root: PathBuf, pub samples: usize, pub json: bool }
 pub struct PluginArgs { pub command: PluginCommand }
@@ -44,21 +46,22 @@ pub struct PluginCreateArgs { pub name: String, pub root: PathBuf, pub dir: Opti
 
 ```
 
-| คำสั่ง          | หน้าที่                                       |
-| --------------- | --------------------------------------------- |
-| `dev`           | เริ่ม dev server พร้อม HMR                    |
-| `build`         | Production build ไปยัง `.ruvyxa/`             |
-| `check`         | `tsc --noEmit` + `test:parity`                |
-| `start`         | ให้บริการ production build                    |
-| `preview`       | ดูตัวอย่าง production build ในเครื่อง         |
-| `routes`        | แสดงตารางเส้นทางที่ค้นพบ                      |
-| `analyze`       | ตรวจสอบ routes/imports/boundaries             |
-| `doctor`        | ตรวจสอบการตั้งค่าโปรเจกต์                     |
-| `clean`         | ลบ `.ruvyxa/`                                 |
-| `trace`         | ตรวจสอบเส้นทางเดียวตาม path (JSON)            |
-| `bench`         | ทดสอบประสิทธิภาพ (discovery, analysis, build) |
-| `test:parity`   | เปรียบเทียบ route และ smoke renders           |
-| `plugin create` | สร้างแพ็กเกจ plugin ที่เผยแพร่ได้             |
+| คำสั่ง          | หน้าที่                                            |
+| --------------- | -------------------------------------------------- |
+| `dev`           | เริ่ม dev server พร้อม HMR                         |
+| `build`         | Production build ไปยัง `.ruvyxa/`                  |
+| `check`         | `tsc --noEmit` + `test:parity`                     |
+| `start`         | ให้บริการ production build                         |
+| `preview`       | ดูตัวอย่าง production build ในเครื่อง              |
+| `routes`        | แสดงตารางเส้นทางที่ค้นพบ                           |
+| `analyze`       | ตรวจสอบ routes/imports/boundaries                  |
+| `add`           | สร้างโค้ดเริ่มต้นสำหรับฟอร์ม ตารางข้อมูล หรือ Auth |
+| `doctor`        | ตรวจสอบการตั้งค่าโปรเจกต์                          |
+| `clean`         | ลบ `.ruvyxa/`                                      |
+| `trace`         | ตรวจสอบเส้นทางเดียวตาม path (JSON)                 |
+| `bench`         | ทดสอบประสิทธิภาพ (discovery, analysis, build)      |
+| `test:parity`   | เปรียบเทียบ route และ smoke renders                |
+| `plugin create` | สร้างแพ็กเกจ plugin ที่เผยแพร่ได้                  |
 
 ---
 

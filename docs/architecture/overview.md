@@ -6,7 +6,7 @@
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                        ruvyxa_cli                               │
-│   (clap CLI dispatch · config loading · build orchestration)     │
+│   (14 CLI commands · config loading · build orchestration)       │
 ├──────────┬───────────┬──────────────┬──────────┬────────────────┤
 │ruvyxa_   │ruvyxa_    │ruvyxa_dev_   │ruvyxa_   │ruvyxa_         │
 │graph     │bundler    │server        │middleware│diagnostics      │

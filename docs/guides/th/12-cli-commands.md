@@ -23,6 +23,7 @@ npm run
 | `preview`       | เปิดใช้ production build เพื่อดูในเครื่อง                            |
 | `routes`        | แสดง route table ที่ค้นพบ                                            |
 | `analyze`       | ตรวจ routes, imports และ server/client boundary                      |
+| `add`           | สร้างโค้ดเริ่มต้นสำหรับฟอร์ม ตารางข้อมูล หรือระบบยืนยันตัวตน         |
 | `doctor`        | ตรวจ project setup, dependencies, runtime และ adapter                |
 | `clean`         | ลบ generated build output ตาม config                                 |
 | `trace`         | แสดง manifest entry ของ route เดียว                                  |

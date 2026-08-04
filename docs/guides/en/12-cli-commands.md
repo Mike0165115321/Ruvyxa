@@ -23,6 +23,7 @@ npm run
 | `preview`       | Serve an existing production build for local preview.                        |
 | `routes`        | Print the discovered route table.                                            |
 | `analyze`       | Validate routes, imports, and server/client boundaries.                      |
+| `add`           | Scaffold framework-native forms, data tables, or authentication flows.       |
 | `doctor`        | Inspect project setup, dependencies, runtime, and optionally an adapter.     |
 | `clean`         | Remove the configured generated build output.                                |
 | `trace`         | Print one discovered route-manifest entry.                                   |
