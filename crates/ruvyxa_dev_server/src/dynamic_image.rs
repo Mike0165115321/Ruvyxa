@@ -4,7 +4,9 @@ use std::sync::{Arc, Mutex};
 
 use image::GenericImageView;
 
-use crate::image_codec::{Pixels, WebpSettings, encode_webp, scaled_height};
+use crate::image_codec::{
+    Pixels, WebpSettings, decode_within_pixel_budget, encode_webp, header_dimensions, scaled_height,
+};
 use crate::static_assets::{contained_public_asset, is_safe_relative_path};
 
 const MAX_SOURCE_BYTES: u64 = 20 * 1024 * 1024;
@@ -174,11 +176,23 @@ pub(crate) async fn optimize(
     }
 
     let encoded = tokio::task::spawn_blocking(move || {
-        let decoded = image::load_from_memory(&source).map_err(|_| DynamicImageError::Decode)?;
-        let (source_width, source_height) = decoded.dimensions();
-        if u64::from(source_width) * u64::from(source_height) > MAX_SOURCE_PIXELS {
+        // The budget is answered from the header, before any pixels exist.
+        // `MAX_SOURCE_BYTES` bounds the *compressed* size, which says nothing
+        // about the decoded size: PNG compresses a uniform 50000x50000 canvas
+        // into a few hundred kilobytes, so decoding first and measuring after
+        // means the 10 GB allocation this limit exists to prevent has already
+        // happened by the time the check runs.
+        let (header_width, header_height) =
+            header_dimensions(&source).map_err(|_| DynamicImageError::Decode)?;
+        if u64::from(header_width) * u64::from(header_height) > MAX_SOURCE_PIXELS {
             return Err(DynamicImageError::TooLarge);
         }
+        // The decoder re-checks under its own allocation limit, because a
+        // header is only a claim: a truncated or hand-edited file can declare a
+        // small image and then stream a much larger one.
+        let decoded = decode_within_pixel_budget(&source, MAX_SOURCE_PIXELS)
+            .map_err(|_| DynamicImageError::Decode)?;
+        let (source_width, source_height) = decoded.dimensions();
         // Borrows the decoded buffer when it is already RGB8/RGBA8, which is
         // what both PNG and JPEG decode to. A request for the source's own
         // width then reaches the encoder without a single pixel copy.

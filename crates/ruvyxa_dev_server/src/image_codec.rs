@@ -15,10 +15,11 @@
 //!   responsive widths: 3628 ms scalar, 68 ms SIMD.
 
 use std::fmt;
+use std::io::Cursor;
 
 use fast_image_resize::images::{Image as FirImage, ImageRef};
 use fast_image_resize::{FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer};
-use image::{DynamicImage, GenericImageView};
+use image::{DynamicImage, GenericImageView, ImageReader};
 
 /// Why a resize or encode could not produce output.
 ///
@@ -45,6 +46,49 @@ impl fmt::Display for ImageCodecError {
 impl std::error::Error for ImageCodecError {}
 
 pub type Result<T> = std::result::Result<T, ImageCodecError>;
+
+/// Dimensions from the image header, without decoding pixel data.
+///
+/// This is the only thing that can be known cheaply about an untrusted image:
+/// the header is a fixed-size prefix, while decoding allocates
+/// `width * height * channels` bytes before anything gets a chance to object.
+pub fn header_dimensions(source: &[u8]) -> Result<(u32, u32)> {
+    ImageReader::new(Cursor::new(source))
+        .with_guessed_format()
+        .map_err(|error| ImageCodecError::InvalidBuffer(error.to_string()))?
+        .into_dimensions()
+        .map_err(|error| ImageCodecError::InvalidBuffer(error.to_string()))
+}
+
+/// Decode an image only if it fits inside `max_pixels`.
+///
+/// The budget is checked against the header first and enforced again by the
+/// decoder's own allocation limit. Checking only after `load_from_memory`
+/// returns is checking after the damage: a 20 MB PNG can legally declare
+/// 50000x50000, and the decoder will have committed ten gigabytes to the heap
+/// before the caller ever sees a dimension to reject. The header covers the
+/// honest case cheaply; `Limits` covers a header that lies about what follows.
+pub fn decode_within_pixel_budget(source: &[u8], max_pixels: u64) -> Result<DynamicImage> {
+    let (width, height) = header_dimensions(source)?;
+    if u64::from(width) * u64::from(height) > max_pixels {
+        return Err(ImageCodecError::InvalidBuffer(format!(
+            "image is {width}x{height}, above the {max_pixels} pixel budget"
+        )));
+    }
+
+    let mut reader = ImageReader::new(Cursor::new(source))
+        .with_guessed_format()
+        .map_err(|error| ImageCodecError::InvalidBuffer(error.to_string()))?;
+    let mut limits = image::Limits::default();
+    // Four channels is the widest layout `Pixels` keeps, and the decoder needs
+    // room for one such buffer. The slack absorbs per-decoder scratch without
+    // widening the budget enough to matter.
+    limits.max_alloc = Some(max_pixels.saturating_mul(4).saturating_add(1 << 20));
+    reader.limits(limits);
+    reader
+        .decode()
+        .map_err(|error| ImageCodecError::InvalidBuffer(error.to_string()))
+}
 
 /// Pixels in a layout both the resizer and the WebP encoder accept directly.
 #[derive(Clone, Copy)]
@@ -277,6 +321,23 @@ mod tests {
         // A 10000x1 banner scaled to 16px wide rounds to 0 before the floor.
         assert_eq!(scaled_height(10_000, 1, 16), 1);
         assert_eq!(scaled_height(1000, 500, 640), 320);
+    }
+
+    #[test]
+    fn refuses_oversized_images_without_decoding_them() {
+        let mut png = Vec::new();
+        DynamicImage::ImageRgb8(ImageBuffer::from_pixel(64, 64, Rgb([1u8, 2, 3])))
+            .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+
+        assert_eq!(header_dimensions(&png).unwrap(), (64, 64));
+        // 64x64 is 4096 pixels, so a 4095 budget must reject it and a 4096
+        // budget must not.
+        assert!(decode_within_pixel_budget(&png, 4095).is_err());
+        assert_eq!(
+            decode_within_pixel_budget(&png, 4096).unwrap().dimensions(),
+            (64, 64)
+        );
     }
 
     #[test]

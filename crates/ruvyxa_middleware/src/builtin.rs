@@ -457,13 +457,13 @@ impl RateLimitLayer {
             return false;
         };
         let now = Instant::now();
-        let expired_current_key = state
-            .get(key)
-            .is_some_and(|bucket| now.duration_since(bucket.last_refill) >= self.window);
-        if expired_current_key {
-            state.remove(key);
-        }
-
+        // A key whose window has rolled over is refilled in place below, not
+        // removed and re-inserted. Removing it first made an already-tracked
+        // client indistinguishable from a brand new one, so at capacity the
+        // guard below would answer a returning client — whose bucket the map
+        // still had room for — with 429 until the sweep happened to free a
+        // slot. It also made the refill branch unreachable, which is why the
+        // window rollover had only one real implementation despite two.
         if !state.contains_key(key) && state.len() >= MAX_TRACKED_RATE_LIMIT_KEYS {
             // The ordinary path only examines the current key. A full sweep is
             // reserved for capacity pressure so high-cardinality traffic cannot
@@ -478,7 +478,9 @@ impl RateLimitLayer {
             last_refill: now,
         });
 
-        // Refill tokens if window has elapsed
+        // Refill tokens if the window has elapsed. This is the single place a
+        // window rollover happens, for a bucket that was already tracked and
+        // for one just created alike.
         let elapsed = now.duration_since(bucket.last_refill);
         if elapsed >= self.window {
             bucket.tokens = self.max_requests;
@@ -760,6 +762,48 @@ mod tests {
         let state = limiter.state.lock().unwrap();
         assert_eq!(state.len(), 1);
         assert!(state.contains_key("new-client"));
+    }
+
+    #[test]
+    fn a_tracked_client_is_refilled_rather_than_rejected_at_capacity() {
+        let limiter = RateLimitLayer::from_config(&RateLimitConfig {
+            max_requests: 1,
+            window_secs: 1,
+            key_by: "ip".to_string(),
+        });
+        let fresh = Instant::now();
+        let expired = fresh - Duration::from_secs(2);
+        {
+            let mut state = limiter.state.lock().unwrap();
+            // The map is full and nothing in it is sweepable, so the capacity
+            // guard cannot make room. A key already in the map must not need it
+            // to: its bucket is already allocated.
+            for index in 0..MAX_TRACKED_RATE_LIMIT_KEYS - 1 {
+                state.insert(
+                    format!("active-{index}"),
+                    RateBucket {
+                        tokens: 1,
+                        last_refill: fresh,
+                    },
+                );
+            }
+            state.insert(
+                "returning".to_string(),
+                RateBucket {
+                    tokens: 0,
+                    last_refill: expired,
+                },
+            );
+        }
+
+        assert!(
+            limiter.allow("returning"),
+            "a tracked client whose window rolled over must be refilled, not rejected"
+        );
+        assert!(
+            !limiter.allow("returning"),
+            "the refill must hand out exactly one window's worth of tokens"
+        );
     }
 
     #[test]

@@ -2512,7 +2512,6 @@ dependencies = [
  "blake3",
  "chrono",
  "clap",
- "fast_image_resize",
  "image",
  "rayon",
  "ruvyxa_bundler",
@@ -2527,7 +2526,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "walkdir",
- "webp",
 ]
 
 [[package]]

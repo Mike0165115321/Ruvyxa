@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, SystemTime};
 
 use axum::http::StatusCode;
 use axum::response::Response;
@@ -314,22 +315,57 @@ pub(crate) fn client_hydration_script(
     )
 }
 
-/// Parsed client manifest cached by content hash.
+/// Parsed client manifest, validated by content hash and short-circuited by a
+/// settled `(length, mtime)`.
 ///
 /// The document renderer looks up per-route script/preload assets on every SSR
 /// request, and re-deserializing the whole manifest each time is wasted work on
-/// a file that only changes on rebuild. The cache key is a blake3 hash of the
-/// file's bytes rather than its `(modified time, length)` metadata: a rebuild
-/// commonly rewrites the manifest to the *same* length (only the content hash
-/// inside each bundle URL changes, e.g. `home.a1b2c3.js` -> `home.d4e5f6.js`),
-/// so a metadata fingerprint can miss a real rebuild whenever the filesystem's
+/// a file that only changes on rebuild.
+///
+/// Correctness rests on the hash, not the metadata. A rebuild commonly rewrites
+/// the manifest to the *same* length (only the content hash inside each bundle
+/// URL changes, e.g. `home.a1b2c3.js` -> `home.d4e5f6.js`), so a metadata
+/// fingerprint on its own can miss a real rebuild whenever the filesystem's
 /// mtime resolution is coarser than the gap between writes (FAT, some network
 /// and container mounts) and the server would then serve the previous build's
-/// bundle URLs. Hashing the bytes keeps the expensive part -- the JSON parse
-/// and route-map build -- cached while making invalidation exact.
+/// bundle URLs.
+///
+/// `settled_identity` is what makes the steady state cheap without giving that
+/// up. It is only ever recorded for a file whose mtime is already older than
+/// [`MANIFEST_SETTLE`], which is exactly the condition under which a later write
+/// must land in a newer second and therefore cannot be confused with the bytes
+/// already cached. Every other case — no metadata, an unsettled file, a changed
+/// fingerprint — reads and hashes as before.
 struct CachedClientManifest {
     content_hash: blake3::Hash,
+    /// `(length, mtime)` the cached bytes were read at, once that pair became
+    /// old enough to identify them. See [`manifest_identity`].
+    settled_identity: Option<(u64, SystemTime)>,
     routes: Arc<HashMap<String, ClientAssets>>,
+}
+
+/// How long the manifest's mtime must be in the past before `(len, mtime)` is
+/// allowed to stand in for its bytes.
+///
+/// This is the same bound, for the same reason, as `ASSET_ETAG_SETTLE` in
+/// `static_assets.rs`: several filesystems record mtime to the second, so two
+/// writes inside one second can leave an identical `(len, mtime)` for different
+/// content. Once a file's mtime is already older than this window, any later
+/// write necessarily lands in a newer second and cannot be missed.
+const MANIFEST_SETTLE: Duration = Duration::from_secs(2);
+
+/// `(length, mtime)` of the manifest, but only once that pair has settled.
+///
+/// `None` means "ask the bytes" — either the metadata is unreadable or the file
+/// changed too recently for its timestamp to identify what it holds.
+fn manifest_identity(manifest_path: &Path) -> Option<(u64, SystemTime)> {
+    let metadata = fs::metadata(manifest_path).ok()?;
+    let modified = metadata.modified().ok()?;
+    SystemTime::now()
+        .duration_since(modified)
+        .ok()
+        .filter(|age| *age >= MANIFEST_SETTLE)
+        .map(|_| (metadata.len(), modified))
 }
 
 static CLIENT_MANIFEST_CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedClientManifest>>> =
@@ -347,15 +383,34 @@ pub(crate) fn prebuilt_client_assets(
 /// Load the client manifest's per-route asset lookup, reusing the cached parse
 /// when the source file's contents are byte-identical to the cached parse.
 fn load_client_manifest(manifest_path: &Path) -> Option<Arc<HashMap<String, ClientAssets>>> {
+    let cache = CLIENT_MANIFEST_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    // Metadata first. Hashing the bytes is what makes invalidation exact, but
+    // it also means reading the whole manifest off disk on every server-rendered
+    // request — a blocking read on an async worker thread, for a file that in
+    // production is written once by the build and then never again. A settled
+    // `(len, mtime)` answers the same question without transferring the
+    // content; anything the timestamp cannot vouch for still falls through to
+    // the hash below, so no rebuild is ever missed.
+    let identity = manifest_identity(manifest_path);
+    if let Some(identity) = identity
+        && let Ok(guard) = cache.lock()
+        && let Some(entry) = guard.get(manifest_path)
+        && entry.settled_identity == Some(identity)
+    {
+        return Some(Arc::clone(&entry.routes));
+    }
+
     let source = fs::read(manifest_path).ok()?;
     let content_hash = blake3::hash(&source);
 
-    let cache = CLIENT_MANIFEST_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-
-    if let Ok(guard) = cache.lock()
-        && let Some(entry) = guard.get(manifest_path)
+    if let Ok(mut guard) = cache.lock()
+        && let Some(entry) = guard.get_mut(manifest_path)
         && entry.content_hash == content_hash
     {
+        // Same bytes, newly settled timestamp: record it so the next request
+        // can stop at the metadata.
+        entry.settled_identity = identity;
         return Some(Arc::clone(&entry.routes));
     }
 
@@ -382,6 +437,11 @@ fn load_client_manifest(manifest_path: &Path) -> Option<Arc<HashMap<String, Clie
             manifest_path.to_path_buf(),
             CachedClientManifest {
                 content_hash,
+                // Re-read rather than reusing the pre-read value: the file may
+                // have been rewritten between the metadata call and the read,
+                // and storing the older identity next to the newer bytes would
+                // pin a stale fast path.
+                settled_identity: manifest_identity(manifest_path),
                 routes: Arc::clone(&routes),
             },
         );

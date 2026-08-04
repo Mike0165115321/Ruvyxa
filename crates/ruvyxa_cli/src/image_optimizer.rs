@@ -11,16 +11,17 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
-use image::{GenericImageView, ImageReader};
+use image::GenericImageView;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use ruvyxa_dev_server::image_codec::{Pixels, WebpSettings, encode_webp, scaled_height};
+use ruvyxa_dev_server::image_codec::{
+    Pixels, WebpSettings, encode_webp, header_dimensions, scaled_height,
+};
 
 /// Bumped when a change makes previously cached bytes wrong for the same input.
 ///
@@ -427,13 +428,6 @@ fn process_one(
         cache_hit,
         variants,
     }))
-}
-
-/// Dimensions from the image header, without decoding pixel data.
-fn header_dimensions(source_data: &[u8]) -> anyhow::Result<(u32, u32)> {
-    Ok(ImageReader::new(Cursor::new(source_data))
-        .with_guessed_format()?
-        .into_dimensions()?)
 }
 
 /// The full-size output followed by one entry per responsive breakpoint.

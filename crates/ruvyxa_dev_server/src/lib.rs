@@ -2066,6 +2066,7 @@ fn extension_is(path: &Path, expected: &str) -> bool {
 mod tests {
     use super::*;
     use base64::Engine;
+    use std::time::SystemTime;
 
     #[test]
     fn validates_realtime_event_metadata_and_channel_filters() {
@@ -3277,6 +3278,57 @@ mod tests {
         assert_eq!(
             prebuilt_client_assets(&config, "/").unwrap().src,
             "/__ruvyxa/client/home.d4e5f6.js"
+        );
+    }
+
+    #[test]
+    fn settled_client_manifest_is_served_without_rereading_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let client_dir = temp.path().join(".ruvyxa/client");
+        std::fs::create_dir_all(&client_dir).unwrap();
+        let manifest = client_dir.join("manifest.json");
+        let source =
+            r#"{"routes":[{"path":"/","src":"/__ruvyxa/client/settled.js","sharedChunks":[]}]}"#;
+        std::fs::write(&manifest, source).unwrap();
+
+        // Backdate past the settle window so the first load is allowed to
+        // record `(len, mtime)`. A build writes this file and then exits, so an
+        // old timestamp is the production steady state, not a contrivance.
+        let settled = SystemTime::now() - Duration::from_secs(3600);
+        let backdate = |at: SystemTime| {
+            std::fs::File::options()
+                .write(true)
+                .open(&manifest)
+                .unwrap()
+                .set_modified(at)
+                .unwrap();
+        };
+        backdate(settled);
+
+        let config = ServerConfig::production(temp.path(), "localhost", 3000);
+        assert_eq!(
+            prebuilt_client_assets(&config, "/").unwrap().src,
+            "/__ruvyxa/client/settled.js"
+        );
+
+        // Replace the bytes with garbage of the same length and put the
+        // timestamp back. Nothing outside a test can produce this — a real
+        // rewrite moves mtime forward — so serving the cached parse here is the
+        // proof that the second call never read or re-parsed the file.
+        std::fs::write(&manifest, "x".repeat(source.len())).unwrap();
+        backdate(settled);
+        assert_eq!(
+            prebuilt_client_assets(&config, "/").unwrap().src,
+            "/__ruvyxa/client/settled.js",
+            "a settled fingerprint must answer from the cache without a read"
+        );
+
+        // The moment the timestamp moves — which is what an actual rebuild
+        // does — the fast path stops applying and the bytes decide again.
+        backdate(SystemTime::now());
+        assert!(
+            prebuilt_client_assets(&config, "/").is_none(),
+            "a changed timestamp must send the lookup back to the bytes"
         );
     }
 

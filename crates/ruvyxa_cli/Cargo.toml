@@ -16,7 +16,11 @@ anyhow.workspace = true
 blake3.workspace = true
 chrono.workspace = true
 clap.workspace = true
-fast_image_resize.workspace = true
+# Resizing and WebP encoding live in `ruvyxa_dev_server::image_codec`; only the
+# decode and header read happen here, so `image` is the sole direct image
+# dependency. `fast_image_resize` and `webp` reach this binary through that
+# module and must not be declared again — a second declaration is what lets the
+# two halves drift to different versions.
 image.workspace = true
 rayon.workspace = true
 ruvyxa_bundler = { path = "../ruvyxa_bundler" }
@@ -30,7 +34,6 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 walkdir.workspace = true
-webp.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
