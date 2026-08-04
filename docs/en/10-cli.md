@@ -18,6 +18,105 @@ reconstruct the flags behind those scripts.
 | `npm run add -- form`                                                                                                                 | `ruvyxa add form`                     | Scaffold a supported application flow.                                                 |
 | `npm run doctor`, `npm run clean`, `npm run trace -- /`, `npm run bench`, `npm run test:parity`, `npm run plugin -- create my-plugin` | Matching `ruvyxa` command             | Diagnose, clean output, inspect a route, benchmark, verify parity, or create a plugin. |
 
+## Add a starter feature
+
+`add` accepts one or more of exactly `form`, `data-table`, and `auth`. It writes below the
+configured `appDir` (normally `app/`), not beside `package.json`. Use an npm script because
+`npm add` means install a package; it does not run Ruvyxa's scaffold.
+
+```bash
+npm run add -- form
+npm run add -- data-table
+npm run add -- auth
+
+# Add independent examples in one operation.
+npm run add -- form data-table auth
+```
+
+| Scaffold     | Created files                                                                         | What it demonstrates                                                                                           | What you must supply before production                                                                                               |
+| ------------ | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `form`       | `app/form-example/page.tsx`, `app/form-example/action.ts`                             | A native POST form, server-side email/message validation, an action handler, and `invalidate('contacts')`.     | Replace the example action with your persistence, authorization, anti-abuse controls, and success/error UX.                          |
+| `data-table` | `app/_components/ruvyxa/data-table.tsx`                                               | A generic client component with text filtering, click-to-sort columns, a row key, and optional cell renderers. | Provide real rows and columns; add pagination, server filtering, authorization, and mutations if your app needs them.                |
+| `auth`       | `app/_server/auth.ts`, `app/__ruvyxa/auth/[...path]/route.ts`, `app/sign-in/page.tsx` | Credentials sign-in UI, GET/POST auth route, and a development-only in-memory auth/rate-limit store.           | Install `@ruvyxa/auth`, register `auth.plugin`, set the required environment values, and replace demo credentials and memory stores. |
+
+### Form: what the generated action accepts
+
+The form posts to `submitContact`. Its server parser lowercases and validates `email`, requires a
+`message` of 10–2,000 characters, then invalidates the `contacts` cache key. Browser attributes such
+as `required`, `minLength`, and `maxLength` improve the immediate experience, but the action parser
+is the authoritative validation because requests can bypass HTML controls.
+
+```tsx
+// app/form-example/action.ts — replace the demonstration handler's body
+.handler(async ({ input, invalidate }) => {
+  await contacts.insert(input) // your server-side persistence and authorization
+  invalidate('contacts')
+  return { accepted: true, email: input.email }
+})
+```
+
+### Data table: use the generated generic component
+
+The scaffold creates a component only; it does not create a route or fetch data. Import it from a
+page and pass typed rows and columns. Sorting is client-side and compares displayed values, so use a
+server query rather than this component alone for a large dataset.
+
+```tsx
+// app/users/page.tsx
+import { DataTable, type DataColumn } from '../_components/ruvyxa/data-table'
+
+type User = { id: string; name: string; role: 'admin' | 'member' }
+const columns: readonly DataColumn<User>[] = [
+  { key: 'name', label: 'Name' },
+  { key: 'role', label: 'Role', render: (role) => <strong>{role}</strong> },
+]
+
+export default function UsersPage() {
+  const rows: User[] = [{ id: 'u1', name: 'Ari', role: 'admin' }]
+  return <DataTable rows={rows} columns={columns} rowKey="id" />
+}
+```
+
+### Auth: make the scaffold safe to run
+
+After adding auth, install its package and register the generated runtime with your configuration.
+The scaffold itself does **not** install a package or edit `ruvyxa.config.ts`.
+
+```bash
+npm install @ruvyxa/auth
+```
+
+```ts
+// ruvyxa.config.ts
+import { config } from 'ruvyxa/config'
+import { auth } from './app/_server/auth'
+
+export default config({ plugins: [auth.plugin] })
+```
+
+```dotenv
+# .env — never commit these values
+RUVYXA_AUTH_SECRET=replace-with-a-secret-of-at-least-32-characters
+RUVYXA_AUTH_ORIGIN=https://app.example.com
+RUVYXA_DEMO_USER=demo@example.com
+RUVYXA_DEMO_PASSWORD=replace-this-demo-password
+```
+
+The generated credentials provider accepts only the email/password values above. It is a runnable
+demonstration, not a user database or password-hashing system. Before a production build, replace
+the development-only memory auth and rate-limit stores with durable atomic implementations;
+otherwise the auth package fails closed with `RUV3105`.
+
+### Conflicts and `--force`
+
+Before writing, the command checks every target file. If any exists, it stops with `RUV2401` and
+does not write the scaffold set. Review the listed paths, preserve user-owned changes, and use force
+only for files you intentionally want to regenerate:
+
+```bash
+npm run add -- form --force
+```
+
 ## Recommended application loop
 
 Run this from the root of a generated application, not from this framework monorepo:

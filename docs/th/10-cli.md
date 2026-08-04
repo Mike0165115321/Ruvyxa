@@ -18,6 +18,105 @@ script ขึ้นเอง
 | `npm run add -- form`                                                                                                                 | `ruvyxa add form`                       | scaffold application flow ที่รองรับ                                      |
 | `npm run doctor`, `npm run clean`, `npm run trace -- /`, `npm run bench`, `npm run test:parity`, `npm run plugin -- create my-plugin` | `ruvyxa` command ที่ตรงกัน              | diagnose, ลบ output, ตรวจ route, benchmark, ตรวจ parity หรือสร้าง plugin |
 
+## เพิ่ม starter feature
+
+`add` รับได้หนึ่งตัวหรือหลายตัวจาก `form`, `data-table` และ `auth` เท่านั้น มันเขียนไฟล์ใต้ `appDir`
+ที่ตั้งค่าไว้ (โดยทั่วไปคือ `app/`) ไม่ใช่ข้าง `package.json` ให้เรียกผ่าน npm script เพราะ
+`npm add` หมายถึงติดตั้ง package ไม่ได้เรียก scaffold ของ Ruvyxa
+
+```bash
+npm run add -- form
+npm run add -- data-table
+npm run add -- auth
+
+# เพิ่มตัวอย่างที่เป็นอิสระต่อกันในครั้งเดียว
+npm run add -- form data-table auth
+```
+
+| Scaffold     | ไฟล์ที่สร้าง                                                                          | สิ่งที่แสดงให้เห็น                                                                                                 | สิ่งที่ต้องเติมก่อน production                                                                                      |
+| ------------ | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| `form`       | `app/form-example/page.tsx`, `app/form-example/action.ts`                             | native POST form, การ validate email/message ฝั่ง server, action handler และ `invalidate('contacts')`              | แทน action ตัวอย่างด้วย persistence, authorization, anti-abuse control และ success/error UX ของคุณ                  |
+| `data-table` | `app/_components/ruvyxa/data-table.tsx`                                               | generic client component ที่ filter ข้อความ, click เพื่อ sort column, ระบุ row key และ custom cell renderer ได้    | ส่ง row/column จริงเข้าไป; เพิ่ม pagination, server filtering, authorization และ mutation เมื่อแอปต้องใช้           |
+| `auth`       | `app/_server/auth.ts`, `app/__ruvyxa/auth/[...path]/route.ts`, `app/sign-in/page.tsx` | UI credentials sign-in, auth route สำหรับ GET/POST และ in-memory auth/rate-limit store สำหรับ development เท่านั้น | ติดตั้ง `@ruvyxa/auth`, register `auth.plugin`, ตั้ง environment ที่ต้องใช้ และแทน demo credential กับ memory store |
+
+### Form: action ที่สร้างรับค่าอะไร
+
+form จะ POST ไปยัง `submitContact` parser ฝั่ง server จะเปลี่ยน `email` เป็น lower case แล้ว
+validate, ต้องมี `message` ยาว 10–2,000 ตัวอักษร แล้ว invalidate cache key `contacts` attribute ใน
+browser เช่น `required`, `minLength` และ `maxLength` ช่วยให้ feedback ทันที แต่ action parser คือ
+validation ที่ใช้ ตัดสินจริง เพราะ request สามารถข้าม HTML control ได้
+
+```tsx
+// app/form-example/action.ts — แทนที่ body ของ handler ตัวอย่าง
+.handler(async ({ input, invalidate }) => {
+  await contacts.insert(input) // persistence และ authorization ฝั่ง server ของคุณ
+  invalidate('contacts')
+  return { accepted: true, email: input.email }
+})
+```
+
+### Data table: ใช้ generic component ที่สร้างมา
+
+scaffold สร้างเฉพาะ component ไม่ได้สร้าง route หรือ fetch data ให้ import จาก page แล้วส่ง
+row/column ที่มี type เข้าไป การ sort ทำใน client และเปรียบเทียบค่าที่แสดง ดังนั้น dataset
+ขนาดใหญ่ควร query/filter ที่ server แทนการพึ่ง component นี้อย่างเดียว
+
+```tsx
+// app/users/page.tsx
+import { DataTable, type DataColumn } from '../_components/ruvyxa/data-table'
+
+type User = { id: string; name: string; role: 'admin' | 'member' }
+const columns: readonly DataColumn<User>[] = [
+  { key: 'name', label: 'Name' },
+  { key: 'role', label: 'Role', render: (role) => <strong>{role}</strong> },
+]
+
+export default function UsersPage() {
+  const rows: User[] = [{ id: 'u1', name: 'Ari', role: 'admin' }]
+  return <DataTable rows={rows} columns={columns} rowKey="id" />
+}
+```
+
+### Auth: ทำให้ scaffold ปลอดภัยก่อนใช้งาน
+
+หลังเพิ่ม auth ให้ติดตั้ง package และ register runtime ที่สร้างใน configuration scaffold เอง
+**ไม่ได้** ติดตั้ง package หรือแก้ `ruvyxa.config.ts` ให้
+
+```bash
+npm install @ruvyxa/auth
+```
+
+```ts
+// ruvyxa.config.ts
+import { config } from 'ruvyxa/config'
+import { auth } from './app/_server/auth'
+
+export default config({ plugins: [auth.plugin] })
+```
+
+```dotenv
+# .env — ห้าม commit ค่าเหล่านี้
+RUVYXA_AUTH_SECRET=replace-with-a-secret-of-at-least-32-characters
+RUVYXA_AUTH_ORIGIN=https://app.example.com
+RUVYXA_DEMO_USER=demo@example.com
+RUVYXA_DEMO_PASSWORD=replace-this-demo-password
+```
+
+credentials provider ที่สร้างยอมรับเฉพาะ email/password ที่ตั้งข้างบน เป็นตัวอย่างที่รันได้ ไม่ใช่
+user database หรือระบบ hash password ก่อน production build ให้แทน in-memory auth/rate-limit store
+สำหรับ development ด้วย durable atomic implementation มิฉะนั้น auth package จะ fail closed ด้วย
+`RUV3105`
+
+### Conflict และ `--force`
+
+ก่อนเขียน command จะตรวจ target file ทุกไฟล์ หากมีไฟล์ใดอยู่แล้ว จะหยุดด้วย `RUV2401` และไม่เขียน
+scaffold ชุดนั้น ตรวจ path ที่รายงาน เก็บการแก้ไขที่ผู้ใช้เป็นเจ้าของ แล้วใช้ force
+เฉพาะไฟล์ที่ตั้งใจ สร้างใหม่จริง:
+
+```bash
+npm run add -- form --force
+```
+
 ## Application loop ที่แนะนำ
 
 รันจาก root ของ application ที่สร้างแล้ว ไม่ใช่จาก framework monorepo นี้:
