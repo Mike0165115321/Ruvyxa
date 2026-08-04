@@ -116,7 +116,7 @@ npm run routes
 npm run routes:json
 npm run analyze
 npm run analyze:html
-npm run add -- form
+npm run adds -- form
 npm run doctor
 npm run clean
 npm run trace -- /

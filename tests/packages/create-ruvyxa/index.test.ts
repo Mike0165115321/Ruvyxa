@@ -24,7 +24,7 @@ const starterScripts = {
   'routes:json': 'ruvyxa routes --json',
   analyze: 'ruvyxa analyze',
   'analyze:html': 'ruvyxa analyze --html',
-  add: 'ruvyxa add',
+  adds: 'ruvyxa adds',
   doctor: 'ruvyxa doctor',
   clean: 'ruvyxa clean',
   trace: 'ruvyxa trace',

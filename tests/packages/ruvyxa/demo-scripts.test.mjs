@@ -20,7 +20,7 @@ describe('demo command contract', () => {
       'routes:json': `${command} routes --root . --json`,
       analyze: `${command} analyze --root .`,
       'analyze:html': `${command} analyze --root . --html`,
-      add: `${command} add --root .`,
+      adds: `${command} adds --root .`,
       doctor: `${command} doctor --root .`,
       clean: `${command} clean --root .`,
       trace: `${command} trace --root .`,

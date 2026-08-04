@@ -18,7 +18,7 @@ Available scripts in `package.json`:
 - `npm run preview` — serve the production output locally
 - `npm run routes` — print discovered routes
 - `npm run analyze` — inspect route, import, and boundary diagnostics
-- `npm run add -- form` — scaffold a supported feature
+- `npm run adds -- form` — scaffold a supported feature
 - `npm run doctor` — diagnose project and environment issues
 - `npm run clean` — remove generated build output
 - `npm run trace -- /` — inspect one route-manifest entry

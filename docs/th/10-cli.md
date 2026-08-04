@@ -15,22 +15,23 @@ script ขึ้นเอง
 | `npm run routes:json`                                                                                                                 | route JSON command ที่ starter กำหนด    | route output สำหรับเครื่องอ่าน                                           |
 | `npm run analyze`                                                                                                                     | `ruvyxa analyze`                        | validate route, import และ server/client boundary                        |
 | `npm run analyze:html`                                                                                                                | HTML analysis command ที่ starter กำหนด | หน้าวิเคราะห์แบบ interactive ในเครื่อง                                   |
-| `npm run add -- form`                                                                                                                 | `ruvyxa add form`                       | scaffold application flow ที่รองรับ                                      |
+| `npm run adds -- form`                                                                                                                | `ruvyxa adds form`                      | scaffold application flow ที่รองรับ                                      |
 | `npm run doctor`, `npm run clean`, `npm run trace -- /`, `npm run bench`, `npm run test:parity`, `npm run plugin -- create my-plugin` | `ruvyxa` command ที่ตรงกัน              | diagnose, ลบ output, ตรวจ route, benchmark, ตรวจ parity หรือสร้าง plugin |
 
-## เพิ่ม starter feature
+## Scaffold starter feature ด้วย `adds`
 
-`add` รับได้หนึ่งตัวหรือหลายตัวจาก `form`, `data-table` และ `auth` เท่านั้น มันเขียนไฟล์ใต้ `appDir`
-ที่ตั้งค่าไว้ (โดยทั่วไปคือ `app/`) ไม่ใช่ข้าง `package.json` ให้เรียกผ่าน npm script เพราะ
-`npm add` หมายถึงติดตั้ง package ไม่ได้เรียก scaffold ของ Ruvyxa
+`adds` รับได้หนึ่งตัวหรือหลายตัวจาก `form`, `data-table` และ `auth` เท่านั้น มันเขียนไฟล์ใต้
+`appDir` ที่ตั้งค่าไว้ (โดยทั่วไปคือ `app/`) ไม่ใช่ข้าง `package.json` ให้เรียกผ่าน npm script
+`adds` ที่ starter สร้างไว้ ชื่อพหูพจน์ช่วยแยก scaffold นี้ออกจากคำสั่งติดตั้ง package อย่าง
+`npm add`
 
 ```bash
-npm run add -- form
-npm run add -- data-table
-npm run add -- auth
+npm run adds -- form
+npm run adds -- data-table
+npm run adds -- auth
 
 # เพิ่มตัวอย่างที่เป็นอิสระต่อกันในครั้งเดียว
-npm run add -- form data-table auth
+npm run adds -- form data-table auth
 ```
 
 | Scaffold     | ไฟล์ที่สร้าง                                                                          | สิ่งที่แสดงให้เห็น                                                                                                 | สิ่งที่ต้องเติมก่อน production                                                                                      |
@@ -114,7 +115,7 @@ scaffold ชุดนั้น ตรวจ path ที่รายงาน เ
 เฉพาะไฟล์ที่ตั้งใจ สร้างใหม่จริง:
 
 ```bash
-npm run add -- form --force
+npm run adds -- form --force
 ```
 
 ## Application loop ที่แนะนำ
@@ -146,8 +147,8 @@ cargo run -p ruvyxa_cli -- check --root examples/demo
 ```
 
 เมื่อดูแล framework เอง ให้รัน `cargo run -p ruvyxa_cli -- <command> --help` CLI ที่ตรวจแล้วมี
-`dev`, `build`, `check`, `start`, `preview`, `routes`, `analyze`, `add`, `doctor`, `clean`, `trace`,
-`bench`, `test:parity` และ `plugin create`
+`dev`, `build`, `check`, `start`, `preview`, `routes`, `analyze`, `adds`, `doctor`, `clean`,
+`trace`, `bench`, `test:parity` และ `plugin create`
 
 ## Repository script
 

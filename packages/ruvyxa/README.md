@@ -37,9 +37,9 @@ npm run check                     # App-level production readiness checks
 npm run routes                    # Show discovered routes
 npm run routes:json                # Machine-readable route tree
 npm run analyze:html               # Interactive self-contained bundle report
-npm run add -- form               # Scaffold form + validated Server Action
-npm run add -- data-table         # Scaffold a typed client data table
-npm run add -- auth               # Scaffold an @ruvyxa/auth flow
+npm run adds -- form              # Scaffold form + validated Server Action
+npm run adds -- data-table        # Scaffold a typed client data table
+npm run adds -- auth              # Scaffold an @ruvyxa/auth flow
 npm run doctor                    # Check project health and environment
 npm run trace -- <path>           # Inspect route matching
 npm run bench                     # Benchmark discovery, validation, builds

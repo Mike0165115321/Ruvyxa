@@ -49,7 +49,7 @@ pub(crate) fn scaffold_add(args: AddArgs) -> anyhow::Result<()> {
             .with_context(|| format!("failed to write {}", target.display()))?;
     }
 
-    println!("\n🦊 Ruvyxa Add\n");
+    println!("\n🦊 Ruvyxa Adds\n");
     for relative in files.keys() {
         println!("  created                {}", relative.display());
     }

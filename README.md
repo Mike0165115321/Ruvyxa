@@ -186,7 +186,7 @@
 ### CLI & diagnostics
 
 - **14 verified commands** — `dev`, `build`, `check`, `start`, `preview`, `routes`, `analyze`,
-  `add`, `doctor`, `clean`, `trace`, `bench`, `test:parity`, and `plugin`.
+  `adds`, `doctor`, `clean`, `trace`, `bench`, `test:parity`, and `plugin`.
 - **`build`** — production output supports `--target node`, `bun`, `edge`, or `static`. Pre-renders
   SSG, ISR, PPR, and CSR pages at build time via parallel worker pool
   (`MAX_PRERENDER_PARALLELISM: 2`).
@@ -195,7 +195,7 @@
 - **`analyze`** — human, JSON, SARIF 2.1.0, or a self-contained interactive HTML validation report
   for routes, imports, and server/client boundaries (`--format sarif --output reports/ruvyxa.sarif`;
   `--html`).
-- **`add`** — scaffold an additive, framework-native `form`, `data-table`, or `auth` flow.
+- **`adds`** — scaffold an additive, framework-native `form`, `data-table`, or `auth` flow.
 - **`doctor`** — project health plus deploy-target inspection: adapter runtime, platform,
   capabilities, and every route unsupported by the selected adapter (`--json` for CI).
 - **`bench`** — benchmark route discovery, analysis, validation, and production builds.
@@ -566,7 +566,7 @@ cache examples.
 | `ruvyxa preview`       | Alias for `ruvyxa start` (preview production build locally)                               |
 | `ruvyxa routes`        | Print the discovered route table (`--json` for the manifest)                              |
 | `ruvyxa analyze`       | Validate routes, imports, and server/client boundaries (human/JSON/SARIF/HTML)            |
-| `ruvyxa add`           | Scaffold a `form`, `data-table`, or `auth` flow                                           |
+| `ruvyxa adds`          | Scaffold a `form`, `data-table`, or `auth` flow                                           |
 | `ruvyxa doctor`        | Check project health, dependencies, environment, and Ruvyxa CLI status                    |
 | `ruvyxa trace <path>`  | Print route matching details for a URL                                                    |
 | `ruvyxa bench`         | Benchmark route discovery, analysis, validation, and production builds                    |

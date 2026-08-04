@@ -23,8 +23,8 @@ undocumented private implementation is public API.
 
 | Scope                 | Commands/scripts                                                                                                                                                                                                |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Ruvyxa CLI            | `dev`, `build`, `check`, `start`, `preview`, `routes`, `analyze`, `add`, `doctor`, `clean`, `trace`, `bench`, `test:parity`, `plugin create`                                                                    |
-| Generated application | `dev`, `build`, `start`, `preview`, `typecheck`, `check`, `routes`, `routes:json`, `analyze`, `analyze:html`, `add`, `doctor`, `clean`, `trace`, `bench`, `test:parity`, `plugin`                               |
+| Ruvyxa CLI            | `dev`, `build`, `check`, `start`, `preview`, `routes`, `analyze`, `adds`, `doctor`, `clean`, `trace`, `bench`, `test:parity`, `plugin create`                                                                   |
+| Generated application | `dev`, `build`, `start`, `preview`, `typecheck`, `check`, `routes`, `routes:json`, `analyze`, `analyze:html`, `adds`, `doctor`, `clean`, `trace`, `bench`, `test:parity`, `plugin`                              |
 | Repository root       | `build`, `check`, `test`, `prepare`, `check:cargo-lock`, `check:oxc-lockstep`, `format`, `format:check`, `format:staged`, `release:validate`, `release:bump`, `pack:smoke`, `test:full-flow`, `publish:dry-run` |
 
 ## Explicitly unverified / not implemented as framework features

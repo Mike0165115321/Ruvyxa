@@ -40,7 +40,7 @@ npm run typecheck   # tsc --noEmit
 npm run preview     # ruvyxa preview
 npm run routes      # ruvyxa routes
 npm run analyze     # ruvyxa analyze
-npm run add -- form # ruvyxa add form
+npm run adds -- form # ruvyxa adds form
 npm run doctor      # ruvyxa doctor
 npm run clean       # ruvyxa clean
 npm run trace -- /  # ruvyxa trace /

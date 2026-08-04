@@ -266,7 +266,7 @@ pub(crate) fn canonical_command_name(command: &str) -> Option<&'static str> {
         "test:parity" => Some("test:parity"),
         "parity" => Some("parity"),
         "plugin" => Some("plugin"),
-        "add" => Some("add"),
+        "adds" => Some("adds"),
         "help" => Some("help"),
         _ => None,
     }

@@ -1637,6 +1637,19 @@ fn parses_top_level_commands_case_insensitively() {
 }
 
 #[test]
+fn parses_adds_scaffold_command_and_rejects_the_old_name() {
+    let cli = Cli::try_parse_from(normalized_cli_args(os_args(["Ruvyxa", "ADDS", "form"])))
+        .expect("adds should parse");
+
+    let Command::Adds(args) = cli.command else {
+        panic!("expected adds command");
+    };
+    assert_eq!(args.templates, vec![AddTemplate::Form]);
+
+    assert!(Cli::try_parse_from(normalized_cli_args(os_args(["Ruvyxa", "add", "form",]))).is_err());
+}
+
+#[test]
 fn parses_check_command_case_insensitively() {
     let cli = Cli::try_parse_from(normalized_cli_args(os_args([
         "Ruvyxa",

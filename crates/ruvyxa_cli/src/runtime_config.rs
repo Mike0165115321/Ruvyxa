@@ -354,7 +354,7 @@ pub(crate) fn command_runtime(command: &Command) -> Option<CliRuntime> {
         Command::Check(args) | Command::Clean(args) | Command::TestParity(args) => args.runtime,
         Command::Routes(args) => args.runtime,
         Command::Analyze(args) => args.runtime,
-        Command::Add(args) => args.runtime,
+        Command::Adds(args) => args.runtime,
         Command::Doctor(args) => args.runtime,
         Command::Trace(_) | Command::Bench(_) | Command::Plugin(_) => None,
     }

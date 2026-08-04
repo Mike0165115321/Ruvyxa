@@ -184,7 +184,7 @@ my-app/
 | `ruvyxa preview`     | Preview an existing production build locally                  |
 | `ruvyxa routes`      | Print route table (`--json` emits its manifest)               |
 | `ruvyxa analyze`     | Validate routes/imports/boundaries; can emit interactive HTML |
-| `ruvyxa add`         | Scaffold a form, data table, or authentication flow           |
+| `ruvyxa adds`        | Scaffold a form, data table, or authentication flow           |
 | `ruvyxa doctor`      | Check environment and project setup                           |
 | `ruvyxa clean`       | Remove generated Ruvyxa build output                          |
 | `ruvyxa trace`       | Inspect one route manifest entry by path                      |

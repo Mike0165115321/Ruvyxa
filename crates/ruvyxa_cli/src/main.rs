@@ -101,7 +101,7 @@ enum Command {
     #[command(about = "Validate routes, imports, and server/client boundaries")]
     Analyze(AnalyzeArgs),
     #[command(about = "Scaffold framework-native forms, data tables, or authentication flows")]
-    Add(AddArgs),
+    Adds(AddArgs),
     #[command(about = "Check project setup, dependencies, and runtime compatibility")]
     Doctor(DoctorArgs),
     #[command(about = "Remove generated Ruvyxa build output")]
@@ -424,7 +424,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Routes(args) => print_routes(args).context("route discovery failed")?,
         Command::Analyze(args) => analyze(args).context("analyze failed")?,
-        Command::Add(args) => scaffold_add(args).context("scaffold failed")?,
+        Command::Adds(args) => scaffold_add(args).context("scaffold failed")?,
         Command::Doctor(args) => doctor(args).context("doctor failed")?,
         Command::Clean(args) => clean(args).context("clean failed")?,
         Command::Trace(args) => trace(args).context("trace failed")?,

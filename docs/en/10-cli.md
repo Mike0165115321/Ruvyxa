@@ -15,22 +15,22 @@ reconstruct the flags behind those scripts.
 | `npm run routes:json`                                                                                                                 | Starter-defined route JSON command    | Machine-readable route output.                                                         |
 | `npm run analyze`                                                                                                                     | `ruvyxa analyze`                      | Validate routes, imports, and server/client boundaries.                                |
 | `npm run analyze:html`                                                                                                                | Starter-defined HTML analysis command | Interactive local analysis page.                                                       |
-| `npm run add -- form`                                                                                                                 | `ruvyxa add form`                     | Scaffold a supported application flow.                                                 |
+| `npm run adds -- form`                                                                                                                | `ruvyxa adds form`                    | Scaffold a supported application flow.                                                 |
 | `npm run doctor`, `npm run clean`, `npm run trace -- /`, `npm run bench`, `npm run test:parity`, `npm run plugin -- create my-plugin` | Matching `ruvyxa` command             | Diagnose, clean output, inspect a route, benchmark, verify parity, or create a plugin. |
 
-## Add a starter feature
+## Scaffold a starter feature with `adds`
 
-`add` accepts one or more of exactly `form`, `data-table`, and `auth`. It writes below the
-configured `appDir` (normally `app/`), not beside `package.json`. Use an npm script because
-`npm add` means install a package; it does not run Ruvyxa's scaffold.
+`adds` accepts one or more of exactly `form`, `data-table`, and `auth`. It writes below the
+configured `appDir` (normally `app/`), not beside `package.json`. Use the generated `adds` npm
+script: its plural name distinguishes this scaffold from package-install commands such as `npm add`.
 
 ```bash
-npm run add -- form
-npm run add -- data-table
-npm run add -- auth
+npm run adds -- form
+npm run adds -- data-table
+npm run adds -- auth
 
 # Add independent examples in one operation.
-npm run add -- form data-table auth
+npm run adds -- form data-table auth
 ```
 
 | Scaffold     | Created files                                                                         | What it demonstrates                                                                                           | What you must supply before production                                                                                               |
@@ -114,7 +114,7 @@ does not write the scaffold set. Review the listed paths, preserve user-owned ch
 only for files you intentionally want to regenerate:
 
 ```bash
-npm run add -- form --force
+npm run adds -- form --force
 ```
 
 ## Recommended application loop
@@ -148,7 +148,7 @@ cargo run -p ruvyxa_cli -- check --root examples/demo
 ```
 
 Run `cargo run -p ruvyxa_cli -- <command> --help` when maintaining the framework itself. The checked
-CLI exposes `dev`, `build`, `check`, `start`, `preview`, `routes`, `analyze`, `add`, `doctor`,
+CLI exposes `dev`, `build`, `check`, `start`, `preview`, `routes`, `analyze`, `adds`, `doctor`,
 `clean`, `trace`, `bench`, `test:parity`, and `plugin create`.
 
 ## Repository scripts

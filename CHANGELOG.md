@@ -10,6 +10,11 @@
 - Added atomic `ruvyxa add form|data-table|auth` scaffolds and the dependency-free `@ruvyxa/testing`
   package with loader, action, and cache mocks.
 
+### Breaking changes
+
+- Renamed the scaffold command from `ruvyxa add` to `ruvyxa adds`. Generated applications now use
+  `npm run adds -- form` (or `data-table` / `auth`).
+
 ### Runtime and routing
 
 - Added validated file-system i18n routing with locale detection, prerender expansion, automatic
