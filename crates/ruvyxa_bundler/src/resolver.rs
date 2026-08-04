@@ -191,11 +191,18 @@ impl ResolveGraphCache {
     }
 
     /// Read source text for a file, using the cache and mmap for large files.
-    fn read_source(&self, path: &Path) -> Result<String> {
+    ///
+    /// Hands back the cached `Arc<str>` rather than a `String`. The cache
+    /// already owns the bytes, so materializing a private copy per lookup
+    /// charged one full duplication of every module's source to every
+    /// resolution — and the caller then had to clone that copy again to keep it
+    /// alive alongside the value it derived from it. Sharing the allocation
+    /// removes both copies without changing what any caller reads.
+    fn read_source(&self, path: &Path) -> Result<Arc<str>> {
         if self.stable_snapshot
             && let Some(entry) = self.sources.get(path)
         {
-            return Ok(entry.source.to_string());
+            return Ok(Arc::clone(&entry.source));
         }
         let metadata = fs::metadata(path).map_err(|error| {
             BundleError::Io(std::io::Error::new(
@@ -212,18 +219,17 @@ impl ResolveGraphCache {
         if let Some(entry) = self.sources.get(path)
             && entry.fingerprint == fingerprint
         {
-            return Ok(entry.source.to_string());
+            return Ok(Arc::clone(&entry.source));
         }
 
         // Cache miss or stale — read the file.
-        let source = read_source_fast(path)?;
-        let arc_source: Arc<str> = Arc::from(source.as_str());
+        let source: Arc<str> = Arc::from(read_source_fast(path)?.as_str());
 
         self.sources.insert(
             path.to_path_buf(),
             CachedSource {
                 fingerprint,
-                source: arc_source,
+                source: Arc::clone(&source),
             },
         );
 
@@ -986,8 +992,12 @@ pub(crate) fn resolve_graph_with_incremental(
                     target,
                 };
                 let loaded = build_hooks.load(dep_path, &hook_context)?;
-                let raw_source = match &loaded {
-                    Some(output) => output.code.clone(),
+                // `Arc<str>` because the module's text is needed twice — once
+                // as the compiled module body, once as the fingerprint the
+                // incremental cache records — and the two do not have to be
+                // separate allocations.
+                let raw_source: Arc<str> = match &loaded {
+                    Some(output) => Arc::from(output.code.as_str()),
                     None => cache.read_source(dep_path)?,
                 };
                 let load_source_map = loaded.and_then(|output| output.map);
@@ -998,7 +1008,7 @@ pub(crate) fn resolve_graph_with_incremental(
                 {
                     minifier::fold_production_node_env(&raw_source)
                 } else {
-                    raw_source.clone()
+                    raw_source.to_string()
                 };
 
                 // Reuse a persisted resolution only when it is complete. Paths
@@ -1030,19 +1040,31 @@ pub(crate) fn resolve_graph_with_incremental(
                     reused
                 } else {
                     let resolve_base = dep_path.parent().unwrap_or(&project_root).to_path_buf();
-                    let dependency_source = if matches!(
+                    // Only content files need a compiled stand-in to scan for
+                    // imports; everything else scans the source it already has.
+                    // Materializing this as an owned `String` in both arms made
+                    // the common arm clone the whole module for no reason —
+                    // the branch that has to own was deciding the shape for the
+                    // branch that only has to borrow. The content arm keeps the
+                    // shared `Arc<str>` the content cache already holds instead
+                    // of copying out of it.
+                    let compiled_content = if matches!(
                         dep_path
                             .extension()
                             .and_then(|extension| extension.to_str()),
                         Some("md" | "mdx")
                     ) {
-                        crate::content::compile_content_module(&source, dep_path)
-                            .map_err(BundleError::Compiler)?
+                        Some(
+                            crate::content::compile_content_module_shared(&source, dep_path)
+                                .map_err(BundleError::Compiler)?,
+                        )
                     } else {
-                        source.clone()
+                        None
                     };
+                    let dependency_source: &str =
+                        compiled_content.as_deref().unwrap_or(source.as_str());
                     collect_deps_cached(
-                        &dependency_source,
+                        dependency_source,
                         &resolve_base,
                         &project_root,
                         &tsconfig,

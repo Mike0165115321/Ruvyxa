@@ -406,14 +406,24 @@ fn append_vary_origin(headers: &mut axum::http::HeaderMap) {
 
 // ─── Rate Limiting Layer ───────────────────────────────────────────────────────
 
-/// Token-bucket rate limiter state shared across clones.
+/// One client's allowance for the window it is currently inside.
+///
+/// `last_refill` is the start of that window, not a continuously advancing
+/// refill clock: it is stamped when the bucket is created or rolled over and
+/// then left alone until the whole window elapses. That makes this a **fixed
+/// window**, and the consequence is worth stating rather than discovering — a
+/// client can spend its full allowance at the end of one window and again at
+/// the start of the next, so a short burst of up to `2 * max_requests` is
+/// reachable across a window boundary. The limit this enforces is a sustained
+/// rate, not an instantaneous one.
 #[derive(Debug)]
 struct RateBucket {
     tokens: usize,
     last_refill: Instant,
 }
 
-/// In-memory sliding-window rate limiter keyed by client IP.
+/// In-memory fixed-window rate limiter, keyed by transport peer or by a
+/// configured header.
 #[derive(Debug, Clone)]
 pub struct RateLimitLayer {
     max_requests: usize,
@@ -433,17 +443,26 @@ impl RateLimitLayer {
     }
 
     fn extract_key(request: &Request<Body>, key_by: &str) -> String {
-        if let Some(header_name) = key_by.strip_prefix("header:") {
-            return request
+        if let Some(header_name) = key_by.strip_prefix("header:")
+            && let Some(value) = request
                 .headers()
                 .get(header_name)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("unknown")
-                .to_string();
+                .and_then(|value| value.to_str().ok())
+                .filter(|value| !value.is_empty())
+        {
+            return value.to_string();
         }
-        // Default: use the transport peer only. Forwarded headers are client
-        // supplied unless a deployment explicitly selects them with
-        // `key: "header:x-forwarded-for"`.
+        // Falling back to the transport peer, not to a shared literal. A
+        // request that is missing the configured header is not the *same*
+        // client as every other request missing it, and bucketing them together
+        // turns the limiter into an outage: one caller that never sends the
+        // header drains a bucket every other such caller has to share, so the
+        // control meant to protect the service is what denies it. The peer
+        // address is the identity the default mode already uses and is not
+        // client-supplied.
+        //
+        // Forwarded headers stay untrusted unless a deployment explicitly
+        // selects one with `key: "header:x-forwarded-for"`.
         request
             .extensions()
             .get::<std::net::SocketAddr>()
@@ -734,6 +753,34 @@ mod tests {
         assert_eq!(
             RateLimitLayer::extract_key(&request, "header:x-forwarded-for"),
             "203.0.113.8"
+        );
+    }
+
+    #[test]
+    fn a_missing_key_header_falls_back_to_the_peer_not_a_shared_bucket() {
+        let peer: std::net::SocketAddr = "198.51.100.7:44321".parse().unwrap();
+        let mut absent = Request::builder().body(Body::empty()).unwrap();
+        absent.extensions_mut().insert(peer);
+        let mut empty = Request::builder()
+            .header("x-api-key", "")
+            .body(Body::empty())
+            .unwrap();
+        empty.extensions_mut().insert(peer);
+
+        // Two clients that both fail to identify themselves must not land in
+        // one bucket, or either of them can rate-limit the other.
+        for request in [&absent, &empty] {
+            assert_eq!(
+                RateLimitLayer::extract_key(request, "header:x-api-key"),
+                "198.51.100.7"
+            );
+        }
+
+        // Only a peer that cannot be determined either is unattributable.
+        let anonymous = Request::builder().body(Body::empty()).unwrap();
+        assert_eq!(
+            RateLimitLayer::extract_key(&anonymous, "header:x-api-key"),
+            "unknown"
         );
     }
 
