@@ -1,8 +1,8 @@
 # Routing and rendering
 
-Route discovery turns the file tree into a manifest. Run `pnpm routes` while developing to inspect
-it; use `pnpm routes:json` when a script needs machine-readable output. A page's strategy is
-selected from its exports and the `render` configuration.
+Route discovery turns the file tree into a manifest. Run `npm run routes` while developing to
+inspect it; use `npm run routes:json` when a script needs machine-readable output. A page's strategy
+is selected from its exports and the `render` configuration.
 
 | Strategy | Selection evidenced in source             | When HTML is produced                                       |
 | -------- | ----------------------------------------- | ----------------------------------------------------------- |
@@ -59,6 +59,77 @@ export const meta = ({ params }: { params: Record<string, string> }) => ({
 select the nearest `not-found.tsx`, import `notFound` from `@ruvyxa/react` and call it (it throws a
 tagged signal). Do not confuse it with `notFound` from `ruvyxa/server`, which creates an HTTP
 `Response` with status 404.
+
+### A complete route-state boundary
+
+Put the three special files beside the segment they should protect. The closest matching file wins,
+so this structure gives all product pages a loading UI, error retry, and product-specific 404
+without changing every page.
+
+```text
+app/products/
+├── [slug]/
+│   └── page.tsx
+├── error.tsx
+├── loading.tsx
+└── not-found.tsx
+```
+
+```tsx
+// app/products/[slug]/page.tsx
+import { notFound } from '@ruvyxa/react'
+
+const products = { notebook: 'A plain notebook' }
+
+export default function Product({ params }: { params: { slug: string } }) {
+  const product = products[params.slug as keyof typeof products]
+  if (!product) notFound()
+  return (
+    <main>
+      <h1>{product}</h1>
+    </main>
+  )
+}
+```
+
+```tsx
+// app/products/loading.tsx
+export default function Loading() {
+  return <main aria-busy="true">Loading products…</main>
+}
+
+// app/products/not-found.tsx
+export default function ProductNotFound() {
+  return (
+    <main>
+      <h1>Product not found</h1>
+    </main>
+  )
+}
+```
+
+```tsx
+// app/products/error.tsx
+'use client'
+import type { RouteErrorProps } from '@ruvyxa/react'
+
+export default function ProductError({ error, reset }: RouteErrorProps) {
+  return (
+    <main>
+      <h1>We could not load this product</h1>
+      <p>{error.message}</p>
+      <button type="button" onClick={reset}>
+        Try again
+      </button>
+    </main>
+  )
+}
+```
+
+`loading.tsx` is used as the route's Suspense fallback. `not-found.tsx` can render on the server,
+but `reset()` re-renders after hydration, so make an `error.tsx` with a retry control a client
+component. Keep error text safe for end users; log diagnostic detail on the server or through your
+observability integration instead of rendering secrets or stack traces.
 
 ## i18n route policy
 

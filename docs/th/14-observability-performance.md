@@ -20,8 +20,9 @@ export default config({
 
 record มี `requestId`, `traceparent`, `method`, `pathname`, `status` และ `durationMs` logger
 ที่ล้มเหลวถูก isolate จึงไม่ทำให้ response ที่ปกติกลายเป็น HTTP failure ให้มองว่านี่คือฐานสำหรับ
-telemetry sink ของคุณ ไม่ใช่ metrics/tracing backend ที่สมบูรณ์ `ruvyxa analyze --html` ให้ local
-build/route analysis page; `trace` ตรวจ route manifest entry
+telemetry sink ของคุณ ไม่ใช่ metrics/tracing backend ที่สมบูรณ์ ใน generated application ให้ใช้
+`npm run analyze:html` สำหรับ local build/route analysis page และ `npm run trace -- /` เพื่อตรวจ
+route manifest entry
 
 ## Performance control
 

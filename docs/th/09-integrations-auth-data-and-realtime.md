@@ -67,8 +67,8 @@ framework ไม่มี database server, migration engine หรือ backup 
 channel ที่ 16 และ reconnect ด้วย bounded exponential backoff
 
 มี first-party adapter package สำหรับ Node, Bun, static, Vercel, Netlify, Cloudflare, Railway,
-Render, Firebase และ AWS เลือก build ด้วย `ruvyxa build --adapter <name>` หรือ config `adapter`; ดู
-[Deploy, run และ operate](15-deploy-run-and-operate.md) `@ruvyxa/testing` export `mockLoader`,
+Render, Firebase และ AWS เลือก build ด้วย `npm run build -- --adapter <name>` หรือ config `adapter`;
+ดู [Deploy, run และ operate](15-deploy-run-and-operate.md) `@ruvyxa/testing` export `mockLoader`,
 `mockAction` และ `mockCache` สำหรับ unit test
 
 **ก่อนหน้า:** [Plugin และ middleware](08-plugins-middleware.md) · **ถัดไป:**

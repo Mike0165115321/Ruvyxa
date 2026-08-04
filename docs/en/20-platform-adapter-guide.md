@@ -11,8 +11,8 @@ Use a one-off CLI selection while evaluating a host, or import a typed adapter i
 `ruvyxa.config.ts`.
 
 ```bash
-ruvyxa doctor --adapter railway
-ruvyxa build --adapter railway
+npm run doctor -- --adapter railway
+npm run build -- --adapter railway
 ```
 
 ```ts
@@ -50,11 +50,23 @@ runtime image or host. Do not copy only the server file: public assets are a sib
 Neither standalone server needs the Ruvyxa CLI or native binary at runtime.
 
 ```bash
-ruvyxa build --adapter node
+npm run build -- --adapter node
 PORT=3000 HOST=0.0.0.0 node .ruvyxa/deploy/node/server/index.mjs
 
-ruvyxa build --adapter bun
+npm run build -- --adapter bun
 PORT=3000 HOST=0.0.0.0 bun .ruvyxa/deploy/bun/server/index.mjs
+```
+
+The two start lines above use POSIX environment-variable syntax. In PowerShell, set the variables
+before starting the same artifact:
+
+```powershell
+$env:PORT = '3000'
+$env:HOST = '0.0.0.0'
+node .ruvyxa/deploy/node/server/index.mjs
+
+# Or use Bun output.
+bun .ruvyxa/deploy/bun/server/index.mjs
 ```
 
 Both generated servers default to `PORT=3000` and `HOST=0.0.0.0`. Each adapter also emits
@@ -64,7 +76,7 @@ runtime image should not carry the CLI.
 ## Static hosting: publish only static output
 
 ```bash
-ruvyxa build --target static
+npm run build -- --target static
 ```
 
 The default publish folder is `<outDir>/static/`. `staticAdapter({ outputDir })` accepts only a
@@ -107,7 +119,7 @@ own the provider file, set `projectConfig: false` and preserve the same build/st
 overwritten. The adapter's generated README provides this verified handoff:
 
 ```bash
-ruvyxa build --adapter firebase
+npm run build -- --adapter firebase
 firebase deploy --only hosting,functions
 ```
 

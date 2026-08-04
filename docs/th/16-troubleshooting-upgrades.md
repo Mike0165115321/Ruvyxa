@@ -3,12 +3,12 @@
 รัน diagnostic ที่แคบที่สุดก่อน จาก application root:
 
 ```bash
-pnpm routes
-pnpm check
-pnpm analyze
-pnpm doctor
-pnpm trace --help
-pnpm test:parity
+npm run routes
+npm run check
+npm run analyze
+npm run doctor
+npm run trace -- /
+npm run test:parity
 ```
 
 ## อาการและวิธีแก้ที่มีหลักฐานรองรับ
@@ -34,9 +34,9 @@ pnpm test:parity
 secret หรือ server-only computation ออกจาก client code แทนการเปลี่ยน prefix
 
 **อัปเกรดได้โดยไม่มี migration guide ไหม?** repository มี `CHANGELOG.md` แต่เอกสารนี้ไม่อนุมาน
-migration ราย version จากมัน ก่อนอัปเกรดให้เปรียบเทียบ export/config type แล้วรัน `pnpm check`,
-`pnpm build` และ `pnpm test:parity` กับ app ของคุณ ใช้ `Seo.card` แทน `Seo.twitterCard` ซึ่งเป็น
-migration ที่เป็นรูปธรรม
+migration ราย version จากมัน ก่อนอัปเกรดให้เปรียบเทียบ export/config type แล้วรัน `npm run check`,
+`npm run build` และ `npm run test:parity` กับ app ของคุณ ใช้ `Seo.card` แทน `Seo.twitterCard`
+ซึ่งเป็น migration ที่เป็นรูปธรรม
 
 **ก่อนหน้า:** [Deploy, run และ operate ใน production](15-deploy-run-and-operate.md) · **ถัดไป:**
 [Public API reference](17-public-api-reference.md)

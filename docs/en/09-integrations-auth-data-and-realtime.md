@@ -69,8 +69,8 @@ netlify, static, and vercel adapters with `RUV3201`. `@ruvyxa/realtime/client` e
 backoff.
 
 First-party adapter packages exist for Node, Bun, static, Vercel, Netlify, Cloudflare, Railway,
-Render, Firebase, and AWS. Build selection is `ruvyxa build --adapter <name>` or config `adapter`;
-see [Deploy, run, and operate](15-deploy-run-and-operate.md). `@ruvyxa/testing` exports
+Render, Firebase, and AWS. Build selection is `npm run build -- --adapter <name>` or config
+`adapter`; see [Deploy, run, and operate](15-deploy-run-and-operate.md). `@ruvyxa/testing` exports
 `mockLoader`, `mockAction`, and `mockCache` for unit tests.
 
 **Previous:** [Plugins and middleware](08-plugins-middleware.md) · **Next:**

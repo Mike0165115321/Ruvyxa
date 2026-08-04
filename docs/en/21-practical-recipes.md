@@ -2,7 +2,7 @@
 
 Each recipe uses a public API or route convention implemented by this repository. Copy the shown
 file into an application that already completed
-[Create your first app](02-create-your-first-app.md), then run `pnpm check` before building.
+[Create your first app](02-create-your-first-app.md), then run `npm run check` before building.
 
 ## 1. Static dynamic pages
 
@@ -26,7 +26,7 @@ export default function Guide({ params }: PageProps<{ slug: string }>) {
 }
 ```
 
-Run `pnpm build`; the concrete paths are pre-render candidates. Use an object result with
+Run `npm run build`; the concrete paths are pre-render candidates. Use an object result with
 `{ params, cache: '10m' }` when parameter discovery itself should be cached. Do not use this pattern
 for values known only after a user-specific request.
 

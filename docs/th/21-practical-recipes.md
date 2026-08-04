@@ -2,7 +2,7 @@
 
 แต่ละ recipe ใช้ public API หรือ route convention ที่ repository นี้ implement อยู่จริง ให้ copy
 ไฟล์ที่แสดงไปยัง app ที่ทำ [สร้าง app แรก](02-create-your-first-app.md) เสร็จแล้ว และรัน
-`pnpm check` ก่อน build
+`npm run check` ก่อน build
 
 ## 1. Static dynamic page
 
@@ -26,7 +26,7 @@ export default function Guide({ params }: PageProps<{ slug: string }>) {
 }
 ```
 
-รัน `pnpm build`; concrete path จะเป็น prerender candidate ใช้ object result แบบ
+รัน `npm run build`; concrete path จะเป็น prerender candidate ใช้ object result แบบ
 `{ params, cache: '10m' }` เมื่อ parameter discovery เองควรถูก cache อย่าใช้ pattern
 นี้สำหรับค่าที่รู้ได้หลัง user-specific request เท่านั้น
 

@@ -3,10 +3,10 @@
 ## Build and select a target
 
 ```bash
-pnpm build
+npm run build
 # or choose a target/adapter without changing config
-ruvyxa build --target static
-ruvyxa build --adapter node
+npm run build -- --target static
+npm run build -- --adapter node
 ```
 
 The verified target values are `node`, `bun`, `edge`, and `static`. Adapter selection accepts Node,
@@ -18,14 +18,14 @@ platform configuration, health checks, or scaling semantics.
 
 ```mermaid
 flowchart LR
-  A[ruvyxa check] --> B[ruvyxa build]
+  A[npm run check] --> B[npm run build]
   B --> C[Inspect manifest and output]
   C --> D[Deploy target artifact]
   D --> E[Run start or platform entrypoint]
   E --> F[Probe application route and logs]
 ```
 
-Before deployment, run `ruvyxa check`, `ruvyxa build`, and `ruvyxa test:parity`; then inspect the
+Before deployment, run `npm run check`, `npm run build`, and `npm run test:parity`; then inspect the
 manifest/output and exercise a health route that your application implements (the `api-backend`
 template includes `app/api/health/route.ts`). The framework does not reserve or implement a
 universal health/readiness endpoint.

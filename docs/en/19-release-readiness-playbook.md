@@ -6,14 +6,14 @@ health-check, and rollback controls remain owned by your chosen host.
 
 ## 1. Choose one supported delivery model
 
-| Delivery model               | Build command                                                                       | Before you choose it                                                                                                                                                                                                  |
-| ---------------------------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Long-lived Node/Bun process  | `ruvyxa build --adapter node` or `--adapter bun`                                    | Use for SSR and native realtime. The process is started from the built application with `ruvyxa start`.                                                                                                               |
-| Static host                  | `ruvyxa build --target static`                                                      | Every route required at runtime must be prerenderable. Static output cannot satisfy arbitrary SSR requests.                                                                                                           |
-| First-party platform adapter | `ruvyxa build --adapter vercel` (or netlify/cloudflare/railway/render/firebase/aws) | Inspect that adapter's output contract and configure the provider outside Ruvyxa. Native realtime is rejected for the serverless/static adapters listed in [Integrations](09-integrations-auth-data-and-realtime.md). |
+| Delivery model               | Build command                                                                           | Before you choose it                                                                                                                                                                                                  |
+| ---------------------------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Long-lived Node/Bun process  | `npm run build -- --adapter node` or `npm run build -- --adapter bun`                   | Use for SSR and native realtime. The process is started from the built application with `npm run start`.                                                                                                              |
+| Static host                  | `npm run build -- --target static`                                                      | Every route required at runtime must be prerenderable. Static output cannot satisfy arbitrary SSR requests.                                                                                                           |
+| First-party platform adapter | `npm run build -- --adapter vercel` (or netlify/cloudflare/railway/render/firebase/aws) | Inspect that adapter's output contract and configure the provider outside Ruvyxa. Native realtime is rejected for the serverless/static adapters listed in [Integrations](09-integrations-auth-data-and-realtime.md). |
 
 Do not select an adapter only because its name matches your account. Run
-`ruvyxa doctor --adapter <name>` first; it is the CLI command intended to inspect adapter
+`npm run doctor -- --adapter <name>` first; it is the application script intended to inspect adapter
 compatibility without materializing artifacts.
 
 ## 2. Make configuration release-safe
@@ -33,10 +33,10 @@ Run these commands from the application root, in this order. Each command must f
 before moving on.
 
 ```bash
-pnpm routes
-pnpm check
-pnpm build
-pnpm test:parity
+npm run routes
+npm run check
+npm run build
+npm run test:parity
 ```
 
 `routes` confirms the discovered public surface. `check` is the application readiness gate. `build`
@@ -50,7 +50,7 @@ Deploy the artifact produced by the selected adapter/target through the platform
 For a self-hosted long-lived process, run the same configured project with:
 
 ```bash
-pnpm start
+npm run start
 ```
 
 Then make explicit probes that your app implements: request `/`, one dynamic page, one protected
@@ -63,7 +63,7 @@ not provide a universal `/health` endpoint, so a probe must target an applicatio
 Record the application version, adapter/target, release time, canonical origin, and a link to the
 build logs. Alert on process availability and your own health route, not merely a successful build.
 If the release fails, use the host's immutable-artifact rollback to restore the last known-good
-version, then compare `ruvyxa routes`, the generated build output, configuration, and logs between
+version, then compare `npm run routes`, the generated build output, configuration, and logs between
 releases. Do not clear a shared cache or change database state as a reflexive rollback action: those
 actions have application-specific data consequences not managed by Ruvyxa.
 

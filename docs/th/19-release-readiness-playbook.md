@@ -6,13 +6,13 @@ rollback ของ platform ยังเป็นของ host ที่คุ�
 
 ## 1. เลือก delivery model ที่รองรับหนึ่งแบบ
 
-| Delivery model               | Build command                                                                         | สิ่งที่ต้องรู้ก่อนเลือก                                                                                                                                                                    |
-| ---------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Long-lived Node/Bun process  | `ruvyxa build --adapter node` หรือ `--adapter bun`                                    | ใช้สำหรับ SSR และ native realtime process เริ่มจาก built application ด้วย `ruvyxa start`                                                                                                   |
-| Static host                  | `ruvyxa build --target static`                                                        | ทุก route ที่ต้องใช้ตอน runtime ต้อง prerender ได้ static output ไม่ตอบ arbitrary SSR request                                                                                              |
-| First-party platform adapter | `ruvyxa build --adapter vercel` (หรือ netlify/cloudflare/railway/render/firebase/aws) | ตรวจ output contract ของ adapter และตั้ง provider นอก Ruvyxa native realtime ถูกปฏิเสธสำหรับ serverless/static adapter ที่ระบุใน [การเชื่อมต่อ](09-integrations-auth-data-and-realtime.md) |
+| Delivery model               | Build command                                                                             | สิ่งที่ต้องรู้ก่อนเลือก                                                                                                                                                                    |
+| ---------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Long-lived Node/Bun process  | `npm run build -- --adapter node` หรือ `npm run build -- --adapter bun`                   | ใช้สำหรับ SSR และ native realtime process เริ่มจาก built application ด้วย `npm run start`                                                                                                  |
+| Static host                  | `npm run build -- --target static`                                                        | ทุก route ที่ต้องใช้ตอน runtime ต้อง prerender ได้ static output ไม่ตอบ arbitrary SSR request                                                                                              |
+| First-party platform adapter | `npm run build -- --adapter vercel` (หรือ netlify/cloudflare/railway/render/firebase/aws) | ตรวจ output contract ของ adapter และตั้ง provider นอก Ruvyxa native realtime ถูกปฏิเสธสำหรับ serverless/static adapter ที่ระบุใน [การเชื่อมต่อ](09-integrations-auth-data-and-realtime.md) |
 
-อย่าเลือก adapter เพราะชื่อเหมือน account ของคุณอย่างเดียว รัน `ruvyxa doctor --adapter <name>`
+อย่าเลือก adapter เพราะชื่อเหมือน account ของคุณอย่างเดียว รัน `npm run doctor -- --adapter <name>`
 ก่อน; นี่คือ CLI command ที่ทำมาเพื่อตรวจ adapter compatibility โดยไม่สร้าง artifact
 
 ## 2. ทำให้ configuration ปลอดภัยสำหรับ release
@@ -31,10 +31,10 @@ rollback ของ platform ยังเป็นของ host ที่คุ�
 รัน command เหล่านี้จาก application root ตามลำดับ ทุกคำต้องสำเร็จก่อนคำถัดไป
 
 ```bash
-pnpm routes
-pnpm check
-pnpm build
-pnpm test:parity
+npm run routes
+npm run check
+npm run build
+npm run test:parity
 ```
 
 `routes` ยืนยัน public surface ที่ค้นพบ `check` คือ application readiness gate `build` สร้าง target
@@ -47,7 +47,7 @@ deploy artifact จาก adapter/target ที่เลือกผ่านก
 process ให้รัน project ที่ตั้งค่าเดียวกันด้วย:
 
 ```bash
-pnpm start
+npm run start
 ```
 
 จากนั้น probe แบบ explicit ที่ app ของคุณ implement: request `/`, dynamic page หนึ่งหน้า, protected
@@ -59,7 +59,7 @@ route หนึ่ง route, write action/API route ด้วย test data ท�
 
 บันทึก application version, adapter/target, เวลา release, canonical origin และลิงก์ build log alert
 บน process availability และ health route ของคุณ ไม่ใช่แค่ build สำเร็จ หาก release ล้มเหลว ใช้
-immutable-artifact rollback ของ host เพื่อคืน version ล่าสุดที่ดี แล้วเปรียบเทียบ `ruvyxa routes`,
+immutable-artifact rollback ของ host เพื่อคืน version ล่าสุดที่ดี แล้วเปรียบเทียบ `npm run routes`,
 generated build output, configuration และ log ระหว่าง release อย่าล้าง shared cache หรือเปลี่ยน
 database state เพียงเพราะ rollback: การทำเช่นนั้นมีผลต่อข้อมูลเฉพาะ app ซึ่ง Ruvyxa ไม่ได้จัดการ
 

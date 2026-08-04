@@ -6,10 +6,10 @@ The workspace publishes `create-ruvyxa`, and its source contains `minimal`, `blo
 `api-backend` templates. Use the generator for a complete, package-manager-neutral starter.
 
 ```bash
-pnpm create ruvyxa my-app
+npm create ruvyxa@latest my-app
 cd my-app
-pnpm install
-pnpm dev
+npm install
+npm run dev
 ```
 
 The generated project scripts invoke the installed `ruvyxa` binary. `dev` discovers routes and
@@ -21,8 +21,8 @@ starts hot reload; its default root is the current directory. Visit the URL prin
 The templates prove the minimum runtime dependencies below. Keep compatible React versions together.
 
 ```bash
-pnpm add ruvyxa @ruvyxa/react react react-dom
-pnpm add -D typescript @types/react @types/react-dom
+npm install ruvyxa @ruvyxa/react react react-dom
+npm install -D typescript @types/react @types/react-dom
 ```
 
 Create `ruvyxa.config.ts`:
@@ -88,15 +88,15 @@ export function GET() {
 }
 ```
 
-Run `pnpm dev`, open `/`, then open `/api/health`. The first request renders the page; the health
+Run `npm run dev`, open `/`, then open `/api/health`. The first request renders the page; the health
 route returns JSON with `status: "ok"`. Save a change to `app/page.tsx` to confirm hot reload, then
 verify discovery and production behavior:
 
 ```bash
-pnpm routes
-pnpm check
-pnpm build
-pnpm test:parity
+npm run routes
+npm run check
+npm run build
+npm run test:parity
 ```
 
 If any command fails, stop at that command and use [Troubleshooting](16-troubleshooting-upgrades.md)
@@ -105,21 +105,29 @@ replacement for application tests.
 
 ## Scripts
 
-```json
-{
-  "scripts": {
-    "dev": "ruvyxa dev",
-    "build": "ruvyxa build",
-    "start": "ruvyxa start",
-    "preview": "ruvyxa preview",
-    "check": "ruvyxa check",
-    "routes": "ruvyxa routes"
-  }
-}
+```bash
+npm run dev
+npm run build
+npm run start
+npm run preview
+npm run typecheck
+npm run check
+npm run routes
+npm run routes:json
+npm run analyze
+npm run analyze:html
+npm run add -- form
+npm run doctor
+npm run clean
+npm run trace -- /
+npm run bench
+npm run test:parity
+npm run plugin -- create my-plugin
 ```
 
-`start` and `preview` operate on an existing production build; run `build` first. `check` is the
-application-level readiness command. See exact CLI flags in [CLI reference](10-cli.md).
+These are the user-facing scripts provided by every starter. `start` and `preview` operate on an
+existing production build; run `build` first. `check` is the application-level readiness command.
+See [CLI reference](10-cli.md) for when each script is useful.
 
 **Previous:** [Introduction](01-introduction.md) · **Next:**
 [Project structure](03-project-structure.md)

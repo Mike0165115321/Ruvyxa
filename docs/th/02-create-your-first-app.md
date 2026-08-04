@@ -7,10 +7,10 @@ workspace เผยแพร่ `create-ruvyxa` และ source ของมั
 รายใดรายหนึ่ง
 
 ```bash
-pnpm create ruvyxa my-app
+npm create ruvyxa@latest my-app
 cd my-app
-pnpm install
-pnpm dev
+npm install
+npm run dev
 ```
 
 script ใน project ที่สร้างจะเรียก binary `ruvyxa` ที่ติดตั้งไว้ `dev` จะค้นหา route และเริ่ม hot
@@ -22,8 +22,8 @@ reload; root เริ่มต้นคือ current directory เปิด UR
 template ยืนยัน dependency ขั้นต่ำด้านล่าง ควรรักษา React version ให้เข้ากันทั้งชุด
 
 ```bash
-pnpm add ruvyxa @ruvyxa/react react react-dom
-pnpm add -D typescript @types/react @types/react-dom
+npm install ruvyxa @ruvyxa/react react react-dom
+npm install -D typescript @types/react @types/react-dom
 ```
 
 สร้าง `ruvyxa.config.ts`:
@@ -89,15 +89,15 @@ export function GET() {
 }
 ```
 
-รัน `pnpm dev`, เปิด `/` แล้วเปิด `/api/health` request แรก render page; health route คืน JSON ที่มี
-`status: "ok"` บันทึกการแก้ใน `app/page.tsx` เพื่อยืนยัน hot reload แล้วตรวจ discovery และ
+รัน `npm run dev`, เปิด `/` แล้วเปิด `/api/health` request แรก render page; health route คืน JSON
+ที่มี `status: "ok"` บันทึกการแก้ใน `app/page.tsx` เพื่อยืนยัน hot reload แล้วตรวจ discovery และ
 production behavior:
 
 ```bash
-pnpm routes
-pnpm check
-pnpm build
-pnpm test:parity
+npm run routes
+npm run check
+npm run build
+npm run test:parity
 ```
 
 หากคำสั่งใดล้มเหลว ให้หยุดที่คำนั้นและใช้ [Troubleshooting](16-troubleshooting-upgrades.md) ก่อน
@@ -106,20 +106,28 @@ test
 
 ## Scripts
 
-```json
-{
-  "scripts": {
-    "dev": "ruvyxa dev",
-    "build": "ruvyxa build",
-    "start": "ruvyxa start",
-    "preview": "ruvyxa preview",
-    "check": "ruvyxa check",
-    "routes": "ruvyxa routes"
-  }
-}
+```bash
+npm run dev
+npm run build
+npm run start
+npm run preview
+npm run typecheck
+npm run check
+npm run routes
+npm run routes:json
+npm run analyze
+npm run analyze:html
+npm run add -- form
+npm run doctor
+npm run clean
+npm run trace -- /
+npm run bench
+npm run test:parity
+npm run plugin -- create my-plugin
 ```
 
-`start` และ `preview` ใช้ production build ที่มีอยู่ จึงต้องรัน `build` ก่อน `check` คือคำสั่ง
-readiness ระดับ application ดู flag ที่ยืนยันแล้วใน [CLI reference](10-cli.md)
+ทั้งหมดนี้คือ user-facing script ที่ starter ทุกตัวมีให้ `start` และ `preview` ใช้ production build
+ที่มีอยู่ จึงต้องรัน `build` ก่อน `check` คือคำสั่ง readiness ระดับ application ดูว่าแต่ละ script
+ใช้เมื่อใดได้ที่ [CLI reference](10-cli.md)
 
 **ก่อนหน้า:** [บทนำ](01-introduction.md) · **ถัดไป:** [โครงสร้างโปรเจกต์](03-project-structure.md)

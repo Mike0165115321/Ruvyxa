@@ -100,5 +100,44 @@ Internal variables beginning or ending in double underscores are runtime transpo
 application configuration. Never set them manually. Values such as `RUVYXA_AUTH_SECRET` occur in the
 auth scaffolder; use a private environment source and never expose one with the public prefix.
 
+### Type public variables and keep private ones server-only
+
+Declare the public variables that your client code reads. This turns misspellings into TypeScript
+errors and makes the browser-visible contract reviewable without exposing private values.
+
+```ts
+// app/ruvyxa-env.d.ts
+interface ImportMetaEnv {
+  readonly RUVYXA_PUBLIC_APP_NAME: string
+  readonly RUVYXA_PUBLIC_API_URL: string
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv
+}
+```
+
+```dotenv
+# .env.example — commit names and harmless placeholders, never real secrets
+RUVYXA_PUBLIC_APP_NAME=Example
+RUVYXA_PUBLIC_API_URL=https://api.example.test
+DATABASE_URL=replace-me-at-deploy
+RUVYXA_AUTH_SECRET=replace-me-at-deploy
+```
+
+```tsx
+// A client component: only public values belong here.
+'use client'
+export function AppName() {
+  return <span>{import.meta.env.RUVYXA_PUBLIC_APP_NAME}</span>
+}
+```
+
+Do not add `DATABASE_URL` or other private names to `ImportMetaEnv`, and do not read them in a
+client component. Read private values only from server-only code such as a loader, action, or API
+route. The framework's boundary validation is an additional guard, not a reason to place secrets in
+shared modules. Pair the committed `.env.example` with `requireEnv([...])` for names that must be
+present at release time.
+
 **Previous:** [UI, navigation, metadata, and assets](06-ui-navigation-metadata-and-assets.md) ·
 **Next:** [Plugins and middleware](08-plugins-middleware.md)

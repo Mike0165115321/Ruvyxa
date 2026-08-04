@@ -20,8 +20,9 @@ export default config({
 
 The record has `requestId`, `traceparent`, `method`, `pathname`, `status`, and `durationMs`. A
 failed logger is isolated so it cannot turn a valid response into an HTTP failure. Treat this as a
-foundation for your telemetry sink, not a complete metrics/tracing backend. `ruvyxa analyze --html`
-provides a local build/route analysis page; `trace` inspects a route manifest entry.
+foundation for your telemetry sink, not a complete metrics/tracing backend. In a generated
+application, `npm run analyze:html` provides a local build/route analysis page; `npm run trace -- /`
+inspects a route manifest entry.
 
 ## Performance controls
 

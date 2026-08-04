@@ -10,8 +10,8 @@ command ใดใช้เริ่มมัน แต่ไม่สร้า�
 ใช้ CLI เลือกแบบชั่วคราวระหว่างประเมิน host หรือ import typed adapter ใน `ruvyxa.config.ts`
 
 ```bash
-ruvyxa doctor --adapter railway
-ruvyxa build --adapter railway
+npm run doctor -- --adapter railway
+npm run build -- --adapter railway
 ```
 
 ```ts
@@ -48,11 +48,23 @@ copy เฉพาะ server file: public asset เป็น sibling artifact sta
 Ruvyxa CLI หรือ native binary ตอน runtime
 
 ```bash
-ruvyxa build --adapter node
+npm run build -- --adapter node
 PORT=3000 HOST=0.0.0.0 node .ruvyxa/deploy/node/server/index.mjs
 
-ruvyxa build --adapter bun
+npm run build -- --adapter bun
 PORT=3000 HOST=0.0.0.0 bun .ruvyxa/deploy/bun/server/index.mjs
+```
+
+สองบรรทัด start ด้านบนใช้ syntax ตั้ง environment variable ของ POSIX หากใช้ PowerShell ให้ตั้งค่า
+ก่อนเริ่ม artifact เดิมดังนี้:
+
+```powershell
+$env:PORT = '3000'
+$env:HOST = '0.0.0.0'
+node .ruvyxa/deploy/node/server/index.mjs
+
+# หรือใช้ Bun output
+bun .ruvyxa/deploy/bun/server/index.mjs
 ```
 
 generated server ทั้งคู่ใช้ `PORT=3000` และ `HOST=0.0.0.0` เป็น default adapter แต่ละตัวสร้าง
@@ -62,7 +74,7 @@ generated server ทั้งคู่ใช้ `PORT=3000` และ `HOST=0.0.
 ## Static hosting: publish เฉพาะ static output
 
 ```bash
-ruvyxa build --target static
+npm run build -- --target static
 ```
 
 publish folder ปริยายคือ `<outDir>/static/` `staticAdapter({ outputDir })` รับเฉพาะ relative
@@ -105,7 +117,7 @@ Railway config ที่สร้างใช้ Railpack และ `ON_FAILURE`
 adapter สร้างให้ handoff command ที่ยืนยันแล้ว:
 
 ```bash
-ruvyxa build --adapter firebase
+npm run build -- --adapter firebase
 firebase deploy --only hosting,functions
 ```
 

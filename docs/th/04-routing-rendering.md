@@ -1,8 +1,8 @@
 # Routing และ rendering
 
-route discovery แปลง file tree เป็น manifest รัน `pnpm routes` ระหว่างพัฒนาเพื่อดู manifest และใช้
-`pnpm routes:json` เมื่อ script ต้องการข้อมูลที่เครื่องอ่านได้ strategy ของหน้าถูกเลือกจาก export
-ของหน้าและ configuration `render`
+route discovery แปลง file tree เป็น manifest รัน `npm run routes` ระหว่างพัฒนาเพื่อดู manifest
+และใช้ `npm run routes:json` เมื่อ script ต้องการข้อมูลที่เครื่องอ่านได้ strategy ของหน้าถูกเลือกจาก
+export ของหน้าและ configuration `render`
 
 | Strategy | การเลือกที่ยืนยันจาก source                | เวลาสร้าง HTML                                          |
 | -------- | ------------------------------------------ | ------------------------------------------------------- |
@@ -57,6 +57,77 @@ export const meta = ({ params }: { params: Record<string, string> }) => ({
 หากต้องการเลือก `not-found.tsx` ที่ใกล้ที่สุด ให้ import `notFound` จาก `@ruvyxa/react` แล้วเรียกมัน
 (มัน throw tagged signal) อย่าสับสนกับ `notFound` จาก `ruvyxa/server` ซึ่งสร้าง HTTP `Response`
 สถานะ 404
+
+### boundary ของสถานะ route แบบครบชุด
+
+วาง special file ทั้งสามไว้ข้าง segment ที่ต้องการครอบคลุม ระบบจะเลือกไฟล์ที่อยู่ใกล้ที่สุด ดังนั้น
+โครงสร้างนี้ทำให้ทุกหน้า product มี loading UI, ปุ่มลองใหม่เมื่อ error และ 404 เฉพาะส่วน โดยไม่ต้อง
+แก้ทุก page
+
+```text
+app/products/
+├── [slug]/
+│   └── page.tsx
+├── error.tsx
+├── loading.tsx
+└── not-found.tsx
+```
+
+```tsx
+// app/products/[slug]/page.tsx
+import { notFound } from '@ruvyxa/react'
+
+const products = { notebook: 'A plain notebook' }
+
+export default function Product({ params }: { params: { slug: string } }) {
+  const product = products[params.slug as keyof typeof products]
+  if (!product) notFound()
+  return (
+    <main>
+      <h1>{product}</h1>
+    </main>
+  )
+}
+```
+
+```tsx
+// app/products/loading.tsx
+export default function Loading() {
+  return <main aria-busy="true">กำลังโหลดสินค้า…</main>
+}
+
+// app/products/not-found.tsx
+export default function ProductNotFound() {
+  return (
+    <main>
+      <h1>ไม่พบสินค้า</h1>
+    </main>
+  )
+}
+```
+
+```tsx
+// app/products/error.tsx
+'use client'
+import type { RouteErrorProps } from '@ruvyxa/react'
+
+export default function ProductError({ error, reset }: RouteErrorProps) {
+  return (
+    <main>
+      <h1>ไม่สามารถโหลดสินค้านี้ได้</h1>
+      <p>{error.message}</p>
+      <button type="button" onClick={reset}>
+        ลองใหม่
+      </button>
+    </main>
+  )
+}
+```
+
+`loading.tsx` ถูกใช้เป็น Suspense fallback ของ route ส่วน `not-found.tsx` render ฝั่ง server ได้ แต่
+`reset()` จะ render ใหม่หลัง hydration ดังนั้น `error.tsx` ที่มีปุ่มลองใหม่ต้องเป็น client component
+ควรแสดงข้อความ error ที่ปลอดภัยสำหรับผู้ใช้ และบันทึกรายละเอียดวินิจฉัยใน server หรือ integration
+ด้าน observability แทนการ render secret หรือ stack trace
 
 ## นโยบาย i18n route
 

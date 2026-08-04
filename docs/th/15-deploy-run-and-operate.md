@@ -3,10 +3,10 @@
 ## Build และเลือก target
 
 ```bash
-pnpm build
+npm run build
 # หรือเลือก target/adapter โดยไม่แก้ config
-ruvyxa build --target static
-ruvyxa build --adapter node
+npm run build -- --target static
+npm run build -- --adapter node
 ```
 
 target ที่ยืนยันแล้วคือ `node`, `bun`, `edge` และ `static` adapter selection รับ Node, Bun, static,
@@ -18,15 +18,15 @@ check หรือ scaling semantics
 
 ```mermaid
 flowchart LR
-  A[ruvyxa check] --> B[ruvyxa build]
+  A[npm run check] --> B[npm run build]
   B --> C[Inspect manifest and output]
   C --> D[Deploy target artifact]
   D --> E[Run start or platform entrypoint]
   E --> F[Probe application route and logs]
 ```
 
-ก่อน deploy ให้รัน `ruvyxa check`, `ruvyxa build` และ `ruvyxa test:parity`; แล้วตรวจ manifest/output
-และเรียก health route ที่ application ของคุณทำเอง (`api-backend` template มี
+ก่อน deploy ให้รัน `npm run check`, `npm run build` และ `npm run test:parity`; แล้วตรวจ
+manifest/output และเรียก health route ที่ application ของคุณทำเอง (`api-backend` template มี
 `app/api/health/route.ts`) framework ไม่ได้สำรองหรือ implement health/readiness endpoint แบบสากล
 
 ## Production checklist

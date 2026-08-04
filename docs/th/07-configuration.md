@@ -99,5 +99,43 @@ variable ภายในที่ขึ้นต้นหรือลงท้�
 application configuration ห้ามตั้งเอง ค่าเช่น `RUVYXA_AUTH_SECRET` ปรากฏใน auth scaffolder; ให้ใช้
 private environment source และอย่าเปิดเผยด้วย public prefix
 
+### กำหนด type ให้ public variable และเก็บ private variable ไว้ฝั่ง server
+
+ประกาศ public variable ที่ client code อ่าน เพื่อให้ชื่อที่พิมพ์ผิดกลายเป็น TypeScript error
+และทำให้ contract ที่ browser มองเห็นตรวจทานได้ โดยไม่ต้องเปิดเผยค่า private
+
+```ts
+// app/ruvyxa-env.d.ts
+interface ImportMetaEnv {
+  readonly RUVYXA_PUBLIC_APP_NAME: string
+  readonly RUVYXA_PUBLIC_API_URL: string
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv
+}
+```
+
+```dotenv
+# .env.example — commit เฉพาะชื่อและ placeholder ที่ไม่อ่อนไหว ห้ามใส่ secret จริง
+RUVYXA_PUBLIC_APP_NAME=Example
+RUVYXA_PUBLIC_API_URL=https://api.example.test
+DATABASE_URL=replace-me-at-deploy
+RUVYXA_AUTH_SECRET=replace-me-at-deploy
+```
+
+```tsx
+// client component: ใช้ได้เฉพาะค่าที่เป็น public
+'use client'
+export function AppName() {
+  return <span>{import.meta.env.RUVYXA_PUBLIC_APP_NAME}</span>
+}
+```
+
+อย่าเพิ่ม `DATABASE_URL` หรือชื่อ private อื่นลงใน `ImportMetaEnv` และอย่าอ่านมันใน client component
+ให้อ่านค่า private เฉพาะ server-only code เช่น loader, action หรือ API route การตรวจ boundary ของ
+framework เป็นด่านเสริม ไม่ใช่เหตุผลให้วาง secret ใน shared module จับคู่ `.env.example` ที่ commit
+ด้วย `requireEnv([...])` สำหรับชื่อที่ต้องมีจริงตอน release
+
 **ก่อนหน้า:** [UI, navigation, metadata และ asset](06-ui-navigation-metadata-and-assets.md) ·
 **ถัดไป:** [Plugin และ middleware](08-plugins-middleware.md)

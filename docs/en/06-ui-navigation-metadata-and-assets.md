@@ -29,6 +29,51 @@ export function SearchControls() {
 markup that must be identical in server HTML. `useRouter().pending` tracks a route-bundle
 navigation.
 
+### Choose prefetch deliberately
+
+`Link` renders a normal anchor first, then enhances eligible same-window clicks. It preserves new
+tab, modified-click, download, and non-`_self` link behavior. Its `prefetch` default is `'hover'`.
+Choose the mode by the likelihood and cost of the next navigation rather than enabling eager
+prefetching everywhere.
+
+```tsx
+import { Link } from '@ruvyxa/react'
+
+export function ProductLinks() {
+  return (
+    <nav>
+      {/* The default: warm only when a visitor shows intent. */}
+      <Link href="/products/notebook">Notebook</Link>
+
+      {/* Good for a prominent next step likely to enter the viewport. */}
+      <Link href="/checkout" prefetch="viewport">
+        Checkout
+      </Link>
+
+      {/* Avoid warming a large, low-probability destination. */}
+      <Link href="/reports" prefetch="none">
+        Reports
+      </Link>
+
+      {/* Replace a transient URL; keep scroll position if the view needs it. */}
+      <Link href="/search?q=paper" replace scroll={false}>
+        Apply filter
+      </Link>
+
+      {/* Keep external destinations as ordinary anchors. */}
+      <a href="https://status.example.com" target="_blank" rel="noreferrer">
+        Status
+      </a>
+    </nav>
+  )
+}
+```
+
+Use `prefetch="viewport"` sparingly on above-the-fold or clearly next-step links; it loads a route
+when its link becomes visible. Use `'none'` (or `false`) for low-intent destinations. `replace`
+replaces the current history entry, `scroll` defaults to `true`, and `viewTransition` opts into the
+browser View Transitions API when available.
+
 ## Metadata and error UI
 
 Use a route `meta` export for hierarchy-aware metadata ([Routing](04-routing-rendering.md)), or use
@@ -86,7 +131,8 @@ export function Hero() {
 
 Imported project CSS may live outside `app/`. To include global styles not imported by a module,
 list project-relative files/directories in `css.entries`. The runtime recognizes Sass as a package
-dependency; use styles that your build can resolve and run `ruvyxa check` after changing boundaries.
+dependency; use styles that your build can resolve and run `npm run check` after changing
+boundaries.
 
 **Previous:** [Data, actions, and API routes](05-data-actions-api.md) · **Next:**
 [Configuration and environment](07-configuration.md)
