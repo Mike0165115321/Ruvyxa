@@ -15,7 +15,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green?style=flat-square" alt="License" />
-  <img src="https://img.shields.io/badge/node-%3E%3D22-blue?style=flat-square" alt="Node 22+" />
+  <img src="https://img.shields.io/badge/node-%3E%3D22.12-blue?style=flat-square" alt="Node 22.12+" />
   <img src="https://img.shields.io/badge/rust-1.96%2B-orange?style=flat-square" alt="Rust 1.96+" />
   <img src="https://img.shields.io/badge/pnpm-11%2B-yellow?style=flat-square" alt="pnpm 11+" />
   <img src="https://img.shields.io/badge/TypeScript-7%2B-blue?style=flat-square" alt="TypeScript 7+" />
@@ -187,8 +187,9 @@
 
 - **14 verified commands** — `dev`, `build`, `check`, `start`, `preview`, `routes`, `analyze`,
   `adds`, `doctor`, `clean`, `trace`, `bench`, `test:parity`, and `plugin`.
-- **`build`** — production output supports `--target node`, `bun`, `edge`, or `static`. Pre-renders
-  SSG, ISR, PPR, and CSR pages at build time via parallel worker pool
+- **`build`** — production output supports `--target node`, `bun`, `edge`, or `static`, plus
+  `--adapter <name>` to run a deploy adapter without editing config and `--server-only` for API-only
+  artifacts. Pre-renders SSG, ISR, PPR, and CSR pages at build time via parallel worker pool
   (`MAX_PRERENDER_PARALLELISM: 2`).
 - **`check`** — type checking, production build, dev/prod route parity, and page smoke rendering in
   one command.
@@ -213,6 +214,19 @@
 - **10 Deployment Adapters** — Zero-config native output for Vercel, Netlify, Cloudflare, Node.js,
   Bun, Static, AWS Amplify, Firebase, Railway, and Render. See the
   [Deployment Guide](docs/en/15-deploy-run-and-operate.md) for platform-specific configurations.
+
+---
+
+## Requirements
+
+| Use case                | Requirement                                                                                      |
+| ----------------------- | ------------------------------------------------------------------------------------------------ |
+| Building an app         | Node.js **22.12+** (Bun can run SSR instead). No Rust toolchain needed — the CLI ships prebuilt. |
+| Supported CLI platforms | `win32-x64`, `win32-arm64`, `linux-x64`, `linux-arm64`, `darwin-arm64`                           |
+| Building the framework  | Node.js 22.12+, pnpm 11+, Rust 1.96+ (edition 2024)                                              |
+
+The `ruvyxa` npm package resolves one `@ruvyxa/cli-<platform>` optional dependency that carries the
+prebuilt native binary, so `npm install` is all that is required to get a working `ruvyxa` command.
 
 ---
 
@@ -252,6 +266,27 @@ my-app/
 ├── ruvyxa.config.ts
 └── tsconfig.json
 ```
+
+In practice you rarely type `ruvyxa` directly — every starter wires the CLI into `package.json`
+scripts, so the day-to-day loop is plain npm/pnpm/yarn/bun scripts:
+
+| Script                 | Runs               | When you use it                             |
+| ---------------------- | ------------------ | ------------------------------------------- |
+| `npm run dev`          | `ruvyxa dev`       | Local development with HMR                  |
+| `npm run build`        | `ruvyxa build`     | Production build into `.ruvyxa/`            |
+| `npm start`            | `ruvyxa start`     | Serve the production build                  |
+| `npm run preview`      | `ruvyxa preview`   | Check the production build locally          |
+| `npm run check`        | `ruvyxa check`     | Pre-deploy gate: typecheck + build + parity |
+| `npm run routes`       | `ruvyxa routes`    | See what the router discovered              |
+| `npm run analyze`      | `ruvyxa analyze`   | Boundary/import validation, CI-friendly     |
+| `npm run doctor`       | `ruvyxa doctor`    | Environment and deploy-target health        |
+| `npm run adds -- form` | `ruvyxa adds form` | Scaffold a framework-native flow            |
+| `npm run trace -- /`   | `ruvyxa trace /`   | Inspect one route manifest entry            |
+| `npm run clean`        | `ruvyxa clean`     | Remove `.ruvyxa/`                           |
+
+Arguments after `npm run <script>` need the `--` separator (`npm run trace -- /blog/[slug]`); pnpm
+and bun pass them through directly. `ruvyxa` has no `--version` flag — run `ruvyxa doctor`, which
+prints the resolved version alongside the rest of the project report.
 
 First time using Ruvyxa? Check out the
 **[Tutorial: Build a Mini Blog](docs/en/02-create-your-first-app.md#build-one-working-vertical-slice)**
@@ -318,23 +353,35 @@ Ruvyxa release candidate, then run
 
 ## Documentation
 
-| Guide                                                         | Description                                      |
-| ------------------------------------------------------------- | ------------------------------------------------ |
-| [Documentation Home](docs/README.md)                          | Full manual — English and Thai editions          |
-| [Introduction](docs/en/01-introduction.md)                    | What Ruvyxa is and when to use it                |
-| [Create Your First App](docs/en/02-create-your-first-app.md)  | Scaffold, run, and build a first vertical slice  |
-| [Project Structure](docs/en/03-project-structure.md)          | `app/`, `public/`, config, and generated output  |
-| [Routing & Rendering](docs/en/04-routing-rendering.md)        | File-system routes, layouts, SSR/SSG/ISR/CSR/PPR |
-| [Data, Actions & API](docs/en/05-data-actions-api.md)         | Loaders, `cache()`, server actions, API routes   |
-| [Configuration](docs/en/07-configuration.md)                  | `ruvyxa.config.ts` and environment variables     |
-| [Plugins & Middleware](docs/en/08-plugins-middleware.md)      | Plugin hooks and the middleware chain            |
-| [CLI](docs/en/10-cli.md)                                      | Every command, flag, and exit code               |
-| [Architecture](docs/en/11-architecture.md)                    | Graph, bundler, dev server, diagnostics          |
-| [Development & Testing](docs/en/12-development-testing.md)    | Develop, test, and package the framework         |
-| [Security](docs/en/13-security.md)                            | Boundary enforcement and env safety              |
-| [Deploy, Run & Operate](docs/en/15-deploy-run-and-operate.md) | Adapters and platform-specific configuration     |
-| [Troubleshooting](docs/en/16-troubleshooting-upgrades.md)     | Diagnostic catalog and upgrade notes             |
-| [Public API Reference](docs/en/17-public-api-reference.md)    | Complete `@ruvyxa/react` + `@ruvyxa/core` API    |
+| Guide                                                                      | Description                                      |
+| -------------------------------------------------------------------------- | ------------------------------------------------ |
+| [Documentation Home](docs/README.md)                                       | Full manual — English and Thai editions          |
+| [Introduction](docs/en/01-introduction.md)                                 | What Ruvyxa is and when to use it                |
+| [Create Your First App](docs/en/02-create-your-first-app.md)               | Scaffold, run, and build a first vertical slice  |
+| [Project Structure](docs/en/03-project-structure.md)                       | `app/`, `public/`, config, and generated output  |
+| [Routing & Rendering](docs/en/04-routing-rendering.md)                     | File-system routes, layouts, SSR/SSG/ISR/CSR/PPR |
+| [Data, Actions & API](docs/en/05-data-actions-api.md)                      | Loaders, `cache()`, server actions, API routes   |
+| [UI, Navigation & Assets](docs/en/06-ui-navigation-metadata-and-assets.md) | Components, metadata, images, fonts              |
+| [Configuration](docs/en/07-configuration.md)                               | `ruvyxa.config.ts` and environment variables     |
+| [Plugins & Middleware](docs/en/08-plugins-middleware.md)                   | Plugin hooks and the middleware chain            |
+| [Integrations](docs/en/09-integrations-auth-data-and-realtime.md)          | `@ruvyxa/auth`, `database`, `realtime`           |
+| [CLI](docs/en/10-cli.md)                                                   | Every command, flag, and exit code               |
+| [Architecture](docs/en/11-architecture.md)                                 | Graph, bundler, dev server, diagnostics          |
+| [Development & Testing](docs/en/12-development-testing.md)                 | Develop, test, and package the framework         |
+| [Security](docs/en/13-security.md)                                         | Boundary enforcement and env safety              |
+| [Observability & Performance](docs/en/14-observability-performance.md)     | Logging, timing, caching, budgets                |
+| [Deploy, Run & Operate](docs/en/15-deploy-run-and-operate.md)              | Adapters and platform-specific configuration     |
+| [Troubleshooting](docs/en/16-troubleshooting-upgrades.md)                  | Diagnostic catalog and upgrade notes             |
+| [Public API Reference](docs/en/17-public-api-reference.md)                 | Complete `@ruvyxa/react` + `@ruvyxa/core` API    |
+| [Documentation Scope](docs/en/18-documentation-scope-and-sources.md)       | What the manual covers and its sources           |
+| [Release Readiness](docs/en/19-release-readiness-playbook.md)              | Pre-release verification playbook                |
+| [Platform Adapter Guide](docs/en/20-platform-adapter-guide.md)             | Writing a custom deployment adapter              |
+| [Practical Recipes](docs/en/21-practical-recipes.md)                       | Task-oriented end-to-end examples                |
+
+A full Thai edition lives beside the English one under [`docs/th/`](docs/th). Repository-level
+documents: [ARCHITECTURE.md](ARCHITECTURE.md), [CHANGELOG.md](CHANGELOG.md),
+[CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md),
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), and [AGENTS.md](AGENTS.md) for agent/contributor rules.
 
 ---
 
@@ -360,6 +407,38 @@ pnpm -r test
 Standalone JavaScript and TypeScript tests live under `tests/` and are routed by each package's
 `test` script. See [Development & Testing](docs/en/12-development-testing.md) for the verification
 layout.
+
+The full pre-submit gate used in this repository:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --locked -- -D warnings
+cargo test --workspace --locked
+pnpm -r build && pnpm -r check && pnpm -r test
+pnpm format:check
+pnpm release:validate
+pnpm pack:smoke
+cargo run -p ruvyxa_cli -- check --root examples/demo
+```
+
+### Repository layout
+
+```text
+ruvyxa/
+├── crates/            # Rust workspace (6 crates)
+│   ├── ruvyxa_cli/        # commands, config loading, build orchestration
+│   ├── ruvyxa_bundler/    # TS/JSX compile, resolve, link, minify, source maps
+│   ├── ruvyxa_dev_server/ # axum server, HMR, worker pool, router, caches
+│   ├── ruvyxa_graph/      # route discovery, validation, render strategies
+│   ├── ruvyxa_middleware/ # Tower layers and the plugin bridge
+│   └── ruvyxa_diagnostics/# RUV#### structured errors
+├── packages/          # npm packages (see the table below)
+├── templates/         # create-ruvyxa starters + plugin scaffold
+├── examples/demo/     # 23-route integration fixture
+├── tests/             # Node tests, organized by package
+├── docs/{en,th}/      # user-facing manual, both editions
+└── scripts/           # release validation, packing, benchmarks
+```
 
 ---
 
@@ -560,48 +639,82 @@ examples.
 
 ## CLI
 
-| Command                | Purpose                                                                                   |
-| ---------------------- | ----------------------------------------------------------------------------------------- |
-| `ruvyxa dev`           | Start the development server with HMR and file watching                                   |
-| `ruvyxa build`         | Build production output to `.ruvyxa/` (supports `--target node`, `bun`, `edge`, `static`) |
-| `ruvyxa check`         | Run app-level production readiness checks (typecheck, build, parity, smoke)               |
-| `ruvyxa start`         | Serve production output with the same runtime semantics as dev                            |
-| `ruvyxa preview`       | Alias for `ruvyxa start` (preview production build locally)                               |
-| `ruvyxa routes`        | Print the discovered route table (`--json` for the manifest)                              |
-| `ruvyxa analyze`       | Validate routes, imports, and server/client boundaries (human/JSON/SARIF/HTML)            |
-| `ruvyxa adds`          | Scaffold a `form`, `data-table`, or `auth` flow                                           |
-| `ruvyxa doctor`        | Check project health, dependencies, environment, and Ruvyxa CLI status                    |
-| `ruvyxa trace <path>`  | Print route matching details for a URL                                                    |
-| `ruvyxa bench`         | Benchmark route discovery, analysis, validation, and production builds                    |
-| `ruvyxa test:parity`   | Compare dev/prod routes and smoke-render page routes                                      |
-| `ruvyxa plugin create` | Scaffold a publishable plugin package                                                     |
-| `ruvyxa clean`         | Remove `.ruvyxa/` build output                                                            |
+Fourteen commands. Every one accepts `--root <dir>` (default `.`) and `--runtime node|bun`.
+
+| Command                       | Purpose                                                                         | Additional flags                                                 |
+| ----------------------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `ruvyxa dev`                  | Development server with HMR and file watching                                   | `--host`, `--port`                                               |
+| `ruvyxa build`                | Build production output to `.ruvyxa/`                                           | `--target node\|bun\|edge\|static`, `--adapter`, `--server-only` |
+| `ruvyxa check`                | Production readiness gate: typecheck, build, dev/prod parity, page smoke render | —                                                                |
+| `ruvyxa start`                | Serve production output with the same runtime semantics as dev                  | `--host`, `--port`                                               |
+| `ruvyxa preview`              | Preview an existing production build locally (same server as `start`)           | `--host`, `--port`                                               |
+| `ruvyxa routes`               | Print the discovered route table                                                | `--json`                                                         |
+| `ruvyxa analyze`              | Validate routes, imports, and server/client boundaries                          | `--format auto\|human\|json\|sarif\|html`, `--output`, `--html`  |
+| `ruvyxa adds <flow…>`         | Scaffold a `form`, `data-table`, or `auth` flow                                 | `--force`                                                        |
+| `ruvyxa doctor`               | Project health plus deploy-target inspection                                    | `--target`, `--adapter`, `--json`                                |
+| `ruvyxa trace <route>`        | Inspect one route manifest entry                                                | —                                                                |
+| `ruvyxa bench`                | Benchmark route discovery, analysis, validation, and production builds          | `--samples <n>` (default 3), `--json`                            |
+| `ruvyxa test:parity`          | Compare dev/prod routes and smoke-render page routes                            | —                                                                |
+| `ruvyxa plugin create <name>` | Scaffold a publishable plugin package                                           | `--dir`                                                          |
+| `ruvyxa clean`                | Remove `.ruvyxa/` build output                                                  | —                                                                |
+
+`trace` takes a **route manifest path, not a request URL**: use `ruvyxa trace "/blog/[slug]"`, not
+`ruvyxa trace /blog/hello`. It prints the route id, file, layout chain, server/client modules,
+runtime, and render strategy as JSON. On Windows, quote paths containing `[` `]`, and note that Git
+Bash rewrites a leading `/` into a Windows path — use PowerShell, `cmd`, or `MSYS_NO_PATHCONV=1`.
+
+Command and flag spellings are normalized before parsing, so `--root=x`, `--server_only`,
+`test-parity`, and an em-dashed `—root` all resolve to their canonical form. Run
+`ruvyxa help <command>` for the built-in reference. There is no `--version` flag; `ruvyxa doctor`
+reports the resolved version.
+
+### Verified end to end
+
+Every command in the table above was run against [`examples/demo`](examples/demo) (23 routes: 21
+pages, 2 API routes) on Windows 11 / Node 22.23.1 with the 1.0.27 workspace binary:
+
+| Command         | Observed result                                                               |
+| --------------- | ----------------------------------------------------------------------------- |
+| `routes`        | 23 routes discovered, strategy per route                                      |
+| `doctor`        | 0 diagnostics, adapter `ruvyxa-native`, all routes supported by the target    |
+| `analyze`       | 0 diagnostics; human, JSON, SARIF (`--output`), and HTML (`--html`) all wrote |
+| `trace`         | route id, file, layout chain, runtime, and render strategy as JSON            |
+| `build`         | 21 client bundles, 20 prerendered pages, `.ruvyxa/` in **2.40s**              |
+| `start`         | ready in **745ms**; `GET /` → 200, `GET /api/health` → 200                    |
+| `preview`       | ready and serving the same production build → 200                             |
+| `dev`           | ready in **781ms**; `GET /` → 200 in 72ms with HMR enabled                    |
+| `check`         | typecheck + build + parity + smoke render over 23 routes, **11.70s**, exit 0  |
+| `test:parity`   | parity passed for 23 routes in **11.05s**, exit 0                             |
+| `bench`         | discovery 15ms · analyze-validation 25ms · production build 1.32s             |
+| `adds form`     | created `app/form-example/page.tsx` and `action.ts`                           |
+| `plugin create` | created a publishable `ruvyxa-plugin-<name>` package                          |
+| `clean`         | removed `.ruvyxa/` in **611ms**                                               |
 
 ---
 
 ## Architecture
 
 ```text
-┌─────────────────────────────────────────────────────────────┐
-│                     ruvyxa (npm package)                     │
-│  CLI launcher → Ruvyxa CLI Rust binary (ruvyxa_cli)         │
-│  Runtime: worker-pool.mjs (persistent Node IPC)             │
-└─────────────────┬───────────────────────────────────────────┘
-                  │
-┌─────────────────┴───────────────────────────────────────────┐
-│                   Rust Workspace (crates/)                   │
-├─────────────────────────────────────────────────────────────┤
-│ ruvyxa_bundler      │ Ruvyxa Bundler: compiler,              │
-│                     │ minifier, linker, resolver, source maps│
-│ ruvyxa_cli          │ CLI commands, config loading, build    │
-│                     │ orchestration, production output       │
-│ ruvyxa_dev_server   │ axum server, websocket HMR, worker     │
-│                     │ pool, radix router, render cache, HMR  │
-│ ruvyxa_middleware    │ Tower layers + plugin bridge│
-│ ruvyxa_graph        │ route discovery, import graph, render  │
+┌───────────────────────────────────────────────────────────────┐
+│                      ruvyxa (npm package)                     │
+│   CLI launcher → Ruvyxa CLI Rust binary (ruvyxa_cli)          │
+│   Runtime: worker-pool.mjs (persistent Node/Bun IPC)          │
+└─────────────────────┬─────────────────────────────────────────┘
+                      │
+┌─────────────────────┴─────────────────────────────────────────┐
+│                    Rust Workspace (crates/)                   │
+├─────────────────────┬─────────────────────────────────────────┤
+│ ruvyxa_bundler      │ compiler, minifier, linker, resolver,   │
+│                     │ source maps, boundary checks            │
+│ ruvyxa_cli          │ CLI commands, config loading, build     │
+│                     │ orchestration, production output        │
+│ ruvyxa_dev_server   │ axum server, websocket HMR, worker      │
+│                     │ pool, radix router, render cache        │
+│ ruvyxa_middleware   │ Tower layers + plugin bridge            │
+│ ruvyxa_graph        │ route discovery, import graph, render   │
 │                     │ strategy detection, validation          │
-│ ruvyxa_diagnostics  │ structured errors with RUV#### codes   │
-└─────────────────────────────────────────────────────────────┘
+│ ruvyxa_diagnostics  │ structured errors with RUV#### codes    │
+└─────────────────────┴─────────────────────────────────────────┘
 ```
 
 **Performance features:**
@@ -673,4 +786,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, verification commands, a
 
 ## License
 
-[Apache 2.0](LICENSE) Copyright (c) 2026 Thirawat27
+[Apache 2.0](LICENSE) Copyright (c) 2026 Thirawat Sinlapasomsak
