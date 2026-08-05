@@ -640,11 +640,9 @@ pub(crate) async fn build_with_output(args: BuildArgs, show_summary: bool) -> an
     if show_summary {
         println!();
         print_route_size_table(&manifest, &client_manifest);
-        println!(
-            "  {} Built into {} in {}\n",
-            success(),
-            path_text(&out_dir),
-            accent(format_duration(started.elapsed()))
+        print_success_banner(
+            format!("Built into {}", out_dir.display()),
+            started.elapsed(),
         );
     }
     Ok(())

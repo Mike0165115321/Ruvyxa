@@ -7,7 +7,10 @@ use std::path::Path;
 
 use anyhow::Context;
 
-use crate::{AddArgs, AddTemplate, load_project_config};
+use crate::{
+    AddArgs, AddTemplate, accent, dim, info, load_project_config, note, number, ok_text,
+    print_field, print_success_banner, print_tui_header,
+};
 
 struct ScaffoldFile {
     relative: &'static str,
@@ -15,6 +18,7 @@ struct ScaffoldFile {
 }
 
 pub(crate) fn scaffold_add(args: AddArgs) -> anyhow::Result<()> {
+    let started = std::time::Instant::now();
     let config = load_project_config(&args.root)?;
     let app_dir = PathBuf::from(config.app_dir());
     let mut files = BTreeMap::<PathBuf, &'static str>::new();
@@ -49,18 +53,44 @@ pub(crate) fn scaffold_add(args: AddArgs) -> anyhow::Result<()> {
             .with_context(|| format!("failed to write {}", target.display()))?;
     }
 
-    println!("\n🦊 Ruvyxa Adds\n");
-    for relative in files.keys() {
-        println!("  created                {}", relative.display());
-    }
-    if files.keys().any(|path| path.ends_with("_server/auth.ts")) {
-        println!(
-            "  dependency             @ruvyxa/auth ^{}",
-            env!("CARGO_PKG_VERSION")
-        );
-        println!("  next                   install the dependency, then set RUVYXA_AUTH_SECRET");
-    }
+    // This command used to print its own header and hand-count its own column
+    // padding, which is how it ended up as the one command with no colour and a
+    // field column two spaces off from every other.
+    print_tui_header("Adds");
+    print_field("scaffolds", number(files.len().to_string()));
     println!();
+
+    let created = files.keys().collect::<Vec<_>>();
+    for (index, relative) in created.iter().enumerate() {
+        let branch = if index + 1 == created.len() {
+            "└─"
+        } else {
+            "├─"
+        };
+        println!(
+            "  {} {} {}",
+            dim(branch),
+            ok_text("new"),
+            accent(relative.display().to_string())
+        );
+    }
+
+    if files.keys().any(|path| path.ends_with("_server/auth.ts")) {
+        println!();
+        print_field(
+            "dependency",
+            info(format!("@ruvyxa/auth ^{}", env!("CARGO_PKG_VERSION"))),
+        );
+        print_field(
+            "next",
+            note("install the dependency, then set RUVYXA_AUTH_SECRET"),
+        );
+    }
+
+    print_success_banner(
+        format!("Scaffolded {} file(s)", files.len()),
+        started.elapsed(),
+    );
     Ok(())
 }
 

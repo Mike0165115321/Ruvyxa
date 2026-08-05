@@ -40,9 +40,9 @@ pub(crate) fn print_routes(args: RoutesArgs) -> anyhow::Result<()> {
     print_tui_header("Routes");
     print_field("root", path_text(&args.root));
     print_field("app dir", path_text(&app_dir));
-    print_field("routes", accent(manifest.routes.len().to_string()));
-    print_field("pages", accent(page_routes.to_string()));
-    print_field("api", accent(api_routes.to_string()));
+    print_field("routes", number(manifest.routes.len().to_string()));
+    print_field("pages", info(page_routes.to_string()));
+    print_field("api", note(api_routes.to_string()));
     println!();
 
     // The route id duplicates the file path, so the table omits it to stay
@@ -65,17 +65,7 @@ pub(crate) fn print_routes(args: RoutesArgs) -> anyhow::Result<()> {
         })
         .collect::<Vec<_>>();
     let headers = ["kind", "path", "file", "strategy"];
-    let widths = headers
-        .iter()
-        .enumerate()
-        .map(|(index, header)| {
-            rows.iter()
-                .map(|row| row[index].len())
-                .max()
-                .unwrap_or(0)
-                .max(header.len())
-        })
-        .collect::<Vec<_>>();
+    let widths = column_widths(&headers, &rows);
 
     print_table_separator(&widths);
     print_box_row(
@@ -87,7 +77,7 @@ pub(crate) fn print_routes(args: RoutesArgs) -> anyhow::Result<()> {
             label(headers[3]),
         ],
         &widths,
-        headers.len(),
+        ROUTE_TABLE_ALIGNMENT,
     );
     print_table_separator(&widths);
     for (row, route) in rows.iter().zip(manifest.routes.iter()) {
@@ -97,9 +87,14 @@ pub(crate) fn print_routes(args: RoutesArgs) -> anyhow::Result<()> {
         };
         print_box_row(
             [&row[0], &row[1], &row[2], &row[3]],
-            [accent(&row[0]), row[1].clone(), dim(&row[2]), strategy],
+            [
+                styled_route_kind(route.kind),
+                row[1].clone(),
+                dim(&row[2]),
+                strategy,
+            ],
             &widths,
-            4,
+            ROUTE_TABLE_ALIGNMENT,
         );
     }
     print_table_separator(&widths);
@@ -108,7 +103,20 @@ pub(crate) fn print_routes(args: RoutesArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Every column of the route table holds text, so all four read left-aligned.
+const ROUTE_TABLE_ALIGNMENT: [bool; 4] = [false; 4];
+
+/// Page and API routes are the table's main axis; painting both the same accent
+/// made the column decoration rather than information.
+pub(crate) fn styled_route_kind(kind: ruvyxa_graph::RouteKind) -> String {
+    match kind {
+        ruvyxa_graph::RouteKind::Page => info("page"),
+        ruvyxa_graph::RouteKind::Api => note("api"),
+    }
+}
+
 pub(crate) fn analyze(args: AnalyzeArgs) -> anyhow::Result<()> {
+    let started = Instant::now();
     let config = load_project_config(&args.root)?;
     let manifest = discover_project_routes(&args.root, &config)?;
     let validation = validate_app(&args.root, &manifest)?;
@@ -177,20 +185,20 @@ pub(crate) fn analyze(args: AnalyzeArgs) -> anyhow::Result<()> {
     } else {
         print_tui_header("Analyze");
         print_field("root", path_text(&args.root));
-        print_field("routes", accent(validation.routes.to_string()));
-        print_field("pages", accent(validation.page_routes.to_string()));
-        print_field("api", accent(validation.api_routes.to_string()));
+        print_field("routes", number(validation.routes.to_string()));
+        print_field("pages", info(validation.page_routes.to_string()));
+        print_field("api", note(validation.api_routes.to_string()));
         print_field(
             "client modules",
-            accent(validation.client_modules.to_string()),
+            number(validation.client_modules.to_string()),
         );
         print_field(
             "server modules",
-            accent(validation.server_modules.to_string()),
+            number(validation.server_modules.to_string()),
         );
         if validation.is_ok() {
             print_field("diagnostics", ok_text("none"));
-            println!("\n  {} No issues found\n", success());
+            print_success_banner("No issues found", started.elapsed());
         } else {
             print_field(
                 "diagnostics",
@@ -236,11 +244,7 @@ pub(crate) async fn check(args: ProjectArgs) -> anyhow::Result<()> {
     run_typecheck(&args.root)?;
     test_parity(args).await?;
 
-    println!(
-        "{} Production readiness checks passed in {}\n",
-        success(),
-        accent(format_duration(started.elapsed()))
-    );
+    print_success_banner("Production readiness checks passed", started.elapsed());
     Ok(())
 }
 
@@ -268,6 +272,7 @@ pub(crate) fn run_typecheck(root: &Path) -> anyhow::Result<()> {
 }
 
 pub(crate) fn doctor(args: DoctorArgs) -> anyhow::Result<()> {
+    let started = Instant::now();
     let config = load_project_config(&args.root)?;
     let app_dir = args.root.join(config.app_dir());
     let package_json = args.root.join("package.json");
@@ -343,7 +348,12 @@ pub(crate) fn doctor(args: DoctorArgs) -> anyhow::Result<()> {
     }
 
     print_tui_header("Doctor");
-    print_field("ruvyxa", accent(env!("CARGO_PKG_VERSION")));
+    print_field("ruvyxa", info(env!("CARGO_PKG_VERSION")));
+
+    // Twenty-five fields in one block is a wall. The groups below are the four
+    // questions a reader actually arrives with: where is the project, what is
+    // installed, what will it deploy to, and what does the graph look like.
+    print_section("project");
     print_field("root", path_text(&args.root));
     print_field("config", exists_status(&args.root.join("ruvyxa.config.ts")));
     print_field("app dir", path_text(&app_dir));
@@ -351,24 +361,26 @@ pub(crate) fn doctor(args: DoctorArgs) -> anyhow::Result<()> {
     print_field("app directory", exists_status(&app_dir));
     print_field("package.json", exists_status(&package_json));
     print_field("tsconfig.json", exists_status(&tsconfig));
-    print_field(
-        "package manager",
-        accent(detect_package_manager(&args.root)),
-    );
+
+    print_section("toolchain");
+    print_field("package manager", info(detect_package_manager(&args.root)));
     print_field("node", tool_status(tool_version("node", &["--version"])));
     print_field("rustc", tool_status(tool_version("rustc", &["--version"])));
     print_field("cargo", tool_status(tool_version("cargo", &["--version"])));
     print_field("bun", tool_status(bun_version()));
-    print_field("build target", accent(&build_target_name));
+
+    print_section("adapter");
+    print_field("build target", info(&build_target_name));
     print_field("adapter", accent(&adapter.name));
-    print_field("adapter target", accent(&adapter.target));
-    print_field("adapter runtime", accent(&adapter.runtime));
-    print_field("adapter supports", accent(adapter.supports.join(", ")));
+    print_field("adapter target", info(&adapter.target));
+    print_field("adapter runtime", info(&adapter.runtime));
+    print_field("adapter supports", note(adapter.supports.join(", ")));
     if let Some(platform) = &adapter.platform {
-        print_field("adapter platform", accent(platform));
+        print_field("adapter platform", note(platform));
     }
 
     if package_json.exists() {
+        print_section("react");
         let package = read_package_json(&package_json)?;
         print_field(
             "react",
@@ -395,16 +407,17 @@ pub(crate) fn doctor(args: DoctorArgs) -> anyhow::Result<()> {
         }
     }
 
-    print_field("routes", accent(manifest.routes.len().to_string()));
-    print_field("page routes", accent(validation.page_routes.to_string()));
-    print_field("api routes", accent(validation.api_routes.to_string()));
+    print_section("graph");
+    print_field("routes", number(manifest.routes.len().to_string()));
+    print_field("page routes", info(validation.page_routes.to_string()));
+    print_field("api routes", note(validation.api_routes.to_string()));
     print_field(
         "client modules",
-        accent(validation.client_modules.to_string()),
+        number(validation.client_modules.to_string()),
     );
     print_field(
         "server modules",
-        accent(validation.server_modules.to_string()),
+        number(validation.server_modules.to_string()),
     );
     print_field(
         "diagnostics",
@@ -432,7 +445,21 @@ pub(crate) fn doctor(args: DoctorArgs) -> anyhow::Result<()> {
             );
         }
     }
-    println!();
+
+    // Doctor never fails the process — it reports. The verdict line is what
+    // saves the reader from scanning twenty-five fields to learn whether
+    // anything needs attention.
+    let concerns = validation.diagnostics.len() + unsupported_routes.len();
+    if concerns == 0 {
+        print_success_banner("Everything checks out", started.elapsed());
+    } else {
+        println!(
+            "\n  {} {} {}\n",
+            warn_text("!"),
+            warn_text(format!("{concerns} item(s) need attention")),
+            dim(format!("· {}", format_duration(started.elapsed())))
+        );
+    }
     Ok(())
 }
 
@@ -454,8 +481,14 @@ pub(crate) fn clean(args: ProjectArgs) -> anyhow::Result<()> {
         },
     );
     print_field("out dir", path_text(&out_dir));
-    print_field("duration", accent(format_duration(started.elapsed())));
-    println!();
+    print_success_banner(
+        if removed {
+            "Build output removed"
+        } else {
+            "Nothing to remove"
+        },
+        started.elapsed(),
+    );
     Ok(())
 }
 
@@ -614,11 +647,13 @@ pub(crate) async fn test_parity(args: ProjectArgs) -> anyhow::Result<()> {
     let prod_routes = parity_routes(&prod_manifest);
     let mut failures = Vec::new();
 
+    // One line per matching route said nothing twenty-four times over. The
+    // count below carries the same fact, and every mismatch is still reported
+    // in full.
+    let mut matched = 0;
     for (key, dev_route) in &dev_routes {
         match prod_routes.get(key) {
-            Some(prod_route) if prod_route == dev_route => {
-                println!("{} {} dev/prod match", success(), key);
-            }
+            Some(prod_route) if prod_route == dev_route => matched += 1,
             Some(prod_route) => {
                 failures.push(format!(
                     "{key} mismatch\n  dev:  {:?}\n  prod: {:?}",
@@ -634,6 +669,12 @@ pub(crate) async fn test_parity(args: ProjectArgs) -> anyhow::Result<()> {
             failures.push(format!("{key} exists in production but not dev"));
         }
     }
+    print_phase(
+        "manifests matched",
+        format!("{matched} of {} routes", dev_routes.len()),
+        started.elapsed(),
+    );
+    println!();
 
     failures.extend(smoke_render_parity(
         &dev_server_config(
@@ -658,11 +699,9 @@ pub(crate) async fn test_parity(args: ProjectArgs) -> anyhow::Result<()> {
     ));
 
     if failures.is_empty() {
-        println!(
-            "\n{} Parity passed for {} routes in {}\n",
-            success(),
-            accent(dev_routes.len().to_string()),
-            accent(format_duration(started.elapsed()))
+        print_success_banner(
+            format!("Parity passed for {} routes", dev_routes.len()),
+            started.elapsed(),
         );
         return Ok(());
     }
@@ -729,47 +768,92 @@ pub(crate) fn smoke_render_parity(
         }
     };
 
-    for route in manifest
+    let pages = manifest
         .routes
         .iter()
         .filter(|route| route.kind == ruvyxa_graph::RouteKind::Page)
-    {
+        .collect::<Vec<_>>();
+    let path_width = pages
+        .iter()
+        .map(|route| route.path.len())
+        .max()
+        .unwrap_or(0);
+
+    for route in pages {
         let request_path = parity_smoke_path(&route.path);
+        let dev = smoke_render_side(
+            "dev",
+            dev_config,
+            &dev_context,
+            &route.path,
+            &request_path,
+            &mut failures,
+        );
+        let prod = smoke_render_side(
+            "prod",
+            prod_config,
+            &prod_context,
+            &route.path,
+            &request_path,
+            &mut failures,
+        );
 
-        match render_request_with_context(dev_config, &dev_context, &request_path, "GET") {
-            Ok(response) if !response.status().is_server_error() => {
-                println!("{} Page {} dev render ok", success(), route.path);
-            }
-            Ok(response) => failures.push(format!(
-                "Page {} dev runtime render returned {} for {}",
-                route.path,
-                response.status(),
-                request_path
-            )),
-            Err(error) => failures.push(format!(
-                "Page {} dev runtime render failed for {}: {error}",
-                route.path, request_path
-            )),
-        }
-
-        match render_request_with_context(prod_config, &prod_context, &request_path, "GET") {
-            Ok(response) if !response.status().is_server_error() => {
-                println!("{} Page {} prod render ok", success(), route.path);
-            }
-            Ok(response) => failures.push(format!(
-                "Page {} prod runtime render returned {} for {}",
-                route.path,
-                response.status(),
-                request_path
-            )),
-            Err(error) => failures.push(format!(
-                "Page {} prod runtime render failed for {}: {error}",
-                route.path, request_path
-            )),
-        }
+        // Both sides on one line: the question is whether dev and prod agree,
+        // and two separate lines made the reader hold one of them in their head
+        // while looking for the other.
+        println!(
+            "  {} {}{}  {} {}  {} {}",
+            if dev && prod {
+                ok_text("✓")
+            } else {
+                alert_text("✗")
+            },
+            route.path,
+            spaces(path_width, route.path.len()),
+            label("dev"),
+            render_mark(dev),
+            label("prod"),
+            render_mark(prod)
+        );
     }
 
     failures
+}
+
+fn render_mark(ok: bool) -> String {
+    if ok {
+        ok_text("ok")
+    } else {
+        alert_text("fail")
+    }
+}
+
+/// Renders one side of a parity smoke test, recording a failure rather than
+/// returning it so the caller can report both sides of a route together.
+fn smoke_render_side(
+    side: &str,
+    config: &ServerConfig,
+    context: &RenderContext,
+    route_path: &str,
+    request_path: &str,
+    failures: &mut Vec<String>,
+) -> bool {
+    match render_request_with_context(config, context, request_path, "GET") {
+        Ok(response) if !response.status().is_server_error() => true,
+        Ok(response) => {
+            failures.push(format!(
+                "Page {route_path} {side} runtime render returned {} for {request_path}",
+                response.status()
+            ));
+            false
+        }
+        Err(error) => {
+            failures.push(format!(
+                "Page {route_path} {side} runtime render failed for {request_path}: {error}"
+            ));
+            false
+        }
+    }
 }
 
 pub(crate) fn parity_smoke_path(route_path: &str) -> String {

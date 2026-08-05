@@ -12,8 +12,8 @@
 use ruvyxa_middleware::MiddlewareConfig;
 
 pub(crate) use ruvyxa_tui::{
-    accent, current_timestamp, dim, enabled_text, heading, link, ok_text as ok, paint, path_text,
-    print_field, warn_text,
+    accent, badge, current_timestamp, dim, enabled_text, heading, info, link, note, number,
+    ok_text as ok, paint, path_text, print_field, warn_text,
 };
 
 pub(crate) fn middleware_summary(config: &MiddlewareConfig) -> String {

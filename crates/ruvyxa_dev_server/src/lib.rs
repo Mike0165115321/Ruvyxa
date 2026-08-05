@@ -67,8 +67,8 @@ use dynamic_image::{DynamicImageCache, DynamicImageError};
 
 mod cli_output;
 use cli_output::{
-    accent, current_timestamp, dim, enabled_text, heading, link, middleware_summary, ok, paint,
-    path_text, print_field,
+    accent, badge, current_timestamp, dim, enabled_text, heading, info, link, middleware_summary,
+    note, number, ok, paint, path_text, print_field,
 };
 
 mod port_binding;
@@ -914,24 +914,28 @@ fn print_server_ready(
         .filter(|route| route.kind == RouteKind::Api)
         .count();
 
-    println!();
-    if config.watch {
-        println!("{}", heading("🦊 Ruvyxa Dev Server"));
-        println!();
+    // The same header shape every CLI command prints: title, badge, blank line.
+    // The dev server used to print its own two-line variant, which is why it
+    // was the one surface with no command badge.
+    let (title, badge) = if config.watch {
+        ("🦊 Ruvyxa Dev Server", badge("Dev"))
     } else {
-        println!("{}", heading("🦊 Ruvyxa Server"));
-        println!();
-    }
-    print_field("time", accent(current_timestamp()));
+        ("🦊 Ruvyxa Server", badge("Server"))
+    };
+    println!();
+    println!("{}", heading(title));
+    println!("  {} {}", badge.icon, dim(badge.tagline));
+    println!();
+    print_field("time", dim(current_timestamp()));
     print_field("mode", accent(mode));
     print_field("local", link(&url));
     print_field("root", path_text(&config.root));
     print_field("app dir", path_text(&config.app_dir));
     print_field("public", path_text(&config.public_dir));
     print_field("client", path_text(&config.client_dir));
-    print_field("routes", accent(manifest.routes.len().to_string()));
-    print_field("pages", accent(page_routes.to_string()));
-    print_field("api", accent(api_routes.to_string()));
+    print_field("routes", number(manifest.routes.len().to_string()));
+    print_field("pages", info(page_routes.to_string()));
+    print_field("api", note(api_routes.to_string()));
     print_field(
         "hmr",
         if config.watch {
@@ -948,7 +952,7 @@ fn print_server_ready(
             enabled_text(config.cache_css)
         )),
     );
-    print_field("watch paths", accent(watch_paths(config).len().to_string()));
+    print_field("watch paths", number(watch_paths(config).len().to_string()));
     print_field("ready in", accent(format_update_elapsed(ready_in)));
     print_field("middleware", accent(middleware_summary(&config.middleware)));
     println!();

@@ -113,6 +113,17 @@ pub fn paint_when(color: bool, value: impl AsRef<str>, code: &str) -> String {
     format!("\x1b[{code}m{value}\x1b[0m")
 }
 
+// ─── Roles ───────────────────────────────────────────────────────────────────
+//
+// A role says what a value *is*, and the palette decides what colour that
+// becomes. Adding colour for decoration alone is what made every field cyan;
+// the rule here is the one `styled_first_load` already follows — if two values
+// carry different meaning, they get different colours, and if they carry the
+// same meaning they get the same one everywhere.
+//
+// Every code stays inside the 16-colour range so a terminal without 256-colour
+// support renders the same distinctions rather than approximating them.
+
 pub fn heading(value: impl AsRef<str>) -> String {
     paint(value, "1;35")
 }
@@ -126,8 +137,29 @@ pub fn label(value: impl AsRef<str>) -> String {
     paint(value, "90")
 }
 
+/// A name, a word, a text value: the default for anything that is not a count,
+/// a path, or a status.
 pub fn accent(value: impl AsRef<str>) -> String {
     paint(value, "36")
+}
+
+/// A count or a measurement. Bright and bold so a number is findable in a
+/// column of names — `doctor` prints twenty-five fields and the reader is
+/// almost always looking for one of the eight numbers among them.
+pub fn number(value: impl AsRef<str>) -> String {
+    paint(value, "1;96")
+}
+
+/// Structural or descriptive information: a version, a target, a kind.
+pub fn info(value: impl AsRef<str>) -> String {
+    paint(value, "94")
+}
+
+/// A secondary classification that must stay distinguishable from [`info`] when
+/// the two sit in the same column — page routes against API routes, for
+/// instance.
+pub fn note(value: impl AsRef<str>) -> String {
+    paint(value, "95")
 }
 
 pub fn dim(value: impl AsRef<str>) -> String {

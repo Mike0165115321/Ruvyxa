@@ -163,6 +163,65 @@ fn header_title_keeps_the_mascot_in_piped_output() {
 }
 
 #[test]
+fn each_command_gets_its_own_badge_and_a_fallback_covers_the_rest() {
+    assert_eq!(badge("Doctor").icon, "🩺");
+    assert_eq!(badge("Clean").icon, "🧹");
+    // Resolved on the first word, so a parameterised title still matches.
+    assert_eq!(
+        badge("Benchmark (3 sample(s))").icon,
+        badge("Benchmark").icon
+    );
+    assert_eq!(badge("Something New").icon, "🦊");
+}
+
+#[test]
+fn every_badge_is_distinguishable_from_the_others() {
+    let mut icons = BADGES
+        .iter()
+        .map(|(_, badge)| badge.icon)
+        .collect::<Vec<_>>();
+    icons.sort_unstable();
+    let total = icons.len();
+    icons.dedup();
+    assert_eq!(icons.len(), total, "two commands share an icon");
+}
+
+#[test]
+fn a_bar_scales_to_the_largest_value_and_never_disappears() {
+    assert_eq!(bar(10.0, 10.0, 10).chars().count(), 10);
+    assert_eq!(bar(5.0, 10.0, 10).chars().count(), 5);
+    // A value orders of magnitude below the maximum still gets one cell, so a
+    // fast row reads as fast rather than as missing.
+    assert_eq!(bar(0.01, 1000.0, 10).chars().count(), 1);
+}
+
+#[test]
+fn a_bar_with_nothing_to_show_is_empty_rather_than_wrong() {
+    assert!(bar(0.0, 10.0, 10).is_empty());
+    assert!(bar(5.0, 0.0, 10).is_empty());
+    assert!(bar(f64::NAN, 10.0, 10).is_empty());
+    assert!(bar(1.0, f64::INFINITY, 10).is_empty());
+}
+
+#[test]
+fn roles_that_share_a_column_get_different_colours() {
+    // `info` and `note` sit in the same column in the route table and the
+    // benchmark table; identical codes would make the distinction invisible.
+    let codes = [
+        "1;35", "1;33", "36", "1;96", "94", "95", "32", "33", "31", "34", "90",
+    ];
+    let painted = codes
+        .iter()
+        .map(|code| paint_when(true, "x", code))
+        .collect::<Vec<_>>();
+    for (index, first) in painted.iter().enumerate() {
+        for second in painted.iter().skip(index + 1) {
+            assert_ne!(first, second, "two palette roles resolve to one colour");
+        }
+    }
+}
+
+#[test]
 fn durations_switch_units_at_one_second() {
     assert_eq!(format_duration(Duration::from_millis(120)), "120ms");
     assert_eq!(format_duration(Duration::from_millis(1500)), "1.50s");
