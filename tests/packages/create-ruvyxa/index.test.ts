@@ -140,6 +140,7 @@ describe('createRuvyxaApp', () => {
         '.gitignore',
         'AGENTS.md',
         'CLAUDE.md',
+        'app/components/ruvyxa-runner.tsx',
         'app/globals.css',
         'app/layout.tsx',
         'app/page.tsx',
