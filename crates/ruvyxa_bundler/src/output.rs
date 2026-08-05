@@ -121,7 +121,7 @@ pub fn build_entry_source(input: &BundleInput) -> (String, String) {
         BundleTarget::Client => {
             format!(
                 r#"import React from "react";
-import {{ hydrateRoot }} from "react-dom/client";
+import {{ createRoot, hydrateRoot }} from "react-dom/client";
 import Page from {page_path};
 {layout_imports}{special_imports}{meta_imports}
 {ROUTE_CONTEXT_PRELUDE}{boundary_prelude}
@@ -142,6 +142,13 @@ const __ruvyxaCtx = {{
 const __ruvyxaTreeElement = __ruvyxaTree(__ruvyxaCtx);
 
 if (globalThis.__RUVYXA_ROOT__) {{
+  globalThis.__RUVYXA_ROOT__.render(__ruvyxaTreeElement);
+}} else if (globalThis.__RUVYXA_CSR__) {{
+  // A client-rendered route is served as a shell the server never rendered
+  // this tree into, so there is no markup to hydrate against and matching one
+  // is a guaranteed mismatch — React discards the document and warns (#418).
+  // Mounting is what the shell is for.
+  globalThis.__RUVYXA_ROOT__ = createRoot(document);
   globalThis.__RUVYXA_ROOT__.render(__ruvyxaTreeElement);
 }} else {{
   globalThis.__RUVYXA_ROOT__ = hydrateRoot(document, __ruvyxaTreeElement);
@@ -414,6 +421,26 @@ mod tests {
             options: BundleOptions::default(),
             specials: RouteSpecials::default(),
         }
+    }
+
+    /// A client-rendered route is served as a shell the server never rendered
+    /// the route tree into. Hydrating it is a guaranteed mismatch — React
+    /// discarded the document and reported #418 — so the bootstrap has to be
+    /// able to mount instead, chosen by the flag the shell sets.
+    #[test]
+    fn client_entry_mounts_a_csr_shell_and_hydrates_a_rendered_one() {
+        let (source, _) = build_entry_source(&input("/project/app/page.tsx", vec![], "/"));
+
+        assert!(
+            source.contains("import { createRoot, hydrateRoot } from \"react-dom/client\";"),
+            "{source}"
+        );
+        assert!(source.contains("globalThis.__RUVYXA_CSR__"), "{source}");
+        assert!(source.contains("createRoot(document)"), "{source}");
+        assert!(
+            source.contains("hydrateRoot(document, __ruvyxaTreeElement)"),
+            "a server-rendered document must still hydrate: {source}"
+        );
     }
 
     #[test]

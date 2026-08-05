@@ -17,7 +17,11 @@ export default function IsrPage() {
     <main className="page-wide">
       <h1>ISR: Incremental Static Regeneration</h1>
       <p>
-        This page was rendered at: <code>{now}</code>
+        {/* The server stamps this at render time and the client stamps it again
+            at hydration, so the two never match. That difference is the point of
+            the demo, and `suppressHydrationWarning` is how React is told a
+            mismatch here is intended rather than a bug. */}
+        This page was rendered at: <code suppressHydrationWarning>{now}</code>
       </p>
       <p>
         It will be served from cache for up to <strong>60 seconds</strong>, then revalidated in the

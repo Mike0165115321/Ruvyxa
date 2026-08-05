@@ -493,6 +493,10 @@ fn rewrite_module_into(
     let mut in_commonjs_block_comment = false;
     let module_ast = crate::ast::parse_module(source);
 
+    if declares_esm_syntax(source, &module_ast) {
+        write_rewritten_line(out, ESM_NAMESPACE_MARKER, indent);
+    }
+
     for (line, statement_start) in lines_with_statement_offsets(source) {
         let trimmed = line.trim();
 
@@ -1099,7 +1103,16 @@ fn try_rewrite_export_statement(line: &str, deps: &DepIndex<'_>) -> Option<Rewri
             let names = parse_named_bindings(clause);
             let assignments: Vec<String> = names
                 .iter()
-                .map(|(local, alias)| format!("__exports.{alias} = {dep_id}.{local};"))
+                .map(|(local, alias)| {
+                    // `export { default as X } from "cjs-pkg"` re-exports the
+                    // same value `import X from "cjs-pkg"` would bind, so it
+                    // needs the same interop.
+                    if local == "default" {
+                        format!("__exports.{alias} = {};", interop_default(&dep_id))
+                    } else {
+                        format!("__exports.{alias} = {dep_id}.{local};")
+                    }
+                })
                 .collect();
             return Some(Rewrite::Inline(assignments.join(" ")));
         }
@@ -1228,6 +1241,41 @@ fn parse_import_clause(clause: &str) -> Result<Vec<(String, ImportBinding)>> {
     )))
 }
 
+/// Marker the linker writes into every namespace it compiles from ES module
+/// source, so an importer can tell one from a CommonJS package at runtime.
+const ESM_NAMESPACE_MARKER: &str = "__exports.__esModule = true;";
+
+/// The value `import X from "…"` binds, for either module system.
+///
+/// `default` means two different things depending on what the module is. For an
+/// ES module it is the `default` export. For a CommonJS package it is
+/// `module.exports` itself — `require("react")` returns an object with
+/// `Component` and `createContext` on it and no `default` at all. Reading
+/// `.default` unconditionally is why `import React from "react"` bound
+/// `undefined` and the first `React.Component` in the bundle threw.
+fn interop_default(dep_id: &str) -> String {
+    format!("{dep_id} && {dep_id}.__esModule ? {dep_id}.default : {dep_id}")
+}
+
+/// Whether `source` is an ES module, and so needs the namespace marker.
+///
+/// Import or export syntax is the signal, exactly as it is for Node: a file
+/// with neither is CommonJS and its namespace stays `module.exports`.
+fn declares_esm_syntax(source: &str, module_ast: &crate::ast::ModuleAst) -> bool {
+    let has_esm_import = module_ast.imports.iter().any(|edge| {
+        matches!(
+            edge.kind,
+            crate::ast::ImportKind::Static
+                | crate::ast::ImportKind::SideEffect
+                | crate::ast::ImportKind::ReExport
+        )
+    });
+    has_esm_import
+        || lines_with_statement_offsets(source).any(|(line, offset)| {
+            line.trim_start().starts_with("export ") && module_ast.is_code_offset(offset)
+        })
+}
+
 /// Rewrite an import clause given the resolved module namespace ID.
 ///
 /// Handles:
@@ -1239,7 +1287,9 @@ fn rewrite_import_clause(clause: &str, dep_id: &str) -> Result<String> {
     let bindings = parse_import_clause(clause)?
         .into_iter()
         .map(|(local, source)| match source {
-            ImportBinding::Default => format!("const {local} = {dep_id}.default;"),
+            ImportBinding::Default => {
+                format!("const {local} = {};", interop_default(dep_id))
+            }
             ImportBinding::Named(original) => format!("const {local} = {dep_id}.{original};"),
             ImportBinding::Namespace => format!("const {local} = {dep_id};"),
         })
@@ -1605,11 +1655,16 @@ mod tests {
         assert!(id1.ends_with("__"));
     }
 
+    /// A default import binds the `default` export of an ES module but
+    /// `module.exports` of a CommonJS package, and the bundle contains both.
     #[test]
-    fn rewrite_default_import() {
+    fn rewrite_default_import_interops_with_commonjs() {
         let dep_id = "__ruv_test1234567890__";
         let result = rewrite_import_clause("React", dep_id).unwrap();
-        assert_eq!(result, "const React = __ruv_test1234567890__.default;");
+        assert_eq!(
+            result,
+            format!("const React = {};", interop_default(dep_id))
+        );
     }
 
     #[test]
@@ -1638,7 +1693,7 @@ mod tests {
     fn rewrite_default_plus_named() {
         let dep_id = "__ruv_abc__";
         let result = rewrite_import_clause("React, { useState }", dep_id).unwrap();
-        assert!(result.contains("const React = __ruv_abc__.default;"));
+        assert!(result.contains(&format!("const React = {};", interop_default(dep_id))));
         assert!(result.contains("const useState = __ruv_abc__.useState;"));
     }
 
@@ -1647,7 +1702,10 @@ mod tests {
         let result = rewrite_import_clause("React, * as ReactNamespace", "__ruv_abc__").unwrap();
         assert_eq!(
             result,
-            "const React = __ruv_abc__.default; const ReactNamespace = __ruv_abc__;"
+            format!(
+                "const React = {}; const ReactNamespace = __ruv_abc__;",
+                interop_default("__ruv_abc__")
+            )
         );
     }
 

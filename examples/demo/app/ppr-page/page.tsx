@@ -8,7 +8,9 @@ async function DynamicSection() {
     <div className="dynamic-slot">
       <h3>Dynamic Content (streamed at request time)</h3>
       <p>
-        Current time: <code>{timestamp}</code>
+        {/* Stamped separately on the server and on the client, so the values
+            differ by design. See the note in app/isr-page/page.tsx. */}
+        Current time: <code suppressHydrationWarning>{timestamp}</code>
       </p>
       <p>This section was rendered on the server at request time and streamed to the client.</p>
     </div>

@@ -802,7 +802,7 @@ pub(crate) fn csr_shell_html(
   <title>Loading...</title>
   <style data-ruvyxa-css>{styles}</style>
   {preload_links}
-  <script>window.__RUVYXA_REQUEST_PATH__ = {path_json};</script>
+  <script>window.__RUVYXA_REQUEST_PATH__ = {path_json};window.__RUVYXA_CSR__ = true;</script>
 </head>
 <body>
   <div id="__ruvyxa"></div>
@@ -962,4 +962,22 @@ pub(crate) fn inline_script_json<T: serde::Serialize + ?Sized>(
         .replace('&', "\\u0026")
         .replace('\u{2028}', "\\u2028")
         .replace('\u{2029}', "\\u2029")
+}
+
+#[cfg(test)]
+mod csr_shell_tests {
+    use super::*;
+
+    /// The shell is not rendered from the route tree, so the client bootstrap
+    /// has to be told to mount rather than hydrate. Without the flag React
+    /// hydrates against markup that cannot match and reports #418.
+    #[test]
+    fn csr_shell_marks_itself_as_not_server_rendered() {
+        let html = csr_shell_html("/hooks", &BTreeMap::new(), "");
+
+        assert!(
+            html.contains("window.__RUVYXA_CSR__ = true;"),
+            "shell must flag itself for the client bootstrap: {html}"
+        );
+    }
 }

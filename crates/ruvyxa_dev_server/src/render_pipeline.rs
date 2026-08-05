@@ -681,6 +681,9 @@ async fn render_page_csr(
   <script>
     window.__RUVYXA_ROUTE_PARAMS__ = {params_json};
     window.__RUVYXA_REQUEST_PATH__ = {path_json};
+    // This shell was not rendered from the route tree, so the client must
+    // mount rather than hydrate. See the bootstrap in `ruvyxa_bundler::output`.
+    window.__RUVYXA_CSR__ = true;
   </script>
 </head>
 <body>

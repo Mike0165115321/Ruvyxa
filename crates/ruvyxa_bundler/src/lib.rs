@@ -1246,6 +1246,57 @@ mod tests {
     /// for every transitive dependency) and ships no `exports` map. Both traits
     /// used to make it unresolvable, and the client linker then replaced the
     /// `require` with a throw that only fired once the browser ran the chunk.
+    /// `import React from "react"` used to compile to `react_ns.default`, and a
+    /// CommonJS package's `module.exports` has no `default` — so `React` was
+    /// `undefined` and the first `React.Component` in the bundle threw
+    /// `Cannot read properties of undefined`. A default import has to mean
+    /// `module.exports` for CommonJS and the `default` export for ESM.
+    #[test]
+    fn client_bundle_default_imports_interop_with_commonjs_packages() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = ruvyxa_diagnostics::normalized_canonical_path(temp.path());
+        let app = root.join("app");
+        let pkg = root.join("node_modules").join("cjs-widget");
+        fs::create_dir_all(&app).unwrap();
+        fs::create_dir_all(&pkg).unwrap();
+
+        // A CommonJS package: no `exports` map, no `default` on its exports.
+        fs::write(pkg.join("package.json"), r#"{"main":"index.js"}"#).unwrap();
+        fs::write(
+            pkg.join("index.js"),
+            "module.exports = { widgetMarker() {} };",
+        )
+        .unwrap();
+
+        let page = app.join("page.tsx");
+        fs::write(
+            &page,
+            "import Widget from 'cjs-widget'; export default function Page() { Widget.widgetMarker(); return <main>x</main>; }",
+        )
+        .unwrap();
+
+        let mut input = client_input(&root, &app, page, vec![], "/");
+        input.options.source_map = false;
+        input.options.emit_chunk_manifest = false;
+        let output = bundle(input).unwrap();
+
+        assert!(
+            output.code.contains("__esModule"),
+            "the bundle must distinguish compiled ES modules from CommonJS: {}",
+            &output.code[..output.code.len().min(600)]
+        );
+        // The page itself is an ES module, so its own namespace carries the
+        // marker and a default import of it still resolves to `.default`.
+        assert!(
+            output.code.contains("__exports.__esModule = true;"),
+            "compiled ES modules must mark their namespace"
+        );
+        assert!(
+            output.code.contains("widgetMarker"),
+            "the CommonJS package must still be bundled"
+        );
+    }
+
     #[test]
     fn client_bundle_resolves_transitive_commonjs_dependencies() {
         let temp = tempfile::tempdir().unwrap();
