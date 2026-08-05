@@ -120,7 +120,7 @@ pub(crate) const BADGES: [(&str, Badge); 12] = [
         "Doctor",
         Badge {
             icon: "🩺",
-            tagline: "project · toolchain · adapter · graph",
+            tagline: "versions · project · toolchain · adapter · graph",
         },
     ),
     (

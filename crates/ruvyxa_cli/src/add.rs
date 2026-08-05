@@ -24,7 +24,14 @@ pub(crate) fn scaffold_add(args: AddArgs) -> anyhow::Result<()> {
     let mut files = BTreeMap::<PathBuf, &'static str>::new();
     for template in args.templates {
         for file in template_files(template) {
-            files.insert(app_dir.join(file.relative), file.content);
+            // Joined one component at a time. `join("a/b")` keeps the literal
+            // slash inside the path, which on Windows printed a mixed
+            // `app\form-example/action.ts` in the created-file list.
+            let relative = file
+                .relative
+                .split('/')
+                .fold(app_dir.clone(), |path, component| path.join(component));
+            files.insert(relative, file.content);
         }
     }
     let conflicts = files

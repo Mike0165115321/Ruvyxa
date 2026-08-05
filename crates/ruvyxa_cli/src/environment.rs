@@ -106,6 +106,70 @@ pub(crate) fn dependency_version(package: &serde_json::Value, name: &str) -> Opt
         })
 }
 
+/// Every Ruvyxa package the project depends on, sorted by name.
+///
+/// A project pulls in `ruvyxa` plus any number of `@ruvyxa/*` packages, and
+/// each is versioned independently, so listing them is the only way to see the
+/// set a project is actually running.
+pub(crate) fn ruvyxa_dependencies(package: &serde_json::Value) -> Vec<(String, String)> {
+    let mut found = BTreeMap::<String, String>::new();
+
+    for section in ["dependencies", "devDependencies", "peerDependencies"] {
+        let Some(deps) = package.get(section).and_then(|value| value.as_object()) else {
+            continue;
+        };
+
+        for (name, version) in deps {
+            if name == "ruvyxa" || name.starts_with("@ruvyxa/") {
+                found.insert(
+                    name.clone(),
+                    version.as_str().unwrap_or("unknown").to_string(),
+                );
+            }
+        }
+    }
+
+    found.into_iter().collect()
+}
+
+/// Compare the npm `ruvyxa` dependency against the CLI binary running the check.
+///
+/// The native CLI and the npm package are released together and read each
+/// other's contracts — a manifest written by one version and served by another
+/// is a class of failure that only appears at runtime, so the drift is worth
+/// naming here rather than leaving it to be discovered in production.
+pub(crate) fn cli_version_match(package_version: Option<&str>, cli_version: &str) -> String {
+    let Some(package_version) = package_version else {
+        return "missing".to_string();
+    };
+
+    // A workspace or link protocol resolves to the checkout itself, so there is
+    // no published version to compare and nothing to warn about. Reporting
+    // these as drift is what made the framework's own repository fail its own
+    // doctor.
+    if package_version.starts_with("workspace:")
+        || package_version.starts_with("link:")
+        || package_version.starts_with("file:")
+    {
+        return format!("ok ({package_version})");
+    }
+
+    let declared = package_version.trim_start_matches(['^', '~', '=', 'v', ' ']);
+    if declared == "*" || declared.is_empty() || declared.eq_ignore_ascii_case("latest") {
+        return format!("ok (unpinned, cli {cli_version})");
+    }
+    if declared == cli_version {
+        return format!("ok ({cli_version})");
+    }
+
+    match (major_version(declared), major_version(cli_version)) {
+        (Some(left), Some(right)) if left == right => {
+            format!("ok (package {declared}, cli {cli_version})")
+        }
+        _ => format!("drift: package {declared}, cli {cli_version}"),
+    }
+}
+
 pub(crate) fn react_compatibility(package: &serde_json::Value) -> String {
     let Some(react) = dependency_version(package, "react") else {
         return "missing react".to_string();

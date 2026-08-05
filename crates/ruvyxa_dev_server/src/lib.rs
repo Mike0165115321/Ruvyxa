@@ -924,6 +924,7 @@ fn print_server_ready(
     };
     println!();
     println!("{}", heading(title));
+    println!();
     println!("  {} {}", badge.icon, dim(badge.tagline));
     println!();
     print_field("time", dim(current_timestamp()));

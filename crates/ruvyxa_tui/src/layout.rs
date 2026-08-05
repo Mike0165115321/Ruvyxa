@@ -183,7 +183,10 @@ pub fn section_line(title: &str) -> String {
 /// A horizontal bar sized to `value` against `max`, for comparing rows of a
 /// table by eye before reading their numbers.
 pub fn bar(value: f64, max: f64, width: usize) -> String {
-    if !(value.is_finite() && max.is_finite()) || max <= 0.0 || value <= 0.0 {
+    // `width == 0` is checked with the rest: the clamp below has a minimum of
+    // one cell, and `f64::clamp` panics outright when its minimum exceeds its
+    // maximum.
+    if width == 0 || !(value.is_finite() && max.is_finite()) || max <= 0.0 || value <= 0.0 {
         return String::new();
     }
     let filled = ((value / max) * width as f64)

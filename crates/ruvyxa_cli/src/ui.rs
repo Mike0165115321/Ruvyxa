@@ -18,9 +18,9 @@ use std::time::Duration;
 use ruvyxa_tui::badge;
 pub(crate) use ruvyxa_tui::{
     Spinner, accent, alert_text, bar, brand, clear_progress_bar, column_widths, current_timestamp,
-    dim, display_path_relative, draw_progress_bar, error_label, exists_status, format_bytes,
-    format_duration, heading, info, label, note, number, ok_text, path_text, print_box_row,
-    print_field, print_phase, print_section, print_table_separator, spaces, success,
+    dim, display_path_relative, display_width, draw_progress_bar, error_label, exists_status,
+    format_bytes, format_duration, heading, info, label, note, number, ok_text, path_text,
+    print_box_row, print_field, print_phase, print_section, print_table_separator, spaces, success,
     tui_header_title, warn_text,
 };
 
@@ -108,6 +108,7 @@ pub(crate) fn print_tui_header(title: impl AsRef<str>) {
     let title = title.as_ref();
     let badge = badge(title);
     println!("\n{}", heading(tui_header_title(title)));
+    println!();
     println!("  {} {}", badge.icon, dim(badge.tagline));
     println!();
     print_field("time", dim(current_timestamp()));
@@ -117,10 +118,26 @@ pub(crate) fn print_tui_header(title: impl AsRef<str>) {
 /// nowhere else in a result, so a finished run is recognisable by shape from
 /// across the room.
 pub(crate) fn print_success_banner(message: impl AsRef<str>, duration: Duration) {
+    print_success_banner_at(message, None, duration);
+}
+
+/// The same banner with a location. The message and the path are painted
+/// separately — a path is the one part of the line a reader copies, and it
+/// carries the same blue it has in every field above.
+pub(crate) fn print_success_banner_at(
+    message: impl AsRef<str>,
+    path: Option<&Path>,
+    duration: Duration,
+) {
+    let location = match path {
+        Some(path) => format!(" {}", path_text(path)),
+        None => String::new(),
+    };
     println!(
-        "\n  {} {} {}\n",
+        "\n  {} {}{} {}\n",
         brand("🦊"),
-        ok_text(message.as_ref()),
+        note(message.as_ref()),
+        location,
         dim(format!("· {}", format_duration(duration)))
     );
 }

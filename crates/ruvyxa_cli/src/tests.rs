@@ -385,6 +385,57 @@ fn detects_react_version_compatibility() {
 }
 
 #[test]
+fn lists_every_ruvyxa_package_across_dependency_sections() {
+    let package = json!({
+        "dependencies": { "ruvyxa": "^1.0.27", "react": "^19.0.0" },
+        "devDependencies": { "@ruvyxa/adapter-node": "^1.0.27" },
+        "peerDependencies": { "@ruvyxa/realtime": "^1.0.27" }
+    });
+
+    assert_eq!(
+        ruvyxa_dependencies(&package),
+        vec![
+            ("@ruvyxa/adapter-node".to_string(), "^1.0.27".to_string()),
+            ("@ruvyxa/realtime".to_string(), "^1.0.27".to_string()),
+            ("ruvyxa".to_string(), "^1.0.27".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn compares_the_npm_package_against_the_cli_binary() {
+    assert_eq!(cli_version_match(Some("^1.0.27"), "1.0.27"), "ok (1.0.27)");
+    assert_eq!(
+        cli_version_match(Some("^1.0.20"), "1.0.27"),
+        "ok (package 1.0.20, cli 1.0.27)"
+    );
+    assert_eq!(
+        cli_version_match(Some("^0.9.0"), "1.0.27"),
+        "drift: package 0.9.0, cli 1.0.27"
+    );
+    assert_eq!(cli_version_match(None, "1.0.27"), "missing");
+}
+
+#[test]
+fn local_dependency_protocols_are_not_reported_as_version_drift() {
+    // The framework's own repository depends on itself through the workspace
+    // protocol; there is no published version to compare against.
+    for spec in [
+        "workspace:*",
+        "workspace:^",
+        "link:../ruvyxa",
+        "file:../pkg",
+    ] {
+        assert!(
+            cli_version_match(Some(spec), "1.0.27").starts_with("ok "),
+            "{spec} should not read as drift"
+        );
+    }
+    assert!(cli_version_match(Some("*"), "1.0.27").starts_with("ok "));
+    assert!(cli_version_match(Some("latest"), "1.0.27").starts_with("ok "));
+}
+
+#[test]
 fn detects_duplicate_dependency_versions() {
     let package = json!({
         "dependencies": {

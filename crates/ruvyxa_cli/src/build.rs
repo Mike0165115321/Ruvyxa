@@ -640,10 +640,7 @@ pub(crate) async fn build_with_output(args: BuildArgs, show_summary: bool) -> an
     if show_summary {
         println!();
         print_route_size_table(&manifest, &client_manifest);
-        print_success_banner(
-            format!("Built into {}", out_dir.display()),
-            started.elapsed(),
-        );
+        print_success_banner_at("Built into", Some(&out_dir), started.elapsed());
     }
     Ok(())
 }
@@ -694,19 +691,22 @@ pub(crate) fn print_route_size_table(
         .map(Vec::as_slice)
         .unwrap_or_default();
 
+    // Measured in characters, not bytes: a route directory named in Thai or any
+    // other non-ASCII script is several bytes per column, and a byte count pads
+    // those rows two or three times too little.
     let route_width = page_routes
         .iter()
-        .map(|route| route.path.len())
+        .map(|route| display_width(&route.path))
         .max()
         .unwrap_or(0)
-        .max("shared by all".len())
+        .max(display_width("shared by all"))
         .max(24);
     println!(
         "      {}{} {}{} {}",
         label("route"),
-        spaces(route_width, "route".len()),
+        spaces(route_width, display_width("route")),
         label("size"),
-        spaces(9, "size".len()),
+        spaces(9, display_width("size")),
         label("first load")
     );
     for (index, route) in page_routes.iter().enumerate() {
@@ -726,9 +726,9 @@ pub(crate) fn print_route_size_table(
             dim(branch),
             styled_render_symbol(route.render.strategy),
             route.path,
-            spaces(route_width, route.path.len()),
+            spaces(route_width, display_width(&route.path)),
             dim(&size),
-            spaces(9, size.len()),
+            spaces(9, display_width(&size)),
             styled_first_load(first_load)
         );
     }
@@ -740,7 +740,7 @@ pub(crate) fn print_route_size_table(
         println!(
             "  {}   shared by all{}{}",
             dim("└"),
-            spaces(route_width + 11, "shared by all".len()),
+            spaces(route_width + 11, display_width("shared by all")),
             styled_first_load(shared_bytes)
         );
     }

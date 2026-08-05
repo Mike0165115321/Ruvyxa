@@ -347,12 +347,46 @@ pub(crate) fn doctor(args: DoctorArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    print_tui_header("Doctor");
-    print_field("ruvyxa", info(env!("CARGO_PKG_VERSION")));
+    let package = package_json
+        .exists()
+        .then(|| read_package_json(&package_json))
+        .transpose()?;
 
-    // Twenty-five fields in one block is a wall. The groups below are the four
-    // questions a reader actually arrives with: where is the project, what is
-    // installed, what will it deploy to, and what does the graph look like.
+    print_tui_header("Doctor");
+
+    // Twenty-five fields in one block is a wall. The groups below are the
+    // questions a reader actually arrives with: which Ruvyxa is this, where is
+    // the project, what is installed, what will it deploy to, and what does the
+    // graph look like.
+    print_section("ruvyxa");
+    print_field("cli", info(env!("CARGO_PKG_VERSION")));
+    match &package {
+        Some(package) => {
+            let packages = ruvyxa_dependencies(package);
+            let declared = dependency_version(package, "ruvyxa");
+            print_field(
+                "version match",
+                compatibility_status(cli_version_match(
+                    declared.as_deref(),
+                    env!("CARGO_PKG_VERSION"),
+                )),
+            );
+            if packages.is_empty() {
+                print_field("packages", warn_text("none installed"));
+            }
+            for (name, version) in packages {
+                // The scope is already the section heading, and the longest
+                // scoped name is wider than the label column, so it is dropped
+                // rather than allowed to push every value out of alignment.
+                print_field(
+                    name.strip_prefix("@ruvyxa/").unwrap_or(&name),
+                    note(version),
+                );
+            }
+        }
+        None => print_field("version match", warn_text("no package.json")),
+    }
+
     print_section("project");
     print_field("root", path_text(&args.root));
     print_field("config", exists_status(&args.root.join("ruvyxa.config.ts")));
@@ -368,6 +402,33 @@ pub(crate) fn doctor(args: DoctorArgs) -> anyhow::Result<()> {
     print_field("rustc", tool_status(tool_version("rustc", &["--version"])));
     print_field("cargo", tool_status(tool_version("cargo", &["--version"])));
     print_field("bun", tool_status(bun_version()));
+    if let Some(package) = &package {
+        // React is part of what is installed, not a section of its own — the
+        // three rows only ever answered "can this project render".
+        print_field(
+            "react",
+            tool_status(
+                dependency_version(package, "react").unwrap_or_else(|| "missing".to_string()),
+            ),
+        );
+        print_field(
+            "react-dom",
+            tool_status(
+                dependency_version(package, "react-dom").unwrap_or_else(|| "missing".to_string()),
+            ),
+        );
+        print_field(
+            "react compatibility",
+            compatibility_status(react_compatibility(package)),
+        );
+
+        let duplicates = duplicate_dependencies(package);
+        if duplicates.is_empty() {
+            print_field("dependency duplicates", ok_text("ok"));
+        } else {
+            print_field("dependency duplicates", warn_text(duplicates.join(", ")));
+        }
+    }
 
     print_section("adapter");
     print_field("build target", info(&build_target_name));
@@ -377,34 +438,6 @@ pub(crate) fn doctor(args: DoctorArgs) -> anyhow::Result<()> {
     print_field("adapter supports", note(adapter.supports.join(", ")));
     if let Some(platform) = &adapter.platform {
         print_field("adapter platform", note(platform));
-    }
-
-    if package_json.exists() {
-        print_section("react");
-        let package = read_package_json(&package_json)?;
-        print_field(
-            "react",
-            tool_status(
-                dependency_version(&package, "react").unwrap_or_else(|| "missing".to_string()),
-            ),
-        );
-        print_field(
-            "react-dom",
-            tool_status(
-                dependency_version(&package, "react-dom").unwrap_or_else(|| "missing".to_string()),
-            ),
-        );
-        print_field(
-            "react compatibility",
-            compatibility_status(react_compatibility(&package)),
-        );
-
-        let duplicates = duplicate_dependencies(&package);
-        if duplicates.is_empty() {
-            print_field("dependency duplicates", ok_text("ok"));
-        } else {
-            print_field("dependency duplicates", warn_text(duplicates.join(", ")));
-        }
     }
 
     print_section("graph");
@@ -481,12 +514,13 @@ pub(crate) fn clean(args: ProjectArgs) -> anyhow::Result<()> {
         },
     );
     print_field("out dir", path_text(&out_dir));
-    print_success_banner(
+    print_success_banner_at(
         if removed {
-            "Build output removed"
+            "Removed"
         } else {
-            "Nothing to remove"
+            "Nothing to remove at"
         },
+        Some(&out_dir),
         started.elapsed(),
     );
     Ok(())
@@ -630,6 +664,10 @@ pub(crate) async fn test_parity(args: ProjectArgs) -> anyhow::Result<()> {
     })
     .await?;
 
+    // Timed from here, not from `started`: `started` also covers the production
+    // build above, and reporting that as the comparison's duration would claim
+    // the manifest diff took ten seconds.
+    let comparison_started = Instant::now();
     let dev_manifest = discover_project_routes(&args.root, &config)?;
     let prod_manifest = discover_routes(
         DiscoverOptions::new(
@@ -672,7 +710,7 @@ pub(crate) async fn test_parity(args: ProjectArgs) -> anyhow::Result<()> {
     print_phase(
         "manifests matched",
         format!("{matched} of {} routes", dev_routes.len()),
-        started.elapsed(),
+        comparison_started.elapsed(),
     );
     println!();
 
@@ -775,7 +813,7 @@ pub(crate) fn smoke_render_parity(
         .collect::<Vec<_>>();
     let path_width = pages
         .iter()
-        .map(|route| route.path.len())
+        .map(|route| display_width(&route.path))
         .max()
         .unwrap_or(0);
 
@@ -809,7 +847,7 @@ pub(crate) fn smoke_render_parity(
                 alert_text("✗")
             },
             route.path,
-            spaces(path_width, route.path.len()),
+            spaces(path_width, display_width(&route.path)),
             label("dev"),
             render_mark(dev),
             label("prod"),
