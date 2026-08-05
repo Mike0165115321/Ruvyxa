@@ -512,6 +512,7 @@ fn rewrite_module_into(
             &dynamic_rewritten,
             deps,
             &mut in_commonjs_block_comment,
+            drop_external_imports,
         );
         write_rewritten_line(out, &commonjs_rewritten, indent);
     }
@@ -525,13 +526,14 @@ fn rewrite_module_into(
 
 #[cfg(test)]
 fn rewrite_commonjs_requires(line: &str, deps: &[PathBuf]) -> String {
-    rewrite_commonjs_requires_with_state(line, &DepIndex::without_aliases(deps), &mut false)
+    rewrite_commonjs_requires_with_state(line, &DepIndex::without_aliases(deps), &mut false, false)
 }
 
 fn rewrite_commonjs_requires_with_state(
     line: &str,
     deps: &DepIndex<'_>,
     in_block_comment: &mut bool,
+    drop_unresolved: bool,
 ) -> String {
     let mut out = String::with_capacity(line.len());
     let bytes = line.as_bytes();
@@ -583,11 +585,24 @@ fn rewrite_commonjs_requires_with_state(
         if bytes[index..].starts_with(b"require")
             && is_import_boundary(bytes, index)
             && let Some((specifier, after_call)) = require_call(line, index + "require".len())
-            && let Some(dep_path) = deps.resolve(&specifier)
         {
-            out.push_str(&module_id(dep_path));
-            index = after_call;
-            continue;
+            if let Some(dep_path) = deps.resolve(&specifier) {
+                out.push_str(&module_id(dep_path));
+                index = after_call;
+                continue;
+            }
+            // Unresolved require in a client bundle: replace with a runtime
+            // error so the bundle does not ship a bare `require()` call that
+            // browsers cannot execute.
+            if drop_unresolved {
+                let escaped = specifier.replace('\\', "\\\\").replace('"', "\\\"");
+                out.push_str(&format!(
+                    "(function(){{throw new Error(\"RUV1610: Cannot require \\\"{}\\\" in a browser bundle\")}})() /* require removed */",
+                    escaped
+                ));
+                index = after_call;
+                continue;
+            }
         }
 
         push_next_char(line, &mut out, &mut index);
@@ -1682,6 +1697,46 @@ mod tests {
         assert!(linked.contains("const example = 'require(\"example\")';"));
         assert!(linked.contains("const template = `require(\"example\")`;"));
         assert!(linked.contains("// require(\"example\") must stay documentation"));
+    }
+
+    #[test]
+    fn unresolved_require_replaced_with_runtime_error_when_drop_enabled() {
+        // Simulates a client bundle where an unresolved require() must not
+        // pass through — it would cause "ReferenceError: require is not defined"
+        // in the browser.
+        let result = rewrite_commonjs_requires_with_state(
+            "const x = require(\"unknown-pkg\");",
+            &DepIndex::without_aliases(&[]),
+            &mut false,
+            true,
+        );
+        assert!(
+            result.contains("RUV1610"),
+            "should emit RUV1610 error code: {result}"
+        );
+        assert!(
+            result.contains("unknown-pkg"),
+            "should mention the specifier: {result}"
+        );
+        assert!(
+            !result.contains("require(\"unknown-pkg\")"),
+            "bare require() must not survive in client bundle: {result}"
+        );
+    }
+
+    #[test]
+    fn unresolved_require_left_intact_when_drop_disabled() {
+        // SSR/Edge bundles run on Node.js — unresolved require() is valid.
+        let result = rewrite_commonjs_requires_with_state(
+            "const x = require(\"fs\");",
+            &DepIndex::without_aliases(&[]),
+            &mut false,
+            false,
+        );
+        assert!(
+            result.contains("require(\"fs\")"),
+            "require should be preserved for SSR: {result}"
+        );
     }
 
     #[test]
