@@ -13,7 +13,7 @@ fn env_from<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<Stri
 
 #[test]
 fn a_terminal_gets_colour_animation_and_unicode() {
-    let capabilities = detect_capabilities(true, env_from(&[]));
+    let capabilities = detect_capabilities(true, true, env_from(&[]));
     assert_eq!(
         capabilities,
         Capabilities {
@@ -27,7 +27,7 @@ fn a_terminal_gets_colour_animation_and_unicode() {
 #[test]
 fn a_pipe_gets_no_colour_and_no_movement_but_keeps_its_glyphs() {
     assert_eq!(
-        detect_capabilities(false, env_from(&[])),
+        detect_capabilities(false, false, env_from(&[])),
         Capabilities {
             color: false,
             animate: false,
@@ -37,8 +37,26 @@ fn a_pipe_gets_no_colour_and_no_movement_but_keeps_its_glyphs() {
 }
 
 #[test]
+fn a_captured_stdout_keeps_animation_off_even_with_a_terminal_on_stderr() {
+    // `ruvyxa build > log`: the results are being captured, so the run reports
+    // one line per event rather than painting frames on the other stream.
+    let capabilities = detect_capabilities(false, true, env_from(&[]));
+    assert!(!capabilities.animate);
+    assert!(!capabilities.color);
+}
+
+#[test]
+fn a_captured_stderr_stops_the_animation_it_would_be_written_to() {
+    // `ruvyxa build 2> log`: frames go to stderr, so a redirected stderr means
+    // no frames — colour on stdout is unaffected.
+    let capabilities = detect_capabilities(true, false, env_from(&[]));
+    assert!(!capabilities.animate);
+    assert!(capabilities.color);
+}
+
+#[test]
 fn no_color_keeps_animation_but_drops_colour() {
-    let capabilities = detect_capabilities(true, env_from(&[("NO_COLOR", "1")]));
+    let capabilities = detect_capabilities(true, true, env_from(&[("NO_COLOR", "1")]));
     assert!(!capabilities.color);
     assert!(capabilities.animate);
 }
@@ -46,7 +64,7 @@ fn no_color_keeps_animation_but_drops_colour() {
 #[test]
 fn dumb_terminals_get_nothing() {
     assert_eq!(
-        detect_capabilities(true, env_from(&[("TERM", "dumb")])),
+        detect_capabilities(true, true, env_from(&[("TERM", "dumb")])),
         Capabilities::PLAIN
     );
 }
@@ -54,7 +72,7 @@ fn dumb_terminals_get_nothing() {
 #[test]
 fn ruvyxa_fun_off_keeps_colour_and_stops_movement() {
     for value in ["0", "false", "off", "no", ""] {
-        let capabilities = detect_capabilities(true, env_from(&[("RUVYXA_FUN", value)]));
+        let capabilities = detect_capabilities(true, true, env_from(&[("RUVYXA_FUN", value)]));
         assert!(
             capabilities.color,
             "colour should survive RUVYXA_FUN={value}"
@@ -68,12 +86,12 @@ fn ruvyxa_fun_off_keeps_colour_and_stops_movement() {
 
 #[test]
 fn ruvyxa_fun_on_leaves_animation_enabled() {
-    assert!(detect_capabilities(true, env_from(&[("RUVYXA_FUN", "1")])).animate);
+    assert!(detect_capabilities(true, true, env_from(&[("RUVYXA_FUN", "1")])).animate);
 }
 
 #[test]
 fn ruvyxa_ascii_selects_the_ascii_glyph_set() {
-    let capabilities = detect_capabilities(true, env_from(&[("RUVYXA_ASCII", "1")]));
+    let capabilities = detect_capabilities(true, true, env_from(&[("RUVYXA_ASCII", "1")]));
     assert!(!capabilities.unicode);
     assert_eq!(glyphs(capabilities), ASCII_GLYPHS);
 }

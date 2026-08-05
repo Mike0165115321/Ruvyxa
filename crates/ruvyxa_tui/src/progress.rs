@@ -6,12 +6,18 @@
 //! record of the work. That is the same rule the old TTY-only progress bar
 //! followed; it is stated once here instead of at each call site.
 //!
-//! The spinner ticks from its own thread while a phase blocks. That is safe
-//! only because a phase body does not print: the build's own output is emitted
-//! before the phase starts or after it finishes, and `tracing` diagnostics go to
-//! stderr, which the spinner never touches. A future phase that prints to
-//! stdout while running must take the spinner's line into account — use the
-//! runner track instead, which is driven from the working thread.
+//! Every transient frame is written to **stderr**; every line that survives the
+//! run — the phase line, fields, tables, banners — stays on stdout. The split
+//! is what makes the spinner safe: it ticks from its own thread while a phase
+//! blocks, and a phase body that prints to stdout (a user's TypeScript plugin
+//! calling `console.log` from a `resolve` or `transform` hook, for instance)
+//! now lands on a different stream instead of tearing the spinner's line in
+//! half. It also means `ruvyxa build > log` records results without animation
+//! bytes, which is the convention progress reporting already follows.
+//!
+//! Two frames still must not interleave with each other, so a phase that can
+//! report progress uses the runner track — driven from the working thread —
+//! rather than starting a second spinner.
 
 use std::io::Write;
 use std::sync::Arc;
@@ -42,7 +48,7 @@ pub fn draw_progress_bar(enabled: bool, name: &str, done: usize, total: usize) {
     }
 
     let tick = TICK.fetch_add(1, Ordering::Relaxed);
-    print!(
+    eprint!(
         "\r  {} {}{} {} {}/{} ",
         dim(glyphs(capabilities).pending),
         label(name),
@@ -51,7 +57,7 @@ pub fn draw_progress_bar(enabled: bool, name: &str, done: usize, total: usize) {
         done,
         total
     );
-    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
 }
 
 /// Clears a line drawn by [`draw_progress_bar`] so the phase line replaces it.
@@ -63,8 +69,8 @@ pub fn clear_progress_bar(enabled: bool) {
 }
 
 fn clear_line() {
-    print!("\r{}\r", " ".repeat(60 + TRACK_WIDTH));
-    let _ = std::io::stdout().flush();
+    eprint!("\r{}\r", " ".repeat(60 + TRACK_WIDTH));
+    let _ = std::io::stderr().flush();
 }
 
 /// The coloured track: completed ground behind the runner, a puff of dust under
@@ -142,14 +148,14 @@ impl Spinner {
                 let frames = glyphs(capabilities()).spinner;
                 let mut frame = 0;
                 while !stop.load(Ordering::Relaxed) {
-                    print!(
+                    eprint!(
                         "\r  {} {}{} {} ",
                         dim(frames[frame % frames.len()]),
                         label(&name),
                         spaces(PHASE_LABEL_WIDTH, name.len()),
                         dim(format_duration(started.elapsed()))
                     );
-                    let _ = std::io::stdout().flush();
+                    let _ = std::io::stderr().flush();
                     frame += 1;
                     std::thread::sleep(SPINNER_INTERVAL);
                 }

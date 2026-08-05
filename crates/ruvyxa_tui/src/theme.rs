@@ -11,9 +11,16 @@
 //! static, but an animated line repaints many fragments per frame, so the
 //! answer is cached in a `OnceLock` instead.
 //!
+//! Two streams are asked, because the CLI writes to two: results go to stdout
+//! and decide `color`, transient animation goes to stderr and decides
+//! `animate`. Animation needs *both* to be terminals — the frames carry the
+//! colours resolved for stdout, and a run whose results are being captured is a
+//! run that should report one line per event on either stream.
+//!
 //! Three opt-outs are preserved exactly as they were, plus two new ones:
 //!
 //! - stdout is not a terminal — no colour, no animation
+//! - stderr is not a terminal — no animation
 //! - `NO_COLOR` is set — no colour
 //! - `TERM=dumb` — no colour, no animation
 //! - `RUVYXA_FUN=0` (or `false`, `off`, `no`, empty) — no animation, no mascot
@@ -27,9 +34,9 @@ use std::sync::OnceLock;
 pub struct Capabilities {
     /// ANSI colour escapes are safe to emit.
     pub color: bool,
-    /// Carriage-return repainting is safe: a real terminal that has not opted
-    /// out. Everything that redraws a line must check this, so piped output and
-    /// CI logs keep one line per event.
+    /// Carriage-return repainting on stderr is safe: both streams are real
+    /// terminals and the user has not opted out. Everything that redraws a line
+    /// must check this, so piped output and CI logs keep one line per event.
     pub animate: bool,
     /// Non-ASCII glyphs (box drawing, braille, emoji) are safe to emit.
     pub unicode: bool,
@@ -48,16 +55,19 @@ impl Capabilities {
 pub fn capabilities() -> Capabilities {
     static CAPABILITIES: OnceLock<Capabilities> = OnceLock::new();
     *CAPABILITIES.get_or_init(|| {
-        detect_capabilities(std::io::stdout().is_terminal(), |name| {
-            std::env::var_os(name).map(|value| value.to_string_lossy().into_owned())
-        })
+        detect_capabilities(
+            std::io::stdout().is_terminal(),
+            std::io::stderr().is_terminal(),
+            |name| std::env::var_os(name).map(|value| value.to_string_lossy().into_owned()),
+        )
     })
 }
 
-/// The detection rules, taking the terminal answer and the environment as
+/// The detection rules, taking both terminal answers and the environment as
 /// arguments so the decision table can be tested without a terminal.
 pub fn detect_capabilities(
-    is_terminal: bool,
+    stdout_is_terminal: bool,
+    stderr_is_terminal: bool,
     env: impl Fn(&str) -> Option<String>,
 ) -> Capabilities {
     let dumb = env("TERM")
@@ -65,9 +75,12 @@ pub fn detect_capabilities(
         .unwrap_or(false);
 
     Capabilities {
-        color: is_terminal && !dumb && env("NO_COLOR").is_none(),
-        animate: is_terminal && !dumb && !is_off(env("RUVYXA_FUN").as_deref()),
-        // Not gated on `is_terminal`: a redirected log renders UTF-8 as well as
+        color: stdout_is_terminal && !dumb && env("NO_COLOR").is_none(),
+        animate: stdout_is_terminal
+            && stderr_is_terminal
+            && !dumb
+            && !is_off(env("RUVYXA_FUN").as_deref()),
+        // Not gated on either terminal answer: a redirected log renders UTF-8 as well as
         // a terminal does, and the header emoji is already written
         // unconditionally. Only a terminal that cannot draw the glyphs — or a
         // user who says so — falls back to ASCII.
