@@ -9,8 +9,12 @@
 //!    extensions via [`resolve_specifier`].
 //! 2. **Absolute path** — used for framework-generated virtual imports.
 //! 3. **tsconfig.json `paths`/`baseUrl`** — checked before `node_modules`.
-//! 4. **Bare specifier** — treated as an external `node_modules` dependency;
-//!    `package.json` `exports` fields are consulted for sub-path resolution.
+//! 4. **Bare specifier** — resolved against `node_modules` the way Node does:
+//!    walk upward from the importing file, and in the first matching package
+//!    consult `exports`, then the legacy `browser`/`module`/`main` fields, then
+//!    `index`. The upward walk is what makes non-hoisted installs work — under
+//!    pnpm a transitive dependency lives beside its dependent in the store and
+//!    never appears in the project's own `node_modules`.
 //!
 //! ## Performance
 //!
@@ -132,22 +136,37 @@ pub struct ResolveGraphCache {
     tsconfigs: Arc<DashMap<PathBuf, CachedTsConfig>>,
     /// Fully resolved dependency lists for build-hook-free source snapshots.
     dependencies: Arc<DashMap<DependencyCacheKey, Arc<[PathBuf]>>>,
-    /// Parsed `package.json` `exports` fields, keyed by the package.json path.
-    /// Avoids re-reading and re-parsing the same `node_modules` package.json
-    /// for every importing module that resolves a bare specifier from it.
-    package_json: Arc<DashMap<PathBuf, CachedPackageExports>>,
+    /// Parsed `package.json` entry-point fields, keyed by the package.json
+    /// path. Avoids re-reading and re-parsing the same `node_modules`
+    /// package.json for every importing module that resolves a bare specifier
+    /// from it.
+    package_json: Arc<DashMap<PathBuf, CachedPackageJson>>,
     /// Production builds operate on one immutable input snapshot and can skip
     /// repeated metadata checks after the first source read.
     stable_snapshot: bool,
 }
 
-/// Cached `exports` field from a `package.json`, fingerprinted for
-/// invalidation. `None` means the file has no `exports` field (or failed to
-/// parse), which is itself worth caching to avoid re-reading it.
+/// Entry-point fields of one `package.json`.
+///
+/// `exports` is the modern map; `browser`/`module`/`main` are the legacy
+/// fields Node and every bundler still honour for the (very common) packages
+/// that ship no `exports` map at all — `scheduler`, for one, which React DOM
+/// requires at runtime.
+#[derive(Debug, Default)]
+struct PackageManifest {
+    exports: Option<PackageJsonValue>,
+    browser: Option<String>,
+    module: Option<String>,
+    main: Option<String>,
+}
+
+/// Cached `package.json` entry points, fingerprinted for invalidation.
+/// `manifest: None` means the file is missing or unparsable, which is itself
+/// worth caching to avoid re-reading it.
 #[derive(Debug, Clone)]
-struct CachedPackageExports {
+struct CachedPackageJson {
     fingerprint: SourceFingerprint,
-    exports: Option<Arc<PackageJsonValue>>,
+    manifest: Option<Arc<PackageManifest>>,
 }
 
 impl ResolveGraphCache {
@@ -261,15 +280,23 @@ impl ResolveGraphCache {
         paths
     }
 
-    /// Load a package.json's `exports` field once per (path, fingerprint),
+    /// Load a package.json's entry-point fields once per (path, fingerprint),
     /// mirroring the tsconfig cache above.
-    fn package_exports_value(&self, pkg_json_path: &Path) -> Option<Arc<PackageJsonValue>> {
+    ///
+    /// Returns `None` when the file does not exist or does not parse as a JSON
+    /// object — the caller reads that as "this directory is not a package".
+    fn package_manifest(&self, pkg_json_path: &Path) -> Option<Arc<PackageManifest>> {
         if self.stable_snapshot
             && let Some(entry) = self.package_json.get(pkg_json_path)
         {
-            return entry.exports.clone();
+            return entry.manifest.clone();
         }
-        let metadata = fs::metadata(pkg_json_path).ok()?;
+        let Ok(metadata) = fs::metadata(pkg_json_path) else {
+            // A missing package.json is the common case while walking
+            // `node_modules` candidates, but it cannot be fingerprint-cached
+            // (there is nothing to stat), so do not poison the map with it.
+            return None;
+        };
         let fingerprint = SourceFingerprint {
             modified: metadata.modified().ok(),
             len: metadata.len(),
@@ -277,34 +304,21 @@ impl ResolveGraphCache {
         if let Some(entry) = self.package_json.get(pkg_json_path)
             && entry.fingerprint == fingerprint
         {
-            return entry.exports.clone();
+            return entry.manifest.clone();
         }
 
-        let content = fs::read_to_string(pkg_json_path).ok()?;
-        let Ok(PackageJsonValue::Object(fields)) =
-            serde_json::from_str::<PackageJsonValue>(&content)
-        else {
-            self.package_json.insert(
-                pkg_json_path.to_path_buf(),
-                CachedPackageExports {
-                    fingerprint,
-                    exports: None,
-                },
-            );
-            return None;
-        };
-        let exports = fields
-            .into_iter()
-            .find(|(field, _)| field == "exports")
-            .map(|(_, value)| Arc::new(value));
+        let manifest = fs::read_to_string(pkg_json_path)
+            .ok()
+            .and_then(|content| parse_package_manifest(&content))
+            .map(Arc::new);
         self.package_json.insert(
             pkg_json_path.to_path_buf(),
-            CachedPackageExports {
+            CachedPackageJson {
                 fingerprint,
-                exports: exports.clone(),
+                manifest: manifest.clone(),
             },
         );
-        exports
+        manifest
     }
 
     /// Number of cached resolution entries. Intended for diagnostics/tests.
@@ -651,11 +665,44 @@ impl<'de> Visitor<'de> for PackageJsonVisitor {
     }
 }
 
-/// Resolve a bare package specifier through its `exports` map. A `null` map
-/// entry is distinct from an absent map: it explicitly blocks filesystem
-/// fallback for that subpath.
-fn resolve_package_exports(
+/// Extract the entry-point fields we care about from a `package.json`.
+fn parse_package_manifest(content: &str) -> Option<PackageManifest> {
+    let PackageJsonValue::Object(fields) =
+        serde_json::from_str::<PackageJsonValue>(content).ok()?
+    else {
+        return None;
+    };
+
+    let mut manifest = PackageManifest::default();
+    for (field, value) in fields {
+        match (field.as_str(), value) {
+            ("exports", value) => manifest.exports = Some(value),
+            // `browser` also has an object form (a per-file substitution map).
+            // Only the string form names an entry point; the map form is
+            // deliberately ignored rather than half-honoured.
+            ("browser", PackageJsonValue::String(path)) => manifest.browser = Some(path),
+            ("module", PackageJsonValue::String(path)) => manifest.module = Some(path),
+            ("main", PackageJsonValue::String(path)) => manifest.main = Some(path),
+            _ => {}
+        }
+    }
+    Some(manifest)
+}
+
+/// Resolve a bare package specifier the way Node does: walk `node_modules`
+/// directories upward from the importer, and inside the first matching package
+/// consult `exports`, then the legacy `browser`/`module`/`main` fields, then
+/// `index`.
+///
+/// The upward walk is what makes non-hoisted installs work. Under pnpm a
+/// transitive dependency lives beside its dependent inside the store
+/// (`.pnpm/react-dom@19/node_modules/scheduler`) and never appears in the
+/// project's own `node_modules`; resolving only against the project root made
+/// every such package unresolvable, which the client linker then turned into a
+/// `RUV1610` throw that fired at runtime.
+fn resolve_node_modules_specifier(
     cache: &ResolveGraphCache,
+    importer_dir: &Path,
     project_root: &Path,
     specifier: &str,
     target: BundleTarget,
@@ -664,22 +711,135 @@ fn resolve_package_exports(
         return PackageExportsResolution::Unavailable;
     };
 
-    let pkg_dir = project_root.join("node_modules").join(pkg_name);
-    let pkg_json_path = pkg_dir.join("package.json");
+    for modules_dir in node_modules_candidates(importer_dir, project_root) {
+        let pkg_dir = modules_dir.join(&pkg_name);
+        let Some(manifest) = cache.package_manifest(&pkg_dir.join("package.json")) else {
+            // No manifest here. A bare directory can still satisfy a deep
+            // subpath import (`pkg/dist/thing.js`); anything else means this
+            // is not the package and the walk continues.
+            if export_key != "."
+                && let Some(path) = resolve_package_relative(&pkg_dir, &export_key)
+            {
+                return PackageExportsResolution::Resolved(path);
+            }
+            continue;
+        };
 
-    let Some(exports) = cache.package_exports_value(&pkg_json_path) else {
-        return PackageExportsResolution::Unavailable;
-    };
+        // The nearest package with this name wins, exactly as in Node: once a
+        // manifest is found the walk stops, successfully or not.
+        if let Some(exports) = manifest.exports.as_ref() {
+            match resolve_exports_entry(exports, &export_key, target) {
+                ExportTargets::Blocked => return PackageExportsResolution::Blocked,
+                ExportTargets::Targets(targets) => {
+                    return targets
+                        .into_iter()
+                        .find_map(|entry| resolve_export_target(&pkg_dir, &entry))
+                        .map(PackageExportsResolution::Resolved)
+                        .unwrap_or(PackageExportsResolution::Unavailable);
+                }
+                // An `exports` map that does not cover this subpath falls
+                // through to the legacy fields rather than failing outright.
+                ExportTargets::Unmatched => {}
+            }
+        }
 
-    match resolve_exports_entry(&exports, &export_key, target) {
-        ExportTargets::Blocked => PackageExportsResolution::Blocked,
-        ExportTargets::Unmatched => PackageExportsResolution::Unavailable,
-        ExportTargets::Targets(targets) => targets
-            .into_iter()
-            .find_map(|target| resolve_export_target(&pkg_dir, &target))
+        return resolve_legacy_entry(&pkg_dir, &manifest, &export_key, target)
             .map(PackageExportsResolution::Resolved)
-            .unwrap_or(PackageExportsResolution::Unavailable),
+            .unwrap_or(PackageExportsResolution::Unavailable);
     }
+
+    PackageExportsResolution::Unavailable
+}
+
+#[cfg(test)]
+fn resolve_package_exports(
+    cache: &ResolveGraphCache,
+    project_root: &Path,
+    specifier: &str,
+    target: BundleTarget,
+) -> PackageExportsResolution {
+    resolve_node_modules_specifier(cache, project_root, project_root, specifier, target)
+}
+
+/// `node_modules` directories to probe, nearest importer first.
+///
+/// Mirrors Node's `NODE_MODULES_PATHS`: every ancestor of the importer that is
+/// not itself named `node_modules` contributes `<ancestor>/node_modules`. The
+/// project root's own chain is appended so a package installed only at the
+/// root still resolves for an importer that lives outside the root — a pnpm
+/// store on another path, for example.
+fn node_modules_candidates(importer_dir: &Path, project_root: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    for dir in [importer_dir, project_root] {
+        let mut current = Some(dir);
+        while let Some(path) = current {
+            if path.file_name().is_none_or(|name| name != "node_modules") {
+                let candidate = path.join("node_modules");
+                if seen.insert(candidate.clone()) {
+                    candidates.push(candidate);
+                }
+            }
+            current = path.parent();
+        }
+    }
+
+    candidates
+}
+
+/// Resolve an entry point from the legacy `browser`/`module`/`main` fields, or
+/// from the package's directory layout when none of them apply.
+fn resolve_legacy_entry(
+    pkg_dir: &Path,
+    manifest: &PackageManifest,
+    export_key: &str,
+    target: BundleTarget,
+) -> Option<PathBuf> {
+    if export_key != "." {
+        return resolve_package_relative(pkg_dir, export_key);
+    }
+
+    let mut fields: Vec<&str> = Vec::new();
+    // `browser` only wins for browser bundles; on the server it would swap in
+    // a build that assumes `window`.
+    if target == BundleTarget::Client
+        && let Some(browser) = manifest.browser.as_deref()
+    {
+        fields.push(browser);
+    }
+    if let Some(module) = manifest.module.as_deref() {
+        fields.push(module);
+    }
+    if let Some(main) = manifest.main.as_deref() {
+        fields.push(main);
+    }
+    fields.push("index");
+
+    fields
+        .into_iter()
+        .find_map(|field| resolve_package_relative(pkg_dir, field))
+}
+
+/// Join a package-relative path and probe it, refusing anything that escapes
+/// the package directory.
+fn resolve_package_relative(pkg_dir: &Path, relative: &str) -> Option<PathBuf> {
+    let relative = relative.strip_prefix("./").unwrap_or(relative);
+    if relative.is_empty() || relative.contains('\\') {
+        return None;
+    }
+    let relative = Path::new(relative);
+    if !relative
+        .components()
+        .all(|component| matches!(component, std::path::Component::Normal(_)))
+    {
+        return None;
+    }
+
+    let resolved = resolve_file_candidate(&pkg_dir.join(relative))?;
+    let package_root = ruvyxa_diagnostics::normalized_canonical_path(pkg_dir);
+    let candidate = ruvyxa_diagnostics::normalized_canonical_path(&resolved);
+    candidate.starts_with(package_root).then_some(candidate)
 }
 
 fn resolve_export_target(pkg_dir: &Path, target: &str) -> Option<PathBuf> {
@@ -1258,7 +1418,13 @@ fn collect_deps_uncached(
                 {
                     project_local
                 } else {
-                    match resolve_package_exports(cache, project_root, &specifier, target) {
+                    match resolve_node_modules_specifier(
+                        cache,
+                        base_dir,
+                        project_root,
+                        &specifier,
+                        target,
+                    ) {
                         PackageExportsResolution::Resolved(path) => Some(path),
                         PackageExportsResolution::Blocked => None,
                         PackageExportsResolution::Unavailable => project_local,
@@ -1833,6 +1999,129 @@ export default function Card() { return <div className={cn("card")} /> }"#,
             panic!("expected package exports resolution");
         };
         assert!(resolved.ends_with("dist/runtime.mjs"));
+    }
+
+    /// The `RUV1610: Cannot require "scheduler"` regression. Under pnpm a
+    /// transitive dependency lives beside its dependent inside the store and
+    /// never appears in the project's own `node_modules`, so resolving only
+    /// against the project root left it unresolved and the client linker
+    /// replaced the `require` with a throw that fired in the browser.
+    #[test]
+    fn resolves_transitive_packages_from_a_nested_node_modules() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let cache = ResolveGraphCache::new();
+
+        let store = root.join("node_modules/.pnpm/react-dom@19.2.8/node_modules");
+        let react_dom = store.join("react-dom");
+        fs::create_dir_all(react_dom.join("cjs")).unwrap();
+        fs::write(
+            react_dom.join("package.json"),
+            r#"{"exports":{".":{"default":"./index.js"}}}"#,
+        )
+        .unwrap();
+        fs::write(
+            react_dom.join("cjs").join("react-dom.production.js"),
+            r#"var Scheduler = require("scheduler");"#,
+        )
+        .unwrap();
+
+        // `scheduler` exists only next to its dependent, and ships no
+        // `exports` map — the two halves of the original failure.
+        let scheduler = store.join("scheduler");
+        fs::create_dir_all(&scheduler).unwrap();
+        fs::write(scheduler.join("package.json"), r#"{"main":"index.js"}"#).unwrap();
+        fs::write(scheduler.join("index.js"), "module.exports = {};").unwrap();
+
+        let PackageExportsResolution::Resolved(resolved) = resolve_node_modules_specifier(
+            &cache,
+            &react_dom.join("cjs"),
+            root,
+            "scheduler",
+            BundleTarget::Client,
+        ) else {
+            panic!("expected the nested scheduler package to resolve");
+        };
+        assert!(resolved.ends_with("scheduler/index.js"), "{resolved:?}");
+    }
+
+    #[test]
+    fn resolves_packages_without_an_exports_map() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let cache = ResolveGraphCache::new();
+
+        // `main`, then a bare `index.js`, then a subpath — none of which the
+        // `exports`-only resolver could reach.
+        let main_only = root.join("node_modules").join("main-only");
+        fs::create_dir_all(main_only.join("lib")).unwrap();
+        fs::write(main_only.join("package.json"), r#"{"main":"lib/entry.js"}"#).unwrap();
+        fs::write(
+            main_only.join("lib").join("entry.js"),
+            "module.exports = 1;",
+        )
+        .unwrap();
+
+        let index_only = root.join("node_modules").join("index-only");
+        fs::create_dir_all(&index_only).unwrap();
+        fs::write(index_only.join("package.json"), r#"{"version":"1.0.0"}"#).unwrap();
+        fs::write(index_only.join("index.js"), "module.exports = 2;").unwrap();
+
+        for (specifier, expected) in [
+            ("main-only", "main-only/lib/entry.js"),
+            ("index-only", "index-only/index.js"),
+            ("main-only/lib/entry.js", "main-only/lib/entry.js"),
+        ] {
+            let PackageExportsResolution::Resolved(resolved) =
+                resolve_package_exports(&cache, root, specifier, BundleTarget::Client)
+            else {
+                panic!("expected {specifier} to resolve");
+            };
+            assert!(resolved.ends_with(expected), "{specifier}: {resolved:?}");
+        }
+    }
+
+    #[test]
+    fn legacy_entry_fields_follow_the_bundle_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let cache = ResolveGraphCache::new();
+
+        let pkg = root.join("node_modules").join("dual");
+        fs::create_dir_all(&pkg).unwrap();
+        fs::write(
+            pkg.join("package.json"),
+            r#"{"browser":"./browser.js","main":"./node.js"}"#,
+        )
+        .unwrap();
+        fs::write(pkg.join("browser.js"), "module.exports = 'browser';").unwrap();
+        fs::write(pkg.join("node.js"), "module.exports = 'node';").unwrap();
+
+        for (target, expected) in [
+            (BundleTarget::Client, "browser.js"),
+            (BundleTarget::Ssr, "node.js"),
+        ] {
+            let PackageExportsResolution::Resolved(resolved) =
+                resolve_package_exports(&cache, root, "dual", target)
+            else {
+                panic!("expected dual package to resolve for {target:?}");
+            };
+            assert!(resolved.ends_with(expected), "{target:?}: {resolved:?}");
+        }
+    }
+
+    #[test]
+    fn node_modules_candidates_skip_nested_node_modules_segments() {
+        let root = Path::new("/app");
+        let importer = Path::new("/app/node_modules/.pnpm/react-dom@19/node_modules/react-dom/cjs");
+        let candidates = node_modules_candidates(importer, root);
+
+        let contains = |suffix: &str| candidates.iter().any(|path| path.ends_with(suffix));
+        assert!(contains("react-dom/cjs/node_modules"));
+        assert!(contains("react-dom@19/node_modules"));
+        assert!(contains("app/node_modules"));
+        // Node never appends `node_modules` to a `node_modules` directory.
+        assert!(!contains("node_modules/node_modules"));
     }
 
     #[test]

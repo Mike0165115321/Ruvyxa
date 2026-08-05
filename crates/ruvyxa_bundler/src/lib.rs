@@ -1238,4 +1238,117 @@ mod tests {
         assert!(output.code.len() < readable_output.code.len());
         assert!(output.stats.minified);
     }
+
+    /// End-to-end guard for `RUV1610: Cannot require "scheduler"`.
+    ///
+    /// The package is reachable only through a nested `node_modules` (the
+    /// non-hoisted layout npm produces on a version conflict and pnpm produces
+    /// for every transitive dependency) and ships no `exports` map. Both traits
+    /// used to make it unresolvable, and the client linker then replaced the
+    /// `require` with a throw that only fired once the browser ran the chunk.
+    #[test]
+    fn client_bundle_resolves_transitive_commonjs_dependencies() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = ruvyxa_diagnostics::normalized_canonical_path(temp.path());
+        let app = root.join("app");
+        let react_dom = root.join("node_modules/react-dom");
+        let scheduler = react_dom.join("node_modules/scheduler");
+        fs::create_dir_all(&app).unwrap();
+        fs::create_dir_all(react_dom.join("cjs")).unwrap();
+        fs::create_dir_all(&scheduler).unwrap();
+
+        fs::write(
+            react_dom.join("package.json"),
+            r#"{"exports":{"./client":"./client.js"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            react_dom.join("client.js"),
+            "module.exports = require('./cjs/react-dom-client.production.js');",
+        )
+        .unwrap();
+        fs::write(
+            react_dom.join("cjs/react-dom-client.production.js"),
+            "const Scheduler = require('scheduler'); module.exports = { hydrateRoot() { Scheduler.schedulerMarker(); } };",
+        )
+        .unwrap();
+
+        // No `exports` map and no `main`: resolution has to fall back to
+        // `index.js`, the way Node does.
+        fs::write(scheduler.join("package.json"), r#"{"version":"0.27.0"}"#).unwrap();
+        fs::write(
+            scheduler.join("index.js"),
+            "module.exports = { schedulerMarker() {} };",
+        )
+        .unwrap();
+
+        let page = app.join("page.tsx");
+        fs::write(
+            &page,
+            "import { hydrateRoot } from 'react-dom/client'; export default function Page() { hydrateRoot(); return <main>Ready</main>; }",
+        )
+        .unwrap();
+
+        let mut input = client_input(&root, &app, page, vec![], "/");
+        input.options.source_map = false;
+        input.options.emit_chunk_manifest = false;
+        let output = bundle(input).unwrap();
+
+        assert!(
+            !output.code.contains("RUV1610"),
+            "transitive package must resolve instead of becoming a runtime throw"
+        );
+        assert!(
+            output.code.contains("schedulerMarker"),
+            "the transitive package must be bundled: {}",
+            &output.code[..output.code.len().min(2000)]
+        );
+        assert!(
+            !output.code.contains("require('scheduler')")
+                && !output.code.contains("require(\"scheduler\")"),
+            "no bare require may survive in a browser bundle"
+        );
+    }
+
+    /// An unresolvable bare import must not reach the browser as a bare ESM
+    /// specifier: nothing resolves it from a `<script type="module">`, so the
+    /// whole chunk failed to load and the browser's message named neither the
+    /// package nor the file that wanted it. The failure has to survive
+    /// minification as an attributable, deferred one.
+    #[test]
+    fn client_bundle_defers_unresolvable_imports_instead_of_shipping_bare_specifiers() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = ruvyxa_diagnostics::normalized_canonical_path(temp.path());
+        let app = root.join("app");
+        fs::create_dir_all(&app).unwrap();
+        let page = app.join("page.tsx");
+        fs::write(
+            &page,
+            "import { thing } from 'ghost-pkg'; export default function Page() { thing(); return <main>x</main>; }",
+        )
+        .unwrap();
+
+        let mut input = client_input(&root, &app, page, vec![], "/");
+        input.options.minify = true;
+        input.options.source_map = false;
+        input.options.emit_chunk_manifest = false;
+        let output = bundle(input).unwrap();
+
+        assert!(
+            !output.code.contains("from\"ghost-pkg\"")
+                && !output.code.contains("from \"ghost-pkg\""),
+            "bare specifier leaked into the browser bundle: {}",
+            &output.code[..output.code.len().min(600)]
+        );
+        assert!(
+            output.code.contains("RUV1611"),
+            "the deferred failure must survive minification: {}",
+            &output.code[..output.code.len().min(600)]
+        );
+        assert!(
+            output.code.contains("ghost-pkg") && output.code.contains("page.tsx"),
+            "the stub must still name the package and the importer: {}",
+            &output.code[..output.code.len().min(600)]
+        );
+    }
 }

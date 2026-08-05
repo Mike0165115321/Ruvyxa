@@ -141,7 +141,7 @@ fn link_inner(
 
     let mut out = String::with_capacity(estimated_size);
 
-    let external_imports = collect_external_imports(&project_modules);
+    let external_imports = collect_external_imports(&project_modules, input.target);
     for import in external_imports {
         out.push_str(&import);
         out.push('\n');
@@ -182,6 +182,7 @@ fn link_inner(
             &mut out,
             true,
             true,
+            &label,
         )?;
 
         out.push_str("  return module.exports;\n");
@@ -247,7 +248,7 @@ pub(crate) fn link_parallel_with_dynamic_imports_and_shared_modules(
     }
 
     // Phase 1: Compute external imports (sequential — cheap BTreeSet scan).
-    let external_imports = collect_external_imports(&project_modules);
+    let external_imports = collect_external_imports(&project_modules, input.target);
 
     // Phase 2: Parallel rewrite — each module's IIFE body is independent.
     // The rewrite only references `module_id(dep)` which is deterministic.
@@ -282,6 +283,7 @@ pub(crate) fn link_parallel_with_dynamic_imports_and_shared_modules(
                 &mut segment,
                 true,
                 true,
+                &label,
             )?;
 
             segment.push_str("  return module.exports;\n");
@@ -335,7 +337,7 @@ pub(crate) fn link_shared_route_modules(
     detect_cycles(modules)?;
     let project_modules = ordered_project_modules(modules);
     let mut out = String::new();
-    for import in collect_external_imports(&project_modules) {
+    for import in collect_external_imports(&project_modules, input.target) {
         out.push_str(&import);
         out.push('\n');
     }
@@ -350,6 +352,7 @@ pub(crate) fn link_shared_route_modules(
 
     for module in project_modules {
         let id = module_id(&module.path);
+        let label = module.path.to_string_lossy().into_owned();
         out.push_str("var ");
         out.push_str(&id);
         out.push_str(" = __ruvyxa_shared_modules__[\"");
@@ -369,6 +372,7 @@ pub(crate) fn link_shared_route_modules(
             &mut out,
             true,
             true,
+            &label,
         )?;
         out.push_str("  return module.exports;\n})();\n\n");
     }
@@ -482,15 +486,17 @@ fn rewrite_module_into(
     out: &mut String,
     indent: bool,
     drop_external_imports: bool,
+    importer: &str,
 ) -> Result<()> {
     let mut pending_exports = Vec::new();
     let mut in_block_comment = false;
     let mut in_commonjs_block_comment = false;
+    let real_imports = static_import_specifiers(source);
 
     for line in source.lines() {
         let trimmed = line.trim();
 
-        let rewritten = try_rewrite_import(trimmed, deps, drop_external_imports)?
+        let rewritten = try_rewrite_import(trimmed, deps, drop_external_imports, &real_imports)?
             .map(Rewrite::Inline)
             .or_else(|| try_rewrite_export_statement(trimmed, deps));
 
@@ -513,6 +519,7 @@ fn rewrite_module_into(
             deps,
             &mut in_commonjs_block_comment,
             drop_external_imports,
+            importer,
         );
         write_rewritten_line(out, &commonjs_rewritten, indent);
     }
@@ -526,7 +533,13 @@ fn rewrite_module_into(
 
 #[cfg(test)]
 fn rewrite_commonjs_requires(line: &str, deps: &[PathBuf]) -> String {
-    rewrite_commonjs_requires_with_state(line, &DepIndex::without_aliases(deps), &mut false, false)
+    rewrite_commonjs_requires_with_state(
+        line,
+        &DepIndex::without_aliases(deps),
+        &mut false,
+        false,
+        "<test>",
+    )
 }
 
 fn rewrite_commonjs_requires_with_state(
@@ -534,6 +547,7 @@ fn rewrite_commonjs_requires_with_state(
     deps: &DepIndex<'_>,
     in_block_comment: &mut bool,
     drop_unresolved: bool,
+    importer: &str,
 ) -> String {
     let mut out = String::with_capacity(line.len());
     let bytes = line.as_bytes();
@@ -594,11 +608,15 @@ fn rewrite_commonjs_requires_with_state(
             // Unresolved require in a client bundle: replace with a runtime
             // error so the bundle does not ship a bare `require()` call that
             // browsers cannot execute.
+            //
+            // The message names the importer because the stack trace cannot:
+            // bundle frames point at a content-hashed chunk, so without it the
+            // only clue is a specifier with no indication of who asked for it.
             if drop_unresolved {
-                let escaped = specifier.replace('\\', "\\\\").replace('"', "\\\"");
+                let escaped = escape_js_string(&specifier);
+                let importer = escape_js_string(importer);
                 out.push_str(&format!(
-                    "(function(){{throw new Error(\"RUV1610: Cannot require \\\"{}\\\" in a browser bundle\")}})() /* require removed */",
-                    escaped
+                    "(function(){{throw new Error(\"RUV1610: Cannot require \\\"{escaped}\\\" in a browser bundle (imported by {importer}). The package could not be resolved from node_modules; check that it is installed.\")}})() /* require removed */"
                 ));
                 index = after_call;
                 continue;
@@ -609,6 +627,16 @@ fn rewrite_commonjs_requires_with_state(
     }
 
     out
+}
+
+/// Escape a value for embedding in a double-quoted JavaScript string literal.
+/// Windows importer paths are full of backslashes, so this is not optional.
+fn escape_js_string(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 fn require_call(line: &str, mut index: usize) -> Option<(String, usize)> {
@@ -780,6 +808,7 @@ fn try_rewrite_import(
     line: &str,
     deps: &DepIndex<'_>,
     drop_external_imports: bool,
+    real_imports: &BTreeSet<String>,
 ) -> Result<Option<String>> {
     if !line.starts_with("import ") {
         return Ok(None);
@@ -787,6 +816,10 @@ fn try_rewrite_import(
 
     // Side-effect import: `import "./styles.css"` → remove (CSS handled separately)
     if line.starts_with("import \"") || line.starts_with("import '") {
+        let quoted = extract_quoted_string(line.strip_prefix("import ").unwrap_or(line));
+        if !quoted.is_some_and(|specifier| real_imports.contains(&specifier)) {
+            return Ok(None);
+        }
         return Ok(Some(format!("// [bundled] {line}")));
     }
 
@@ -794,6 +827,12 @@ fn try_rewrite_import(
     let Some((before_from, specifier)) = split_from_specifier(line) else {
         return Ok(None);
     };
+
+    // Text that merely looks like an import — a code sample inside a template
+    // literal, most often. Rewriting it would edit the string's contents.
+    if !real_imports.contains(&specifier) {
+        return Ok(None);
+    }
 
     // Find the matching dep by specifier.
     let Some(dep_path) = deps.resolve(&specifier) else {
@@ -814,20 +853,38 @@ fn try_rewrite_import(
     Ok(Some(rewrite_import_clause(clause, &dep_id)?))
 }
 
-fn collect_external_imports(modules: &[&CompiledModule]) -> Vec<String> {
+/// Hoist the import statements that stay external to the bundle.
+///
+/// On the server a bare specifier left here is correct: Node resolves it at
+/// load time. In a browser bundle it is not — nothing resolves `"scheduler"`
+/// from a `<script type="module">`, so hoisting it verbatim makes the whole
+/// chunk fail to load with a message that names neither the package nor the
+/// file that wanted it. Client bundles therefore replace unresolvable bare
+/// imports with bindings that throw a `RUV1611` naming both, which keeps the
+/// rest of the page alive and the failure attributable. This mirrors what the
+/// CommonJS path does with `RUV1610`.
+fn collect_external_imports(modules: &[&CompiledModule], target: BundleTarget) -> Vec<String> {
     let mut imports = BTreeSet::new();
+    // specifier -> (local bindings, importing modules). Collected across all
+    // modules before emitting so one stub covers every importer of a package:
+    // emitting per-module would redeclare shared binding names and produce a
+    // bundle that does not parse.
+    let mut unresolved: BTreeMap<String, (BTreeSet<String>, BTreeSet<String>)> = BTreeMap::new();
 
     for module in modules {
         // One index per module: every import line in the module resolves
         // against the same dependency list.
         let deps = DepIndex::new(&module.deps, &module.dependency_aliases);
+        let real_imports = static_import_specifiers(&module.js);
         for line in module.js.lines() {
             let trimmed = line.trim();
             if !trimmed.starts_with("import ") {
                 continue;
             }
 
-            let specifier = if trimmed.starts_with("import \"") || trimmed.starts_with("import '") {
+            let side_effect_only =
+                trimmed.starts_with("import \"") || trimmed.starts_with("import '");
+            let specifier = if side_effect_only {
                 extract_quoted_string(trimmed.strip_prefix("import ").unwrap_or(trimmed))
             } else {
                 split_from_specifier(trimmed).map(|(_, specifier)| specifier)
@@ -837,17 +894,139 @@ fn collect_external_imports(modules: &[&CompiledModule]) -> Vec<String> {
                 continue;
             };
 
-            if is_non_js_asset_specifier(&specifier) {
+            if is_non_js_asset_specifier(&specifier) || !real_imports.contains(&specifier) {
                 continue;
             }
 
-            if deps.resolve(&specifier).is_none() {
+            if deps.resolve(&specifier).is_some() {
+                continue;
+            }
+
+            if target != BundleTarget::Client || !is_bare_specifier(&specifier) {
                 imports.insert(ensure_semicolon(trimmed));
+                continue;
+            }
+
+            let entry = unresolved.entry(specifier).or_default();
+            entry.1.insert(module.path.to_string_lossy().into_owned());
+            if side_effect_only {
+                continue;
+            }
+            let Some((before_from, _)) = split_from_specifier(trimmed) else {
+                continue;
+            };
+            let Some(clause) = before_from.strip_prefix("import ") else {
+                continue;
+            };
+            // An unparsable clause is not worth failing the build over here:
+            // the statement is already broken, and the importer is still
+            // recorded so the stub reports it.
+            if let Ok(bindings) = parse_import_clause(clause.trim()) {
+                entry.0.extend(bindings.into_iter().map(|(local, _)| local));
             }
         }
     }
 
-    imports.into_iter().collect()
+    let mut out: Vec<String> = imports.into_iter().collect();
+    out.extend(unresolved_import_stubs(&unresolved));
+    out
+}
+
+/// Emit throwing bindings for bare specifiers a browser bundle cannot resolve.
+fn unresolved_import_stubs(
+    unresolved: &BTreeMap<String, (BTreeSet<String>, BTreeSet<String>)>,
+) -> Vec<String> {
+    if unresolved.is_empty() {
+        return Vec::new();
+    }
+
+    let mut out = vec![UNRESOLVED_IMPORT_HELPER.to_string()];
+    // One declaration per name across the whole bundle. Two missing packages
+    // that introduce the same local name would otherwise emit a duplicate
+    // `const` and break parsing — the first declaration wins, and its message
+    // still names a package that has to be installed.
+    let mut declared = BTreeSet::new();
+
+    for (specifier, (bindings, importers)) in unresolved {
+        let importers = importers
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let specifier_literal = crate::output::js_string(specifier);
+        let importers_literal = crate::output::js_string(&importers);
+
+        for binding in bindings {
+            if !declared.insert(binding.clone()) {
+                continue;
+            }
+            out.push(format!(
+                "const {binding} = __ruvyxaMissingImport__({specifier_literal}, {}, {importers_literal});",
+                crate::output::js_string(binding)
+            ));
+        }
+
+        if bindings.is_empty() {
+            // A side-effect-only import has no binding to defer the failure
+            // onto, so `null` makes it report at load — no worse than the
+            // module-resolution error it replaces, and it names the package and
+            // the importer.
+            out.push(format!(
+                "__ruvyxaMissingImport__({specifier_literal}, null, {importers_literal});"
+            ));
+        }
+    }
+
+    out
+}
+
+/// Runtime half of the `RUV1611` stub.
+///
+/// Every trap throws, so a named binding reports the first time the missing
+/// value is actually touched rather than at load — code paths that never reach
+/// it keep working. The binding is a function so a missing React component
+/// still reaches the render that calls it. A `null` binding has nothing to
+/// defer onto and throws immediately.
+const UNRESOLVED_IMPORT_HELPER: &str = concat!(
+    "const __ruvyxaMissingImport__ = function(specifier, binding, importers) {",
+    "const fail = function() {",
+    "throw new Error(\"RUV1611: Cannot import \" + (binding ? '\"' + binding + '\" from ' : \"\") + '\"' + specifier + '\"' + \" in a browser bundle (imported by \" + importers + \"). \" + ",
+    "\"The package could not be resolved from node_modules; check that it is installed.\")",
+    "};",
+    "if (binding === null) fail();",
+    "return new Proxy(function() {}, { get: fail, apply: fail, construct: fail });",
+    "};"
+);
+
+/// Specifiers the shared scanner agrees are real static imports in `source`.
+///
+/// The linker decides line by line, which cannot tell an `import` statement
+/// from the same text inside a template literal — and a documentation snippet
+/// in a `<pre>{`…`}</pre>` block is exactly that. Left ungated, the demo's own
+/// todos page had the import line deleted out of its code sample and the
+/// quoted package hoisted into the bundle as a real dependency.
+/// [`ast::parse_module`] already knows the difference, so every line-level
+/// import decision is gated on what it found.
+fn static_import_specifiers(source: &str) -> BTreeSet<String> {
+    crate::ast::parse_module(source)
+        .imports
+        .into_iter()
+        .filter(|edge| {
+            matches!(
+                edge.kind,
+                crate::ast::ImportKind::Static | crate::ast::ImportKind::SideEffect
+            )
+        })
+        .map(|edge| edge.specifier)
+        .collect()
+}
+
+/// Whether a specifier names a package rather than a file or a URL.
+fn is_bare_specifier(specifier: &str) -> bool {
+    !specifier.starts_with('.')
+        && !specifier.starts_with('/')
+        && !specifier.contains("://")
+        && !specifier.starts_with("data:")
 }
 
 fn is_non_js_asset_specifier(specifier: &str) -> bool {
@@ -975,30 +1154,37 @@ fn try_rewrite_export_statement(line: &str, deps: &DepIndex<'_>) -> Option<Rewri
     None
 }
 
-/// Rewrite an import clause given the resolved module namespace ID.
+/// What a local binding in an import clause reads from the module namespace.
+#[derive(Debug, PartialEq, Eq)]
+enum ImportBinding {
+    Default,
+    Named(String),
+    Namespace,
+}
+
+/// Parse an import clause into its local bindings, in source order.
 ///
-/// Handles:
-/// - `Default`                      → `const Default = dep.default`
-/// - `{ a, b as c }`               → `const {a, c: b} = dep` (actually `const a = dep.a; const c = dep.b;`)
-/// - `* as ns`                      → `const ns = dep`
-/// - `Default, { a, b }`           → combined default + named
-fn rewrite_import_clause(clause: &str, dep_id: &str) -> Result<String> {
+/// Both consumers go through here: the rewriter that points bindings at a
+/// bundled module, and the client stub that replaces bindings whose package
+/// could not be resolved. Parsing the clause in one place is what keeps the two
+/// from disagreeing about which names a statement introduces.
+fn parse_import_clause(clause: &str) -> Result<Vec<(String, ImportBinding)>> {
     let clause = clause.trim();
 
     // `* as ns`
-    if clause.starts_with("* as ") {
-        let ns = clause.strip_prefix("* as ").unwrap().trim();
-        return Ok(format!("const {ns} = {dep_id};"));
+    if let Some(namespace) = clause.strip_prefix("* as ") {
+        return Ok(vec![(
+            namespace.trim().to_string(),
+            ImportBinding::Namespace,
+        )]);
     }
 
     // `{ a, b as c }` — named imports only
     if clause.starts_with('{') {
-        let names = parse_named_bindings(clause);
-        let bindings: Vec<String> = names
-            .iter()
-            .map(|(original, alias)| format!("const {alias} = {dep_id}.{original};"))
-            .collect();
-        return Ok(bindings.join(" "));
+        return Ok(parse_named_bindings(clause)
+            .into_iter()
+            .map(|(original, alias)| (alias, ImportBinding::Named(original)))
+            .collect());
     }
 
     // `Default, { a, b }` — default + named
@@ -1007,14 +1193,15 @@ fn rewrite_import_clause(clause: &str, dep_id: &str) -> Result<String> {
         let default_name = clause[..comma_idx].trim();
         let rest = clause[comma_idx + 1..].trim();
 
-        let mut result = format!("const {default_name} = {dep_id}.default;");
+        let mut bindings = vec![(default_name.to_string(), ImportBinding::Default)];
         if rest.starts_with('{') {
-            let names = parse_named_bindings(rest);
-            for (original, alias) in &names {
-                result.push_str(&format!(" const {alias} = {dep_id}.{original};"));
-            }
+            bindings.extend(
+                parse_named_bindings(rest)
+                    .into_iter()
+                    .map(|(original, alias)| (alias, ImportBinding::Named(original))),
+            );
         }
-        return Ok(result);
+        return Ok(bindings);
     }
 
     // `Default, * as ns` — default + namespace import.
@@ -1025,21 +1212,41 @@ fn rewrite_import_clause(clause: &str, dep_id: &str) -> Result<String> {
             && is_identifier(default_name)
             && is_identifier(namespace.trim())
         {
-            return Ok(format!(
-                "const {default_name} = {dep_id}.default; const {} = {dep_id};",
-                namespace.trim()
-            ));
+            return Ok(vec![
+                (default_name.to_string(), ImportBinding::Default),
+                (namespace.trim().to_string(), ImportBinding::Namespace),
+            ]);
         }
     }
 
     // `Default` — plain default import
     if is_identifier(clause) {
-        return Ok(format!("const {clause} = {dep_id}.default;"));
+        return Ok(vec![(clause.to_string(), ImportBinding::Default)]);
     }
 
     Err(BundleError::Compiler(format!(
         "unsupported static import clause `{clause}`"
     )))
+}
+
+/// Rewrite an import clause given the resolved module namespace ID.
+///
+/// Handles:
+/// - `Default` → `const Default = dep.default;`
+/// - `{ a, b as c }` → `const a = dep.a; const c = dep.b;`
+/// - `* as ns` → `const ns = dep;`
+/// - `Default, { a, b }` and `Default, * as ns` → combined
+fn rewrite_import_clause(clause: &str, dep_id: &str) -> Result<String> {
+    let bindings = parse_import_clause(clause)?
+        .into_iter()
+        .map(|(local, source)| match source {
+            ImportBinding::Default => format!("const {local} = {dep_id}.default;"),
+            ImportBinding::Named(original) => format!("const {local} = {dep_id}.{original};"),
+            ImportBinding::Namespace => format!("const {local} = {dep_id};"),
+        })
+        .collect::<Vec<_>>();
+
+    Ok(bindings.join(" "))
 }
 
 fn is_identifier(value: &str) -> bool {
@@ -1564,12 +1771,62 @@ mod tests {
 
     #[test]
     fn side_effect_import_commented() {
+        let line = "import \"./styles.css\"";
         let result = try_rewrite_import(
-            "import \"./styles.css\"",
+            line,
             &DepIndex::without_aliases(&[]),
             false,
+            &static_import_specifiers(line),
         );
         assert!(result.unwrap().unwrap().starts_with("// [bundled]"));
+    }
+
+    /// A code sample in a template literal is string content, not a statement.
+    /// Rewriting it edited the sample the page was trying to display and
+    /// hoisted the quoted package into the bundle as a real dependency.
+    #[test]
+    fn import_text_inside_a_template_literal_is_left_alone() {
+        let source = "const sample = `\nimport { action } from \"ruvyxa/server\"\n`;\nexport default sample;";
+        let real_imports = static_import_specifiers(source);
+        assert!(real_imports.is_empty(), "{real_imports:?}");
+
+        let result = try_rewrite_import(
+            "import { action } from \"ruvyxa/server\"",
+            &DepIndex::without_aliases(&[]),
+            true,
+            &real_imports,
+        )
+        .unwrap();
+        assert_eq!(result, None, "the sample line must pass through untouched");
+    }
+
+    #[test]
+    fn client_link_keeps_template_literal_samples_out_of_hoisted_imports() {
+        let entry = PathBuf::from("/app/docs.tsx");
+        let input = BundleInput {
+            entry: entry.clone(),
+            project_root: PathBuf::from("/app"),
+            app_dir: PathBuf::from("/app/app"),
+            layouts: Vec::new(),
+            request_path: "/".to_string(),
+            target: BundleTarget::Client,
+            options: crate::BundleOptions::default(),
+            specials: crate::RouteSpecials::default(),
+        };
+        let module = fixture(
+            entry,
+            "export default function Docs() { return `\nimport { action } from \"ruvyxa/server\"\n`; }",
+            Vec::new(),
+        );
+
+        let output = link(&[module], &input).unwrap();
+
+        assert!(!output.contains("RUV1611"), "{output}");
+        assert!(!output.contains("__ruvyxaMissingImport__"), "{output}");
+        assert!(
+            output.contains("import { action } from \"ruvyxa/server\""),
+            "the sample must survive verbatim inside the literal: {output}"
+        );
     }
 
     #[test]
@@ -1643,11 +1900,84 @@ mod tests {
         assert_eq!(spec, "./foo");
     }
 
-    #[test]
-    fn client_link_hoists_external_imports() {
+    fn link_unresolved_import(target: BundleTarget, source: &str) -> String {
         let entry = PathBuf::from("/app/page.tsx");
         let input = BundleInput {
             entry: entry.clone(),
+            project_root: PathBuf::from("/app"),
+            app_dir: PathBuf::from("/app/app"),
+            layouts: Vec::new(),
+            request_path: "/".to_string(),
+            target,
+            options: crate::BundleOptions::default(),
+            specials: crate::RouteSpecials::default(),
+        };
+        link(&[fixture(entry, source, Vec::new())], &input).unwrap()
+    }
+
+    /// Node resolves bare specifiers at load time, so server bundles must keep
+    /// hoisting them untouched.
+    #[test]
+    fn server_link_hoists_external_imports() {
+        let output = link_unresolved_import(
+            BundleTarget::Ssr,
+            "import React from \"react\";\nexport default function Page() {}",
+        );
+
+        assert!(output.starts_with("import React from \"react\";"));
+        assert!(!output.contains("  import React from \"react\";"));
+    }
+
+    /// Nothing resolves a bare specifier inside a `<script type="module">`, and
+    /// Ruvyxa emits no import map, so hoisting one into a browser bundle used
+    /// to kill the entire chunk with a message naming neither the package nor
+    /// the importer. The binding must survive as a deferred, attributable
+    /// failure instead.
+    #[test]
+    fn client_link_replaces_unresolvable_bare_imports_with_throwing_bindings() {
+        let output = link_unresolved_import(
+            BundleTarget::Client,
+            "import React from \"react\";\nexport default function Page() {}",
+        );
+
+        assert!(
+            !output.contains("import React from \"react\";"),
+            "a bare specifier must not reach a browser bundle: {output}"
+        );
+        assert!(output.contains("RUV1611"), "{output}");
+        assert!(
+            output.contains("const React = __ruvyxaMissingImport__(\"react\", \"React\""),
+            "{output}"
+        );
+        assert!(
+            output.contains("/app/page.tsx"),
+            "the stub must name the importer: {output}"
+        );
+    }
+
+    /// Relative specifiers are how emitted chunks reference each other. They
+    /// resolve fine in the browser and must keep being hoisted.
+    #[test]
+    fn client_link_keeps_relative_external_imports() {
+        let output = link_unresolved_import(
+            BundleTarget::Client,
+            "import \"./shared.chunk.js\";\nexport default function Page() {}",
+        );
+
+        assert!(
+            output.starts_with("import \"./shared.chunk.js\";"),
+            "{output}"
+        );
+        assert!(!output.contains("RUV1611"), "{output}");
+    }
+
+    /// Two modules importing the same missing package must produce one
+    /// declaration per name. Emitting per importer would redeclare the binding
+    /// and leave a bundle that does not parse.
+    #[test]
+    fn client_link_declares_each_missing_binding_once() {
+        let input = BundleInput {
+            entry: PathBuf::from("/app/page.tsx"),
             project_root: PathBuf::from("/app"),
             app_dir: PathBuf::from("/app/app"),
             layouts: Vec::new(),
@@ -1656,16 +1986,33 @@ mod tests {
             options: crate::BundleOptions::default(),
             specials: crate::RouteSpecials::default(),
         };
-        let module = fixture(
-            entry,
-            "import React from \"react\";\nexport default function Page() {}",
-            Vec::new(),
+        let modules = [
+            fixture(
+                PathBuf::from("/app/page.tsx"),
+                "import { icon } from \"ghost\";\nexport default function Page() {}",
+                Vec::new(),
+            ),
+            fixture(
+                PathBuf::from("/app/layout.tsx"),
+                "import { icon } from \"ghost\";\nexport function Layout() {}",
+                Vec::new(),
+            ),
+        ];
+
+        let output = link(&modules, &input).unwrap();
+
+        assert_eq!(
+            output
+                .matches("const icon = __ruvyxaMissingImport__")
+                .count(),
+            1,
+            "{output}"
         );
-
-        let output = link(&[module], &input).unwrap();
-
-        assert!(output.starts_with("import React from \"react\";"));
-        assert!(!output.contains("  import React from \"react\";"));
+        assert!(
+            output.contains("/app/page.tsx, /app/layout.tsx")
+                || output.contains("/app/layout.tsx, /app/page.tsx"),
+            "both importers must be named: {output}"
+        );
     }
 
     #[test]
@@ -1709,6 +2056,7 @@ mod tests {
             &DepIndex::without_aliases(&[]),
             &mut false,
             true,
+            "C:\\app\\node_modules\\dependent\\index.js",
         );
         assert!(
             result.contains("RUV1610"),
@@ -1717,6 +2065,14 @@ mod tests {
         assert!(
             result.contains("unknown-pkg"),
             "should mention the specifier: {result}"
+        );
+        assert!(
+            result.contains("dependent"),
+            "should name the importer, which the stack trace cannot: {result}"
+        );
+        assert!(
+            !result.contains("\\app\\node"),
+            "importer backslashes must be escaped for the JS literal: {result}"
         );
         assert!(
             !result.contains("require(\"unknown-pkg\")"),
@@ -1732,6 +2088,7 @@ mod tests {
             &DepIndex::without_aliases(&[]),
             &mut false,
             false,
+            "/app/server.js",
         );
         assert!(
             result.contains("require(\"fs\")"),

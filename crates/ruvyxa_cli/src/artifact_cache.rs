@@ -31,17 +31,28 @@ pub(crate) fn content_hash_bytes(input: &[u8]) -> String {
     blake3::hash(input).to_hex().to_string()
 }
 
+/// The toolchain itself is a cache input, and the one users cannot see.
+///
+/// Every key below mixes this in so upgrading Ruvyxa invalidates artifacts the
+/// new compiler, resolver, or linker would emit differently. Without it a fixed
+/// bundler still served the broken chunk it emitted before the upgrade — the
+/// project's own inputs had not changed, so every key still matched — and the
+/// only cure was a manual `ruvyxa clean` nobody knew to run.
+fn versioned_key(parts: &str) -> String {
+    content_hash(&format!("{}\0{parts}", env!("CARGO_PKG_VERSION")))
+}
+
 pub(crate) fn client_artifact_cache_file(
     cache_dir: &Path,
     route_path: &str,
     variant: &str,
 ) -> PathBuf {
-    let key = content_hash(&format!("{route_path}\0{variant}"));
+    let key = versioned_key(&format!("{route_path}\0{variant}"));
     cache_dir.join("client-routes").join(format!("{key}.json"))
 }
 
 pub(crate) fn client_plan_cache_file(cache_dir: &Path, route_path: &str, variant: &str) -> PathBuf {
-    let key = content_hash(&format!("{route_path}\0{variant}"));
+    let key = versioned_key(&format!("{route_path}\0{variant}"));
     cache_dir
         .join("client-route-plans")
         .join(format!("{key}.json"))
@@ -59,7 +70,7 @@ pub(crate) fn shared_route_artifact_cache_file(
     }
     cache_dir
         .join("shared-route-artifacts")
-        .join(format!("{}.json", content_hash(&key_source)))
+        .join(format!("{}.json", versioned_key(&key_source)))
 }
 
 pub(crate) fn prerender_artifact_cache_file(cache_dir: &Path, job: &PrerenderJob) -> PathBuf {
@@ -77,7 +88,7 @@ pub(crate) fn prerender_artifact_cache_file(cache_dir: &Path, job: &PrerenderJob
     });
     cache_dir
         .join("prerender-routes")
-        .join(format!("{}.json", content_hash(&key.to_string())))
+        .join(format!("{}.json", versioned_key(&key.to_string())))
 }
 
 pub(crate) fn prerender_context_hash(
@@ -382,5 +393,39 @@ pub(crate) fn write_client_cache_file(path: PathBuf, source: Vec<u8>) {
     if fs::write(&temp, source).is_ok() && fs::rename(&temp, &path).is_err() {
         let _ = fs::write(&path, fs::read(&temp).unwrap_or_default());
         let _ = fs::remove_file(temp);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A Ruvyxa upgrade must invalidate build artifacts. Keys that hashed only
+    /// project inputs kept serving chunks emitted by the previous compiler —
+    /// including, before the resolver fix, a shared chunk whose `require` had
+    /// been replaced by a `RUV1610` throw.
+    #[test]
+    fn artifact_cache_keys_are_scoped_to_the_toolchain_version() {
+        let cache_dir = Path::new("/app/.ruvyxa/cache/bundler");
+        let unversioned = content_hash("/blog\0base");
+
+        for path in [
+            client_artifact_cache_file(cache_dir, "/blog", "base"),
+            client_plan_cache_file(cache_dir, "/blog", "base"),
+        ] {
+            let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
+            assert_ne!(stem, unversioned, "key must not ignore the Ruvyxa version");
+            assert_eq!(stem, versioned_key("/blog\0base"));
+        }
+
+        let modules = BTreeSet::from([PathBuf::from("/app/app/page.tsx")]);
+        let shared = shared_route_artifact_cache_file(cache_dir, &modules, "base");
+        let mut expected = String::from("base");
+        expected.push('\0');
+        expected.push_str("/app/app/page.tsx");
+        assert_eq!(
+            shared.file_stem().unwrap().to_string_lossy(),
+            versioned_key(&expected)
+        );
     }
 }
