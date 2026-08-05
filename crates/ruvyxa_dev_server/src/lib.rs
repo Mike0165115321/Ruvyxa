@@ -3582,6 +3582,38 @@ mod tests {
         );
     }
 
+    /// The reported bug: another project holds `127.0.0.1:3000`, Ruvyxa binds
+    /// `[::1]:3000` because that is what `localhost` resolved to first, both
+    /// succeed, and `http://localhost:3000` reaches whichever server the
+    /// browser's resolver happens to pick. A port is only free when it is free
+    /// on every address the host answers to.
+    #[tokio::test]
+    async fn bind_listener_moves_on_when_the_other_loopback_family_is_taken() {
+        let Ok(occupied) = TcpListener::bind("127.0.0.1:0").await else {
+            return;
+        };
+        let port = occupied.local_addr().unwrap().port();
+        if port == u16::MAX {
+            return;
+        }
+        // Nothing to prove on a host that cannot serve IPv6 loopback at all.
+        let Ok(probe) = TcpListener::bind(("::1".parse::<std::net::IpAddr>().unwrap(), 0)).await
+        else {
+            return;
+        };
+        drop(probe);
+
+        let config = ServerConfig::dev(".", "localhost", port);
+        let requested: SocketAddr = format!("[::1]:{port}").parse().unwrap();
+        let (_listener, bound_address) = bind_listener(&config, requested).await.unwrap();
+
+        assert_ne!(
+            bound_address.port(),
+            port,
+            "the IPv4 loopback holder must push the server to another port"
+        );
+    }
+
     #[test]
     fn port_conflict_diagnostic_reports_scanned_range() {
         let config = ServerConfig::dev(".", "localhost", 3000);

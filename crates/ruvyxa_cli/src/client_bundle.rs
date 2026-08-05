@@ -564,10 +564,16 @@ where
         .collect()
 }
 
+/// First-load size a route is expected to stay under.
+///
+/// This is an observation, not a failing contract — but it is the number the
+/// build table colours against, so the two always agree about what "large"
+/// means.
+pub(crate) const DEFAULT_FIRST_LOAD_BUDGET_BYTES: usize = 250 * 1024;
+
 /// Summarize first-load bundle offenders without turning a build observation
 /// into a new failing production contract.
 pub(crate) fn bundle_budget_report(routes: &[serde_json::Value]) -> serde_json::Value {
-    const DEFAULT_FIRST_LOAD_BUDGET_BYTES: usize = 250 * 1024;
     let mut offenders = routes
         .iter()
         .map(|route| {

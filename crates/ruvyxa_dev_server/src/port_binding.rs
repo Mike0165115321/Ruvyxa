@@ -1,7 +1,7 @@
 //! Server port binding with sequential fallback and conflict diagnostics.
 
 use std::io::ErrorKind;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 use std::process::Command;
 
 use ruvyxa_diagnostics::{Diagnostic, Result, RuvyxaError};
@@ -18,6 +18,7 @@ pub(crate) async fn bind_listener(
     address: SocketAddr,
 ) -> Result<(TcpListener, SocketAddr)> {
     let mut first_addr_in_use = None;
+    let guards = guard_addresses(&config.host, address.ip());
 
     for offset in 0..=PORT_FALLBACK_SCAN_LIMIT {
         let Some(port) = address.port().checked_add(offset) else {
@@ -29,6 +30,24 @@ pub(crate) async fn bind_listener(
         let bind_result = TcpListener::bind(candidate).await;
         match bind_result {
             Ok(listener) => {
+                // Binding succeeded on one address, which is not the same as
+                // the port being free. `localhost` answers to both `127.0.0.1`
+                // and `::1`; binding one while another process holds the other
+                // succeeds on every platform, and then whichever family the
+                // browser's resolver picks decides whose server it reaches.
+                // That is how two projects "shared" port 3000 without either
+                // one reporting a conflict.
+                if let Some(busy) = busy_guard(&guards, candidate.ip(), port).await {
+                    drop(listener);
+                    if offset == 0 {
+                        first_addr_in_use = Some(std::io::Error::new(
+                            ErrorKind::AddrInUse,
+                            format!("port {port} is already bound on {busy}"),
+                        ));
+                    }
+                    continue;
+                }
+
                 let bound_address = listener.local_addr().unwrap_or(candidate);
                 if offset > 0 {
                     print_port_fallback(config, address, bound_address);
@@ -59,6 +78,54 @@ pub(crate) async fn bind_listener(
     let error =
         first_addr_in_use.unwrap_or_else(|| std::io::Error::from(ErrorKind::AddrNotAvailable));
     Err(port_conflict_diagnostic(config, address, &error).into())
+}
+
+/// Addresses that must also be free before a port counts as available.
+///
+/// The listener binds one address, but the URL the user opens does not name an
+/// address — it names a host. Every address that host resolves to has to be
+/// free, or the server is reachable only some of the time.
+fn guard_addresses(host: &str, primary: IpAddr) -> Vec<IpAddr> {
+    let mut addresses: Vec<IpAddr> = format!("{host}:0")
+        .to_socket_addrs()
+        .map(|resolved| resolved.map(|address| address.ip()).collect())
+        .unwrap_or_default();
+
+    // A resolver that answers with only one loopback family still leaves the
+    // other reachable as `localhost`, so guard both whenever either appears.
+    if addresses.iter().any(IpAddr::is_loopback) || primary.is_loopback() {
+        addresses.push(IpAddr::V4(Ipv4Addr::LOCALHOST));
+        addresses.push(IpAddr::V6(Ipv6Addr::LOCALHOST));
+    }
+
+    addresses.sort();
+    addresses.dedup();
+    addresses
+}
+
+/// The first guard address that already has something listening on `port`.
+///
+/// `bound` is skipped: this process just bound it.
+async fn busy_guard(guards: &[IpAddr], bound: IpAddr, port: u16) -> Option<IpAddr> {
+    for guard in guards {
+        if *guard == bound {
+            continue;
+        }
+        match TcpListener::bind(SocketAddr::new(*guard, port)).await {
+            Ok(probe) => drop(probe),
+            Err(error)
+                if error.kind() == ErrorKind::AddrInUse
+                    || error.kind() == ErrorKind::PermissionDenied =>
+            {
+                return Some(*guard);
+            }
+            // Anything else — an address this machine cannot bind at all, such
+            // as an IPv6 address on a host without IPv6 — says nothing about
+            // whether the port is contended.
+            Err(_) => {}
+        }
+    }
+    None
 }
 
 fn print_port_fallback(config: &ServerConfig, requested: SocketAddr, bound: SocketAddr) {

@@ -62,6 +62,16 @@ pub struct ModuleAst {
     pub has_enums: bool,
     /// Whether the module declares a runtime default export.
     pub has_default_export: bool,
+    /// Byte ranges that are text rather than code: string bodies, comments,
+    /// regular expressions, and the literal parts of template literals (their
+    /// `${…}` interpolations stay code and are excluded).
+    ///
+    /// Ranges are non-overlapping and in ascending order. The linker rewrites
+    /// statements line by line and cannot tell `export const x = 1` from the
+    /// same characters inside a documentation sample; this is how it asks the
+    /// one scanner that already knows.
+    #[serde(default)]
+    pub text_spans: Vec<(usize, usize)>,
 }
 
 impl ModuleAst {
@@ -70,6 +80,22 @@ impl ModuleAst {
             .iter()
             .map(|edge| edge.specifier.clone())
             .collect()
+    }
+
+    /// Whether `offset` is a code position rather than text inside a string,
+    /// template literal, comment, or regular expression.
+    #[must_use]
+    pub fn is_code_offset(&self, offset: usize) -> bool {
+        // Ascending, non-overlapping ranges: the last span that starts at or
+        // before `offset` is the only one that can contain it.
+        match self
+            .text_spans
+            .binary_search_by(|(start, _)| start.cmp(&offset))
+        {
+            Ok(_) => false,
+            Err(0) => true,
+            Err(next) => offset >= self.text_spans[next - 1].1,
+        }
     }
 
     pub fn dynamic_import_specifiers(&self) -> Vec<String> {
@@ -85,6 +111,9 @@ impl ModuleAst {
 pub fn parse_module(source: &str) -> ModuleAst {
     let mut ast = ModuleAst::default();
     scan_code(source, 0, source.len(), &mut ast);
+    // The walk emits spans in order already; sorting costs nothing on sorted
+    // input and keeps `is_code_offset`'s binary search correct regardless.
+    ast.text_spans.sort_unstable();
     ast
 }
 
@@ -101,17 +130,27 @@ fn scan_code(source: &str, start: usize, end: usize, ast: &mut ModuleAst) {
     let mut previous_significant: Option<usize> = None;
     while index < bytes.len() {
         if is_comment_start(bytes, index) {
+            let start = index;
             index = skip_comment(bytes, index);
+            ast.text_spans.push((start, index));
             continue;
         }
         if bytes[index] == b'`' {
             // A template literal's interpolations are code, not text. Skipping
             // the whole literal would hide `${require("server-only")}` from the
             // boundary check and drop real dependency edges.
+            let literal_start = index;
             let (after, interpolations) = template_literal(bytes, index);
+            // Everything between the interpolations is text. Recording it in
+            // pieces is what lets a consumer ask about one offset and get the
+            // right answer for a literal that contains both.
+            let mut text_start = literal_start;
             for (code_start, code_end) in interpolations {
+                ast.text_spans.push((text_start, code_start));
                 scan_code(source, code_start, code_end, ast);
+                text_start = code_end;
             }
+            ast.text_spans.push((text_start, after));
             previous_significant = Some(index);
             index = after;
             continue;
@@ -119,12 +158,14 @@ fn scan_code(source: &str, start: usize, end: usize, ast: &mut ModuleAst) {
         if is_quote(bytes[index]) {
             let start = index;
             index = skip_string(bytes, index);
+            ast.text_spans.push((start, index));
             previous_significant = Some(start);
             continue;
         }
         if bytes[index] == b'/' && regex_can_start(bytes, previous_significant) {
             let start = index;
             index = skip_regex_literal(bytes, index);
+            ast.text_spans.push((start, index));
             previous_significant = Some(start);
             continue;
         }

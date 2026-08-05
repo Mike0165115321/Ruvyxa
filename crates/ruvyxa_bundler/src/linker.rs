@@ -491,14 +491,21 @@ fn rewrite_module_into(
     let mut pending_exports = Vec::new();
     let mut in_block_comment = false;
     let mut in_commonjs_block_comment = false;
-    let real_imports = static_import_specifiers(source);
+    let module_ast = crate::ast::parse_module(source);
 
-    for line in source.lines() {
+    for (line, statement_start) in lines_with_statement_offsets(source) {
         let trimmed = line.trim();
 
-        let rewritten = try_rewrite_import(trimmed, deps, drop_external_imports, &real_imports)?
-            .map(Rewrite::Inline)
-            .or_else(|| try_rewrite_export_statement(trimmed, deps));
+        // A line whose first non-whitespace byte sits inside a string,
+        // template literal, or comment is text the module means to keep, not a
+        // statement to rewrite. Rewriting it edits the literal's contents.
+        let rewritten = if module_ast.is_code_offset(statement_start) {
+            try_rewrite_import(trimmed, deps, drop_external_imports)?
+                .map(Rewrite::Inline)
+                .or_else(|| try_rewrite_export_statement(trimmed, deps))
+        } else {
+            None
+        };
 
         let content = match rewritten {
             Some(Rewrite::Inline(ref content)) => content.as_str(),
@@ -808,7 +815,6 @@ fn try_rewrite_import(
     line: &str,
     deps: &DepIndex<'_>,
     drop_external_imports: bool,
-    real_imports: &BTreeSet<String>,
 ) -> Result<Option<String>> {
     if !line.starts_with("import ") {
         return Ok(None);
@@ -816,10 +822,6 @@ fn try_rewrite_import(
 
     // Side-effect import: `import "./styles.css"` → remove (CSS handled separately)
     if line.starts_with("import \"") || line.starts_with("import '") {
-        let quoted = extract_quoted_string(line.strip_prefix("import ").unwrap_or(line));
-        if !quoted.is_some_and(|specifier| real_imports.contains(&specifier)) {
-            return Ok(None);
-        }
         return Ok(Some(format!("// [bundled] {line}")));
     }
 
@@ -827,12 +829,6 @@ fn try_rewrite_import(
     let Some((before_from, specifier)) = split_from_specifier(line) else {
         return Ok(None);
     };
-
-    // Text that merely looks like an import — a code sample inside a template
-    // literal, most often. Rewriting it would edit the string's contents.
-    if !real_imports.contains(&specifier) {
-        return Ok(None);
-    }
 
     // Find the matching dep by specifier.
     let Some(dep_path) = deps.resolve(&specifier) else {
@@ -875,10 +871,10 @@ fn collect_external_imports(modules: &[&CompiledModule], target: BundleTarget) -
         // One index per module: every import line in the module resolves
         // against the same dependency list.
         let deps = DepIndex::new(&module.deps, &module.dependency_aliases);
-        let real_imports = static_import_specifiers(&module.js);
-        for line in module.js.lines() {
+        let module_ast = crate::ast::parse_module(&module.js);
+        for (line, statement_start) in lines_with_statement_offsets(&module.js) {
             let trimmed = line.trim();
-            if !trimmed.starts_with("import ") {
+            if !trimmed.starts_with("import ") || !module_ast.is_code_offset(statement_start) {
                 continue;
             }
 
@@ -894,7 +890,7 @@ fn collect_external_imports(modules: &[&CompiledModule], target: BundleTarget) -
                 continue;
             };
 
-            if is_non_js_asset_specifier(&specifier) || !real_imports.contains(&specifier) {
+            if is_non_js_asset_specifier(&specifier) {
                 continue;
             }
 
@@ -998,27 +994,30 @@ const UNRESOLVED_IMPORT_HELPER: &str = concat!(
     "};"
 );
 
-/// Specifiers the shared scanner agrees are real static imports in `source`.
+/// Each line of `source` with the byte offset of its first non-whitespace byte.
 ///
-/// The linker decides line by line, which cannot tell an `import` statement
-/// from the same text inside a template literal — and a documentation snippet
-/// in a `<pre>{`…`}</pre>` block is exactly that. Left ungated, the demo's own
-/// todos page had the import line deleted out of its code sample and the
-/// quoted package hoisted into the bundle as a real dependency.
-/// [`ast::parse_module`] already knows the difference, so every line-level
-/// import decision is gated on what it found.
-fn static_import_specifiers(source: &str) -> BTreeSet<String> {
-    crate::ast::parse_module(source)
-        .imports
-        .into_iter()
-        .filter(|edge| {
-            matches!(
-                edge.kind,
-                crate::ast::ImportKind::Static | crate::ast::ImportKind::SideEffect
-            )
-        })
-        .map(|edge| edge.specifier)
-        .collect()
+/// The linker decides line by line, which cannot tell an `import` or `export`
+/// statement from the same characters inside a template literal — and a
+/// documentation snippet in a `<pre>{`…`}</pre>` block is exactly that. Left
+/// ungated, the demo's own todos page had the import line deleted out of its
+/// code sample and the quoted package hoisted into the bundle as a real
+/// dependency. Pairing each line with an offset is what lets the caller ask
+/// [`crate::ast::ModuleAst::is_code_offset`], the one scanner that knows where
+/// text begins and ends.
+fn lines_with_statement_offsets(source: &str) -> impl Iterator<Item = (&str, usize)> {
+    let mut offset = 0;
+    source.lines().map(move |line| {
+        let line_start = offset;
+        // `lines()` strips the terminator; `\r\n` therefore costs two bytes.
+        offset += line.len()
+            + if source[offset + line.len()..].starts_with("\r\n") {
+                2
+            } else {
+                1
+            };
+        let indent = line.len() - line.trim_start().len();
+        (line, line_start + indent)
+    })
 }
 
 /// Whether a specifier names a package rather than a file or a URL.
@@ -1771,33 +1770,52 @@ mod tests {
 
     #[test]
     fn side_effect_import_commented() {
-        let line = "import \"./styles.css\"";
         let result = try_rewrite_import(
-            line,
+            "import \"./styles.css\"",
             &DepIndex::without_aliases(&[]),
             false,
-            &static_import_specifiers(line),
         );
         assert!(result.unwrap().unwrap().starts_with("// [bundled]"));
+    }
+
+    /// Statement offsets are what tell the line scanner which lines are code.
+    /// `lines()` strips the terminator, so a `\r\n` source that is counted one
+    /// byte per line drifts and starts pointing at the wrong text.
+    #[test]
+    fn statement_offsets_survive_indentation_and_crlf() {
+        let source = "const a = 1;\r\n  import x from \"y\";\r\nlast";
+        let offsets: Vec<_> = lines_with_statement_offsets(source).collect();
+
+        assert_eq!(offsets.len(), 3);
+        for (line, offset) in &offsets {
+            assert!(
+                source[*offset..].starts_with(line.trim()),
+                "offset {offset} does not point at {line:?}"
+            );
+        }
     }
 
     /// A code sample in a template literal is string content, not a statement.
     /// Rewriting it edited the sample the page was trying to display and
     /// hoisted the quoted package into the bundle as a real dependency.
     #[test]
-    fn import_text_inside_a_template_literal_is_left_alone() {
-        let source = "const sample = `\nimport { action } from \"ruvyxa/server\"\n`;\nexport default sample;";
-        let real_imports = static_import_specifiers(source);
-        assert!(real_imports.is_empty(), "{real_imports:?}");
+    fn statements_inside_a_template_literal_are_not_code() {
+        let source = "const sample = `\nimport { action } from \"ruvyxa/server\"\nexport const createTodo = 1\n`;\nexport default sample;";
+        let ast = crate::ast::parse_module(source);
 
-        let result = try_rewrite_import(
-            "import { action } from \"ruvyxa/server\"",
-            &DepIndex::without_aliases(&[]),
-            true,
-            &real_imports,
-        )
-        .unwrap();
-        assert_eq!(result, None, "the sample line must pass through untouched");
+        let offsets: Vec<_> = lines_with_statement_offsets(source).collect();
+        let code: Vec<_> = offsets
+            .iter()
+            .filter(|(_, offset)| ast.is_code_offset(*offset))
+            .map(|(line, _)| line.trim())
+            .collect();
+
+        assert!(
+            !code.contains(&"import { action } from \"ruvyxa/server\""),
+            "{code:?}"
+        );
+        assert!(!code.contains(&"export const createTodo = 1"), "{code:?}");
+        assert!(code.contains(&"export default sample;"), "{code:?}");
     }
 
     #[test]

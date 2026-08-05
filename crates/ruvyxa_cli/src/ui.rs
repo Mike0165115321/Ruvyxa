@@ -245,6 +245,10 @@ pub(crate) fn error_label() -> String {
     paint("[error]", "31")
 }
 
+pub(crate) fn alert_text(value: impl AsRef<str>) -> String {
+    paint(value, "31")
+}
+
 pub(crate) fn success() -> String {
     ok_text("[ok]")
 }

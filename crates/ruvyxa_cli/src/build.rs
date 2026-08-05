@@ -704,9 +704,9 @@ pub(crate) fn print_route_size_table(
             styled_render_symbol(route.render.strategy),
             route.path,
             spaces(route_width, route.path.len()),
-            size,
+            dim(&size),
             spaces(9, size.len()),
-            accent(format_bytes(first_load))
+            styled_first_load(first_load)
         );
     }
     let shared_bytes = shared_chunks
@@ -718,11 +718,29 @@ pub(crate) fn print_route_size_table(
             "  {}   shared by all{}{}",
             dim("└"),
             spaces(route_width + 11, "shared by all".len()),
-            accent(format_bytes(shared_bytes))
+            styled_first_load(shared_bytes)
         );
     }
     println!("  {}", dim("○ csr · ● static · ◐ isr/ppr · ƒ dynamic"));
     println!();
+}
+
+/// Colour a first-load size by how close it is to the shipping budget.
+///
+/// The table used to paint every size the same accent colour, which made the
+/// column decoration rather than information: a 40 kB route and a 400 kB one
+/// looked identical. Green/yellow/red is the whole point of having a budget.
+pub(crate) fn styled_first_load(bytes: usize) -> String {
+    let text = format_bytes(bytes);
+    let budget = crate::client_bundle::DEFAULT_FIRST_LOAD_BUDGET_BYTES;
+    if bytes > budget {
+        alert_text(text)
+    } else if bytes * 5 > budget * 4 {
+        // Within 20% of the budget — worth seeing before it crosses.
+        warn_text(text)
+    } else {
+        ok_text(text)
+    }
 }
 
 pub(crate) fn styled_render_symbol(strategy: RenderStrategy) -> String {
@@ -798,3 +816,26 @@ pub(crate) const BUILD_OUTPUT_DIRS: [&str; 6] = [
 pub(crate) const BUILD_OUTPUT_FILES: [&str; 2] = ["manifest.json", "build.json"];
 // Default cap balances Node process memory against prerender throughput; an
 // explicit `build.parallelism` config value may raise it up to the pool limit.
+
+#[cfg(test)]
+mod build_table_tests {
+    use super::*;
+
+    /// Colour in the build table has to mean something. `paint` strips escapes
+    /// when stdout is not a terminal — as in tests — so assert on the mapping
+    /// through the styling helpers rather than on escape codes.
+    #[test]
+    fn first_load_colour_tracks_the_shipping_budget() {
+        let budget = crate::client_bundle::DEFAULT_FIRST_LOAD_BUDGET_BYTES;
+
+        assert_eq!(
+            styled_first_load(budget / 4),
+            ok_text(format_bytes(budget / 4))
+        );
+        // 90% of budget: close enough to warn before it crosses.
+        let near = budget * 9 / 10;
+        assert_eq!(styled_first_load(near), warn_text(format_bytes(near)));
+        let over = budget + 1;
+        assert_eq!(styled_first_load(over), alert_text(format_bytes(over)));
+    }
+}
