@@ -421,3 +421,18 @@ td {
     font-size: 13px;
   }
 }
+
+.runner {
+  display: grid;
+  justify-items: center;
+  margin-top: 8px;
+}
+
+.runner-canvas {
+  background: #ffffff;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  max-width: 100%;
+  touch-action: manipulation;
+  width: 100%;
+}

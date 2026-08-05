@@ -45,6 +45,11 @@ export default function Home() {
           <p>app/env/page.tsx</p>
           <code>RUVYXA_PUBLIC_*</code>
         </a>
+        <a className="feature-card" href="/game">
+          <h3>Client Component</h3>
+          <p>app/game/page.tsx</p>
+          <code>Canvas mini-game</code>
+        </a>
       </div>
 
       <h2>Rendering Strategies</h2>
