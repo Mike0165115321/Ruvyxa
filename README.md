@@ -23,6 +23,40 @@
 
 ---
 
+## Documentation
+
+| Guide                                                                      | Description                                      |
+| -------------------------------------------------------------------------- | ------------------------------------------------ |
+| [Documentation Home](docs/README.md)                                       | Full manual — English and Thai editions          |
+| [Introduction](docs/en/01-introduction.md)                                 | What Ruvyxa is and when to use it                |
+| [Create Your First App](docs/en/02-create-your-first-app.md)               | Scaffold, run, and build a first vertical slice  |
+| [Project Structure](docs/en/03-project-structure.md)                       | `app/`, `public/`, config, and generated output  |
+| [Routing & Rendering](docs/en/04-routing-rendering.md)                     | File-system routes, layouts, SSR/SSG/ISR/CSR/PPR |
+| [Data, Actions & API](docs/en/05-data-actions-api.md)                      | Loaders, `cache()`, server actions, API routes   |
+| [UI, Navigation & Assets](docs/en/06-ui-navigation-metadata-and-assets.md) | Components, metadata, images, fonts              |
+| [Configuration](docs/en/07-configuration.md)                               | `ruvyxa.config.ts` and environment variables     |
+| [Plugins & Middleware](docs/en/08-plugins-middleware.md)                   | Plugin hooks and the middleware chain            |
+| [Integrations](docs/en/09-integrations-auth-data-and-realtime.md)          | `@ruvyxa/auth`, `database`, `realtime`           |
+| [CLI](docs/en/10-cli.md)                                                   | Every command, flag, and exit code               |
+| [Architecture](docs/en/11-architecture.md)                                 | Graph, bundler, dev server, diagnostics          |
+| [Development & Testing](docs/en/12-development-testing.md)                 | Develop, test, and package the framework         |
+| [Security](docs/en/13-security.md)                                         | Boundary enforcement and env safety              |
+| [Observability & Performance](docs/en/14-observability-performance.md)     | Logging, timing, caching, budgets                |
+| [Deploy, Run & Operate](docs/en/15-deploy-run-and-operate.md)              | Adapters and platform-specific configuration     |
+| [Troubleshooting](docs/en/16-troubleshooting-upgrades.md)                  | Diagnostic catalog and upgrade notes             |
+| [Public API Reference](docs/en/17-public-api-reference.md)                 | Complete `@ruvyxa/react` + `@ruvyxa/core` API    |
+| [Documentation Scope](docs/en/18-documentation-scope-and-sources.md)       | What the manual covers and its sources           |
+| [Release Readiness](docs/en/19-release-readiness-playbook.md)              | Pre-release verification playbook                |
+| [Platform Adapter Guide](docs/en/20-platform-adapter-guide.md)             | Writing a custom deployment adapter              |
+| [Practical Recipes](docs/en/21-practical-recipes.md)                       | Task-oriented end-to-end examples                |
+
+A full Thai edition lives beside the English one under [`docs/th/`](docs/th). Repository-level
+documents: [ARCHITECTURE.md](ARCHITECTURE.md), [CHANGELOG.md](CHANGELOG.md),
+[CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md),
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), and [AGENTS.md](AGENTS.md) for agent/contributor rules.
+
+---
+
 ## Why Ruvyxa
 
 ### Rust core
@@ -300,30 +334,35 @@ strategies, see [examples/demo](examples/demo).
 
 ## Benchmarks
 
-Measured on 2026-07-29 with the repository harness against minimal starters. These figures are valid
+Measured on 2026-08-05 with the repository harness against minimal starters. These figures are valid
 only for the exact versions, machine, and run conditions shown below; re-run the harness when
 comparing newer releases.
 
-| Metric (lower is better)             | **Ruvyxa 1.0.25** | Next.js 16.2.12 | Astro 7.1.5 |
-| ------------------------------------ | ----------------: | --------------: | ----------: |
-| Production build (cold-cache median) |       **1.948 s** |         7.081 s |     2.710 s |
-| Dev server → first rendered response |       **1.334 s** |         5.495 s |     5.072 s |
-| Prod server start → first response   |       **1.487 s** |         1.504 s |     2.069 s |
-| Client JS shipped (minimal page)     |          187 KB ¹ |          627 KB |      0 KB ² |
+| Metric (lower is better)             | **Ruvyxa 1.0.27** | Next.js 16.3.0 | Astro 7.1.6 |
+| ------------------------------------ | ----------------: | -------------: | ----------: |
+| Production build (cold-cache median) |       **1.851 s** |        8.768 s |     2.671 s |
+| Dev server → first rendered response |       **1.622 s** |        4.368 s |     5.323 s |
+| Prod server start → first response   |           1.544 s |    **1.496 s** |     2.673 s |
+| Client JS shipped (minimal page)     |          210 KB ¹ |         566 KB |      0 KB ² |
 
-| Throughput (higher is better)        | **Ruvyxa 1.0.25** | Next.js 16.2.12 | Astro 7.1.5 |
-| ------------------------------------ | ----------------: | --------------: | ----------: |
-| Requests/second (`/`, prod server) ³ |        **37,111** |           2,594 |       2,378 |
-| Latency p50 / p99                    |      **0 / 1 ms** |       8 / 20 ms |   9 / 23 ms |
+| Throughput (higher is better)        | **Ruvyxa 1.0.27** | Next.js 16.3.0 | Astro 7.1.6 |
+| ------------------------------------ | ----------------: | -------------: | ----------: |
+| Requests/second (`/`, prod server) ³ |        **43,299** |          2,433 |       2,757 |
+| Latency p50 / p99                    |      **0 / 1 ms** |      9 / 21 ms |   8 / 13 ms |
 
-In this run, Ruvyxa's median cold build completed **3.6× / 1.4×** faster than Next.js / Astro
-respectively, and the measured production-server throughput was **14.3× / 15.6×** higher. These are
-local results for this minimal-starter workload, not a universal performance ranking.
+In this run, Ruvyxa's median cold build completed **4.7× / 1.4×** faster than Next.js / Astro
+respectively, and the measured production-server throughput was **17.8× / 15.7×** higher. Prod
+server readiness was a near-tie this run — Next.js's median (1.496 s) edged out Ruvyxa's (1.544 s)
+by 48 ms, inside the noise described below. These are local results for this minimal-starter
+workload, not a universal performance ranking.
 
-Run-to-run spread on this hardware is real and larger than several of the gaps above: within this
-run Ruvyxa's prod readiness ranged 1.236–1.515 s and Next.js's dev readiness ranged 4.760–11.277 s.
-Treat the prod-readiness row as a tie between Ruvyxa and Next.js rather than a 17 ms win, and re-run
-the harness on an otherwise idle machine before reading anything into small differences.
+Run-to-run spread on this hardware is real and larger than the prod-readiness gap above: Next.js's
+first cold build measured 30.5 s against a 8.5–8.8 s median for its other two runs (JIT/cache
+warm-up on the first invocation), and Astro's first cold build likewise spiked to 24.6 s against a
+~2.67 s median otherwise; the reported build medians are unaffected because the median discards
+single outliers. Next.js's dev readiness also ranged 4.0–8.6 s across its three cold runs. Treat the
+prod-readiness row as a tie between Ruvyxa and Next.js rather than a real win, and re-run the
+harness on an otherwise idle machine before reading anything into small differences.
 
 ¹ For the interactive React starter page. A content page can opt out entirely with
 `export const hydrate = false` — its HTML then ships **0 KB** of JavaScript and no client bundle is
@@ -333,13 +372,13 @@ has no client bundle and its `preview` server serves static files only. ³ The h
 framework; throughput and latency are not medians.
 
 **Methodology** — measured on Windows 11 Home, AMD Ryzen 7 8845HS, 31 GB RAM, Node.js 22.23.1, npm
-10.9.8, and pnpm 11.17.0. Each framework used a freshly scaffolded minimal starter in the isolated
-`D:\RuvyxaBench-20260729` benchmark root with `RUNS=3` and the same
+10.9.8, and pnpm 11.18.0. Each framework used a freshly scaffolded minimal starter in the isolated
+`D:\RuvyxaBench-20260805` benchmark root with `RUNS=3` and the same
 [`scripts/bench-frameworks.mjs`](scripts/bench-frameworks.mjs) harness. Build = `build` script wall
 time. Dev/prod readiness = time from process spawn to first HTTP 200 on `/`. Cold-cache runs remove
 `.ruvyxa`/`.next`/`dist`/`.astro`/Vite caches before each run; dependencies remain installed during
-the harness. Ruvyxa used local packed 1.0.25 artifacts and the matching Windows native CLI package.
-Next.js 16.2.12 and Astro 7.1.5 were the resolved starter dependencies. The harness runs one
+the harness. Ruvyxa used local packed 1.0.27 artifacts and the matching Windows native CLI package.
+Next.js 16.3.0 and Astro 7.1.6 were the resolved starter dependencies. The harness runs one
 10-second `autocannon` pass with 25 connections against each final production server; throughput and
 latency are not medians. Astro's minimal starter is static-first and ships no client JavaScript,
 while the Ruvyxa and Next starters include React runtime output. The machine was not otherwise idle
@@ -348,40 +387,6 @@ were measured back to back under the same conditions, so the comparison between 
 reproduce, prepare the three isolated starters, use local tarball overrides for an unpublished
 Ruvyxa release candidate, then run
 `BENCH_ROOT=<benchmark-root> RUNS=3 node scripts/bench-frameworks.mjs`.
-
----
-
-## Documentation
-
-| Guide                                                                      | Description                                      |
-| -------------------------------------------------------------------------- | ------------------------------------------------ |
-| [Documentation Home](docs/README.md)                                       | Full manual — English and Thai editions          |
-| [Introduction](docs/en/01-introduction.md)                                 | What Ruvyxa is and when to use it                |
-| [Create Your First App](docs/en/02-create-your-first-app.md)               | Scaffold, run, and build a first vertical slice  |
-| [Project Structure](docs/en/03-project-structure.md)                       | `app/`, `public/`, config, and generated output  |
-| [Routing & Rendering](docs/en/04-routing-rendering.md)                     | File-system routes, layouts, SSR/SSG/ISR/CSR/PPR |
-| [Data, Actions & API](docs/en/05-data-actions-api.md)                      | Loaders, `cache()`, server actions, API routes   |
-| [UI, Navigation & Assets](docs/en/06-ui-navigation-metadata-and-assets.md) | Components, metadata, images, fonts              |
-| [Configuration](docs/en/07-configuration.md)                               | `ruvyxa.config.ts` and environment variables     |
-| [Plugins & Middleware](docs/en/08-plugins-middleware.md)                   | Plugin hooks and the middleware chain            |
-| [Integrations](docs/en/09-integrations-auth-data-and-realtime.md)          | `@ruvyxa/auth`, `database`, `realtime`           |
-| [CLI](docs/en/10-cli.md)                                                   | Every command, flag, and exit code               |
-| [Architecture](docs/en/11-architecture.md)                                 | Graph, bundler, dev server, diagnostics          |
-| [Development & Testing](docs/en/12-development-testing.md)                 | Develop, test, and package the framework         |
-| [Security](docs/en/13-security.md)                                         | Boundary enforcement and env safety              |
-| [Observability & Performance](docs/en/14-observability-performance.md)     | Logging, timing, caching, budgets                |
-| [Deploy, Run & Operate](docs/en/15-deploy-run-and-operate.md)              | Adapters and platform-specific configuration     |
-| [Troubleshooting](docs/en/16-troubleshooting-upgrades.md)                  | Diagnostic catalog and upgrade notes             |
-| [Public API Reference](docs/en/17-public-api-reference.md)                 | Complete `@ruvyxa/react` + `@ruvyxa/core` API    |
-| [Documentation Scope](docs/en/18-documentation-scope-and-sources.md)       | What the manual covers and its sources           |
-| [Release Readiness](docs/en/19-release-readiness-playbook.md)              | Pre-release verification playbook                |
-| [Platform Adapter Guide](docs/en/20-platform-adapter-guide.md)             | Writing a custom deployment adapter              |
-| [Practical Recipes](docs/en/21-practical-recipes.md)                       | Task-oriented end-to-end examples                |
-
-A full Thai edition lives beside the English one under [`docs/th/`](docs/th). Repository-level
-documents: [ARCHITECTURE.md](ARCHITECTURE.md), [CHANGELOG.md](CHANGELOG.md),
-[CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md),
-[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), and [AGENTS.md](AGENTS.md) for agent/contributor rules.
 
 ---
 

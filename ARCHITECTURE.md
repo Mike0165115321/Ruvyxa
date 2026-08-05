@@ -1560,11 +1560,13 @@ Realtime WebSocket handler:
   `netstat`/`lsof`.
 - **Plugin host**: TypeScript middleware via `PluginHost` pool. Request/response round-trip
   serialized over stdio. Realtime configured via plugin descriptor.
-- **Security headers**: Applied to all responses unless `security_headers: false`. Defaults:
-  `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`,
-  `X-Frame-Options: DENY`, `Cross-Origin-Opener-Policy: same-origin`,
-  `Cross-Origin-Resource-Policy: same-origin`,
-  `Permissions-Policy: camera=(), microphone=(), geolocation=()`.
+- **Security headers**: Applied to all responses unless `security_headers: false`. Defaults (7, each
+  set only if the application has not already set it): `X-Content-Type-Options: nosniff`,
+  `Referrer-Policy: strict-origin-when-cross-origin`,
+  `Permissions-Policy: camera=(), microphone=(), geolocation=()`,
+  `Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Resource-Policy: same-origin`,
+  `X-Frame-Options: DENY`, `X-Permitted-Cross-Domain-Policies: none`. No default CSP or HSTS — both
+  are application-specific and left to explicit config.
 
 ---
 
@@ -2270,12 +2272,17 @@ released without acquiring another.
 
 ## Protocols · โพรโทคอล
 
-**Scope**: Cross-crate (dev server HMR, server actions, client module protocol)
+**Scope**: Cross-crate (dev server HMR, server actions, client module protocol) **Source**:
+`crates/ruvyxa_dev_server/src/lib.rs`
+
+> Every endpoint below is verified against `lib.rs`'s route table and handler bodies. All framework
+> endpoints live under `/__ruvyxa/` (double underscore) — see the Framework Endpoints table in the
+> Dev Server section, which this section cross-checks against rather than restates.
 
 ### สรุป
 
 สาม wire protocols: (1) HMR WebSocket สำหรับ hot reload, (2) Server Action HTTP สำหรับ form/action
-submissions, (3) Client Module HTTP สำหรับ lazy-loading client-side bundles
+submissions, (3) Client Module HTTP สำหรับ on-demand compiled bundles
 
 ---
 
@@ -2284,53 +2291,44 @@ submissions, (3) Client Module HTTP สำหรับ lazy-loading client-side 
 #### Endpoint
 
 ```
-ws://<host>:<port>/_ruvyxa/hmr
+ws://<host>:<port>/__ruvyxa/hmr
 ```
 
-#### Server → Client Messages
+#### Server → Client Message
+
+One message shape, broadcast via `reload_tx: broadcast::Sender<String>` (`lib.rs:1058-1064`):
 
 ```json
 {
-  "type": "hot",
-  "data": {
-    "module": "/src/app/blog/[slug]/page.tsx",
-    "route": "/blog/:slug",
-    "timestamp": 1719536400000
-  }
+  "type": "component-update",
+  "paths": ["app/blog/[slug]/page.tsx"],
+  "affectedRoutes": ["app/blog/[slug]/page"],
+  "fullReload": false
 }
 ```
 
-| `type`         | Meaning                | Client behavior                                                 |
-| -------------- | ---------------------- | --------------------------------------------------------------- |
-| `hot`          | Module changed         | Re-import the module via dynamic `import()`, re-render in place |
-| `full-reload`  | Config/root change     | `window.location.reload()`                                      |
-| `style-update` | CSS changed            | Swap `<link>` href, inject new `<style>`                        |
-| `error`        | Compile/boundary error | Show error overlay (red banner with diagnostics)                |
-| `connected`    | Initial handshake      | Client sends its current manifest hash for diff                 |
-| `state-sync`   | Full manifest delta    | Replace module registry entries                                 |
+`type` is one of `HmrTracker`'s `HmrEventType` values (`css-update`, `component-update`,
+`full-reload`). There is no `hot` / `style-update` / `connected` / `state-sync` vocabulary and no
+server-initiated handshake message — the client opens the socket and starts receiving
+`HmrTracker::compute_update` payloads directly.
 
-#### Client → Server Messages
+#### Client → Server
+
+The dev server does not read incoming WebSocket frames as protocol messages — there is no
+`manifest-hash` negotiation. The Origin header is validated at connection time
+(`hmr_origin_is_cross_site`); a cross-site connection is rejected before the upgrade completes.
+
+#### Realtime channel (separate from HMR)
+
+The application-level realtime WebSocket (opt-in via a plugin descriptor, not HMR) sends its own
+server → client control frame on backpressure:
 
 ```json
-{
-  "type": "manifest-hash",
-  "hash": "a1b2c3d4e5f6..."
-}
+{ "version": 1, "type": "resync", "reason": "lagged" }
 ```
 
-Sent on `connected` acknowledgment. Server compares hash with current manifest; if different, sends
-`state-sync` with the delta.
-
-#### Connection Lifecycle
-
-```
-Client opens WebSocket
-  → Server sends { type: "connected" }
-  → Client sends { type: "manifest-hash", hash }
-  → Server sends delta or full manifest if hash mismatch
-  → Loop: Server pushes update events
-  → On disconnect: Client retries every 1s (exponential backoff, max 30s)
-```
+See Realtime Runtime in the Dev Server section for its channel-subscription and heartbeat protocol —
+it is a distinct WebSocket endpoint from HMR, not a variant of it.
 
 ---
 
@@ -2339,198 +2337,87 @@ Client opens WebSocket
 #### Request
 
 ```
-POST /_ruvyxa/action/{action_name}
-Content-Type: application/json
+POST /__ruvyxa/action?path=<route-path>&name=<action-name>
+Content-Type: application/json | application/x-www-form-urlencoded
 ```
 
-```json
-{
-  "args": [arg1, arg2, ...],
-  "headers": {
-    "content-type": "application/json"
-  }
-}
-```
+`path` and `name` are query parameters (`ActionQuery { path, name }`), not URL path segments — there
+is no `/action/<dir>/<fn>`-style namespace. The route at `path` must resolve to a `RouteKind::Page`;
+targeting an API route returns `405`. The action handler is resolved from `action.ts`/`action.js`
+next to that page (`RUV1501` if missing).
 
-#### Response (Success)
+#### Response
 
-```
-Status: 200
-Content-Type: application/json
-```
-
-```json
-{
-  "data": {/* action return value */}
-}
-```
-
-#### Response (Error)
-
-```
-Status: 500
-Content-Type: application/json
-```
-
-```json
-{
-  "error": "ActionError",
-  "message": "Something went wrong",
-  "code": "RUV1500"
-}
-```
-
-#### Action Discovery
-
-Server actions are defined in `app/**/action.ts`:
-
-```typescript
-// app/contact/action.ts
-export async function submitForm(prev: unknown, formData: FormData) {
-  'use server'
-  const name = formData.get('name')
-  // ...validation, database...
-  return { success: true }
-}
-```
-
-The CLI discovers action modules during route discovery and registers them at server start. Each
-action is bound to its URL namespace: `app/contact/action.ts → submitForm` is available at
-`/action/contact/submitForm`.
+The status, headers, and body are whatever `render_action` returns from the worker — there is no
+fixed `{ data }` / `{ error, message, code }` envelope. A worker-reported failure is converted to a
+diagnostic (`action_error_code`, default `RUV1500`) and surfaced as a `500` with the framework's
+public-error formatting, not a structured JSON error object.
 
 #### Security
 
-- Actions are POST-only. GET returns 405.
-- CSRF protection via `Ruvyxa-Action` header (must match action name).
-- Origin check: `Origin` header must match allowed origins.
-- Rate limiting: applies to action endpoints when `RateLimitConfig` is enabled.
+Enforced by `validate_action_request` / `validate_action_payload` (Action Security in the Dev Server
+section) before the handler runs: body size ceiling, allowed `Content-Type`, same-origin check,
+Fetch Metadata headers, and a per-key sliding-window rate limit. There is no separate CSRF header —
+no `Ruvyxa-Action` header exists in the source — so same-origin plus Fetch Metadata is the CSRF
+defense.
 
 ---
 
 ### 3. Client Module Protocol
 
-#### Request
+#### Dev: on-demand compiled bundle
 
 ```
-GET /_ruvyxa/client/{module_path}
+GET /__ruvyxa/client?path=<route-path>
 ```
 
-`module_path` is URL-encoded relative path from project root. Example:
-`GET /_ruvyxa/client/src%2Fapp%2Fpage.tsx`
+`path` is a query parameter identifying a route (matched against the live manifest), not a raw
+module file path and not URL-path-embedded. The dev server compiles the route's client bundle on
+demand (`render_client_bundle_pooled`) and returns it as `text/javascript`. There is no
+`Cache-Control: immutable` on this dev endpoint — it is a hot compile, so each request must be
+re-evaluated against current source.
 
-#### Response
+#### Production: static content-addressed bundle
 
-```
-Status: 200
-Content-Type: application/javascript
-Cache-Control: public, max-age=31536000, immutable
-```
+Production build output serves precompiled bundles from `.ruvyxa/client/<blake3-hash>.js` as static
+files (`static_assets.rs`), with `Cache-Control: public, max-age=31536000, immutable` — safe only
+because the filename changes when the content does. This is the file the route manifest
+(`/__ruvyxa/client/route-manifest.json`) points browsers at.
 
-```
-(function(__ruvyxa) {
-  // compiled IIFE module code
-  __ruvyxa.define("src/app/page.tsx", function(module, exports) {
-    // ...
-  });
-})(__ruvyxa);
-```
+#### Wire format (both modes)
 
-#### Module Registry (Browser-side)
-
-```javascript
-// Runtime: injected into every HTML page
-window.__ruvyxa = {
-  registry: new Map(),
-  define(name, factory) {
-    this.registry.set(name, factory)
-  },
-  require(name) {
-    if (!this.registry.has(name)) {
-      throw new Error(`Module not loaded: ${name}`)
-    }
-    const module = { exports: {} }
-    this.registry.get(name)(module, module.exports)
-    return module.exports
-  },
-  load(path) {
-    if (this.registry.has(path)) return Promise.resolve()
-    return new Promise((resolve, reject) => {
-      const script = document.createElement('script')
-      script.src = `/_ruvyxa/client/${encodeURIComponent(path)}`
-      script.onload = resolve
-      script.onerror = reject
-      document.head.appendChild(script)
-    })
-  },
-}
-```
-
-#### Lazy Loading
-
-HMR `hot` events trigger:
-
-```javascript
-// Client-side HMR handler
-async function applyHotUpdate(modulePath, routeId) {
-  // 1. Fetch updated module (no-cache to bypass immutable cache)
-  const url = `/_ruvyxa/client/${encodeURIComponent(modulePath)}?_=${Date.now()}`
-  await window.__ruvyxa.load(url)
-
-  // 2. Re-render route component
-  const Component = window.__ruvyxa.require(modulePath).default
-  // re-render logic...
-}
-```
-
----
-
-### 4. Render Proxy Protocol
-
-#### Internal Use Only
-
-Dev server clients proxy SSR renders through `/_ruvyxa/render`:
-
-```
-POST /_ruvyxa/render
-Content-Type: application/json
-```
-
-```json
-{
-  "route": "/blog/hello-world",
-  "method": "GET",
-  "headers": {
-    "accept": "text/html"
-  }
-}
-```
-
-Response: rendered HTML (streamed via chunked transfer encoding). This proxy is used internally by
-the dev server worker pool. Not exposed to external clients.
+Each module becomes an IIFE registration under a shared registry — see Linking Strategy in the
+Bundler section for the exact `__ruvyxa.define(...)` format and module-id derivation; this document
+does not duplicate that runtime's registry implementation here to avoid the two copies drifting
+apart.
 
 ---
 
 ### Protocol Comparison
 
-| Protocol      | Transport | Encoding          | Direction                  | Caching        |
-| ------------- | --------- | ----------------- | -------------------------- | -------------- |
-| HMR           | WebSocket | JSON              | Bidirectional              | None           |
-| Server Action | HTTP POST | JSON              | Client → Server (result ←) | None           |
-| Client Module | HTTP GET  | JavaScript (IIFE) | Server → Client            | Immutable (1y) |
-| Render Proxy  | HTTP POST | HTML              | Internal                   | LRU            |
+| Protocol        | Transport | Encoding                | Direction                   | Caching                          |
+| --------------- | --------- | ----------------------- | --------------------------- | -------------------------------- |
+| HMR             | WebSocket | JSON                    | Server → Client (one-way)   | None                             |
+| Server Action   | HTTP POST | JSON or form-urlencoded | Client → Server (result ←)  | None                             |
+| Client Module   | HTTP GET  | JavaScript (IIFE)       | Server → Client             | Dev: none · Prod: immutable (1y) |
+| Realtime        | WebSocket | JSON                    | Bidirectional (app-defined) | None                             |
+| Worker (NDJSON) | stdio     | NDJSON                  | Bidirectional (internal)    | N/A                              |
+
+There is no `/render` proxy endpoint — the dev server dispatches to the worker pool in-process, not
+over an internal HTTP hop.
 
 ---
 
 ### Why This Design
 
-1. **WebSocket for HMR, not SSE** — HMR needs bidirectional messages. SSE is unidirectional
-   server→client. WebSocket allows the client to send `manifest-hash` on reconnect for state
-   negotiation.
-2. **Immutable client module caching** — Client bundles are content-addressed by module path.
-   `Cache-Control: immutable` ensures the browser never re-fetches a module that hasn't changed. HMR
-   bypasses this with a cache-busting `_` query param.
-3. **Action as POST-only** — Server actions mutate state. HTTP POST is the correct semantics. GET
-   requests to action endpoints are rejected to prevent CSRF via `<img>` tags.
+1. **One-way HMR over a request/response protocol** — the server already knows what changed from the
+   file watcher; there is nothing for the client to negotiate, so a broadcast-only channel is
+   sufficient and avoids a handshake state machine.
+2. **Immutable caching only where content-addressing makes it safe** — production bundle filenames
+   are content-hashed, so `immutable` cannot serve a stale file. The dev endpoint compiles on demand
+   from mutable source, so it deliberately carries no such header.
+3. **Action as POST-only** — server actions mutate state. HTTP POST is the correct semantics, and
+   `validate_action_request` rejects non-POST before any handler runs.
 4. **Module registry over ESM** — ES modules (`<script type="module">`) have cross-origin and CORS
    complications with HMR. A synchronous `__ruvyxa` registry is simpler and works with the IIFE
    output format.
@@ -3079,6 +2966,14 @@ Key behavior:
 
 ### Error Code Catalog
 
+Representative sample, not exhaustive — the workspace defines roughly 70 distinct `RUV####` codes
+across route discovery (`RUV1000s`), rendering (`RUV1100s`–`RUV1500s`), config validation
+(`RUV1600s`), plugins (`RUV1700s`–`RUV1800s`), realtime (`RUV2000s`), i18n (`RUV2100s`), adapters
+(`RUV2200s`), and packages (`RUV3000s`). The CLI Architecture section above lists the config and
+plugin ranges it emits directly; the full catalog with explanations lives in
+[Troubleshooting](docs/en/16-troubleshooting-upgrades.md), not here — this table exists to show the
+code shape and a few of each family, not to enumerate every one.
+
 | Code    | Title                                                           | Crate             |
 | ------- | --------------------------------------------------------------- | ----------------- |
 | RUV1001 | App directory was not found                                     | graph             |
@@ -3156,37 +3051,32 @@ server/client boundary enforcement, private env var isolation, and origin valida
 
 #### Configuration
 
+The real struct — see [`BuiltinMiddlewareConfig`](#configuration-configrs) in the Middleware
+section, which this restates rather than duplicates with different field names:
+
 ```rust
 pub struct CorsConfig {
-    pub allow_origins: Vec<String>,
-    pub allow_methods: Vec<String>,   // default: GET, POST, PUT, DELETE, OPTIONS
-    pub allow_headers: Vec<String>,   // default: Content-Type, Authorization
-    pub expose_headers: Vec<String>,  // optional: Server-Timing, X-Ruvyxa-Debug
-    pub max_age: Option<u64>,         // default: 600 seconds
-    pub allow_credentials: bool,      // default: false
+    pub origins: Vec<String>,     // allowed origins; ["*"] for permissive
+    pub methods: Vec<String>,     // default: GET, POST, PUT, DELETE, OPTIONS
+    pub headers: Vec<String>,     // allowed request headers
+    pub credentials: bool,        // allow credentials, default false
+    pub max_age: u64,             // preflight cache seconds, default 86400
 }
 ```
+
+There is no `expose_headers` field.
 
 #### Runtime
 
-`CorsLayer` wraps `tower_http::cors::CorsLayer`. Preflight `OPTIONS` is handled automatically.
-Origin matching is strict (no wildcard `*` when credentials enabled).
+Not `tower_http::cors::CorsLayer` — a hand-written Tower service. It matches `Origin` against the
+allowlist and short-circuits preflight `OPTIONS` to `204 No Content`. Non-matching origins get
+`Vary: Origin` appended but no CORS headers; `MiddlewareStack::validate()` rejects
+`credentials: true` combined with `origins: ["*"]` before the layer is installed.
 
-#### Default (dev)
+#### Default
 
-```json
-{
-  "cors": {
-    "allowOrigins": ["http://localhost:3000"],
-    "allowCredentials": true
-  }
-}
-```
-
-#### Default (build)
-
-No CORS middleware unless explicitly configured (production API is expected to set `allowOrigins` to
-the actual domain).
+CORS is **off** unless `middleware.builtin.cors` is set in `ruvyxa.config.ts` — for both `dev` and
+production. There is no built-in dev-mode allowlist.
 
 ---
 
@@ -3194,11 +3084,13 @@ the actual domain).
 
 #### Configuration
 
+The real struct — see [`RateLimitConfig`](#configuration-configrs) in the Middleware section:
+
 ```rust
 pub struct RateLimitConfig {
-    pub requests: u64,     // max requests per window
-    pub window_secs: u64,  // time window in seconds
-    pub key_by: String,    // "ip" (default) or "header:<name>"
+    pub max_requests: usize,   // serialized as "max"
+    pub window_secs: u64,      // serialized as "window"
+    pub key_by: String,        // "ip" (default) or "header:<name>"
 }
 ```
 
@@ -3211,38 +3103,41 @@ that overwrites it.
 
 #### Default Store
 
-In-memory: `Arc<Mutex<BTreeMap<String, …>>>` holding a window start and a counter per key, swept
-lazily as requests arrive.
+In-memory: `Arc<Mutex<BTreeMap<String, RateBucket>>>` holding a window start and counter per key. A
+hard cap of 10,000 tracked keys triggers lazy GC.
 
 #### Response on Limit
 
 ```
 Status: 429 Too Many Requests
-Content-Type: application/json
-Retry-After: <seconds>
+retry-after: <seconds>
+
+Rate limit exceeded
 ```
 
-```json
-{
-  "error": "Rate limit exceeded",
-  "retryAfter": 30
-}
-```
+Plain text body (`builtin.rs:602-605`), not a JSON envelope. `retry-after` is lowercase per the HTTP
+convention Axum emits.
 
-`Retry-After` header tells the client when to retry.
+Server actions have a **separate** rate limiter (`ActionRateLimiter` in
+[Action Security](#action-security-actionsecurityrs)) — a fixed 8192-slot sliding window, distinct
+from this Tower-layer limiter, and configured through `security.actionRateLimit` rather than
+`middleware.builtin.rate`.
 
 ---
 
-### 3. CSRF Protection for Server Actions
+### 3. Server Action Request Validation
 
-All POST requests to `/_ruvyxa/action/*` require:
+There is no CSRF header. Requests to `/__ruvyxa/action` (see
+[Server Action Protocol](#2-server-action-protocol) in the Protocols section for the exact
+query-parameter shape) are validated by `validate_action_request`:
 
-1. **Origin validation**: `Origin` header must match an allowed origin from
-   `CorsConfig.allow_origins`. No `Origin` header → blocked (browsers always send `Origin` on
-   cross-origin POST).
-2. **`Ruvyxa-Action` header**: Must equal the action name being called. E.g.,
-   `Ruvyxa-Action: submitForm`. Absent or mismatched → 403.
-3. **Method check**: Only POST allowed. GET → 405.
+1. **Method check** — only POST; anything else is rejected before the body is read.
+2. **Body size** — capped at `security.actionLimit` (default 1 MB, hard ceiling 16 MB).
+3. **Content-Type** — must be JSON or `application/x-www-form-urlencoded`.
+4. **Same-origin** — `Origin` must match `Host` when `security.sameOrigin` is enabled (default).
+5. **Fetch Metadata** — `Sec-Fetch-*` headers checked when `security.fetchMetadata` is enabled
+   (default).
+6. **Rate limit** — the action-specific sliding-window limiter above.
 
 ---
 
@@ -3309,29 +3204,43 @@ confusing runtime `undefined`, while a build error names the file and the variab
 
 ### 6. Plugin Security
 
-Plugins from `ruvyxa.plugin.ts` run inside the server process. Safety measures:
+Plugins run as a **separate Node/Bun subprocess** (see PluginHost in the Middleware section) — not
+inside the server process. That subprocess is a normal JavaScript runtime with full `fs`/`process`
+access; there is no sandbox around plugin code, and this document makes no unverified sandboxing
+claim.
 
-1. **PluginHost isolates hooks** — `before_request` / `after_response` receive sanitized
-   `PluginHttpRequest` objects (body capped at 1MB, headers audited).
-2. **Plugin code is compiled** — Modified plugin files trigger HMR full-reload, not silent
-   injection.
-3. **No filesystem access** — Plugin hooks do not receive `fs` or `process` references. They mutate
-   HTTP request/response data only.
+What is actually bounded:
+
+1. **Response buffering** — plugin HTTP responses are capped at `security.pluginLimit` (default 32
+   MB, hard ceiling 256 MB via `MAX_PLUGIN_RESPONSE_BODY_LIMIT_BYTES`), enforced Rust-side on the
+   bridge.
+2. **Hook timeout** — `middleware.timeoutMs` (1-300,000 ms) bounds how long a hook may run before
+   the worker is declared poisoned and replaced (see Failure Recovery in the Middleware section).
+3. **Explicit trust boundary, not isolation** — a plugin is first-party code the project author
+   installs and configures; the framework's guarantee is that a stuck or oversized plugin cannot
+   wedge the server indefinitely, not that plugin code is contained from the host.
 
 ---
 
 ### 7. Default Headers
 
-Every response includes:
+Every response gets 7 headers unless `security.headers: false` (`apply_security_headers` in
+`ruvyxa_dev_server/src/lib.rs`), each only set if the application has not already set it:
 
 ```
 X-Content-Type-Options: nosniff
-X-Frame-Options: DENY
-Content-Security-Policy: default-src 'self'
 Referrer-Policy: strict-origin-when-cross-origin
+Permissions-Policy: camera=(), microphone=(), geolocation=()
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Resource-Policy: same-origin
+X-Frame-Options: DENY
+X-Permitted-Cross-Domain-Policies: none
 ```
 
-Configurable via `ruvyxa.config.ts` `security.headers` field.
+**There is no default Content-Security-Policy or HSTS.** Both are application-specific — a safe CSP
+depends on the app's own script/style/image sources, and HSTS is only safe once HTTPS is guaranteed
+end-to-end — so the framework leaves them to explicit application configuration rather than shipping
+a default that could be wrong. Configurable via `ruvyxa.config.ts` `security.headers` (bool).
 
 ---
 
@@ -3431,6 +3340,8 @@ ruvyxa build --adapter node
 
 ### Adapter: Node
 
+**Source**: `packages/@ruvyxa/adapter-node/src/index.ts`
+
 #### Output Structure
 
 ```
@@ -3443,110 +3354,94 @@ ruvyxa build --adapter node
 
 #### Runtime
 
-The generated `server/index.mjs` is a standalone server:
-
-```javascript
-node.ruvyxa / deploy / node / server / index.mjs
+```bash
+node .ruvyxa/deploy/node/server/index.mjs
+# or
+node .ruvyxa/deploy/node/start.mjs
 ```
 
 ---
 
 ### Adapter: Static
 
-#### Output Structure
+**Source**: `packages/@ruvyxa/adapter-static/src/index.ts`
 
-```
-.ruvyxa/static/
-  ├── static/                   # Default publish directory
-  ├── assets/                   # Hashed client assets
-  └── build.json
-```
-
-#### Build Process
-
-1. Run `ruvyxa build` (full SSG detection)
-2. For each SSG route: use the framework's `getStaticParams`/`staticParams` metadata
-3. Write HTML to the adapter's static-site artifact
-4. Copy client bundles and generated headers into the publish directory
+Copies prerendered HTML and hashed client assets into a single publish directory alongside a
+`_headers` file (Netlify/Cloudflare Pages header-rules format) — there is no separate `build.json`
+artifact in this adapter's own output; build metadata lives in the shared `.ruvyxa/build.json` from
+the base build, not something the static adapter writes itself.
 
 ---
 
 ### Adapter: Vercel
 
+**Source**: `packages/@ruvyxa/adapter-vercel/src/index.ts`
+
 #### Output Structure
 
 ```
-.ruvyxa/vercel/
-  └── .vercel/output/
-      ├── config.json          # Vercel output config
-      └── static/
-          ├── index.html
-          └── ...
-      └── functions/
-          ├── __ruvyxa.func/
-          │   ├── .vc-config.json
-          │   └── server.js
-          └── blog/[slug].func/
-              ├── .vc-config.json
-              └── server.js
+.vercel/output/
+  ├── config.json                                    # Vercel Build Output API v3 config
+  ├── static/                                          # prerendered HTML + assets (optional —
+  │                                                      # empty for an API-only/all-SSR app)
+  └── functions/
+      └── __ruvyxa_handler.func/
+          ├── .vc-config.json
+          └── index.mjs
 ```
 
-#### `.vc-config.json`
+**One function handles every route** — `__ruvyxa_handler.func`, not a function per dynamic route.
+`config.json` routes all non-static requests to it. Prerendered ISR/PPR pages are explicitly
+excluded from the filesystem-served `static-site` artifact (`excludeStrategies: ['isr', 'ppr']`),
+because `handle: filesystem` runs before the function and would otherwise serve a build-time
+snapshot forever instead of revalidating.
+
+#### `.vc-config.json` (Node target)
 
 ```json
 {
-  "runtime": "nodejs18.x",
-  "handler": "server.js",
-  "launcherType": "Nodejs",
-  "shouldAddHelpers": true
+  "runtime": "nodejs20.x",
+  "handler": "index.mjs",
+  "maxDuration": 30,
+  "launcherType": "Nodejs"
 }
 ```
+
+Default runtime is `nodejs20.x`, not an older LTS. There is no `shouldAddHelpers` field. The edge
+target (`--target edge`) instead writes `{ runtime: "edge", entrypoint: "index.mjs" }`.
 
 ---
 
 ### Adapter: Cloudflare
 
+**Source**: `packages/@ruvyxa/adapter-cloudflare/src/index.ts`
+
 #### Output Structure
 
 ```
-.ruvyxa/cloudflare/
-  ├── wrangler.toml
-  ├── worker.js              # Compiled worker (ESM)
-  └── assets/                 # Static assets
+.ruvyxa/deploy/cloudflare/
+  ├── wrangler.json           # NOT wrangler.toml — this adapter emits JSON
+  ├── worker/index.mjs        # Compiled worker (ESM), inside worker/, not top-level
+  └── assets/                  # Static assets
 ```
 
-#### `wrangler.toml`
+#### `wrangler.json`
 
-```toml
-name = "ruvyxa-app"
-main = "worker.js"
-compatibility_date = "2024-01-01"
-
-[site]
-bucket = "assets"
-```
-
-`worker.js` is an ES module that exports `fetch`:
-
-```javascript
-export default {
-  async fetch(request, env, ctx) {
-    // Match route, render, return Response
-  },
+```json
+{
+  "name": "ruvyxa-app",
+  "main": "./worker/index.mjs",
+  "compatibility_date": "<configured or default>",
+  "assets": { "directory": "./assets" }
 }
 ```
+
+Uses the modern `assets.directory` binding — not the legacy `[site]`/`bucket` Workers Sites config
+from older Wrangler versions. `worker/index.mjs` is an ES module exporting `fetch`.
 
 ---
 
 ### Using the Node output in Docker
-
-#### Output Structure
-
-```
-.ruvyxa/deploy/node/
-  ├── server/index.mjs
-  └── public/
-```
 
 #### Dockerfile
 
@@ -3558,7 +3453,7 @@ EXPOSE 3000
 CMD ["node", "server/index.mjs"]
 ```
 
-#### nginx.conf (optional)
+#### nginx.conf (optional reverse proxy)
 
 ```nginx
 server {
@@ -3566,13 +3461,19 @@ server {
     location / {
         proxy_pass http://127.0.0.1:3000;
     }
-    location /_next/static {
-        # Immutable static assets
+    location /__ruvyxa/client/ {
+        # Content-addressed client bundles; the Node server already sends
+        # Cache-Control: public, max-age=31536000, immutable for these.
+        # This block is only useful if you want nginx to serve them directly
+        # instead of proxying to the Node process.
         expires 1y;
         add_header Cache-Control "public, immutable";
     }
 }
 ```
+
+The earlier `/_next/static` path in this section was a Next.js path, not a Ruvyxa one — Ruvyxa's
+client bundles are served from `/__ruvyxa/client/`.
 
 ---
 
