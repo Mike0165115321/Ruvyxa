@@ -73,15 +73,26 @@ struct Cli {
     command: Command,
 }
 
+/// `--help` styling, mapped role by role onto the palette in
+/// [`ruvyxa_tui::theme`] so `ruvyxa --help` and `ruvyxa build` are recognisably
+/// the same tool. clap takes `AnsiColor` values rather than escape codes, which
+/// is why the palette is restated here instead of imported; each line names the
+/// theme function it mirrors, and the two must be changed together.
 fn cli_styles() -> Styles {
     Styles::styled()
-        .header(AnsiColor::Cyan.on_default().effects(Effects::BOLD))
-        .usage(AnsiColor::Green.on_default().effects(Effects::BOLD))
-        .literal(AnsiColor::BrightBlue.on_default().effects(Effects::BOLD))
-        .placeholder(AnsiColor::Yellow.on_default())
-        .valid(AnsiColor::BrightGreen.on_default())
-        .invalid(AnsiColor::BrightRed.on_default().effects(Effects::BOLD))
-        .error(AnsiColor::BrightRed.on_default().effects(Effects::BOLD))
+        // heading()
+        .header(AnsiColor::Magenta.on_default().effects(Effects::BOLD))
+        // brand()
+        .usage(AnsiColor::Yellow.on_default().effects(Effects::BOLD))
+        // accent()
+        .literal(AnsiColor::Cyan.on_default().effects(Effects::BOLD))
+        // label()
+        .placeholder(AnsiColor::BrightBlack.on_default())
+        // ok_text()
+        .valid(AnsiColor::Green.on_default())
+        // alert_text()
+        .invalid(AnsiColor::Red.on_default().effects(Effects::BOLD))
+        .error(AnsiColor::Red.on_default().effects(Effects::BOLD))
 }
 
 #[derive(Debug, Subcommand)]

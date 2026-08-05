@@ -243,21 +243,24 @@ pub(crate) async fn build_with_output(args: BuildArgs, show_summary: bool) -> an
     }
 
     let phase_started = Instant::now();
+    let spinner = start_build_phase(show_summary, "routes discovered");
     let manifest = discover_project_routes(&args.root, &config)?;
     let route_discovery_duration = phase_started.elapsed();
     if show_summary {
         print_build_phase(
+            spinner,
             "routes discovered",
             format!("{} routes", manifest.routes.len()),
             route_discovery_duration,
         );
     }
     let phase_started = Instant::now();
+    let spinner = start_build_phase(show_summary, "validated");
     let validation = validate_app(&args.root, &manifest)?;
     fail_on_diagnostics(&validation.diagnostics)?;
     let validation_duration = phase_started.elapsed();
     if show_summary {
-        print_build_phase("validated", "ok".to_string(), validation_duration);
+        print_build_phase(spinner, "validated", "ok".to_string(), validation_duration);
     }
     // Every server-only compatibility rule is enforced here: before the plugin
     // session starts and before any staging directory exists, so a rejected
@@ -303,6 +306,9 @@ pub(crate) async fn build_with_output(args: BuildArgs, show_summary: bool) -> an
     // Asset preparation and client bundling both read the immutable project
     // snapshot but write disjoint staging trees. Overlap them, then reduce
     // results in the historical phase order so errors and output stay stable.
+    // One live line covers both workers: they overlap, so two spinners would
+    // fight over the same terminal row.
+    let spinner = start_build_phase(show_summary, "bundling");
     let ((prepared_assets, client_manifest), client_bundle_duration) =
         std::thread::scope(|scope| -> anyhow::Result<_> {
             let preparation = scope.spawn(|| {
@@ -340,6 +346,11 @@ pub(crate) async fn build_with_output(args: BuildArgs, show_summary: bool) -> an
                 .map_err(|_| anyhow::anyhow!("asset preparation worker panicked"))??;
             Ok(((prepared_assets, client_manifest?), client_bundle_duration))
         })?;
+    // The two phases below report separately, so the shared live line ends here
+    // without a result of its own.
+    if let Some(spinner) = spinner {
+        spinner.cancel();
+    }
     let PreparedBuildAssets {
         styles: style_collection,
         images: image_report,
@@ -386,7 +397,7 @@ pub(crate) async fn build_with_output(args: BuildArgs, show_summary: bool) -> an
                 }
             ));
         }
-        print_build_phase("assets prepared", detail, preparation_duration);
+        print_build_phase(None, "assets prepared", detail, preparation_duration);
     }
 
     // The client manifest is machine-read (the server resolves per-route scripts
@@ -405,6 +416,7 @@ pub(crate) async fn build_with_output(args: BuildArgs, show_summary: bool) -> an
         .unwrap_or_default();
     if show_summary && !args.server_only {
         print_build_phase(
+            None,
             "client bundles",
             format!("{client_bundles} bundles"),
             client_bundle_duration,
@@ -440,6 +452,7 @@ pub(crate) async fn build_with_output(args: BuildArgs, show_summary: bool) -> an
     let prerender_duration = phase_started.elapsed();
     if show_summary && !prerendered.is_empty() {
         print_build_phase(
+            None,
             "prerendered",
             format!(
                 "{} page{}",
@@ -591,6 +604,7 @@ pub(crate) async fn build_with_output(args: BuildArgs, show_summary: bool) -> an
     // sitemap or service worker that must be present in static deploy output.
     if config.adapter.is_some() || args.adapter.is_some() || detected_adapter.is_some() {
         let phase_started = Instant::now();
+        let spinner = start_build_phase(show_summary, "adapter");
         let named_adapter = args
             .adapter
             .as_deref()
@@ -607,7 +621,7 @@ pub(crate) async fn build_with_output(args: BuildArgs, show_summary: bool) -> an
                 (None, Some((name, source))) => format!("{name} (auto via {source})"),
                 (None, None) => format!("{} artifact(s)", artifacts.len()),
             };
-            print_build_phase("adapter", detail, phase_started.elapsed());
+            print_build_phase(spinner, "adapter", detail, phase_started.elapsed());
         }
         build_info["adapterArtifacts"] = serde_json::to_value(artifacts)?;
     }
@@ -636,15 +650,26 @@ pub(crate) async fn build_with_output(args: BuildArgs, show_summary: bool) -> an
     Ok(())
 }
 
-pub(crate) fn print_build_phase(name: &str, detail: String, duration: Duration) {
-    println!(
-        "  {} {}{} {} {}",
-        dim("◌"),
-        label(name),
-        spaces(18, name.len()),
-        accent(detail),
-        dim(format!("· {}", format_duration(duration)))
-    );
+/// Starts the live line for a phase that is about to block, when the build is
+/// reporting to a human. `None` — a quiet build, or a phase that draws its own
+/// progress track — leaves the terminal untouched until the phase line prints.
+pub(crate) fn start_build_phase(show_summary: bool, name: &str) -> Option<Spinner> {
+    show_summary.then(|| Spinner::start(name))
+}
+
+/// Replaces the live line with the phase result. Passing the spinner in rather
+/// than dropping it separately is what keeps the animation and the line it
+/// resolves to from disagreeing about the phase name.
+pub(crate) fn print_build_phase(
+    spinner: Option<Spinner>,
+    name: &str,
+    detail: String,
+    duration: Duration,
+) {
+    match spinner {
+        Some(spinner) => spinner.finish_with(detail, duration),
+        None => print_phase(name, detail, duration),
+    }
 }
 
 /// Per-route bundle size table shown after a successful build.

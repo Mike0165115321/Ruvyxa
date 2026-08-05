@@ -2519,6 +2519,7 @@ dependencies = [
  "ruvyxa_diagnostics",
  "ruvyxa_graph",
  "ruvyxa_middleware",
+ "ruvyxa_tui",
  "serde",
  "serde_json",
  "tempfile",
@@ -2545,6 +2546,7 @@ dependencies = [
  "ruvyxa_diagnostics",
  "ruvyxa_graph",
  "ruvyxa_middleware",
+ "ruvyxa_tui",
  "serde",
  "serde_json",
  "tempfile",
@@ -2588,6 +2590,13 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+]
+
+[[package]]
+name = "ruvyxa_tui"
+version = "1.0.27"
+dependencies = [
+ "chrono",
 ]
 
 [[package]]

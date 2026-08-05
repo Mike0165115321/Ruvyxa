@@ -28,6 +28,7 @@ ruvyxa_dev_server = { path = "../ruvyxa_dev_server" }
 ruvyxa_diagnostics = { path = "../ruvyxa_diagnostics" }
 ruvyxa_graph = { path = "../ruvyxa_graph" }
 ruvyxa_middleware = { path = "../ruvyxa_middleware" }
+ruvyxa_tui = { path = "../ruvyxa_tui" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
