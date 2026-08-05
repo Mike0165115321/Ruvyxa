@@ -499,6 +499,7 @@ pub(crate) async fn bench(args: BenchArgs) -> anyhow::Result<()> {
                 target: None,
                 adapter: None,
                 runtime: None,
+                server_only: false,
             },
             false,
         )
@@ -592,6 +593,7 @@ pub(crate) async fn test_parity(args: ProjectArgs) -> anyhow::Result<()> {
         target: None,
         adapter: None,
         runtime: None,
+        server_only: false,
     })
     .await?;
 

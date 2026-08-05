@@ -212,6 +212,9 @@ pub(crate) fn canonical_option_name(option: &str) -> Option<&'static str> {
         "target" => Some("target"),
         "runtime" => Some("runtime"),
         "adapter" => Some("adapter"),
+        // clap's canonical spelling is the hyphenated one; the underscored
+        // form matches the Rust field name a reader may have seen in docs.
+        "server-only" | "server_only" => Some("server-only"),
         "format" => Some("format"),
         "output" => Some("output"),
         "samples" => Some("samples"),

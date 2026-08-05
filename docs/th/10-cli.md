@@ -118,6 +118,41 @@ scaffold ชุดนั้น ตรวจ path ที่รายงาน เ
 npm run adds -- form --force
 ```
 
+## Build เฉพาะ API ด้วย `build --server-only`
+
+`ruvyxa build --server-only` สร้าง artifact สำหรับแอปที่มีเฉพาะ API โดยยังทำ configuration loading,
+route discovery, validation, plugin build hook, server staging และ deploy adapter เหมือน build ปกติ
+ทุกประการ และข้ามงานที่มีเฉพาะหน้า HTML เท่านั้นที่ใช้:
+
+| สร้าง                                             | ข้าม                                               |
+| ------------------------------------------------- | -------------------------------------------------- |
+| `server/` (source ของ app, components และ server) | `client/` — route bundle และ `route-manifest.json` |
+| `assets/` — ทุกไฟล์จาก `public/` แบบไม่ดัดแปลง    | การแปลง WebP และ responsive image variant          |
+| `manifest.json`, `build.json`                     | `prerender/` — output ของ SSG, ISR และ PPR         |
+| `deploy/` จาก adapter ที่เลือก                    | `robots.txt` และ `sitemap.xml`                     |
+|                                                   | การเก็บ CSS ของหน้า                                |
+
+Security header, body limit ของ API และ action, action rate limit, middleware และ diagnostics
+ไม่เปลี่ยน เพราะทั้งหมดเป็นของฝั่ง server ซึ่ง mode นี้ยัง build อยู่
+
+มีกฎสองข้อที่ตรวจก่อน stage output ใด ๆ ดังนั้น build ที่ถูกปฏิเสธจะไม่แตะ `dist/` เดิม:
+
+- **`RUV1211`** — mode นี้รองรับเฉพาะ target `node` และ `bun` เพราะ `static` ไม่มี server และ edge
+  adapter ยังไม่มี server-only output contract
+- **`RUV1210`** — โปรเจกต์ที่มี page route ใด ๆ จะล้มเหลว พร้อมระบุ path แรกที่พบ หากปล่อยผ่าน
+  artifact จะ deploy สำเร็จแล้วคืน 404 จึงตัดสินให้เป็น error ตั้งแต่ตอน build
+
+```bash
+ruvyxa build --server-only
+ruvyxa build --server-only --target bun --adapter node
+```
+
+`build.json` บันทึก `"serverOnly": true` และตั้ง `"clientDir": null` การ build ซ้ำทับ output เดิมที่
+เป็น full build ด้วย `--server-only` จะลบ `client/`, `prerender/` และไฟล์ discovery ที่ค้างอยู่
+เพราะ atomic commit แทนที่ชุด build output ทั้งหมด
+
+flag นี้เป็น opt-in `ruvyxa build` ที่ไม่ใส่ flag ยังทำงานเหมือนเดิมทุกประการ
+
 ## Application loop ที่แนะนำ
 
 รันจาก root ของ application ที่สร้างแล้ว ไม่ใช่จาก framework monorepo นี้:

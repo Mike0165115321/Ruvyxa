@@ -17,6 +17,7 @@ use std::time::SystemTime;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
+use ruvyxa_diagnostics::Diagnostic;
 use ruvyxa_graph::{RenderStrategy, RouteManifest, validate_app, write_manifest};
 use tracing::{info, warn};
 
@@ -24,6 +25,96 @@ use crate::*;
 
 pub(crate) async fn build(args: BuildArgs) -> anyhow::Result<()> {
     build_with_output(args, true).await
+}
+
+/// Build targets that have an agreed server-only output contract.
+///
+/// `static` has no server to run at all, and `edge` adapters each stage their
+/// own function payload from the full output; neither has been given a minimal
+/// contract yet, so both are rejected rather than silently producing an
+/// artifact that cannot be deployed.
+pub(crate) const SERVER_ONLY_TARGETS: [&str; 2] = ["node", "bun"];
+
+/// Reject a `--server-only` build whose target has no server-only contract.
+///
+/// Checked before any staging directory is created: a build that cannot
+/// produce a deployable artifact must not write output at all.
+pub(crate) fn server_only_target_diagnostic(target: BuildTarget) -> Option<Diagnostic> {
+    let name = format!("{target:?}").to_lowercase();
+    if SERVER_ONLY_TARGETS.contains(&name.as_str()) {
+        return None;
+    }
+    Some(
+        Diagnostic::new(
+            "RUV1211",
+            format!("--server-only does not support the `{name}` target"),
+        )
+        .explain(
+            "A server-only artifact is a running Node or Bun server. The static and edge targets \
+             have no server-only output contract yet, so the build would emit an artifact that \
+             cannot be deployed.",
+        )
+        .suggest(format!(
+            "Build with `--target node` or `--target bun`, or drop --server-only to produce the \
+             full {name} output."
+        )),
+    )
+}
+
+/// Reject a `--server-only` build that contains a page route.
+///
+/// Silently omitting pages would produce a deployment that starts successfully
+/// and then serves 404 for every page — a defect that only appears in
+/// production. Failing here keeps it a build-time error.
+///
+/// The offending route is chosen by sorted path so the same project always
+/// reports the same first path, whatever order discovery walked the tree in.
+pub(crate) fn server_only_page_route_diagnostic(manifest: &RouteManifest) -> Option<Diagnostic> {
+    let mut pages = manifest
+        .routes
+        .iter()
+        .filter(|route| route.kind == ruvyxa_graph::RouteKind::Page)
+        .collect::<Vec<_>>();
+    pages.sort_by(|left, right| left.path.cmp(&right.path));
+    let first = pages.first()?;
+
+    let remaining = pages.len() - 1;
+    let diagnostic = Diagnostic::new(
+        "RUV1210",
+        format!("--server-only cannot build page route \"{}\"", first.path),
+    )
+    .explain(if remaining == 0 {
+        "A server-only artifact has no client bundles, page CSS, or prerendered HTML, so this \
+         page would return 404 in the deployed application."
+            .to_string()
+    } else {
+        format!(
+            "A server-only artifact has no client bundles, page CSS, or prerendered HTML, so this \
+             page would return 404 in the deployed application. {remaining} more page route(s) \
+             were discovered."
+        )
+    })
+    .suggest(
+        "Move the endpoint to app/api/<name>/route.ts, or run a normal Node/Bun build without \
+         --server-only.",
+    )
+    .at_file(first.file.clone());
+    Some(diagnostic)
+}
+
+/// Run every `--server-only` compatibility rule before output staging begins.
+pub(crate) fn ensure_server_only_supported(
+    target: BuildTarget,
+    manifest: &RouteManifest,
+) -> anyhow::Result<()> {
+    let diagnostics = [
+        server_only_target_diagnostic(target),
+        server_only_page_route_diagnostic(manifest),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    fail_on_diagnostics(&diagnostics)
 }
 
 pub(crate) struct PreparedBuildAssets {
@@ -66,14 +157,20 @@ pub(crate) fn prepare_build_assets(
     app_dir: &Path,
     server_dir: &Path,
     assets_dir: &Path,
-    style_entries: &[PathBuf],
+    // `None` skips style collection entirely: a server-only artifact renders no
+    // HTML document, so collected CSS has nothing to be inlined into and no
+    // stylesheet to be emitted as. The project's own source files are still
+    // staged — an API route may import a module that sits next to a stylesheet.
+    style_entries: Option<&[PathBuf]>,
     image_cache_dir: &Path,
     image_options: &ImageOptimizationOptions,
 ) -> anyhow::Result<PreparedBuildAssets> {
     let started = Instant::now();
     let (styles, images) = std::thread::scope(|scope| -> anyhow::Result<_> {
-        let styles =
-            scope.spawn(|| ruvyxa_dev_server::collect_styles(root, app_dir, style_entries));
+        let styles = scope.spawn(|| match style_entries {
+            Some(entries) => ruvyxa_dev_server::collect_styles(root, app_dir, entries),
+            None => Ok(ruvyxa_dev_server::StyleCollection::default()),
+        });
         let app_copy = scope.spawn(|| copy_dir_all(app_dir, &server_dir.join("app")));
         let components_copy = scope
             .spawn(|| copy_optional_dir(&root.join("components"), &server_dir.join("components")));
@@ -131,7 +228,14 @@ pub(crate) async fn build_with_output(args: BuildArgs, show_summary: bool) -> an
     if show_summary {
         print_tui_header("Build");
         print_field("target", accent(format!("{:?}", target).to_lowercase()));
-        print_field("profile", accent("production"));
+        print_field(
+            "profile",
+            accent(if args.server_only {
+                "production · server-only"
+            } else {
+                "production"
+            }),
+        );
         print_field("root", path_text(&args.root));
         print_field("app dir", path_text(&app_dir));
         print_field("out dir", path_text(&out_dir));
@@ -155,6 +259,12 @@ pub(crate) async fn build_with_output(args: BuildArgs, show_summary: bool) -> an
     if show_summary {
         print_build_phase("validated", "ok".to_string(), validation_duration);
     }
+    // Every server-only compatibility rule is enforced here: before the plugin
+    // session starts and before any staging directory exists, so a rejected
+    // build leaves the previous output and the project untouched.
+    if args.server_only {
+        ensure_server_only_supported(target, &manifest)?;
+    }
     let plugin_session = TypeScriptPluginBuildSession::new(
         &args.root,
         &config.plugins,
@@ -172,8 +282,22 @@ pub(crate) async fn build_with_output(args: BuildArgs, show_summary: bool) -> an
     let client_dir = staging_dir.join("client");
     let assets_dir = staging_dir.join("assets");
     let image_cache_dir = build_cache_dir(&args.root, &config.cache).join("images");
-    let style_entries = config.style_entries(&args.root);
-    fs::create_dir_all(&client_dir)?;
+    let style_entries = (!args.server_only).then(|| config.style_entries(&args.root));
+    // `public/` is a URL contract for an API-only service too, so its files are
+    // still staged. What is skipped is the browser-facing part: WebP conversion
+    // and responsive variants exist for `<Image>`, which a server-only artifact
+    // never renders.
+    let image_options = if args.server_only {
+        ImageOptimizationOptions {
+            optimize: false,
+            ..config.images.clone()
+        }
+    } else {
+        config.images.clone()
+    };
+    if !args.server_only {
+        fs::create_dir_all(&client_dir)?;
+    }
     write_manifest(&manifest, &staging_dir.join("manifest.json"))?;
 
     // Asset preparation and client bundling both read the immutable project
@@ -187,25 +311,29 @@ pub(crate) async fn build_with_output(args: BuildArgs, show_summary: bool) -> an
                     &app_dir,
                     &server_dir,
                     &assets_dir,
-                    &style_entries,
+                    style_entries.as_deref(),
                     &image_cache_dir,
-                    &config.images,
+                    &image_options,
                 )
             });
             let bundle_started = Instant::now();
-            let client_manifest = emit_client_bundles_with_session(
-                &args.root,
-                &app_dir,
-                &manifest,
-                &client_dir,
-                &config.build,
-                &config.plugins,
-                RuvyxaBuildCache {
-                    dependency_hash: &config.config_dependency_hash,
-                    directory: &build_cache_dir(&args.root, &config.cache),
-                },
-                &plugin_session,
-            );
+            let client_manifest = if args.server_only {
+                Ok(serde_json::json!({ "routes": [] }))
+            } else {
+                emit_client_bundles_with_session(
+                    &args.root,
+                    &app_dir,
+                    &manifest,
+                    &client_dir,
+                    &config.build,
+                    &config.plugins,
+                    RuvyxaBuildCache {
+                        dependency_hash: &config.config_dependency_hash,
+                        directory: &build_cache_dir(&args.root, &config.cache),
+                    },
+                    &plugin_session,
+                )
+            };
             let client_bundle_duration = bundle_started.elapsed();
             let prepared_assets = preparation
                 .join()
@@ -220,8 +348,14 @@ pub(crate) async fn build_with_output(args: BuildArgs, show_summary: bool) -> an
     } = prepared_assets;
 
     // The optimizer converted these images; a raw `<img>` still ships the
-    // original bytes, so the build's work is silently unused.
-    let bypassed_images = scan_raw_image_usage(&app_dir, &image_report.entries);
+    // original bytes, so the build's work is silently unused. A server-only
+    // build converts nothing and renders no markup, so there is nothing to warn
+    // about.
+    let bypassed_images = if args.server_only {
+        Vec::new()
+    } else {
+        scan_raw_image_usage(&app_dir, &image_report.entries)
+    };
     for usage in bypassed_images.iter().take(5) {
         warn!(
             "{}:{} <img src=\"{}\"> ships {} instead of the generated WebP ({}). Use <Image> from @ruvyxa/react to serve the optimized file.",
@@ -258,16 +392,18 @@ pub(crate) async fn build_with_output(args: BuildArgs, show_summary: bool) -> an
     // The client manifest is machine-read (the server resolves per-route scripts
     // and preloads from it) and never hand-edited, so emit compact JSON: it is
     // part of the deployed artifact and is parsed on the render path.
-    fs::write(
-        client_dir.join("manifest.json"),
-        serde_json::to_string(&client_manifest)?,
-    )?;
+    if !args.server_only {
+        fs::write(
+            client_dir.join("manifest.json"),
+            serde_json::to_string(&client_manifest)?,
+        )?;
+    }
     let client_bundles = client_manifest
         .get("routes")
         .and_then(|routes| routes.as_array())
         .map(Vec::len)
         .unwrap_or_default();
-    if show_summary {
+    if show_summary && !args.server_only {
         print_build_phase(
             "client bundles",
             format!("{client_bundles} bundles"),
@@ -276,24 +412,31 @@ pub(crate) async fn build_with_output(args: BuildArgs, show_summary: bool) -> an
     }
 
     // ─── SSG / ISR / PPR pre-rendering at build time ──────────────────────────
+    // Every prerendered artifact is an HTML page, and a server-only build has
+    // no page routes by the compatibility rule above, so this stage has no work
+    // to do and its `prerender/` directory is never created.
     let prerender_dir = staging_dir.join("prerender");
     let phase_started = Instant::now();
-    let prerendered = prerender_static_routes(
-        &args.root,
-        &app_dir,
-        &manifest,
-        &prerender_dir,
-        &client_dir,
-        &style_collection.css,
-        &config.build,
-        RuvyxaBuildCache {
-            dependency_hash: &config.config_dependency_hash,
-            directory: &build_cache_dir(&args.root, &config.cache),
-        },
-        config.javascript_runtime(),
-        show_summary,
-    )
-    .await?;
+    let prerendered = if args.server_only {
+        Vec::new()
+    } else {
+        prerender_static_routes(
+            &args.root,
+            &app_dir,
+            &manifest,
+            &prerender_dir,
+            &client_dir,
+            &style_collection.css,
+            &config.build,
+            RuvyxaBuildCache {
+                dependency_hash: &config.config_dependency_hash,
+                directory: &build_cache_dir(&args.root, &config.cache),
+            },
+            config.javascript_runtime(),
+            show_summary,
+        )
+        .await?
+    };
     let prerender_duration = phase_started.elapsed();
     if show_summary && !prerendered.is_empty() {
         print_build_phase(
@@ -314,23 +457,28 @@ pub(crate) async fn build_with_output(args: BuildArgs, show_summary: bool) -> an
         prerendered.iter().map(|route| route.path.clone()).collect();
     let site_url = resolve_site_url(config.site.url.as_deref(), |name| std::env::var(name).ok())
         .map_err(anyhow::Error::msg)?;
-    let discovery = write_discovery_files(
-        &manifest,
-        &prerendered_paths,
-        &assets_dir,
-        site_url.as_deref(),
-        &config.site,
-    )
-    .with_context(|| {
-        format!(
-            "failed to write discovery files into {}",
-            assets_dir.display()
+    // robots.txt and sitemap.xml describe crawlable pages. A server-only
+    // artifact has none, so writing them would advertise URLs that do not exist
+    // and would create an `assets/` directory for a project with no `public/`.
+    if !args.server_only {
+        let discovery = write_discovery_files(
+            &manifest,
+            &prerendered_paths,
+            &assets_dir,
+            site_url.as_deref(),
+            &config.site,
         )
-    })?;
-    if discovery.sitemap_needs_site_url {
-        warn!(
-            "no production site URL is configured, so sitemap.xml was not generated. Set `site.url`, RUVYXA_SITE_URL, or a supported production host URL environment variable."
-        );
+        .with_context(|| {
+            format!(
+                "failed to write discovery files into {}",
+                assets_dir.display()
+            )
+        })?;
+        if discovery.sitemap_needs_site_url {
+            warn!(
+                "no production site URL is configured, so sitemap.xml was not generated. Set `site.url`, RUVYXA_SITE_URL, or a supported production host URL environment variable."
+            );
+        }
     }
 
     // Zero-config deploys: pick the adapter from the hosting platform's build
@@ -354,8 +502,12 @@ pub(crate) async fn build_with_output(args: BuildArgs, show_summary: bool) -> an
             .map(|duration| duration.as_secs())
             .unwrap_or_default(),
         "routes": manifest.routes.len(),
+        "serverOnly": args.server_only,
         "serverDir": "server",
-        "clientDir": "client",
+        // Null rather than "client": a server-only artifact has no client
+        // directory, and an adapter or operator reading this file must not be
+        // pointed at a path the build never wrote.
+        "clientDir": if args.server_only { serde_json::Value::Null } else { serde_json::json!("client") },
         "assetsDir": "assets",
         "adapter": args
             .adapter

@@ -117,6 +117,43 @@ only for files you intentionally want to regenerate:
 npm run adds -- form --force
 ```
 
+## API-only builds with `build --server-only`
+
+`ruvyxa build --server-only` produces an API-only artifact. It runs configuration loading, route
+discovery, validation, plugin build hooks, server staging, and the deploy adapter exactly as a
+normal build does, and it skips the work that only a rendered HTML page consumes:
+
+| Produced                                          | Skipped                                          |
+| ------------------------------------------------- | ------------------------------------------------ |
+| `server/` (app, components, and server sources)   | `client/` — route bundles, `route-manifest.json` |
+| `assets/` — every file from `public/`, unmodified | WebP conversion and responsive image variants    |
+| `manifest.json`, `build.json`                     | `prerender/` — SSG, ISR, and PPR output          |
+| `deploy/` from the selected adapter               | `robots.txt` and `sitemap.xml`                   |
+|                                                   | page CSS collection                              |
+
+Security headers, API and action body limits, action rate limiting, middleware, and diagnostics are
+unchanged: they belong to the server, which this mode still builds.
+
+Two rules are enforced before any output is staged, so a rejected build leaves the previous `dist/`
+untouched:
+
+- **`RUV1211`** — the mode supports the `node` and `bun` targets only. `static` has no server, and
+  the edge adapters have no server-only output contract yet.
+- **`RUV1210`** — a project containing any page route fails, naming the first offending path. A page
+  route in a server-only artifact would deploy successfully and then return 404, so this is a
+  build-time error rather than a silent omission.
+
+```bash
+ruvyxa build --server-only
+ruvyxa build --server-only --target bun --adapter node
+```
+
+`build.json` records `"serverOnly": true` and sets `"clientDir": null`. Rebuilding an existing
+full-build output with `--server-only` removes the now-stale `client/`, `prerender/`, and discovery
+files, because the atomic commit replaces the complete set of named build outputs.
+
+The flag is opt-in. `ruvyxa build` without it is unchanged.
+
 ## Recommended application loop
 
 Run this from the root of a generated application, not from this framework monorepo:

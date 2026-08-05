@@ -259,6 +259,12 @@ struct BuildArgs {
     /// and config.runtime.
     #[arg(long, value_enum, ignore_case = true)]
     runtime: Option<CliRuntime>,
+
+    /// Build an API-only artifact: no client bundles, page CSS, prerendered
+    /// pages, or discovery files. Requires the node or bun target, and fails
+    /// when the project contains a page route.
+    #[arg(long)]
+    server_only: bool,
 }
 
 const KNOWN_ADAPTER_NAMES: [&str; 10] = [

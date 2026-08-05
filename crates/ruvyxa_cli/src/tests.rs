@@ -1956,3 +1956,119 @@ fn has_temp_build_dir(out_dir: &Path, prefix: &str) -> bool {
                 && entry.file_name().to_string_lossy().starts_with(prefix)
         })
 }
+
+// ─── `build --server-only` ────────────────────────────────────────────────────
+
+fn server_only_route(path: &str, kind: ruvyxa_graph::RouteKind) -> ruvyxa_graph::RouteEntry {
+    ruvyxa_graph::RouteEntry {
+        id: path.to_string(),
+        path: path.to_string(),
+        kind,
+        file: PathBuf::from(format!("app{path}/route.ts")),
+        layout_chain: Vec::new(),
+        server_modules: Vec::new(),
+        client_modules: Vec::new(),
+        runtime: ruvyxa_graph::RuntimeTarget::Node,
+        render: ruvyxa_graph::RenderMeta::default(),
+    }
+}
+
+fn server_only_manifest(routes: Vec<ruvyxa_graph::RouteEntry>) -> ruvyxa_graph::RouteManifest {
+    ruvyxa_graph::RouteManifest {
+        app_dir: PathBuf::from("app"),
+        routes,
+        i18n: None,
+    }
+}
+
+#[test]
+fn parses_the_server_only_flag_in_every_accepted_spelling() {
+    for spelling in ["--server-only", "--SERVER-ONLY", "--server_only"] {
+        let cli = Cli::try_parse_from(normalized_cli_args(os_args([
+            "Ruvyxa",
+            "build",
+            spelling,
+            "--root",
+            "examples/demo",
+        ])))
+        .unwrap_or_else(|error| panic!("{spelling} should parse: {error}"));
+
+        let Command::Build(args) = cli.command else {
+            panic!("expected build command");
+        };
+        assert!(args.server_only, "{spelling}");
+    }
+
+    // The default path must stay exactly what it was before the flag existed.
+    let cli = Cli::try_parse_from(normalized_cli_args(os_args(["Ruvyxa", "build"]))).unwrap();
+    let Command::Build(args) = cli.command else {
+        panic!("expected build command");
+    };
+    assert!(!args.server_only);
+}
+
+#[test]
+fn server_only_accepts_node_and_bun_targets_only() {
+    for target in [BuildTarget::Node, BuildTarget::Bun] {
+        assert!(
+            server_only_target_diagnostic(target).is_none(),
+            "{target:?} should be supported"
+        );
+    }
+
+    for target in [BuildTarget::Static, BuildTarget::Edge] {
+        let diagnostic = server_only_target_diagnostic(target)
+            .unwrap_or_else(|| panic!("{target:?} should be rejected"));
+        let rendered = diagnostic.to_string();
+        assert!(rendered.contains("RUV1211"), "{rendered}");
+        assert!(
+            rendered.contains(&format!("{target:?}").to_lowercase()),
+            "{rendered}"
+        );
+    }
+}
+
+#[test]
+fn server_only_rejects_page_routes_and_names_the_first_one() {
+    use ruvyxa_graph::RouteKind;
+
+    let api_only = server_only_manifest(vec![
+        server_only_route("/api/health", RouteKind::Api),
+        server_only_route("/api/users", RouteKind::Api),
+    ]);
+    assert!(server_only_page_route_diagnostic(&api_only).is_none());
+
+    // Discovery order must not change which path is reported.
+    let with_pages = server_only_manifest(vec![
+        server_only_route("/api/health", RouteKind::Api),
+        server_only_route("/settings", RouteKind::Page),
+        server_only_route("/dashboard", RouteKind::Page),
+    ]);
+    let rendered = server_only_page_route_diagnostic(&with_pages)
+        .expect("a page route must fail the build")
+        .to_string();
+    assert!(rendered.contains("RUV1210"), "{rendered}");
+    assert!(rendered.contains("/dashboard"), "{rendered}");
+    assert!(
+        rendered.contains("1 more page route"),
+        "the count of remaining pages should be reported: {rendered}"
+    );
+    assert!(rendered.contains("app/api/"), "{rendered}");
+}
+
+#[test]
+fn server_only_compatibility_gate_passes_only_for_api_only_node_builds() {
+    use ruvyxa_graph::RouteKind;
+
+    let api_only = server_only_manifest(vec![server_only_route("/api/health", RouteKind::Api)]);
+    assert!(ensure_server_only_supported(BuildTarget::Node, &api_only).is_ok());
+    assert!(ensure_server_only_supported(BuildTarget::Bun, &api_only).is_ok());
+    assert!(ensure_server_only_supported(BuildTarget::Static, &api_only).is_err());
+
+    let with_page = server_only_manifest(vec![server_only_route("/", RouteKind::Page)]);
+    assert!(ensure_server_only_supported(BuildTarget::Node, &with_page).is_err());
+
+    // An empty project is not a page project; the gate must not invent a failure.
+    let empty = server_only_manifest(Vec::new());
+    assert!(ensure_server_only_supported(BuildTarget::Node, &empty).is_ok());
+}
