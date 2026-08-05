@@ -1,6 +1,56 @@
 # Changelog
 
-## v1.0.27 (2026-08-04)
+## v1.0.27 (2026-08-05)
+
+### Breaking changes
+
+- Renamed the scaffold command from `ruvyxa add` to `ruvyxa adds`. Generated applications now use
+  `npm run adds -- form` (or `data-table` / `auth`).
+
+### Terminal UI
+
+- Added the `ruvyxa_tui` crate with a spinner, layout, mascot, progress, and theme module, and wired
+  it into the CLI and dev server. Build phases now render as animated spinners with progress
+  tracking instead of static printed lines.
+- Separated the terminal's two streams: progress bars and spinners write to stderr, results to
+  stdout. `ruvyxa build > log` now captures a clean result log without animation bytes, animation is
+  disabled when either stream is captured, and color is preserved on stdout.
+- Standardized CLI output across commands: semantic color functions (`info`, `note`, `number`), a
+  shared `print_success_banner` with elapsed time, and reusable column-width helpers. `doctor` now
+  reports the installed Ruvyxa packages and their version compatibility beside the CLI version.
+- Replaced byte-count width math with character-based `display_width`, so multi-byte route names
+  (Thai, Arabic, …) no longer break table alignment, and fixed Windows path joining to concatenate
+  component by component instead of with a literal slash.
+
+### Bundler and Linker Correctness
+
+- **Added CommonJS-to-ESM default-import interoperability.** Compiled ES modules carry a
+  `__esModule` marker, and `interop_default()` binds default imports to `module.exports` for
+  CommonJS packages or the `default` export for ESM, for both plain and re-exported default imports.
+  The prerender and dev-server pipelines apply the same rule.
+- **Added text-span tracking.** `ModuleAst` records byte ranges for strings, comments, regexes, and
+  template-literal text, and `is_code_offset()` lets the linker skip rewriting inside text. The
+  `real_imports` set and `static_import_specifiers()` are gone; import-like content in documentation
+  strings is no longer rewritten.
+- **Added unresolvable import detection and deferred failure stubs.** External imports carry target
+  and importer labels, bare specifiers no longer leak into browser bundles, and unresolvable imports
+  defer failure in a way that survives minification with `RUV1610`/`RUV1611` file context intact.
+- Client bundles now replace unresolved `require()` calls with a runtime `RUV1610` error under the
+  new `drop_unresolved` flag (default off for SSR/edge bundles), instead of shipping a bare
+  `require` that throws `require is not defined` in the browser.
+
+### Server-only builds
+
+- Added `ruvyxa build --server-only` for API-only artifacts. Only the `node` and `bun` targets
+  accept it; a server-only build with page routes that cannot be deployed is rejected before any
+  staging directory is created. Style collection and image optimization are skipped, and the build
+  summary shows a "production · server-only" profile.
+
+### Templates and examples
+
+- Added an interactive Ruvyxa runner game to the minimal template and the demo app: sprite
+  rendering, jump/duck/shoot controls, progressive obstacles (bugs, errors, malware), a score-based
+  boss encounter, particles, best-score persistence, and keyboard/touch input.
 
 ### Fixed
 
@@ -46,6 +96,9 @@
   back to SSR.
 - The auth runtime compiles its OAuth route pattern once per `createAuth()` instead of once per
   request that reaches the auth handler.
+- Bundler source handling shares allocations through `Arc<str>` instead of cloning `String`s:
+  `read_source()` returns an `Arc<str>`, content modules and cache paths borrow it, and
+  `compile_content_module_shared()` avoids one extra string copy per content module.
 
 ### Documentation
 
@@ -75,6 +128,16 @@
   read only by its own tests.
 - `@ruvyxa/testing` now declares its `@ruvyxa/core` peer range as `workspace:^`, matching every
   other package, so releases cannot leave it pinned to an older minor.
+- Consolidated the image pipeline into `ruvyxa_dev_server::image_codec`: `fast_image_resize` and
+  `webp` are no longer direct CLI dependencies, the optimizer imports the shared module, and image
+  dimensions are checked from the file header before a full decode as a second memory-exhaustion
+  guard. The image manifest cache fingerprints settled outputs to reduce redundant JSON parsing.
+- README updates in this release: Node.js minimum raised to `>=22.12`, the `build` command now
+  documents `--adapter` and `--server-only`, and a Requirements plus Quick Start section was added.
+- Architecture documentation now describes the real protocol shapes: HMR lives at `/__ruvyxa/hmr`
+  with a single message and no client-to-server traffic, Server Actions use
+  `?path=<route-path>&name=<action-name>` query parameters, and the seven default security headers
+  are documented as opt-out-overridable application defaults.
 
 ## v1.0.26 (2026-08-03)
 
@@ -85,11 +148,6 @@
   Server Action timing, and uptime.
 - Added atomic `ruvyxa add form|data-table|auth` scaffolds and the dependency-free `@ruvyxa/testing`
   package with loader, action, and cache mocks.
-
-### Breaking changes
-
-- Renamed the scaffold command from `ruvyxa add` to `ruvyxa adds`. Generated applications now use
-  `npm run adds -- form` (or `data-table` / `auth`).
 
 ### Runtime and routing
 
