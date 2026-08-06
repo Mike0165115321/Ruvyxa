@@ -62,6 +62,12 @@ cargo run -p ruvyxa_cli -- test:parity --root examples/demo
 
 ## Change Guidance
 
+- Route matching has one JavaScript implementation, `packages/@ruvyxa/core/src/route-match.ts`.
+  `packages/ruvyxa/runtime/route-match.mjs` is a committed copy of its compiled output, because the
+  serverless handler is copied into function bundles that resolve no bare specifiers. After changing
+  the shared module run `pnpm --filter ruvyxa sync:route-match` and commit both; `ruvyxa`'s build
+  fails on a stale copy. The Rust router cannot share the module, so both languages are held to
+  `tests/fixtures/route-match-conformance.json` — add a case there before changing match behavior.
 - Rust shared behavior needs Rust tests near the changed crate.
 - Runtime/config/package behavior needs Node tests under `tests/packages/**`.
 - Template changes should stay package-manager neutral and must match

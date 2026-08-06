@@ -18,6 +18,10 @@ crates/
 *.wasm
 *.d.ts
 *.js.map
+# Compiled copy of @ruvyxa/core/route-match, kept byte-identical to that module's
+# tsc output by `pnpm --filter ruvyxa sync:route-match`. Reformatting it would
+# make the sync check fail on a file nobody edited.
+packages/ruvyxa/runtime/route-match.mjs
 
 # Environment
 .env

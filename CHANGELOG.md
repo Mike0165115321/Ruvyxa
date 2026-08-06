@@ -20,8 +20,14 @@
   agreement except review, and a URL that resolves differently between them renders a different page
   on a soft navigation than on a reload — a defect that only appears after deployment. The
   JavaScript hosts now share one module, `@ruvyxa/core/src/route-match.ts`; the handler receives it
-  as `runtime/route-match.mjs`, generated at package build time and copied into every function
-  bundle alongside the handler, so a deployed function still resolves no bare specifiers.
+  as `runtime/route-match.mjs`, a committed copy of that module's compiled output which
+  `adapter-runner.mjs` places in every function bundle alongside the handler, so a deployed function
+  still resolves no bare specifiers. The copy is committed rather than generated on demand because
+  the Rust test suite executes the adapter runner before any JavaScript build has run, and because
+  the file ships in the package's `files` — a generated-only file would be absent in both cases.
+  `ruvyxa`'s build runs `scripts/sync-route-match.mjs --check`, so editing the shared module without
+  regenerating the copy fails the build with the command to fix it instead of shipping two matchers
+  that disagree.
 - **Added a cross-language conformance suite.** The Rust router cannot share the JavaScript module,
   so `tests/fixtures/route-match-conformance.json` pins canonicalization and match results for both.
   It is replayed by `crates/ruvyxa_dev_server/src/router.rs` and by
