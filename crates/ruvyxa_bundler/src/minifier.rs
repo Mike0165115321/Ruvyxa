@@ -384,15 +384,28 @@ fn tree_shake_pass(source: &str) -> String {
             continue;
         }
 
-        // Check if this is an export assignment we can remove.
+        // Check if this line holds export assignments we can remove. A single
+        // line can carry several (`export { a, b } from "./mod"`), so each
+        // assignment is judged on its own — dropping the whole line because its
+        // first export is unused would take live exports down with it.
         if let Some(ref mod_id) = current_module_id
-            && let Some(export_name) = extract_export_assignment(trimmed)
+            && let Some(statements) = split_export_assignments(trimmed)
         {
-            let member_key = format!("{mod_id}.{export_name}");
-            if !used_members.contains(&member_key) && export_name != "default" {
-                // This export is unused — remove the assignment line.
-                out.push_str("  // [tree-shaken] ");
-                out.push_str(trimmed);
+            let (kept, dropped): (Vec<_>, Vec<_>) =
+                statements.into_iter().partition(|(name, _)| {
+                    name == "default" || used_members.contains(&format!("{mod_id}.{name}"))
+                });
+
+            if !dropped.is_empty() {
+                let indent = &line[..line.len() - line.trim_start().len()];
+                if !kept.is_empty() {
+                    out.push_str(indent);
+                    out.push_str(&join_statements(&kept));
+                    out.push('\n');
+                }
+                out.push_str(indent);
+                out.push_str("// [tree-shaken] ");
+                out.push_str(&join_statements(&dropped));
                 out.push('\n');
                 continue;
             }
@@ -474,20 +487,59 @@ fn extract_module_id_from_line(line: &str) -> Option<String> {
     }
 }
 
-/// Extract the export name from `__exports.name = …;` lines.
-fn extract_export_assignment(line: &str) -> Option<String> {
-    let rest = line.strip_prefix("__exports.")?;
-    let eq_idx = rest.find(" = ")?;
-    let name = &rest[..eq_idx];
-    // Validate that it's a simple identifier.
-    if name
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
-    {
-        Some(name.to_string())
-    } else {
-        None
+/// Split a line into its individual `__exports.<name> = <value>;` statements.
+///
+/// The linker emits one line per source `export` statement, so a barrel's
+/// `export { a, b, c } from "./mod"` lands as three assignments on one line.
+/// Returns `(name, statement)` pairs, or `None` when the line is not made up
+/// entirely of simple export assignments — the caller then leaves it alone,
+/// which keeps the pass conservative.
+fn split_export_assignments(line: &str) -> Option<Vec<(String, String)>> {
+    let mut rest = line.trim();
+    if !rest.starts_with("__exports.") {
+        return None;
     }
+
+    let mut statements = Vec::new();
+    while !rest.is_empty() {
+        let after = rest.strip_prefix("__exports.")?;
+        let eq_idx = after.find(" = ")?;
+        let name = &after[..eq_idx];
+        if name.is_empty()
+            || !name
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+        {
+            return None;
+        }
+
+        let value_start = eq_idx + " = ".len();
+        let value_end = value_start + after[value_start..].find(';')?;
+        let value = &after[value_start..value_end];
+        // Only identifiers and member accesses are safe to split on `;` —
+        // anything richer could hide a `;` inside a string or call argument.
+        if value.is_empty() || value.contains(['"', '\'', '`', '(', ')', '{', '}', '[', ']', ',']) {
+            return None;
+        }
+
+        statements.push((name.to_string(), format!("__exports.{name} = {value};")));
+        rest = after[value_end + 1..].trim_start();
+    }
+
+    if statements.is_empty() {
+        None
+    } else {
+        Some(statements)
+    }
+}
+
+/// Render `(name, statement)` pairs back onto a single line.
+fn join_statements(statements: &[(String, String)]) -> String {
+    statements
+        .iter()
+        .map(|(_, statement)| statement.as_str())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 // ─────────────────────────────────────────────
@@ -1030,13 +1082,86 @@ var __ruv_cccc3333cccc3333__ = (function() {
     #[test]
     fn extract_export_assignment_works() {
         assert_eq!(
-            extract_export_assignment("__exports.helper = helper;"),
+            first_export_assignment("__exports.helper = helper;"),
             Some("helper".into())
         );
         assert_eq!(
-            extract_export_assignment("__exports.default = Page;"),
+            first_export_assignment("__exports.default = Page;"),
             Some("default".into())
         );
-        assert_eq!(extract_export_assignment("const x = 1;"), None);
+        assert_eq!(first_export_assignment("const x = 1;"), None);
+    }
+
+    /// Name of the first export assigned on a line, for tests.
+    fn first_export_assignment(line: &str) -> Option<String> {
+        Some(split_export_assignments(line)?.remove(0).0)
+    }
+
+    #[test]
+    fn split_export_assignments_separates_statements() {
+        let statements = split_export_assignments(
+            "__exports.A = __ruv_aaaa1111aaaa1111__.A; __exports.B = __ruv_aaaa1111aaaa1111__.B;",
+        )
+        .expect("line is made of export assignments");
+
+        assert_eq!(
+            statements,
+            vec![
+                (
+                    "A".to_string(),
+                    "__exports.A = __ruv_aaaa1111aaaa1111__.A;".to_string()
+                ),
+                (
+                    "B".to_string(),
+                    "__exports.B = __ruv_aaaa1111aaaa1111__.B;".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn split_export_assignments_keeps_complex_values_intact() {
+        // A `;` could hide inside a string or call, so these stay untouched.
+        assert_eq!(split_export_assignments("__exports.msg = \"a; b\";"), None);
+        assert_eq!(
+            split_export_assignments("__exports.run = wrap(a, b);"),
+            None
+        );
+    }
+
+    #[test]
+    fn tree_shake_keeps_used_exports_sharing_a_line() {
+        // A barrel's `export { a, b, c } from "./mod"` lands as three
+        // assignments on one line. Only `Image` is consumed, so the other two
+        // must shake out without taking `Image` with them.
+        let src = r#"var __ruv_aaaa1111aaaa1111__ = (function() {
+  "use strict";
+  var __exports = {};
+  __exports.DEFAULT_WIDTHS = __ruv_bbbb2222bbbb2222__.DEFAULT_WIDTHS; __exports.Image = __ruv_bbbb2222bbbb2222__.Image; __exports.Picture = __ruv_bbbb2222bbbb2222__.Picture;
+  return __exports;
+})();
+var __ruv_cccc3333cccc3333__ = (function() {
+  "use strict";
+  var __exports = {};
+  const Image = __ruv_aaaa1111aaaa1111__.Image;
+  __exports.default = Image;
+  return __exports;
+})();
+"#;
+        let result = tree_shake(src);
+
+        // The consumed re-export survives as executable code.
+        assert!(result.lines().any(|line| {
+            !line.contains("[tree-shaken]")
+                && line.contains("__exports.Image = __ruv_bbbb2222bbbb2222__.Image;")
+        }));
+        // Its unused line-mates do not.
+        for dead in ["__exports.DEFAULT_WIDTHS", "__exports.Picture"] {
+            let active: Vec<&str> = result
+                .lines()
+                .filter(|line| line.contains(dead) && !line.contains("[tree-shaken]"))
+                .collect();
+            assert!(active.is_empty(), "{dead} should be shaken: {active:?}");
+        }
     }
 }

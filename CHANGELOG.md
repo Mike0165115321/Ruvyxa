@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Bundler and Linker Correctness
+
+- **Fixed tree-shaking dropping live exports that share a line with an unused one.** The linker
+  emits one line per source `export` statement, so a barrel's `export { a, b, c } from "./mod"`
+  becomes three `__exports.… = …;` assignments on a single line. The shaking pass read only the
+  first name on the line and commented out the whole line when that name was unused, which emptied
+  pure re-export barrels such as `@ruvyxa/react`'s `dist/index.js`. Consumers then hydrated with
+  `undefined` for every imported component (React error #130). Each assignment is now judged on its
+  own; lines that are not made up entirely of simple export assignments are left untouched.
+
 ## v1.0.27 (2026-08-05)
 
 ### Breaking changes

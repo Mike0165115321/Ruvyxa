@@ -1298,6 +1298,69 @@ mod tests {
     }
 
     #[test]
+    fn tree_shaking_keeps_consumed_exports_from_a_barrel_package() {
+        // A barrel of pure re-exports (`@ruvyxa/react`'s `dist/index.js`) puts
+        // every name of one `export { … } from` statement on a single linked
+        // line. Shaking must judge each name on its own, or an unused sibling
+        // takes the consumed one down with it and the import lands `undefined`.
+        let temp = tempfile::tempdir().unwrap();
+        let root = ruvyxa_diagnostics::normalized_canonical_path(temp.path());
+        let app = root.join("app");
+        let pkg = root.join("node_modules").join("barrel-ui");
+        fs::create_dir_all(&app).unwrap();
+        fs::create_dir_all(&pkg).unwrap();
+
+        fs::write(
+            pkg.join("package.json"),
+            r#"{"type":"module","main":"index.js"}"#,
+        )
+        .unwrap();
+        fs::write(
+            pkg.join("index.js"),
+            "export { DEFAULT_WIDTHS, BarrelImage, BarrelPicture } from './image.js';\n",
+        )
+        .unwrap();
+        fs::write(
+            pkg.join("image.js"),
+            "export const DEFAULT_WIDTHS = [640, 1080];\n\
+             export function BarrelImage(props) { return props; }\n\
+             export function BarrelPicture(props) { return props; }\n",
+        )
+        .unwrap();
+
+        let page = app.join("page.tsx");
+        fs::write(
+            &page,
+            "import { BarrelImage } from 'barrel-ui';\n\
+             export default function Page() { return <BarrelImage src=\"/x.png\" />; }\n",
+        )
+        .unwrap();
+
+        let mut input = client_input(&root, &app, page, vec![], "/");
+        input.options.source_map = false;
+        input.options.emit_chunk_manifest = false;
+        let output = bundle(input).unwrap();
+
+        let live = |needle: &str| {
+            output
+                .code
+                .lines()
+                .any(|line| line.contains(needle) && !line.contains("[tree-shaken]"))
+        };
+
+        assert!(
+            live("__exports.BarrelImage"),
+            "the consumed re-export must survive shaking:\n{}",
+            output.code
+        );
+        assert!(
+            !live("__exports.BarrelPicture") && !live("__exports.DEFAULT_WIDTHS"),
+            "unused line-mates should still shake out:\n{}",
+            output.code
+        );
+    }
+
+    #[test]
     fn client_bundle_resolves_transitive_commonjs_dependencies() {
         let temp = tempfile::tempdir().unwrap();
         let root = ruvyxa_diagnostics::normalized_canonical_path(temp.path());
