@@ -10,6 +10,8 @@
 //! (Node or Bun), including the process-wide override a `--runtime` flag sets
 //! before any command runs.
 
+use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::time::Duration;
@@ -205,29 +207,194 @@ pub(crate) fn load_project_config(root: &Path) -> anyhow::Result<ProjectConfig> 
     Ok(config)
 }
 
+/// Format of [`ConfigLoadCache`]. Bump to discard every existing entry when the
+/// meaning of a field changes; a stale entry is silently ignored, not migrated.
+pub(crate) const CONFIG_CACHE_VERSION: u32 = 1;
+
+/// A previous config render, with everything needed to decide if it still holds.
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ConfigLoadCache {
+    pub(crate) version: u32,
+    /// The runtime that produced this result. A config may branch on
+    /// `process.versions`, so a result rendered by Node cannot answer for Bun.
+    pub(crate) runtime: String,
+    /// Content hash of `config-renderer.mjs`, so upgrading the ruvyxa package
+    /// invalidates results produced by the previous renderer.
+    pub(crate) renderer_fingerprint: String,
+    /// Project-relative input path to its content hash at render time.
+    pub(crate) inputs: BTreeMap<String, String>,
+    /// Environment variables the config read, and what they were.
+    pub(crate) env: BTreeMap<String, Option<String>>,
+    /// The renderer's stdout verbatim, replayed on a hit.
+    pub(crate) stdout: String,
+}
+
+fn config_cache_path(root: &Path) -> PathBuf {
+    // Alongside the compiled config bundle the renderer already writes, which is
+    // fixed at `.ruvyxa/cache/` — `outDir` cannot be honoured here, because
+    // reading it is what this cache exists to avoid.
+    root.join(".ruvyxa").join("cache").join("config-load.json")
+}
+
+fn file_fingerprint(path: &Path) -> Option<String> {
+    let bytes = fs::read(path).ok()?;
+    Some(blake3::hash(&bytes).to_hex().to_string())
+}
+
+/// Whether `cache` still describes the project as it is on disk right now.
+pub(crate) fn config_cache_is_current(
+    cache: &ConfigLoadCache,
+    root: &Path,
+    runtime: JavaScriptRuntime,
+    renderer_fingerprint: &str,
+) -> bool {
+    if cache.version != CONFIG_CACHE_VERSION
+        || cache.runtime != runtime.command()
+        || cache.renderer_fingerprint != renderer_fingerprint
+    {
+        return false;
+    }
+
+    // A config with no inputs was never rendered from a file, so there is
+    // nothing that could prove it still current.
+    if cache.inputs.is_empty() {
+        return false;
+    }
+
+    for (relative, expected) in &cache.inputs {
+        if file_fingerprint(&root.join(relative)).as_deref() != Some(expected.as_str()) {
+            return false;
+        }
+    }
+
+    cache
+        .env
+        .iter()
+        .all(|(key, value)| std::env::var(key).ok().as_deref() == value.as_deref())
+}
+
+fn read_config_cache(
+    root: &Path,
+    runtime: JavaScriptRuntime,
+    renderer_fingerprint: &str,
+) -> Option<ConfigRendererOutput> {
+    let raw = fs::read_to_string(config_cache_path(root)).ok()?;
+    let cache: ConfigLoadCache = serde_json::from_str(&raw).ok()?;
+    if !config_cache_is_current(&cache, root, runtime, renderer_fingerprint) {
+        return None;
+    }
+    // Re-parsed rather than stored structurally so the cached result travels
+    // through exactly the same validation a fresh render does.
+    parse_config_renderer_output(root, cache.stdout.as_bytes(), b"", "cached").ok()
+}
+
+/// Persist a successful render. A cache that cannot be written is not an error:
+/// the next run simply pays for the renderer again.
+fn write_config_cache(
+    root: &Path,
+    runtime: JavaScriptRuntime,
+    renderer_fingerprint: &str,
+    result: &ConfigRendererOutput,
+    stdout: &str,
+) {
+    let Some(key) = result.cache_key.as_ref() else {
+        return;
+    };
+    if key.inputs.is_empty() {
+        return;
+    }
+
+    let mut inputs = BTreeMap::new();
+    for relative in &key.inputs {
+        // A file that vanished between render and write would make the entry
+        // permanently stale; skip writing rather than store a lie.
+        let Some(hash) = file_fingerprint(&root.join(relative)) else {
+            return;
+        };
+        inputs.insert(relative.clone(), hash);
+    }
+
+    let cache = ConfigLoadCache {
+        version: CONFIG_CACHE_VERSION,
+        runtime: runtime.command().to_string(),
+        renderer_fingerprint: renderer_fingerprint.to_string(),
+        inputs,
+        env: key.env.clone(),
+        stdout: stdout.to_string(),
+    };
+
+    let path = config_cache_path(root);
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Ok(encoded) = serde_json::to_string(&cache) {
+        let _ = fs::write(path, encoded);
+    }
+}
+
+/// Render a project's config, reusing the previous result while it still holds.
+///
+/// Rendering costs a full JavaScript runtime start plus a recompile of the
+/// config bundle — around 300–400ms — and it ran on every single CLI command,
+/// including ones that never look at most of the config. Caching it is the
+/// single largest saving available on a warm build.
+///
+/// The cache is keyed on what the renderer reports it depended on rather than on
+/// the config file alone: transitive project imports, the package manifests, the
+/// runtime, the renderer itself, and every environment variable the config read.
 pub(crate) fn run_config_renderer(
     root: &Path,
     renderer: &Path,
     runtime: JavaScriptRuntime,
 ) -> anyhow::Result<ConfigRendererOutput> {
-    let output = ProcessCommand::new(runtime.executable())
+    let renderer_fingerprint = file_fingerprint(renderer).unwrap_or_default();
+    if !renderer_fingerprint.is_empty()
+        && let Some(cached) = read_config_cache(root, runtime, &renderer_fingerprint)
+    {
+        return Ok(cached);
+    }
+
+    let mut command = ProcessCommand::new(runtime.executable());
+    command
         .arg(renderer)
         .arg(root)
-        .env("RUVYXA_RUNTIME", runtime.command())
-        .output()
-        .with_context(|| {
-            format!(
-                "failed to load config with {} for {}",
-                runtime.command(),
-                root.display()
-            )
-        })?;
-    parse_config_renderer_output(
+        .env("RUVYXA_RUNTIME", runtime.command());
+    // Bounded: a `ruvyxa.config.ts` that imports a module which opens a handle
+    // — a database pool, a watcher, a server — keeps the runtime alive after
+    // the config has already been printed, which used to hang every command
+    // before it produced any output at all.
+    let output = ruvyxa_dev_server::process::output_with_timeout(
+        &mut command,
+        ruvyxa_dev_server::process::CONFIG_LOAD_TIMEOUT,
+    )
+    .with_context(|| {
+        format!(
+            "failed to load config with {} for {}",
+            runtime.command(),
+            root.display()
+        )
+    })?;
+    let result = parse_config_renderer_output(
         root,
         &output.stdout,
         &output.stderr,
         &output.status.to_string(),
-    )
+    )?;
+
+    // Only a successful render is worth replaying; a failure must be re-reported
+    // by re-running, so the user sees it again after fixing nothing.
+    if result.ok && !renderer_fingerprint.is_empty() {
+        write_config_cache(
+            root,
+            runtime,
+            &renderer_fingerprint,
+            &result,
+            &String::from_utf8_lossy(&output.stdout),
+        );
+    }
+
+    Ok(result)
 }
 
 pub(crate) fn run_adapter_runner(
@@ -250,7 +417,11 @@ pub(crate) fn run_adapter_runner(
     if let Some(adapter_name) = adapter_name {
         command.arg(adapter_name);
     }
-    let output = command.output().with_context(|| {
+    let output = ruvyxa_dev_server::process::output_with_timeout(
+        &mut command,
+        ruvyxa_dev_server::process::ADAPTER_HOOK_TIMEOUT,
+    )
+    .with_context(|| {
         format!(
             "failed to run adapter build hook with {} for {}",
             runtime.command(),
@@ -307,7 +478,11 @@ pub(crate) fn inspect_adapter(
     if let Some(adapter_name) = adapter_name {
         command.arg(adapter_name);
     }
-    let output = command.output().with_context(|| {
+    let output = ruvyxa_dev_server::process::output_with_timeout(
+        &mut command,
+        ruvyxa_dev_server::process::ADAPTER_HOOK_TIMEOUT,
+    )
+    .with_context(|| {
         format!(
             "failed to inspect adapter with {} for {}",
             runtime.command(),

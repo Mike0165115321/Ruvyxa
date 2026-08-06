@@ -132,6 +132,8 @@ pub use hmr_tracker::{HmrEventType, HmrTracker, HmrUpdate};
 mod style;
 pub use style::{StyleCollection, collect_styles, minify_css};
 
+pub mod process;
+
 const MAX_ACTION_BODY_BYTES: usize = 1024 * 1024;
 const MAX_API_BODY_BYTES: usize = 10 * 1024 * 1024;
 /// Absolute upper bound for action payload buffering, regardless of project config.
@@ -187,9 +189,12 @@ impl JavaScriptRuntime {
 
     #[must_use]
     pub fn is_available(self) -> bool {
-        std::process::Command::new(self.executable())
-            .arg("--version")
-            .output()
+        // Bounded: a runtime that cannot answer `--version` promptly is not a
+        // usable runtime, and this probe runs during `doctor` and during
+        // runtime auto-detection, where hanging would strand the whole command.
+        let mut command = std::process::Command::new(self.executable());
+        command.arg("--version");
+        crate::process::output_with_timeout(&mut command, crate::process::PROBE_TIMEOUT)
             .is_ok_and(|output| output.status.success())
     }
 

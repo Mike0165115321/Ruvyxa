@@ -17,7 +17,7 @@ import {
   type RouteContextValue,
   type RuvyxaRouter,
 } from './router.js'
-import type { RouteParams } from './route-match.js'
+import type { RouteParams } from '@ruvyxa/core/route-match'
 
 const CONTEXT_KEY = '__RUVYXA_ROUTE_CONTEXT__'
 

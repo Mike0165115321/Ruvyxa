@@ -603,22 +603,39 @@ pub(crate) fn bundle_budget_report(routes: &[serde_json::Value]) -> serde_json::
     })
 }
 
+/// How many routes are bundled at once.
+///
+/// Three limits apply, and the smallest wins: how much work there is, how many
+/// cores are available (honouring an operator's `RAYON_NUM_THREADS`), and how
+/// much memory is free. The memory bound is what stops a many-core machine from
+/// reserving hundreds of megabytes for parallelism that measurement shows it
+/// barely converts into speed — and what stops a memory-capped CI container
+/// from being killed for asking.
+///
+/// An explicit `build.workers` still sets the CPU budget, but it no longer
+/// escapes the memory bound: a value copied from another project's config must
+/// not decide how much memory this machine is asked for.
 pub(crate) fn build_parallelism(configured: Option<usize>, work_items: usize) -> usize {
-    // Match the outer route budget to the nested Rayon module budget, including
-    // an operator's RAYON_NUM_THREADS cap, unless config sets it explicitly.
-    let available = rayon::current_num_threads();
-    configured.unwrap_or(available).clamp(1, work_items.max(1))
+    let cpu_budget = configured.unwrap_or_else(rayon::current_num_threads);
+    crate::host_resources::bundle_worker_budget(cpu_budget).clamp(1, work_items.max(1))
 }
 
+/// How many routes are prerendered at once.
+///
+/// Each worker is a whole JavaScript runtime process, which is why the ceiling
+/// is far lower than for bundling and why the memory bound matters more here:
+/// on the demo these processes account for more resident memory than the CLI
+/// itself.
 pub(crate) fn prerender_parallelism(configured: Option<usize>, work_items: usize) -> usize {
-    let default = std::thread::available_parallelism()
-        .map(usize::from)
-        .unwrap_or(1)
-        .min(MAX_PRERENDER_PARALLELISM);
-    configured
+    let cpu_budget = configured
         .map(|value| value.min(MAX_CONFIGURED_PRERENDER_PARALLELISM))
-        .unwrap_or(default)
-        .clamp(1, work_items.max(1))
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(usize::from)
+                .unwrap_or(1)
+                .min(MAX_PRERENDER_PARALLELISM)
+        });
+    crate::host_resources::prerender_worker_budget(cpu_budget).clamp(1, work_items.max(1))
 }
 
 /// Flatten every plugin's declared head elements in configuration order.

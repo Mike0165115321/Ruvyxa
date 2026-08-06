@@ -13,7 +13,7 @@ nested source types.
 | `server.host`, `server.port`                                             | string, number                                  | Dev/start listening address.               |
 | `build.minify`, `map`, `treeShake`, `manifest`, `warm`, `prerenderCache` | booleans; cache defaults true                   | Compiler/build artifact behavior.          |
 | `build.split`                                                            | `single \| route \| manual`                     | Bundle splitting policy.                   |
-| `build.workers`                                                          | number                                          | Build parallelism.                         |
+| `build.workers`                                                          | number                                          | Build parallelism. See note below.         |
 | `render.strategy`, `render.revalidate`                                   | strategy, seconds                               | Default page rendering policy.             |
 | `cache.routes`, `cache.css`, `cache.dir`                                 | booleans/string                                 | Route/CSS/cache-directory settings.        |
 
@@ -80,6 +80,12 @@ IPv4/IPv6 addresses or CIDR ranges; only configured non-loopback proxies may sup
 client/protocol headers.
 
 `middleware` contains built-ins (`cors`, `timing`, `log`, `rate`, `headers`) and TypeScript plugin
+`build.workers` is best left unset. Unset, route bundling is sized to the machine: the smaller of
+its core count (honouring `RAYON_NUM_THREADS`) and what free memory can hold. A pinned number caps a
+large machine — a value of 4 uses four workers on a 16-core host — and the starter templates no
+longer ship one. Setting it lowers the CPU budget only; the memory bound still applies, so a value
+copied from another project cannot make a memory-limited CI container ask for more than it has.
+
 `workers` (1–8) and `timeoutMs` (default 30,000, maximum 300,000). `site` configures build-time
 `sitemap.xml` and `robots.txt`; an exact app route or same-named `public/` file suppresses the core
 generator. `plugins` is the array of `RuvyxaPlugin` objects.

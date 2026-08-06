@@ -388,10 +388,22 @@ async function materializeFunction(buildDir, destination, handlerSource, target)
   // Write the platform-specific handler entry point
   await writeFile(path.join(destination, 'index.mjs'), handlerSource, 'utf8')
 
-  // Copy the generic serverless handler runtime
-  const serverlessHandlerSrc = path.join(runtimeDir, 'serverless-handler.mjs')
-  if (existsSync(serverlessHandlerSrc)) {
-    await cp(serverlessHandlerSrc, path.join(destination, 'serverless-handler.mjs'))
+  // Copy the generic serverless handler runtime.
+  //
+  // `route-match.mjs` travels with it: the handler imports it as a sibling, and
+  // a function directory resolves no bare specifiers. A missing file here would
+  // surface as a broken deployment on the first request rather than a failed
+  // build, so the pair is required rather than copied opportunistically.
+  for (const runtimeFile of ['serverless-handler.mjs', 'route-match.mjs']) {
+    const source = path.join(runtimeDir, runtimeFile)
+    if (!existsSync(source)) {
+      throw new Error(
+        `RUV2201 The Ruvyxa runtime file ${runtimeFile} is missing from ${runtimeDir}. ` +
+          'Reinstall the ruvyxa package, or run `pnpm --filter ruvyxa build` in a checkout ' +
+          'to regenerate it.',
+      )
+    }
+    await cp(source, path.join(destination, runtimeFile))
   }
 
   // Compile every route into executable JavaScript and expose it through a

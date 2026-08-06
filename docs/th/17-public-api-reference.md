@@ -34,6 +34,27 @@ type มี `RuvyxaConfig`, `PageProps`, `GetStaticParams`, `RenderStrategy`, `A
 `hydrate({ root?, onError? })` dispatch hydration event และติดตั้ง reporting ที่เลือกได้
 `notFound()` จาก package นี้ throw เสมอ จึงคืน `never`
 
+## `@ruvyxa/core/route-match`
+
+route matcher ที่ทุก JavaScript host ใช้ร่วมกัน — browser router, serverless handler และ standalone
+server resolve URL ผ่าน module เดียวกันนี้ การคลิก link กับการ reload URL เดิมจึงให้ผลต่างกันไม่ได้
+
+| Export                                            | วัตถุประสงค์                                                           |
+| ------------------------------------------------- | ---------------------------------------------------------------------- |
+| `createRouteMatcher(routes)`                      | compile route table ครั้งเดียว; คืน `(pathname) => RouteMatch \| null` |
+| `canonicalRoutePath(pathname)`                    | decode path หนึ่งครั้งเป็น canonical segment หรือ `null` ถ้าต้องปฏิเสธ |
+| `compilePattern`, `routeSpecificity`              | compile pattern และลำดับ static มาก่อน dynamic                         |
+| `compareSpecificity`, `normalizeMatchPath`        | primitive สำหรับการจัดลำดับและ normalize slash                         |
+| `bindPatternParams(pattern, matched)`             | ผูก capture ของ compiled pattern เข้ากับ parameter ที่มีชื่อ           |
+| `RouteParams`, `RouteMatch`, `RouteManifestEntry` | type ของการ match                                                      |
+
+ปกติ application ต้องการแค่ `useParams()` จาก `@ruvyxa/react` ส่วนเหล่านี้มีไว้สำหรับโค้ดที่ต้อง
+resolve route นอก React tree เช่น custom server หรือ adapter
+
+> **เปลี่ยนใน 1.0.28** ชื่อเหล่านี้เคย re-export จาก `@ruvyxa/react` และตอนนี้ไม่แล้ว
+> `@ruvyxa/react` ยัง export type `RouteParams` อยู่ ส่วนที่เหลือให้ import จาก
+> `@ruvyxa/core/route-match`
+
 ## Public package อื่น
 
 | Package             | Integration ที่ export                                                                      |

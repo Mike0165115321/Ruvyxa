@@ -31,7 +31,7 @@ const SITEMAP_CHANGE_FREQUENCIES = new Set([
 try {
   const configFile = findConfig(projectRoot)
   if (!configFile) {
-    await ok({}, 'no-config')
+    await ok({}, 'no-config', { inputs: [], env: {} })
   }
 
   const moduleCode = `export { default } from ${JSON.stringify(toImportPath(configFile))}`
@@ -53,9 +53,13 @@ try {
     aliases: runtimeAliases(runtimeDir),
   })
 
+  const readEnv = recordEnvironmentReads()
   const mod = await import(pathToFileURL(outfile).href + `?t=${Date.now()}`)
   const config = mod.default ?? {}
-  await ok(await sanitizeConfig(config), bundle.dependencyHash)
+  await ok(await sanitizeConfig(config), bundle.dependencyHash, {
+    inputs: bundle.fingerprintInputs,
+    env: readEnv(),
+  })
 } catch (error) {
   await fail('RUV1600', error instanceof Error ? error.message : String(error), error?.stack)
 }
@@ -721,8 +725,57 @@ function pluginDescriptors(value) {
   return plugins.length > 0 ? plugins : undefined
 }
 
-async function ok(config, dependencyHash) {
-  await writeJson({ ok: true, config, dependencyHash })
+/**
+ * Replace `process.env` with a recorder for the duration of config evaluation.
+ *
+ * The CLI caches a rendered config and skips this process entirely while the
+ * inputs are unchanged. A config that branches on an environment variable would
+ * be frozen at whatever the variable was on the run that populated the cache —
+ * so the cache key has to include those variables. Recording the reads keeps
+ * that key exact: a config that reads nothing pins nothing, and one that reads
+ * `NODE_ENV` re-renders when `NODE_ENV` changes and not otherwise.
+ *
+ * A missing variable is recorded as `null` and is just as load-bearing as a
+ * present one: `process.env.ANALYZE ? ... : ...` must re-render when the
+ * variable appears, not only when its value changes.
+ *
+ * @returns {() => Record<string, string|null>} Reads observed so far.
+ */
+function recordEnvironmentReads() {
+  const source = process.env
+  const observed = new Map()
+  const observe = (key) => {
+    if (typeof key !== 'string' || observed.has(key)) return
+    observed.set(key, Object.hasOwn(source, key) ? source[key] : null)
+  }
+
+  const proxy = new Proxy(source, {
+    get(target, key, receiver) {
+      observe(key)
+      return Reflect.get(target, key, receiver)
+    },
+    has(target, key) {
+      observe(key)
+      return Reflect.has(target, key)
+    },
+    // Enumeration reads every value at once, so the whole environment becomes
+    // part of the key. Rare, and better than a config that silently goes stale.
+    ownKeys(target) {
+      for (const key of Reflect.ownKeys(target)) observe(key)
+      return Reflect.ownKeys(target)
+    },
+  })
+
+  Object.defineProperty(process, 'env', { value: proxy, configurable: true, writable: true })
+
+  return () => {
+    Object.defineProperty(process, 'env', { value: source, configurable: true, writable: true })
+    return Object.fromEntries([...observed].sort(([left], [right]) => left.localeCompare(right)))
+  }
+}
+
+async function ok(config, dependencyHash, cacheKey = { inputs: [], env: {} }) {
+  await writeJson({ ok: true, config, dependencyHash, cacheKey })
   process.exit(0)
 }
 

@@ -34,6 +34,28 @@ from `ruvyxa` for public primitives and `ruvyxa/config` or `ruvyxa/plugin` for e
 `hydrate({ root?, onError? })` dispatches the hydration event and installs optional reporting.
 `notFound()` from this package always throws and therefore returns `never`.
 
+## `@ruvyxa/core/route-match`
+
+The route matcher every JavaScript host shares — the browser router, the serverless handler, and the
+standalone server all resolve a URL through this one module, so a link click and a reload of the
+same address cannot disagree.
+
+| Export                                            | Purpose                                                                      |
+| ------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `createRouteMatcher(routes)`                      | Compile a route table once; returns `(pathname) => RouteMatch \| null`.      |
+| `canonicalRoutePath(pathname)`                    | Decode a path once into canonical segments, or `null` if it must be refused. |
+| `compilePattern`, `routeSpecificity`              | Pattern compilation and static-before-dynamic ordering.                      |
+| `compareSpecificity`, `normalizeMatchPath`        | Ordering and slash normalization primitives.                                 |
+| `bindPatternParams(pattern, matched)`             | Bind a compiled pattern's captures to named parameters.                      |
+| `RouteParams`, `RouteMatch`, `RouteManifestEntry` | Matching types.                                                              |
+
+Applications normally need only `useParams()` from `@ruvyxa/react`. These are for code that has to
+resolve routes outside the React tree, such as a custom server or adapter.
+
+> **Changed in 1.0.28.** These names were previously re-exported from `@ruvyxa/react` and are no
+> longer. `@ruvyxa/react` still exports the `RouteParams` type; import the rest from
+> `@ruvyxa/core/route-match`.
+
 ## Other public packages
 
 | Package             | Exported integration                                                                          |

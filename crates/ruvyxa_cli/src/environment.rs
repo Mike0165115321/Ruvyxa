@@ -44,7 +44,14 @@ pub(crate) fn find_upwards(root: &Path, file_name: &str) -> Option<PathBuf> {
 }
 
 pub(crate) fn tool_version(command: &str, args: &[&str]) -> String {
-    match ProcessCommand::new(command).args(args).output() {
+    // Bounded: `doctor` probes several tools in a row, and one that never
+    // answers would stall the whole report instead of being listed as missing.
+    let mut probe = ProcessCommand::new(command);
+    probe.args(args);
+    match ruvyxa_dev_server::process::output_with_timeout(
+        &mut probe,
+        ruvyxa_dev_server::process::PROBE_TIMEOUT,
+    ) {
         Ok(output) if output.status.success() => {
             String::from_utf8_lossy(&output.stdout).trim().to_string()
         }
@@ -57,10 +64,12 @@ pub(crate) fn tool_version(command: &str, args: &[&str]) -> String {
 /// plain `Command::new("bun")` cannot launch, so a naive check reports "missing"
 /// even when `bun --version` succeeds in a shell.
 pub(crate) fn bun_version() -> String {
-    match ProcessCommand::new(JavaScriptRuntime::Bun.executable())
-        .arg("--version")
-        .output()
-    {
+    let mut probe = ProcessCommand::new(JavaScriptRuntime::Bun.executable());
+    probe.arg("--version");
+    match ruvyxa_dev_server::process::output_with_timeout(
+        &mut probe,
+        ruvyxa_dev_server::process::PROBE_TIMEOUT,
+    ) {
         Ok(output) if output.status.success() => {
             String::from_utf8_lossy(&output.stdout).trim().to_string()
         }

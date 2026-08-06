@@ -208,6 +208,28 @@ pub(crate) struct ConfigRendererOutput {
     pub(crate) message: Option<String>,
     pub(crate) stack: Option<String>,
     pub(crate) dependency_hash: Option<String>,
+    /// What the rendered result depends on, so the next run can decide whether
+    /// it may reuse this one instead of starting a JavaScript runtime again.
+    pub(crate) cache_key: Option<ConfigCacheKey>,
+}
+
+/// The inputs one config render observed.
+///
+/// Reported by `config-renderer.mjs` rather than guessed here: the renderer is
+/// the only side that knows which modules the config actually imported and
+/// which environment variables it actually read.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ConfigCacheKey {
+    /// Project-relative paths of every file whose contents fed the dependency
+    /// hash — the config, its transitive project imports, and the manifests.
+    #[serde(default)]
+    pub(crate) inputs: Vec<String>,
+    /// Environment variables the config read while it was evaluated, with the
+    /// value seen. `None` records a variable that was read while unset, which
+    /// invalidates the cache just as surely when it later appears.
+    #[serde(default)]
+    pub(crate) env: std::collections::BTreeMap<String, Option<String>>,
 }
 
 #[derive(Debug, serde::Deserialize)]

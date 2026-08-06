@@ -177,6 +177,14 @@ export async function compileBundleWithMetadata({
     contentHash: createHash('sha256').update(linked.code).digest('hex').slice(0, 16),
     dependencyHash: await fingerprintProjectInputs(root, modules),
     inputs: projectInputPaths(root, modules),
+    // Every file whose contents feed `dependencyHash`, so a caller can decide
+    // whether a cached result is still valid without recompiling to find out.
+    // Built from the same two sources the hash is, so the list can never claim
+    // fewer inputs than the hash actually covers.
+    fingerprintInputs: [
+      ...projectModulePaths(root, modules),
+      ...existingManifestFiles(root),
+    ].sort(),
   }
 }
 
@@ -222,14 +230,7 @@ async function fingerprintProjectInputs(root, modules) {
     hash.update('\0')
   }
 
-  for (const fileName of [
-    'package.json',
-    'pnpm-lock.yaml',
-    'package-lock.json',
-    'yarn.lock',
-    'bun.lock',
-    'bun.lockb',
-  ]) {
+  for (const fileName of PROJECT_MANIFEST_FILES) {
     const file = path.join(root, fileName)
     if (!existsSync(file)) continue
     hash.update(fileName)
@@ -239,6 +240,32 @@ async function fingerprintProjectInputs(root, modules) {
   }
 
   return hash.digest('hex')
+}
+
+/**
+ * Project manifests and lockfiles that participate in the dependency
+ * fingerprint. A change to any of them can change what a bare specifier
+ * resolves to, so they invalidate a compiled bundle even when no source file
+ * was touched.
+ */
+const PROJECT_MANIFEST_FILES = [
+  'package.json',
+  'pnpm-lock.yaml',
+  'package-lock.json',
+  'yarn.lock',
+  'bun.lock',
+  'bun.lockb',
+]
+
+/** Project-relative paths of the modules that feed the dependency fingerprint. */
+function projectModulePaths(root, modules) {
+  return modules
+    .filter((module) => module.filePath && isWithinProject(root, module.filePath))
+    .map((module) => path.relative(root, module.filePath).replaceAll('\\', '/'))
+}
+
+function existingManifestFiles(root) {
+  return PROJECT_MANIFEST_FILES.filter((fileName) => existsSync(path.join(root, fileName)))
 }
 
 export function runtimeAliases(runtimeDir = path.dirname(fileURLToPath(import.meta.url))) {

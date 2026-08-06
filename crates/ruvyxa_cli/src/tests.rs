@@ -2161,3 +2161,249 @@ fn server_only_compatibility_gate_passes_only_for_api_only_node_builds() {
     let empty = server_only_manifest(Vec::new());
     assert!(ensure_server_only_supported(BuildTarget::Node, &empty).is_ok());
 }
+
+/// A plugin worker that never answers must fail the build, not hang it.
+///
+/// This is the defect the timeout exists for: the hook protocol used to read
+/// the response with a blocking `read_line`, so a plugin with an unresolved
+/// promise or a blocking loop stalled the whole build with no diagnostic and no
+/// way out but killing the CLI.
+#[test]
+fn a_plugin_hook_that_never_answers_fails_the_build_instead_of_hanging() {
+    use crate::plugins::TypeScriptPluginWorker;
+    use ruvyxa_dev_server::JavaScriptRuntime;
+    use std::time::{Duration, Instant};
+
+    if !JavaScriptRuntime::Node.is_available() {
+        eprintln!("skipping: node is not available on this machine");
+        return;
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let runner = temp.path().join("never-answers.mjs");
+    // Reads its request but never writes a response line, and holds the event
+    // loop open — exactly how a plugin awaiting a promise that never settles
+    // presents to the host.
+    std::fs::write(
+        &runner,
+        "process.stdin.resume(); setInterval(() => {}, 1000);\n",
+    )
+    .unwrap();
+
+    let mut worker =
+        TypeScriptPluginWorker::spawn(&runner, temp.path(), JavaScriptRuntime::Node).unwrap();
+
+    let started = Instant::now();
+    let error = worker
+        .call_with_timeout(
+            &serde_json::json!({ "hook": "build.transform" }),
+            Duration::from_millis(400),
+        )
+        .expect_err("a worker that never answers must not resolve");
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "the call must give up on its own budget, took {elapsed:?}"
+    );
+    let rendered = error.to_string();
+    assert!(rendered.contains("RUV1701"), "{rendered}");
+    assert!(rendered.contains("did not respond"), "{rendered}");
+
+    // The stalled process is stopped rather than left spinning until the CLI
+    // exits, and the dead worker refuses further work instead of pairing a late
+    // response with the next request.
+    let reused = worker
+        .call_with_timeout(
+            &serde_json::json!({ "hook": "build.transform" }),
+            Duration::from_millis(400),
+        )
+        .expect_err("a poisoned worker must not accept another hook");
+    assert!(
+        reused.to_string().contains("earlier hook timed out"),
+        "{reused}"
+    );
+}
+
+/// A worker that exits without answering is reported as an exit, not a timeout.
+#[test]
+fn a_plugin_worker_that_exits_without_answering_is_reported_immediately() {
+    use crate::plugins::TypeScriptPluginWorker;
+    use ruvyxa_dev_server::JavaScriptRuntime;
+    use std::time::{Duration, Instant};
+
+    if !JavaScriptRuntime::Node.is_available() {
+        eprintln!("skipping: node is not available on this machine");
+        return;
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let runner = temp.path().join("exits.mjs");
+    std::fs::write(&runner, "process.exit(3);\n").unwrap();
+
+    let mut worker =
+        TypeScriptPluginWorker::spawn(&runner, temp.path(), JavaScriptRuntime::Node).unwrap();
+
+    // Generous budget: reaching it would mean the exit was detected by timing
+    // out rather than by the closed pipe, which is the distinction under test.
+    let started = Instant::now();
+    let error = worker
+        .call_with_timeout(
+            &serde_json::json!({ "hook": "build.transform" }),
+            Duration::from_secs(20),
+        )
+        .expect_err("a worker that exited cannot answer");
+
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "an exited worker must be detected by EOF, not by the timeout"
+    );
+    assert!(
+        error.to_string().contains("exited before responding"),
+        "{error}"
+    );
+}
+
+/// The config cache must notice every input the renderer told it about.
+///
+/// Rendering `ruvyxa.config.ts` costs a JavaScript runtime start plus a bundle
+/// recompile on every command, so it is cached — which is only safe while the
+/// validity check is exact. These cases pin the parts that are easy to get
+/// subtly wrong and impossible to notice: a stale config produces a correct
+/// looking build against the wrong settings.
+#[test]
+fn the_config_cache_is_reused_only_while_every_recorded_input_still_holds() {
+    use crate::runtime_config::{CONFIG_CACHE_VERSION, ConfigLoadCache, config_cache_is_current};
+    use ruvyxa_dev_server::JavaScriptRuntime;
+    use std::collections::BTreeMap;
+
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    fs::write(root.join("ruvyxa.config.ts"), "export default {}").unwrap();
+    let config_hash = blake3::hash(b"export default {}").to_hex().to_string();
+
+    let base = |mutate: &dyn Fn(&mut ConfigLoadCache)| {
+        let mut cache = ConfigLoadCache {
+            version: CONFIG_CACHE_VERSION,
+            runtime: JavaScriptRuntime::Node.command().to_string(),
+            renderer_fingerprint: "renderer-v1".to_string(),
+            inputs: BTreeMap::from([("ruvyxa.config.ts".to_string(), config_hash.clone())]),
+            env: BTreeMap::new(),
+            stdout: "{}".to_string(),
+        };
+        mutate(&mut cache);
+        cache
+    };
+    let is_current = |cache: &ConfigLoadCache| {
+        config_cache_is_current(cache, root, JavaScriptRuntime::Node, "renderer-v1")
+    };
+
+    assert!(is_current(&base(&|_| {})), "an untouched project is a hit");
+
+    // Each of these invalidates on its own.
+    assert!(
+        !is_current(&base(&|cache| cache.version += 1)),
+        "a cache written by another format must be discarded, not reinterpreted"
+    );
+    assert!(
+        !is_current(&base(&|cache| cache.runtime = "bun".to_string())),
+        "a config may branch on the runtime, so a Node result cannot answer for Bun"
+    );
+    assert!(
+        !is_current(&base(&|cache| {
+            cache.renderer_fingerprint = "renderer-v2".to_string()
+        })),
+        "upgrading the ruvyxa package must not replay results from the old renderer"
+    );
+    assert!(
+        !is_current(&base(&|cache| {
+            cache
+                .inputs
+                .insert("ruvyxa.config.ts".to_string(), "different".to_string());
+        })),
+        "an edited input must invalidate"
+    );
+    assert!(
+        !is_current(&base(&|cache| {
+            cache
+                .inputs
+                .insert("plugins/index.ts".to_string(), "any".to_string());
+        })),
+        "a recorded input that no longer exists must invalidate"
+    );
+    assert!(
+        !is_current(&base(&|cache| cache.inputs.clear())),
+        "a cache that claims no inputs can never be shown to be current"
+    );
+}
+
+/// A config that reads an environment variable must re-render when it changes.
+///
+/// This is what makes caching safe for `process.env.NODE_ENV ? ... : ...`
+/// configs: the renderer reports which variables it actually read, and only
+/// those pin the result. A variable read while unset is recorded too, so the
+/// config also re-renders when the variable first appears.
+#[test]
+fn the_config_cache_tracks_only_the_environment_the_config_actually_read() {
+    use crate::runtime_config::{CONFIG_CACHE_VERSION, ConfigLoadCache, config_cache_is_current};
+    use ruvyxa_dev_server::JavaScriptRuntime;
+    use std::collections::BTreeMap;
+
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    fs::write(root.join("ruvyxa.config.ts"), "export default {}").unwrap();
+    let inputs = BTreeMap::from([(
+        "ruvyxa.config.ts".to_string(),
+        blake3::hash(b"export default {}").to_hex().to_string(),
+    )]);
+
+    let cache = |env: BTreeMap<String, Option<String>>| ConfigLoadCache {
+        version: CONFIG_CACHE_VERSION,
+        runtime: JavaScriptRuntime::Node.command().to_string(),
+        renderer_fingerprint: "renderer-v1".to_string(),
+        inputs: inputs.clone(),
+        env,
+        stdout: "{}".to_string(),
+    };
+    let is_current = |cache: &ConfigLoadCache| {
+        config_cache_is_current(cache, root, JavaScriptRuntime::Node, "renderer-v1")
+    };
+
+    // A uniquely named variable keeps this test independent of the ambient
+    // environment and of other tests running in the same process.
+    let key = "RUVYXA_TEST_CONFIG_CACHE_ENV";
+    unsafe { std::env::remove_var(key) };
+
+    assert!(
+        is_current(&cache(BTreeMap::from([(key.to_string(), None)]))),
+        "a variable recorded as unset, and still unset, is a hit"
+    );
+
+    unsafe { std::env::set_var(key, "1") };
+    assert!(
+        !is_current(&cache(BTreeMap::from([(key.to_string(), None)]))),
+        "a variable that was read while unset must invalidate once it appears"
+    );
+    assert!(
+        is_current(&cache(BTreeMap::from([(
+            key.to_string(),
+            Some("1".to_string())
+        )]))),
+        "an unchanged value is a hit"
+    );
+    assert!(
+        !is_current(&cache(BTreeMap::from([(
+            key.to_string(),
+            Some("2".to_string())
+        )]))),
+        "a changed value must invalidate"
+    );
+
+    // A config that never read this variable must not be pinned to it.
+    assert!(
+        is_current(&cache(BTreeMap::new())),
+        "an unread variable must not invalidate anything"
+    );
+
+    unsafe { std::env::remove_var(key) };
+}

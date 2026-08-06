@@ -29,6 +29,7 @@ mod client_bundle;
 mod commands;
 mod config;
 mod environment;
+mod host_resources;
 mod image_optimizer;
 mod image_usage;
 mod plugins;

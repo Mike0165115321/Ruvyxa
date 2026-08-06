@@ -1,15 +1,22 @@
 /**
- * Client-side route matching.
+ * Route matching — the single JavaScript implementation.
  *
- * The browser needs the same answer the server gives for a URL, or a soft
- * navigation would render a different page than a reload of the same address.
- * The segment semantics here are a deliberate port of `compilePattern`,
- * `routeSpecificity`, and `matchRoute` in
- * `packages/ruvyxa/runtime/serverless-handler.mjs`, which in turn mirror
- * `split_path` in `crates/ruvyxa_dev_server/src/router.rs`.
+ * Every JavaScript host that has to answer "which route is this URL?" reads
+ * this module: the browser router in `@ruvyxa/react`, the serverless handler
+ * in `packages/ruvyxa/runtime/serverless-handler.mjs` (via the generated
+ * `runtime/route-match.mjs` copy), and the standalone Node server. A URL that
+ * resolves differently in any of them renders a different page than a reload
+ * of the same address, so they are not allowed to hold separate ports of these
+ * rules.
  *
- * `tests/packages/react/route-match.test.mjs` runs one shared case table
- * through both implementations so the two cannot drift apart silently.
+ * The Rust router in `crates/ruvyxa_dev_server/src/router.rs` cannot share this
+ * code — it is a different language — so it is held to the same behaviour by a
+ * shared case table instead: `tests/fixtures/route-match-conformance.json` is
+ * replayed by both the Rust and the Node test suites.
+ *
+ * This module must stay dependency-free and free of Node and DOM APIs. It is
+ * copied verbatim into serverless function bundles, where nothing else is
+ * resolvable, and it runs in the browser.
  */
 
 /** Route parameters extracted from a matched URL. */
@@ -33,7 +40,8 @@ export interface RouteMatch<Route extends RouteManifestEntry = RouteManifestEntr
   params: RouteParams
 }
 
-interface CompiledPattern {
+/** The compiled form of one route pattern. */
+export interface CompiledPattern {
   regex: RegExp
   paramNames: string[]
   catchAll: { name: string; optional: boolean } | null
@@ -139,10 +147,21 @@ export function normalizeMatchPath(pathname: string): string {
   return segments.length === 0 ? '/' : `/${segments.join('/')}`
 }
 
+function hasControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.codePointAt(0)!
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return true
+  }
+  return false
+}
+
 /**
  * Decode each path segment exactly once without allowing an encoded value to
  * create a route boundary or traversal component. This mirrors
  * `canonical_request_path` at the development-server request boundary.
+ *
+ * Returns `null` when the path is malformed or an encoded segment would change
+ * the segment structure — callers treat that as "no route", never as a match.
  */
 export function canonicalRoutePath(pathname: string): string | null {
   if (!pathname.startsWith('/')) return null
@@ -168,12 +187,31 @@ export function canonicalRoutePath(pathname: string): string | null {
   return normalizeMatchPath(`/${decoded.join('/')}`)
 }
 
-function hasControlCharacter(value: string): boolean {
-  for (const character of value) {
-    const code = character.codePointAt(0)!
-    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return true
+/**
+ * Bind one compiled pattern's captures to named parameters.
+ *
+ * Split out so a host that already has a match in hand — the serverless
+ * handler dispatches on its own compiled table — produces exactly the same
+ * parameter object as `createRouteMatcher`.
+ */
+export function bindPatternParams(pattern: CompiledPattern, matched: RegExpExecArray): RouteParams {
+  const params: RouteParams = {}
+  for (let index = 0; index < pattern.paramNames.length; index++) {
+    const name = pattern.paramNames[index]!
+    const value = matched[index + 1]
+
+    if (pattern.catchAll && name === pattern.catchAll.name) {
+      // An optional catch-all that captured nothing stays absent rather than
+      // becoming `[]`: the documented contract is "undefined at the parent
+      // route", and every host omits the key there.
+      if (value) {
+        params[name] = value.split('/')
+      }
+    } else {
+      params[name] = value || undefined
+    }
   }
-  return false
+  return params
 }
 
 /**
@@ -201,25 +239,7 @@ export function createRouteMatcher<Route extends RouteManifestEntry>(
     for (const entry of compiled) {
       const matched = entry.pattern.regex.exec(normalized)
       if (!matched) continue
-
-      const params: RouteParams = {}
-      for (let index = 0; index < entry.pattern.paramNames.length; index++) {
-        const name = entry.pattern.paramNames[index]!
-        const value = matched[index + 1]
-
-        if (entry.pattern.catchAll && name === entry.pattern.catchAll.name) {
-          // An optional catch-all that captured nothing stays absent rather
-          // than becoming `[]`: the documented contract is "undefined at the
-          // parent route", and both server routers omit the key there.
-          if (value) {
-            params[name] = value.split('/')
-          }
-        } else {
-          params[name] = value || undefined
-        }
-      }
-
-      return { route: entry.route, params }
+      return { route: entry.route, params: bindPatternParams(entry.pattern, matched) }
     }
 
     return null

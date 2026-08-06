@@ -36,5 +36,15 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 walkdir.workspace = true
 
+# Reading how much memory the machine actually has free, so build concurrency
+# can be sized to the host instead of to its core count alone (see
+# `src/host_resources.rs`). Both crates are already in the dependency graph
+# through transitive deps, so neither adds to the shipped binary's build.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_System_SystemInformation"] }
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+libc = "0.2.189"
+
 [dev-dependencies]
 tempfile.workspace = true

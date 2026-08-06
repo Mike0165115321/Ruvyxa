@@ -43,6 +43,10 @@
     "./plugin-harness": {
       "types": "./dist/plugin-harness.d.ts",
       "default": "./dist/plugin-harness.js"
+    },
+    "./route-match": {
+      "types": "./dist/route-match.d.ts",
+      "default": "./dist/route-match.js"
     }
   },
   "scripts": {

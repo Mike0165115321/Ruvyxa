@@ -185,10 +185,13 @@ fn port_owner(port: u16) -> Option<String> {
 }
 
 fn windows_port_owner(port: u16) -> Option<String> {
-    let output = Command::new("netstat")
-        .args(["-ano", "-p", "tcp"])
-        .output()
-        .ok()?;
+    // Bounded like every other child process Ruvyxa starts. This runs only
+    // after a port conflict, to name the process holding the port; a probe that
+    // hangs would replace a clear error with no error at all.
+    let mut command = Command::new("netstat");
+    command.args(["-ano", "-p", "tcp"]);
+    let output =
+        crate::process::output_with_timeout(&mut command, crate::process::PROBE_TIMEOUT).ok()?;
     if !output.status.success() {
         return None;
     }
@@ -207,9 +210,9 @@ fn windows_port_owner(port: u16) -> Option<String> {
         }
     })?;
 
-    let process = Command::new("tasklist")
-        .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
-        .output()
+    let mut tasklist = Command::new("tasklist");
+    tasklist.args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"]);
+    let process = crate::process::output_with_timeout(&mut tasklist, crate::process::PROBE_TIMEOUT)
         .ok()
         .filter(|output| output.status.success())
         .and_then(|output| {
@@ -229,10 +232,13 @@ fn windows_port_owner(port: u16) -> Option<String> {
 }
 
 fn unix_port_owner(port: u16) -> Option<String> {
-    let output = Command::new("lsof")
-        .args(["-nP", "-iTCP", "-sTCP:LISTEN"])
-        .output()
-        .ok()?;
+    // `lsof` is the likeliest of these to stall — it walks every open file on
+    // the machine and blocks on unresponsive mounts — so the bound matters most
+    // here.
+    let mut command = Command::new("lsof");
+    command.args(["-nP", "-iTCP", "-sTCP:LISTEN"]);
+    let output =
+        crate::process::output_with_timeout(&mut command, crate::process::PROBE_TIMEOUT).ok()?;
     if !output.status.success() {
         return None;
     }

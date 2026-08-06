@@ -1274,7 +1274,8 @@ fn render_react_page(
             .suggest("Run pnpm install from the monorepo root, or install the ruvyxa package in the app.")
     })?;
 
-    let output = javascript_command(config)?
+    let mut command = javascript_command(config)?;
+    command
         .arg(&renderer)
         .arg(&config.root)
         .arg(&config.app_dir)
@@ -1283,12 +1284,8 @@ fn render_react_page(
         .arg(
             serde_json::to_string(params)
                 .map_err(|error| RuvyxaError::Message(error.to_string()))?,
-        )
-        .output()
-        .map_err(|source| RuvyxaError::Io {
-            message: format!("Failed to start {} for React SSR", config.runtime.command()),
-            source,
-        })?;
+        );
+    let output = run_renderer(&mut command, config, "React SSR")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1376,6 +1373,33 @@ fn find_upwards(start: &Path, relative: &Path, file_name: &str) -> Option<PathBu
     }
 }
 
+/// Run a one-shot renderer process under a bound.
+///
+/// These are the fallback render paths used when the worker pool is not
+/// serving the request. They run while an HTTP request is open, so a renderer
+/// that never exits — a page module that starts a timer or opens a handle at
+/// import time — would hold the request thread indefinitely. The bound turns
+/// that into an error the developer can see.
+fn run_renderer(
+    command: &mut Command,
+    config: &ServerConfig,
+    what: &str,
+) -> Result<std::process::Output> {
+    crate::process::output_with_timeout(command, crate::process::RENDER_TIMEOUT).map_err(|error| {
+        match error {
+            crate::process::ProcessError::Io(source) => RuvyxaError::Io {
+                message: format!("Failed to start {} for {what}", config.runtime.command()),
+                source,
+            },
+            timed_out => RuvyxaError::Message(format!(
+                "{what} {timed_out}. A module imported by this route may be keeping the \
+                 {} process alive after rendering.",
+                config.runtime.command()
+            )),
+        }
+    })
+}
+
 fn javascript_command(config: &ServerConfig) -> Result<Command> {
     let mut command = Command::new(config.runtime.executable());
     command.envs(runtime_env(config)?);
@@ -1416,7 +1440,8 @@ fn render_api(
             .suggest("Run pnpm install from the monorepo root, or install the ruvyxa package in the app.")
     })?;
 
-    let output = javascript_command(config)?
+    let mut command = javascript_command(config)?;
+    command
         .arg(&renderer)
         .arg(&config.root)
         .arg(&route.file)
@@ -1425,15 +1450,8 @@ fn render_api(
         .arg(
             serde_json::to_string(params)
                 .map_err(|error| RuvyxaError::Message(error.to_string()))?,
-        )
-        .output()
-        .map_err(|source| RuvyxaError::Io {
-            message: format!(
-                "Failed to start {} for API route rendering",
-                config.runtime.command()
-            ),
-            source,
-        })?;
+        );
+    let output = run_renderer(&mut command, config, "API route rendering")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);

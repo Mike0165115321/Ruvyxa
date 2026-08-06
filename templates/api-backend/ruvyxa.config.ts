@@ -12,7 +12,9 @@ const settings: RuvyxaConfig = {
     map: false,
     treeShake: true,
     split: 'route',
-    workers: 4,
+    // `workers` is intentionally unset: the build sizes route bundling to the
+    // machine's cores and free memory. Pinning a number here caps a 16-core
+    // machine at 4 and asks a memory-limited CI container for more than it has.
   },
   cache: {
     routes: true,

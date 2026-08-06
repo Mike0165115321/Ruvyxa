@@ -17,7 +17,20 @@
  *   - API: invoke method-specific handlers (GET/POST/PUT/DELETE/PATCH etc.)
  *
  * ISR/PPR behavior depends on platform capabilities passed via options.
+ *
+ * The only import this file is allowed to carry is the sibling `route-match.mjs`,
+ * which `adapter-runner.mjs` copies into the function bundle next to this file.
+ * Everything else must stay inlined: a deployed function directory resolves no
+ * bare specifiers.
  */
+
+import {
+  bindPatternParams,
+  canonicalRoutePath,
+  compareSpecificity,
+  compilePattern,
+  routeSpecificity,
+} from './route-match.mjs'
 
 /**
  * @typedef {Object} RouteEntry
@@ -773,168 +786,46 @@ function stripBasePath(pathname, basePath) {
 }
 
 /**
- * Collapse duplicate slashes and drop the trailing slash so pattern matching
- * sees the same segments as the dev server's router, which splits on `/` and
- * filters empty segments.
+ * Decode a request path exactly once while preserving segment boundaries.
+ *
+ * Thin wrapper over the shared `canonicalRoutePath`, which answers "is this
+ * path acceptable, and what are its segments?" for every JavaScript host. The
+ * handler needs the rejection as an exception so `dispatch` can turn it into a
+ * 400 with a message, while the client matcher wants a null — the decision
+ * itself must stay in one place, so only the reporting differs here.
  */
-function normalizeMatchPath(pathname) {
-  if (pathname === '/') return pathname
-  const segments = pathname.split('/').filter(Boolean)
-  return segments.length === 0 ? '/' : `/${segments.join('/')}`
-}
-
-/** Decode a request path exactly once while preserving segment boundaries. */
 function canonicalRequestPath(rawPathname) {
   if (typeof rawPathname !== 'string' || !rawPathname.startsWith('/')) {
     throw new URIError('Request path must start with "/"')
   }
-  const segments = []
-  for (const segment of rawPathname.split('/').filter(Boolean)) {
-    const decoded = decodeURIComponent(segment)
-    if (
-      decoded === '' ||
-      decoded === '.' ||
-      decoded === '..' ||
-      decoded.includes('/') ||
-      decoded.includes('\\') ||
-      hasControlCharacter(decoded)
-    ) {
-      throw new URIError('Request path contains an unsafe encoded segment')
-    }
-    segments.push(decoded)
+  const canonical = canonicalRoutePath(rawPathname)
+  if (canonical === null) {
+    throw new URIError('Request path contains an unsafe encoded segment')
   }
-  return normalizeMatchPath(`/${segments.join('/')}`)
-}
-
-function hasControlCharacter(value) {
-  for (const character of value) {
-    const code = character.codePointAt(0)
-    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return true
-  }
-  return false
-}
-
-/**
- * Compile a route path pattern into a regex and parameter names.
- * Supports:
- *   - Static segments: /about
- *   - Dynamic segments: /blog/[slug]
- *   - Catch-all segments: /docs/[...path]
- *   - Optional catch-all: /docs/[[...path]]
- */
-function compilePattern(routePath) {
-  if (routePath === '/') {
-    return { regex: /^\/$/, paramNames: [], catchAll: null }
-  }
-
-  const paramNames = []
-  let catchAll = null
-  const segments = routePath.split('/').filter(Boolean)
-  let pattern = '^'
-
-  for (const segment of segments) {
-    // Optional catch-all: [[...name]]
-    const optionalCatchAll = segment.match(/^\[\[\.\.\.(\w+)\]\]$/)
-    if (optionalCatchAll) {
-      paramNames.push(optionalCatchAll[1])
-      catchAll = { name: optionalCatchAll[1], optional: true }
-      pattern += '(?:/(.*))?'
-      continue
-    }
-
-    // Catch-all: [...name]
-    const catchAllMatch = segment.match(/^\[\.\.\.(\w+)\]$/)
-    if (catchAllMatch) {
-      paramNames.push(catchAllMatch[1])
-      catchAll = { name: catchAllMatch[1], optional: false }
-      pattern += '/(.+)'
-      continue
-    }
-
-    // Dynamic segment: [name]
-    const dynamicMatch = segment.match(/^\[(\w+)\]$/)
-    if (dynamicMatch) {
-      paramNames.push(dynamicMatch[1])
-      pattern += '/([^/]+)'
-      continue
-    }
-
-    // Static segment
-    pattern += `/${escapeRegex(segment)}`
-  }
-
-  pattern += '/?$'
-  return { regex: new RegExp(pattern), paramNames, catchAll }
-}
-
-/**
- * Per-segment specificity score: static (0) < dynamic (1) < catch-all (2)
- * < optional catch-all (3). Lower-scoring routes match first.
- */
-function routeSpecificity(routePath) {
-  if (routePath === '/') return [0]
-  return routePath
-    .split('/')
-    .filter(Boolean)
-    .map((segment) => {
-      if (/^\[\[\.\.\.\w+\]\]$/.test(segment)) return 3
-      if (/^\[\.\.\.\w+\]$/.test(segment)) return 2
-      if (/^\[\w+\]$/.test(segment)) return 1
-      return 0
-    })
-}
-
-function compareSpecificity(left, right) {
-  const length = Math.max(left.length, right.length)
-  for (let index = 0; index < length; index++) {
-    const leftScore = left[index] ?? -1
-    const rightScore = right[index] ?? -1
-    if (leftScore !== rightScore) return leftScore - rightScore
-  }
-  return 0
+  return canonical
 }
 
 function matchRoute(compiledRoutes, pathname) {
   for (const route of compiledRoutes) {
     const match = route.pattern.regex.exec(pathname)
     if (!match) continue
-
-    const params = {}
-    for (let i = 0; i < route.pattern.paramNames.length; i++) {
-      const name = route.pattern.paramNames[i]
-      const value = match[i + 1]
-
-      if (route.pattern.catchAll && name === route.pattern.catchAll.name) {
-        // An optional catch-all that captured nothing stays absent rather than
-        // becoming `[]`. The documented contract is "undefined at the parent
-        // route", and the dev server's router omits the key there, so emitting
-        // an empty array would make `/shop` behave differently in a deploy.
-        if (value) {
-          params[name] = value.split('/')
-        }
-      } else {
-        params[name] = value || undefined
-      }
-    }
-
-    return { route, params }
+    return { route, params: bindPatternParams(route.pattern, match) }
   }
   return null
-}
-
-function escapeRegex(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 /**
  * Match a request path against a route table, exposed for cross-implementation
  * testing.
  *
- * `@ruvyxa/react`'s `createRouteMatcher` is a deliberate port of the matcher
- * above, so a link click and a page reload resolve the same URL to the same
- * route and params. `tests/packages/react/route-match.test.mjs` drives one
- * shared case table through both this function and the client matcher and
- * asserts they never disagree. It is not part of the handler's runtime path.
+ * The handler, `@ruvyxa/react`'s router, and the standalone server all compile
+ * their tables with the same shared `compilePattern`/`routeSpecificity`, so a
+ * link click and a page reload resolve the same URL to the same route and
+ * params by construction rather than by review. This entry point exists so the
+ * conformance suite can drive the handler's own dispatch path — including its
+ * base-path and error reporting behaviour — against the shared case table in
+ * `tests/fixtures/route-match-conformance.json`, alongside the Rust router.
+ * It is not part of the handler's runtime path.
  */
 export function resolveRouteForTesting(routes, pathname) {
   const compiled = routes

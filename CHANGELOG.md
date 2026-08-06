@@ -2,6 +2,77 @@
 
 ## Unreleased
 
+### Breaking
+
+- **`@ruvyxa/react` no longer re-exports the route-matching engine.** `compilePattern`,
+  `routeSpecificity`, `compareSpecificity`, `normalizeMatchPath`, and `createRouteMatcher`, plus the
+  `RouteMatch` and `RouteManifestEntry` types, now live only in the new `@ruvyxa/core/route-match`
+  entry point. `@ruvyxa/react` still exports the `RouteParams` type, which is what `useParams()`
+  returns and the only one of these an application normally touches. Update any import of the others
+  to `@ruvyxa/core/route-match`. These were engine internals sitting in a user-facing package, and
+  exporting them there is what allowed the duplicate ports described below to accumulate unnoticed.
+
+### Route Matching Correctness
+
+- **Removed the third independent implementation of route matching.** Resolving a URL to a route was
+  ported three times: the Rust router used by `dev` and `start`, the client router in
+  `@ruvyxa/react`, and a private copy inside `runtime/serverless-handler.mjs`. Nothing kept them in
+  agreement except review, and a URL that resolves differently between them renders a different page
+  on a soft navigation than on a reload — a defect that only appears after deployment. The
+  JavaScript hosts now share one module, `@ruvyxa/core/src/route-match.ts`; the handler receives it
+  as `runtime/route-match.mjs`, generated at package build time and copied into every function
+  bundle alongside the handler, so a deployed function still resolves no bare specifiers.
+- **Added a cross-language conformance suite.** The Rust router cannot share the JavaScript module,
+  so `tests/fixtures/route-match-conformance.json` pins canonicalization and match results for both.
+  It is replayed by `crates/ruvyxa_dev_server/src/router.rs` and by
+  `packages/@ruvyxa/react/test/route-match.test.mjs`, which also drives the serverless handler's own
+  dispatch path. A behaviour change made in one language and not the other now fails a test.
+
+### Process Lifecycle
+
+- **Fixed builds hanging forever on an unresponsive TypeScript build plugin.** The build-side plugin
+  host read each hook response with a blocking `read_line` and no timeout, so a plugin with an
+  unresolved promise or a blocking loop stalled the whole build with no diagnostic and no recovery
+  but killing the CLI — the exact failure the module's own documentation promised not to have. Hook
+  responses are now read on a dedicated thread with the same 30-second budget the middleware plugin
+  host already enforced; on expiry the worker is killed, the build fails with `RUV1701`, and the
+  dead worker refuses further hooks rather than pairing a late response with the next request.
+- **Bounded every synchronous child process.** Config loading, adapter build and inspect hooks,
+  `tsc --noEmit`, the Tailwind CLI, the one-shot page and API renderers, runtime version probes, and
+  the port-conflict diagnostics all called `Command::output()`, which waits forever. A child that
+  keeps its event loop alive — a config importing a module that opens a database handle, a watcher,
+  a server — hung the CLI before it printed anything, and because `std::process::Child` does not
+  terminate on drop, an interrupted CLI left the child orphaned. All of them now run through
+  `ruvyxa_dev_server::process::output_with_timeout`, which drains both pipes on their own threads,
+  closes stdin, and kills and reaps the child on every path out.
+
+### Build Performance
+
+- **Cached the rendered project config.** Loading `ruvyxa.config.ts` started a JavaScript runtime
+  and recompiled the config bundle on every single CLI invocation, including commands that barely
+  read the config. The result is now cached and replayed while its inputs hold, cutting a light
+  command such as `ruvyxa routes` on `examples/demo` from ~517ms to ~167ms. The cache key is exact
+  rather than approximate: the renderer reports the transitive project modules and package manifests
+  that fed the dependency hash, plus — via a recording proxy over `process.env` — every environment
+  variable the config actually read, so a config that branches on `NODE_ENV` re-renders when
+  `NODE_ENV` changes and a config that reads nothing is pinned to nothing. The runtime and the
+  renderer's own content hash are part of the key too.
+
+### Build Resource Use
+
+- **Build concurrency is now bounded by free memory, not by core count alone.** Route bundling and
+  prerendering sized themselves from available cores, which reads as "use the machine" but ignores
+  what actually runs out: each concurrent bundle holds its own parser arenas and module graph, and
+  each prerender worker is a whole JavaScript runtime process. Measured on `examples/demo`, going
+  from one worker to sixteen cost about 100MB of peak resident memory for a 1.4x speedup; the same
+  rule on a memory-capped CI container asks for far more and is killed rather than slowed. Both
+  budgets now take the smaller of the CPU budget and what free memory can hold. When free memory
+  cannot be determined the previous core-based behaviour is used unchanged.
+- **Starter templates no longer pin `build.workers`.** Every template — and the demo — shipped
+  `workers: 4`, so every scaffolded project was capped at four bundling workers regardless of the
+  machine it built on. The field is now unset, which selects the machine-aware default. An explicit
+  value still lowers the CPU budget but no longer escapes the memory bound.
+
 ### Bundler and Linker Correctness
 
 - **Fixed tree-shaking dropping live exports that share a line with an unused one.** The linker

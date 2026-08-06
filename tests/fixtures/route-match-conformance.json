@@ -1,0 +1,96 @@
+{
+  "$comment": [
+    "Shared route-matching conformance table.",
+    "",
+    "Ruvyxa resolves a URL to a route in two languages that cannot share code:",
+    "the Rust router in crates/ruvyxa_dev_server/src/router.rs (dev and `start`),",
+    "and the single JavaScript matcher in packages/@ruvyxa/core/src/route-match.ts",
+    "(browser router, serverless handler, standalone server). If they disagree, a",
+    "soft navigation renders a different page than a reload of the same address —",
+    "a defect that only appears after deployment.",
+    "",
+    "Every implementation replays this file:",
+    "  - crates/ruvyxa_dev_server/src/router.rs  (Rust test)",
+    "  - tests/packages/react/route-match.test.mjs  (client + serverless handler)",
+    "",
+    "Add a case here first when changing matching behaviour; a port that drifts",
+    "then fails in the language that drifted, not in review."
+  ],
+
+  "routes": [
+    { "path": "/" },
+    { "path": "/about" },
+    { "path": "/blog/new" },
+    { "path": "/blog/[slug]" },
+    { "path": "/docs/[...slug]" },
+    { "path": "/shop/[[...category]]" },
+    { "path": "/users/[id]/posts/[postId]" },
+    { "path": "/ทดสอบ" }
+  ],
+
+  "$canonicalComment": [
+    "Raw request path to its canonical segment form, or null when the path must",
+    "be refused outright. Refusal is not 'no route': an encoded separator or a",
+    "traversal component would let a URL address a route it does not name, so",
+    "every host rejects it before matching.",
+    "Rust: canonical_request_path (Err). JavaScript: canonicalRoutePath (null)."
+  ],
+  "canonical": [
+    { "input": "/", "output": "/" },
+    { "input": "/about", "output": "/about" },
+    { "input": "/blog/hello/", "output": "/blog/hello" },
+    { "input": "/blog//hello", "output": "/blog/hello" },
+    { "input": "/docs/a%20b", "output": "/docs/a b" },
+    { "input": "/blog/hello%20world", "output": "/blog/hello world" },
+    { "input": "/%E0%B8%97%E0%B8%94%E0%B8%AA%E0%B8%AD%E0%B8%9A", "output": "/ทดสอบ" },
+    { "input": "/blog/%2520", "output": "/blog/%20" },
+    { "input": "/blog/%2Fsecret", "output": null },
+    { "input": "/blog/%5Csecret", "output": null },
+    { "input": "/blog/%2E%2E", "output": null },
+    { "input": "/blog/%2e%2e", "output": null },
+    { "input": "/blog/%00", "output": null },
+    { "input": "/blog/%", "output": null },
+    { "input": "/blog/%GG", "output": null },
+    { "input": "/blog/%ZZ", "output": null },
+    { "input": "/blog/%FF", "output": null }
+  ],
+
+  "$matchComment": [
+    "Canonical path to the route pattern that must win and the parameters it",
+    "must bind. `route: null` means no route matched — a 404, not a refusal.",
+    "An optional catch-all that captured nothing omits its key entirely, so",
+    "a page can tell '/shop' apart from '/shop/<segment>'.",
+    "",
+    "Every path here must already be canonical and free of percent-escapes.",
+    "The Rust router matches a path that canonical_request_path has already",
+    "decoded, while the JavaScript matcher canonicalizes internally — feeding",
+    "an escape to both would decode it once on one side and twice on the other",
+    "and compare two different requests. Percent-decoding belongs in the",
+    "`canonical` table above, which is where it is actually decided."
+  ],
+  "match": [
+    { "path": "/", "route": "/", "params": {} },
+    { "path": "/about", "route": "/about", "params": {} },
+    { "path": "/blog/new", "route": "/blog/new", "params": {} },
+    { "path": "/blog/hello", "route": "/blog/[slug]", "params": { "slug": "hello" } },
+    { "path": "/blog/hello world", "route": "/blog/[slug]", "params": { "slug": "hello world" } },
+    { "path": "/docs/a", "route": "/docs/[...slug]", "params": { "slug": ["a"] } },
+    { "path": "/docs/a/b/c", "route": "/docs/[...slug]", "params": { "slug": ["a", "b", "c"] } },
+    { "path": "/docs/a b", "route": "/docs/[...slug]", "params": { "slug": ["a b"] } },
+    { "path": "/shop", "route": "/shop/[[...category]]", "params": {} },
+    {
+      "path": "/shop/electronics/phones",
+      "route": "/shop/[[...category]]",
+      "params": { "category": ["electronics", "phones"] }
+    },
+    {
+      "path": "/users/7/posts/42",
+      "route": "/users/[id]/posts/[postId]",
+      "params": { "id": "7", "postId": "42" }
+    },
+    { "path": "/ทดสอบ", "route": "/ทดสอบ", "params": {} },
+    { "path": "/nope", "route": null },
+    { "path": "/nope/nope", "route": null },
+    { "path": "/does/not/exist/here", "route": null }
+  ]
+}

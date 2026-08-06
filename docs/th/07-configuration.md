@@ -13,7 +13,7 @@ source type ของมัน
 | `server.host`, `server.port`                                             | string, number                                 | address ที่ dev/start ฟัง               |
 | `build.minify`, `map`, `treeShake`, `manifest`, `warm`, `prerenderCache` | boolean; cache ปริยาย true                     | พฤติกรรม compiler/build artifact        |
 | `build.split`                                                            | `single \| route \| manual`                    | นโยบาย bundle splitting                 |
-| `build.workers`                                                          | number                                         | build parallelism                       |
+| `build.workers`                                                          | number                                         | build parallelism ดูหมายเหตุด้านล่าง    |
 | `render.strategy`, `render.revalidate`                                   | strategy, seconds                              | นโยบาย page rendering ปริยาย            |
 | `cache.routes`, `cache.css`, `cache.dir`                                 | boolean/string                                 | setting route/CSS/cache directory       |
 
@@ -79,6 +79,12 @@ export default config({
 non-loopback proxy ที่ตั้งค่าเท่านั้นที่ส่ง forwarded client/protocol header ได้
 
 `middleware` มี built-in (`cors`, `timing`, `log`, `rate`, `headers`) และ TypeScript plugin
+`build.workers` ควรปล่อยไม่ตั้งค่า เมื่อไม่ตั้ง การ bundle route จะปรับตามเครื่อง:
+ค่าที่น้อยกว่าระหว่างจำนวน core (เคารพ `RAYON_NUM_THREADS`) กับจำนวนที่ memory ว่างรองรับได้ การ pin
+ตัวเลขไว้จะจำกัดเครื่องใหญ่ — ค่า 4 ใช้แค่ 4 worker บนเครื่อง 16 core — และ starter template
+ไม่ส่งค่านี้มาแล้ว การตั้งค่าจะลด CPU budget เท่านั้น ส่วนขอบเขต memory ยังบังคับอยู่ ค่าที่ copy
+มาจากโปรเจกต์อื่นจึงทำให้ CI container ที่จำกัด memory ขอเกินที่มีไม่ได้
+
 `workers` (1–8) กับ `timeoutMs` (ปริยาย 30,000, สูงสุด 300,000) `site` ตั้งค่า `sitemap.xml` และ
 `robots.txt` ตอน build; exact app route หรือไฟล์ชื่อเดียวกันใน `public/` จะระงับ core generator
 `plugins` คือ array ของ `RuvyxaPlugin`

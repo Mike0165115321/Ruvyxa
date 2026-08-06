@@ -255,11 +255,13 @@ pub(crate) fn run_typecheck(root: &Path) -> anyhow::Result<()> {
     }
 
     let tsc = local_binary_upwards(root, "tsc").unwrap_or_else(|| PathBuf::from("tsc"));
-    let output = ProcessCommand::new(&tsc)
-        .arg("--noEmit")
-        .current_dir(root)
-        .output()
-        .with_context(|| format!("failed to run TypeScript type check with {}", tsc.display()))?;
+    let mut command = ProcessCommand::new(&tsc);
+    command.arg("--noEmit").current_dir(root);
+    let output = ruvyxa_dev_server::process::output_with_timeout(
+        &mut command,
+        ruvyxa_dev_server::process::TYPECHECK_TIMEOUT,
+    )
+    .with_context(|| format!("failed to run TypeScript type check with {}", tsc.display()))?;
 
     if output.status.success() {
         println!("{} TypeScript type check passed", success());

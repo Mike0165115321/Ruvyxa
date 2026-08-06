@@ -33,11 +33,9 @@ export type { NavigateOptions, RouteContextValue, RouterInstance, RuvyxaRouter }
 export { isNotFoundError, notFound, NOT_FOUND_PROPERTY } from './not-found.js'
 export type { NotFoundError } from './not-found.js'
 export type { RouteErrorProps } from './special-files.js'
-export {
-  compareSpecificity,
-  compilePattern,
-  createRouteMatcher,
-  normalizeMatchPath,
-  routeSpecificity,
-} from './route-match.js'
-export type { RouteManifestEntry, RouteMatch, RouteParams } from './route-match.js'
+// `RouteParams` is what `useParams()` returns, so it stays part of this
+// package's surface. The pattern compiler, specificity ordering, and matcher
+// factory behind it are engine internals shared with the server and serverless
+// hosts: their home is `@ruvyxa/core/route-match`, and re-exporting them here
+// invited the duplicate ports this package used to carry.
+export type { RouteParams } from '@ruvyxa/core/route-match'

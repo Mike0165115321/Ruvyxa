@@ -262,6 +262,63 @@ mod tests {
     use serde_json::json;
     use std::path::PathBuf;
 
+    /// Replay the shared cross-language conformance table.
+    ///
+    /// The JavaScript hosts share one matcher module; this router cannot, so
+    /// the two are held together by `tests/fixtures/route-match-conformance.json`
+    /// instead. `tests/packages/react/route-match.test.mjs` drives the same file
+    /// through the client matcher and the serverless handler. A behaviour change
+    /// made in one language and not the other fails here.
+    #[test]
+    fn matches_the_shared_cross_language_conformance_table() {
+        let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/route-match-conformance.json");
+        let fixture: Value = serde_json::from_str(
+            &std::fs::read_to_string(&fixture_path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", fixture_path.display())),
+        )
+        .expect("conformance fixture is valid JSON");
+
+        let routes = fixture["routes"]
+            .as_array()
+            .expect("fixture declares routes")
+            .iter()
+            .map(|route| (route["path"].as_str().expect("route path"), RouteKind::Page))
+            .collect::<Vec<_>>();
+        let manifest = make_manifest(routes);
+        let router = RadixRouter::compile(&manifest);
+
+        for case in fixture["canonical"].as_array().expect("canonical cases") {
+            let input = case["input"].as_str().expect("canonical input");
+            let actual = crate::plugin_bridge::canonical_request_path(input).ok();
+            let expected = case["output"].as_str().map(str::to_string);
+            assert_eq!(actual, expected, "canonical form of {input}");
+        }
+
+        for case in fixture["match"].as_array().expect("match cases") {
+            let path = case["path"].as_str().expect("match path");
+            let matched = router.find(&manifest, path);
+
+            let Some(expected_route) = case["route"].as_str() else {
+                assert!(
+                    matched.is_none(),
+                    "{path} must not match, matched {:?}",
+                    matched.map(|found| found.route.path.clone())
+                );
+                continue;
+            };
+
+            let matched = matched.unwrap_or_else(|| panic!("{path} must match {expected_route}"));
+            assert_eq!(matched.route.path, expected_route, "route for {path}");
+
+            // Params are compared as JSON so a string/array mismatch — the shape
+            // an optional catch-all is easiest to get wrong — is a failure, not a
+            // coincidental equality.
+            let actual_params = serde_json::to_value(&matched.params).expect("params serialize");
+            assert_eq!(actual_params, case["params"], "params for {path}");
+        }
+    }
+
     fn make_manifest(routes: Vec<(&str, RouteKind)>) -> RouteManifest {
         let entries = routes
             .into_iter()

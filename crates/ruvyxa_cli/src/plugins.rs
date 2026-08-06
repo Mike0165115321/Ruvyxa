@@ -12,9 +12,10 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command as ProcessCommand, Stdio};
+use std::process::{Child, ChildStdin, Command as ProcessCommand, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::Duration;
 
 use ruvyxa_dev_server::{JavaScriptRuntime, find_runtime_script};
 
@@ -27,10 +28,23 @@ pub(crate) struct TypeScriptPluginBridge {
     pub(crate) next_worker: Arc<AtomicUsize>,
 }
 
+/// Longest one build-plugin hook may run before its worker is stopped.
+///
+/// Matches `DEFAULT_PLUGIN_HOOK_TIMEOUT_MS` for middleware plugin hooks, so a
+/// plugin author sees the same budget on both sides of the framework. Without
+/// it a plugin that never resolves hung the whole build with no diagnostic —
+/// the failure this module's own documentation promises not to have.
+const PLUGIN_HOOK_TIMEOUT: Duration =
+    Duration::from_millis(ruvyxa_middleware::config::DEFAULT_PLUGIN_HOOK_TIMEOUT_MS);
+
 pub(crate) struct TypeScriptPluginWorker {
     pub(crate) child: Child,
     pub(crate) stdin: ChildStdin,
-    pub(crate) stdout: BufReader<ChildStdout>,
+    /// Response lines pushed by this worker's reader thread. See
+    /// [`TypeScriptPluginWorker::spawn`] for why the read is not inline.
+    responses: mpsc::Receiver<std::io::Result<String>>,
+    /// Set once a hook timed out; the worker is dead and must not be reused.
+    poisoned: bool,
 }
 
 /// Owns the single persistent plugin registry used by one production build.
@@ -291,10 +305,38 @@ impl TypeScriptPluginWorker {
             )
         })?;
 
+        // Responses are read on a dedicated thread rather than inline, so a
+        // plugin that never answers costs a bounded wait instead of the whole
+        // build. `BuildHooks` is a synchronous trait called from rayon workers,
+        // so there is no runtime here to time the read out against — the thread
+        // plus channel is what makes `recv_timeout` possible at all.
+        let (responses, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            loop {
+                let mut line = String::new();
+                match reader.read_line(&mut line) {
+                    // Clean EOF: the worker closed stdout. Dropping the sender
+                    // is the signal; an explicit message would race the exit.
+                    Ok(0) => break,
+                    Ok(_) => {
+                        if responses.send(Ok(line)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        let _ = responses.send(Err(error));
+                        break;
+                    }
+                }
+            }
+        });
+
         Ok(Self {
             child,
             stdin,
-            stdout: BufReader::new(stdout),
+            responses: receiver,
+            poisoned: false,
         })
     }
 
@@ -302,6 +344,25 @@ impl TypeScriptPluginWorker {
         &mut self,
         payload: &serde_json::Value,
     ) -> ruvyxa_bundler::Result<PluginRuntimeOutput> {
+        self.call_with_timeout(payload, PLUGIN_HOOK_TIMEOUT)
+    }
+
+    /// [`Self::call`] with an explicit budget, so the timeout path can be tested
+    /// without a test that waits out the production one.
+    pub(crate) fn call_with_timeout(
+        &mut self,
+        payload: &serde_json::Value,
+        timeout: Duration,
+    ) -> ruvyxa_bundler::Result<PluginRuntimeOutput> {
+        // A worker that timed out may still answer the previous request later.
+        // Reusing it would pair that stale line with the next call's payload, so
+        // it stays refused rather than silently returning another hook's result.
+        if self.poisoned {
+            return Err(ruvyxa_bundler::BundleError::Compiler(
+                "TypeScript plugin worker was stopped after an earlier hook timed out".into(),
+            ));
+        }
+
         writeln!(self.stdin, "{payload}").map_err(|err| {
             ruvyxa_bundler::BundleError::Compiler(format!(
                 "failed to send TypeScript plugin worker payload: {err}"
@@ -313,24 +374,42 @@ impl TypeScriptPluginWorker {
             ))
         })?;
 
-        let mut stdout = String::new();
-        let bytes_read = self.stdout.read_line(&mut stdout).map_err(|err| {
-            ruvyxa_bundler::BundleError::Compiler(format!(
-                "failed to read TypeScript plugin worker response: {err}"
-            ))
-        })?;
-        if bytes_read == 0 {
-            let status = self
-                .child
-                .try_wait()
-                .ok()
-                .flatten()
-                .map(|status| status.to_string())
-                .unwrap_or_else(|| "unknown".to_string());
-            return Err(ruvyxa_bundler::BundleError::Compiler(format!(
-                "TypeScript plugin worker exited before responding (status: {status})"
-            )));
-        }
+        let stdout = match self.responses.recv_timeout(timeout) {
+            Ok(Ok(line)) => line,
+            Ok(Err(error)) => {
+                return Err(ruvyxa_bundler::BundleError::Compiler(format!(
+                    "failed to read TypeScript plugin worker response: {error}"
+                )));
+            }
+            // The reader thread ended, which only happens at EOF: the worker
+            // exited without answering.
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let status = self
+                    .child
+                    .try_wait()
+                    .ok()
+                    .flatten()
+                    .map(|status| status.to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+                return Err(ruvyxa_bundler::BundleError::Compiler(format!(
+                    "TypeScript plugin worker exited before responding (status: {status})"
+                )));
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                self.poisoned = true;
+                // Kill now rather than at drop: the build is about to fail, and
+                // a plugin stuck in an infinite loop would otherwise keep a core
+                // busy until the CLI process itself exits.
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+                return Err(ruvyxa_bundler::BundleError::Compiler(format!(
+                    "RUV1701 a TypeScript build plugin hook did not respond within {} seconds. \
+                     The plugin worker was stopped. Check the plugin for an unresolved promise \
+                     or a blocking loop.",
+                    timeout.as_secs()
+                )));
+            }
+        };
 
         serde_json::from_str(stdout.trim()).map_err(|err| {
             ruvyxa_bundler::BundleError::Compiler(format!(

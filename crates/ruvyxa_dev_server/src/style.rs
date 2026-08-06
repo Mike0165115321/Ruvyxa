@@ -474,16 +474,21 @@ fn compile_tailwind_css(root: &Path, input: &Path) -> Result<String> {
             .suggest("Install Tailwind support with `pnpm add tailwindcss && pnpm add -D @tailwindcss/cli`.")
     })?;
     let input_arg = input.strip_prefix(root).unwrap_or(input);
-    let output = Command::new(tailwind)
+    let mut command = Command::new(tailwind);
+    command
         .current_dir(root)
         .arg("-i")
         .arg(input_arg)
-        .arg("--minify")
-        .output()
-        .map_err(|source| RuvyxaError::Io {
-            message: "Failed to run Tailwind CSS CLI".to_string(),
-            source,
-        })?;
+        .arg("--minify");
+    let output =
+        crate::process::output_with_timeout(&mut command, crate::process::STYLE_TOOL_TIMEOUT)
+            .map_err(|error| match error {
+                crate::process::ProcessError::Io(source) => RuvyxaError::Io {
+                    message: "Failed to run Tailwind CSS CLI".to_string(),
+                    source,
+                },
+                timed_out => RuvyxaError::Message(format!("Tailwind CSS compilation {timed_out}")),
+            })?;
 
     if output.status.success() {
         return String::from_utf8(output.stdout)

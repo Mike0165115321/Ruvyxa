@@ -30,7 +30,7 @@ import {
   createRouteMatcher,
   type RouteManifestEntry,
   type RouteParams,
-} from './route-match.js'
+} from '@ruvyxa/core/route-match'
 
 /**
  * The active route, as seen by the routing hooks.

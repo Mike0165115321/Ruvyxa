@@ -2513,6 +2513,7 @@ dependencies = [
  "chrono",
  "clap",
  "image",
+ "libc",
  "rayon",
  "ruvyxa_bundler",
  "ruvyxa_dev_server",
@@ -2527,6 +2528,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "walkdir",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

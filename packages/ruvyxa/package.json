@@ -21,6 +21,7 @@
     "runtime/config-renderer.mjs",
     "runtime/entry-templates.mjs",
     "runtime/plugin-runtime.mjs",
+    "runtime/route-match.mjs",
     "runtime/serverless-handler.mjs",
     "runtime/ssr-renderer.mjs",
     "runtime/worker-pool.mjs",
@@ -107,7 +108,7 @@
     "@ruvyxa/cli-win32-x64": "workspace:^"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node scripts/sync-route-match.mjs && tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.check.json",
     "test": "node --test \"../../tests/packages/ruvyxa/**/*.test.mjs\"",
     "format": "tsc -p tsconfig.check.json",
