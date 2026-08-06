@@ -121,6 +121,7 @@ export default function RuvyxaRunner() {
     let running = true
     let started = false
     let gameOver = false
+    let paused = false
     let score = 0
     let best = 0
     let speed = 4.5
@@ -176,6 +177,7 @@ export default function RuvyxaRunner() {
       ducking = false
       nextBossAt = 250
       gameOver = false
+      paused = false
       seedScenery()
     }
 
@@ -188,6 +190,7 @@ export default function RuvyxaRunner() {
         reset()
         return
       }
+      if (paused) return
       if (runner.onGround) {
         runner.vy = JUMP_VELOCITY
         runner.onGround = false
@@ -195,7 +198,7 @@ export default function RuvyxaRunner() {
     }
 
     function shoot() {
-      if (!started || gameOver || ammo <= 0) return
+      if (!started || gameOver || paused || ammo <= 0) return
       ammo--
       bolts.push({ x: runner.x + 8 * PIXEL, y: runner.y + (ducking ? 6 : 10) })
     }
@@ -210,6 +213,12 @@ export default function RuvyxaRunner() {
           life: 18 + Math.random() * 12,
         })
       }
+    }
+
+    function togglePause() {
+      if (!started || gameOver) return
+      paused = !paused
+      ducking = false
     }
 
     function drawSprite(sprite: string[], x: number, y: number, scale = PIXEL, color = INK) {
@@ -252,29 +261,37 @@ export default function RuvyxaRunner() {
     function spawnObstacle() {
       const roll = Math.random()
       if (roll < 0.55) {
-        const sprite = BUG_SPRITES[Math.floor(Math.random() * BUG_SPRITES.length)]
+        const frames = BUG_SPRITES[Math.floor(Math.random() * BUG_SPRITES.length)]
         obstacles.push({
           x: WIDTH + 10,
-          y: GROUND_Y - sprH(sprite),
-          sprite,
+          y: GROUND_Y - sprH(frames[0]),
+          sprite: frames[0],
+          frames,
           kind: 'bug',
           hp: 1,
+          animation: Math.random() * frames.length,
         })
       } else if (roll < 0.8) {
+        const frames = ERROR_SPRITES[Math.floor(Math.random() * ERROR_SPRITES.length)]
         obstacles.push({
           x: WIDTH + 10,
           y: GROUND_Y - 36,
-          sprite: ERROR_SPRITE,
+          sprite: frames[0],
+          frames,
           kind: 'error',
           hp: 1,
+          animation: Math.random() * frames.length,
         })
       } else {
+        const frames = MALWARE_SPRITES[Math.floor(Math.random() * MALWARE_SPRITES.length)]
         obstacles.push({
           x: WIDTH + 10,
-          y: GROUND_Y - sprH(MALWARE_SPRITE),
-          sprite: MALWARE_SPRITE,
+          y: GROUND_Y - sprH(frames[0]),
+          sprite: frames[0],
+          frames,
           kind: 'malware',
           hp: 2,
+          animation: Math.random() * frames.length,
         })
       }
     }
@@ -307,7 +324,7 @@ export default function RuvyxaRunner() {
 
     function step() {
       if (!running) return
-      frame++
+      if (!paused) frame++
 
       ctx!.clearRect(0, 0, WIDTH, HEIGHT)
       drawScenery()
@@ -319,7 +336,7 @@ export default function RuvyxaRunner() {
       ctx!.lineTo(WIDTH, GROUND_Y + 2)
       ctx!.stroke()
 
-      if (started && !gameOver) {
+      if (started && !gameOver && !paused) {
         for (const s of scenery) {
           const factor = s.kind === 'cloud' ? 0.18 : s.kind === 'hill' ? 0.35 : 1
           s.x -= speed * factor
@@ -343,7 +360,18 @@ export default function RuvyxaRunner() {
         }
 
         if (!boss && score >= nextBossAt) {
-          boss = { x: WIDTH + 40, y: 148, hp: 3, t: 0, cooldown: 110 }
+          const variant = BOSS_VARIANTS[Math.floor(Math.random() * BOSS_VARIANTS.length)]
+          boss = {
+            x: WIDTH + 40,
+            y: variant.spawnY,
+            hp: variant.hp,
+            maxHp: variant.hp,
+            t: 0,
+            cooldown: variant.fireInterval,
+            variant,
+            sprite: variant.frames[0],
+            animation: Math.random() * variant.frames.length,
+          }
         }
 
         if (!boss) {
@@ -354,28 +382,40 @@ export default function RuvyxaRunner() {
           }
         }
 
-        for (const o of obstacles) o.x -= speed
+        for (const o of obstacles) {
+          o.x -= speed
+          o.animation += 0.14
+          o.sprite = o.frames[Math.floor(o.animation) % o.frames.length]
+        }
         obstacles = obstacles.filter((o) => o.x > -40)
 
         // boss behaviour
         if (boss) {
           boss.t++
-          const target = 470
-          if (boss.x > target) boss.x -= 3
-          // Bob through the runner's firing line so a standing shot can connect.
-          boss.y = 148 + Math.sin(boss.t / 34) * 18
+          boss.animation += 0.12
+          boss.sprite = boss.variant.frames[Math.floor(boss.animation) % boss.variant.frames.length]
+          if (boss.x > boss.variant.targetX) boss.x -= boss.variant.approachSpeed
+          boss.y =
+            boss.variant.spawnY +
+            Math.sin(boss.t / boss.variant.bobRate) * boss.variant.bobAmplitude
           boss.cooldown--
           if (boss.cooldown <= 0) {
-            boss.cooldown = 95
-            const high = Math.random() < 0.5
-            // High shot clears a crouch but not a standing runner; low shot must be jumped.
-            shots.push({ x: boss.x, y: high ? GROUND_Y - 26 : GROUND_Y - 14 })
+            boss.cooldown = boss.variant.fireInterval
+            if (boss.variant.shotMode === 'dual') {
+              shots.push({ x: boss.x, y: GROUND_Y - 14 })
+              shots.push({ x: boss.x + 12, y: GROUND_Y - 26 })
+            } else {
+              const high =
+                boss.variant.shotMode === 'alternating' &&
+                Math.floor(boss.t / boss.variant.fireInterval) % 2 === 0
+              shots.push({ x: boss.x, y: high ? GROUND_Y - 26 : GROUND_Y - 14 })
+            }
           }
           const bBox = {
             x: boss.x + 4,
             y: boss.y + 4,
-            w: sprW(HACKER_SPRITE) - 8,
-            h: sprH(HACKER_SPRITE) - 8,
+            w: sprW(boss.sprite) - 8,
+            h: sprH(boss.sprite) - 8,
           }
           if (overlap(activeRunnerBox(), bBox)) endGame()
         }
@@ -399,16 +439,16 @@ export default function RuvyxaRunner() {
           }
           if (
             boss &&
-            overlap(bBox, { x: boss.x, y: boss.y, w: sprW(HACKER_SPRITE), h: sprH(HACKER_SPRITE) })
+            overlap(bBox, { x: boss.x, y: boss.y, w: sprW(boss.sprite), h: sprH(boss.sprite) })
           ) {
             boss.hp--
             b.x = WIDTH + 999
-            burst(boss.x + 15, boss.y + 15, 12)
+            burst(boss.x + sprW(boss.sprite) / 2, boss.y + sprH(boss.sprite) / 2, 12)
             // Landing a hit buys a short reprieve from return fire.
             boss.cooldown = Math.max(boss.cooldown, 45)
             if (boss.hp <= 0) {
               score += 150
-              burst(boss.x + 15, boss.y + 15, 24)
+              burst(boss.x + sprW(boss.sprite) / 2, boss.y + sprH(boss.sprite) / 2, 24)
               boss = null
               nextBossAt = score + 350
               shots = []
@@ -432,19 +472,21 @@ export default function RuvyxaRunner() {
       }
 
       // particles
-      for (const p of particles) {
-        p.x += p.vx
-        p.y += p.vy
-        p.vy += 0.2
-        p.life--
+      if (!paused) {
+        for (const p of particles) {
+          p.x += p.vx
+          p.y += p.vy
+          p.vy += 0.2
+          p.life--
+        }
+        particles = particles.filter((p) => p.life > 0)
       }
-      particles = particles.filter((p) => p.life > 0)
       ctx!.fillStyle = MUTED
       for (const p of particles) ctx!.fillRect(p.x, p.y, PIXEL, PIXEL)
 
       // entities
       for (const o of obstacles) drawSprite(o.sprite, o.x, o.y)
-      if (boss) drawSprite(HACKER_SPRITE, boss.x, boss.y)
+      if (boss) drawSprite(boss.sprite, boss.x, boss.y)
 
       ctx!.fillStyle = ACCENT
       for (const b of bolts) ctx!.fillRect(b.x, b.y, 10, 4)
@@ -489,8 +531,8 @@ export default function RuvyxaRunner() {
 
       if (boss) {
         ctx!.fillStyle = '#525252'
-        ctx!.fillText('HACKER', 20, 36)
-        for (let i = 0; i < 3; i++) {
+        ctx!.fillText(boss.variant.label, 20, 36)
+        for (let i = 0; i < boss.maxHp; i++) {
           ctx!.fillStyle = i < boss.hp ? INK : FAINT
           ctx!.fillRect(80 + i * 12, 37, 8, 10)
         }
@@ -509,6 +551,17 @@ export default function RuvyxaRunner() {
         ctx!.font = "12px 'SFMono-Regular', Consolas, monospace"
         ctx!.fillText('SPACE/W JUMP   S DUCK   X/ARROWS SHOOT', WIDTH / 2, 110)
       }
+      if (paused && !gameOver) {
+        ctx!.fillStyle = 'rgba(255, 255, 255, 0.82)'
+        ctx!.fillRect(0, 0, WIDTH, HEIGHT)
+        ctx!.fillStyle = INK
+        ctx!.font = "18px 'SFMono-Regular', Consolas, monospace"
+        ctx!.textAlign = 'center'
+        ctx!.fillText('PAUSED', WIDTH / 2, 82)
+        ctx!.fillStyle = '#525252'
+        ctx!.font = "12px 'SFMono-Regular', Consolas, monospace"
+        ctx!.fillText('PRESS ESC TO RESUME', WIDTH / 2, 108)
+      }
       ctx!.textAlign = 'left'
 
       raf = requestAnimationFrame(step)
@@ -516,11 +569,15 @@ export default function RuvyxaRunner() {
 
     const JUMP_KEYS = new Set(['Space', 'ArrowUp', 'KeyW'])
     const DUCK_KEYS = new Set(['ArrowDown', 'KeyS'])
+    const PAUSE_KEYS = new Set(['Escape'])
     // No lateral movement in an endless runner, so left/right fire ahead instead of going unused.
     const SHOOT_KEYS = new Set(['KeyX', 'KeyF', 'ArrowLeft', 'ArrowRight', 'KeyA', 'KeyD'])
 
     function onKeyDown(e: KeyboardEvent) {
-      if (JUMP_KEYS.has(e.code)) {
+      if (PAUSE_KEYS.has(e.code)) {
+        e.preventDefault()
+        togglePause()
+      } else if (JUMP_KEYS.has(e.code)) {
         e.preventDefault()
         jump()
       } else if (DUCK_KEYS.has(e.code)) {
@@ -562,7 +619,7 @@ export default function RuvyxaRunner() {
         width={WIDTH}
         height={HEIGHT}
         role="img"
-        aria-label="Endless runner mini-game: jump, duck, and shoot fixes at bugs, errors, and a hacker boss"
+        aria-label="Endless runner mini-game: jump, duck, shoot, pause, and defeat animated bugs, errors, and random bosses"
       />
     </div>
   )
