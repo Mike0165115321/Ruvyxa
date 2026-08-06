@@ -13,16 +13,17 @@ const AMMO_REGEN = 70
 
 const INK = '#171717'
 const ACCENT = '#7c3aed'
+const SPRITE_COLOR = '#8b5cf6'
 const MUTED = '#a3a3a3'
 const FAINT = '#e5e5e5'
 
-// 8x8 Ruvyxa runner, with a one-pixel brand accent for the eye.
+// 8x8 Ruvyxa runner, with a slimmer purple silhouette and a darker eye accent.
 const RUNNER_SPRITE = [
   '00111100',
   '01111A10',
   '11011011',
-  '11111111',
   '01111110',
+  '00111100',
   '00100100',
   '01000010',
   '01000010',
@@ -33,8 +34,8 @@ const RUNNER_SPRITE_ALT = [
   '00111100',
   '01111A10',
   '11011011',
-  '11111111',
   '01111110',
+  '00111100',
   '00100100',
   '00100100',
   '00011000',
@@ -442,7 +443,13 @@ export default function RuvyxaRunner() {
         : !started || !runner.onGround || Math.floor(frame / 6) % 2 === 0
           ? RUNNER_SPRITE
           : RUNNER_SPRITE_ALT
-      drawSprite(runSprite, runner.x, duckNow ? GROUND_Y - sprH(RUNNER_DUCK) : runner.y)
+      drawSprite(
+        runSprite,
+        runner.x,
+        duckNow ? GROUND_Y - sprH(RUNNER_DUCK) : runner.y,
+        PIXEL,
+        SPRITE_COLOR,
+      )
 
       // HUD
       ctx!.fillStyle = '#525252'
