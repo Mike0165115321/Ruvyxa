@@ -19,9 +19,9 @@
 //!
 //! Import/export rewrites handle all ES module patterns:
 //! - `import Default from "./mod"`       → `const Default = __ruv_xxx__.default`
-//! - `import { a, b } from "./mod"`      → `const {a, b} = __ruv_xxx__`
+//! - `import { a, b } from "./mod"`      → `const a = __ruv_xxx__.a; const b = __ruv_xxx__.b`
 //! - `import * as ns from "./mod"`       → `const ns = __ruv_xxx__`
-//! - `import Default, { a } from "./mod"`→ `const Default = __ruv_xxx__.default; const {a} = __ruv_xxx__`
+//! - `import Default, { a } from "./mod"`→ `const Default = __ruv_xxx__.default; const a = __ruv_xxx__.a`
 //! - `export { a } from "./mod"`         → re-exported via `__exports.a = __ruv_xxx__.a`
 //! - `export * from "./mod"`             → `Object.assign(__exports, __ruv_xxx__)`
 //! - `export default expr`              → `__exports.default = expr`

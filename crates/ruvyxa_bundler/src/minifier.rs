@@ -378,13 +378,11 @@ fn tree_shake_pass(source: &str) -> String {
         }
 
         // End of module IIFE: `})();`
-        if trimmed == "})();" || trimmed == "  return __exports;" {
-            // Keep these lines regardless.
+        if trimmed == "})();" {
+            // Keep the closer regardless, and leave the module scope.
             out.push_str(line);
             out.push('\n');
-            if trimmed == "})();" {
-                current_module_id = None;
-            }
+            current_module_id = None;
             continue;
         }
 

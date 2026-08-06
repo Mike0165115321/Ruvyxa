@@ -184,6 +184,44 @@ fn plugin_create_scaffolds_the_canonical_plugin() {
 }
 
 #[test]
+fn plugin_create_leaves_no_authoring_literal_behind() {
+    // Every other scaffold test uses `request-logger`, which is also the name
+    // the templates were authored against. That makes a hardcoded literal
+    // indistinguishable from a correctly substituted placeholder, and one did
+    // survive in the generated test until it was caught by scaffolding under a
+    // different name. Scaffold under a name that shares nothing with the
+    // authoring name so any residue fails loudly.
+    let temp = tempfile::tempdir().unwrap();
+
+    scaffold_plugin(PluginCreateArgs {
+        name: "audit-trail".to_string(),
+        root: temp.path().to_path_buf(),
+        dir: None,
+    })
+    .unwrap();
+
+    let plugin_dir = temp.path().join("audit-trail");
+    for (relative_path, _) in PLUGIN_TEMPLATE_FILES {
+        let contents = fs::read_to_string(plugin_dir.join(relative_path))
+            .unwrap_or_else(|error| panic!("{relative_path} should be scaffolded: {error}"));
+
+        // A leftover authoring name means the template hardcoded a value where
+        // it should have used a placeholder.
+        assert!(
+            !contents.contains("request-logger") && !contents.contains("request_logger"),
+            "{relative_path} still carries the authoring plugin name:\n{contents}"
+        );
+        // An unsubstituted placeholder means a token was misspelled.
+        assert!(
+            !contents.contains("__PLUGIN_NAME__")
+                && !contents.contains("__PLUGIN_IDENTIFIER__")
+                && !contents.contains("__RUVYXA_VERSION__"),
+            "{relative_path} has an unsubstituted placeholder:\n{contents}"
+        );
+    }
+}
+
+#[test]
 fn plugin_create_scaffolds_into_a_custom_directory() {
     let temp = tempfile::tempdir().unwrap();
 

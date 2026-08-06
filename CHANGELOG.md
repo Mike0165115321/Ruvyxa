@@ -17,6 +17,31 @@
   dead. A module whose namespace is read as a whole — by a namespace import, or by the
   default-import interop expression for CommonJS packages — now keeps all of its exports.
 
+### Plugin Scaffolding
+
+- **Fixed `ruvyxa plugin create` generating a test that fails for every plugin name except one.**
+  The scaffolded `test/plugin.test.mjs` asserted the plugin's name twice: once against the
+  `__PLUGIN_NAME__` placeholder and once against the literal `request-logger` the template was
+  authored with. Placeholder substitution cannot rewrite a plain literal, so the stray assertion
+  survived into every generated plugin and failed at `npm test` — step 3 of the "next steps" the
+  command prints — and, because the generated `package.json` runs `prepublishOnly: npm test`,
+  blocked publishing too. The duplicate assertion is removed. Scaffold tests previously all used
+  `request-logger`, which made a hardcoded literal indistinguishable from a substituted placeholder;
+  a new test now scaffolds under an unrelated name and rejects any residual authoring literal or
+  unsubstituted placeholder across every template file.
+
+### Internal
+
+- Documented the bundler's custom tree-shaking pass (Pass 0) in `ARCHITECTURE.md`, including the
+  per-assignment and opacity rules that carry its correctness.
+- Corrected the linker's module docs: named imports bind per-member (`const a = __ruv_xxx__.a`), not
+  by destructuring the namespace. The stale form mattered because tree-shaking's opacity rule turns
+  on exactly which import forms read a namespace as a whole.
+- Removed an unreachable branch in the tree-shaking pass that tested for `return __exports;`, a line
+  the linker never emits (it emits `return module.exports;`) and which could not match a trimmed
+  line anyway.
+- Dropped the unused `chrono` dependency from `ruvyxa_dev_server`.
+
 ## v1.0.27 (2026-08-05)
 
 ### Breaking changes

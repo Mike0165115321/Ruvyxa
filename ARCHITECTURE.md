@@ -1172,6 +1172,35 @@ not-yet-initialized module refs.
 
 ---
 
+### Tree-shaking (Pass 0)
+
+Before Oxc runs, `minifier::tree_shake` removes unused exports from the linked bundle. It is a
+line-oriented pass over linker-generated output, not an AST pass, so it only ever acts on the shapes
+the linker emits:
+
+1. Collect every `__ruv_<id>__.<member>` read in the bundle — the "used set", keyed per module.
+2. Collect **opaque modules**: those whose namespace object is read as a whole rather than through a
+   single member.
+3. Within each module IIFE, drop `__exports.<name> = <value>;` assignments whose `<name>` is not in
+   the used set, unless the module is opaque. `default` is always kept.
+
+The pass repeats to a fixed point (bounded at 64 iterations) so cascading dead re-export chains
+collapse fully. Dropped assignments are rewritten as `// [tree-shaken]` comments and are excluded
+from later scans, so a dead export's own references cannot keep another export alive.
+
+Two rules carry the correctness of the whole pass, and each one cost a real bug when it was missing:
+
+- **Per-assignment judgement.** One emitted line can carry several assignments (a barrel's
+  `export { a, b, c } from "./mod"`). Each is judged on its own; dropping the line because its first
+  name is unused would take live exports with it.
+- **Opacity.** `import * as ns from "./mod"` binds to `const ns = __ruv_xxx__;`, and a CommonJS
+  default import binds to an interop expression over the bare namespace. Neither produces a
+  `__ruv_xxx__.member` read, so nothing in such a module can be proven dead and all of its exports
+  are kept. Named imports do produce `.member` reads and stay shakeable.
+
+Opacity is deliberately conservative — it keeps exports it cannot prove dead. On `examples/demo`
+that costs 122 bytes across the whole client output (0.02%).
+
 ### Minification
 
 Oxc minifier pipeline:

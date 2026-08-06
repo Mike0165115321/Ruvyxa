@@ -2536,7 +2536,6 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "blake3",
- "chrono",
  "fast_image_resize",
  "futures-core",
  "image",

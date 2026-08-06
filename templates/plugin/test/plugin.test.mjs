@@ -25,7 +25,6 @@ test('exports a Ruvyxa plugin and declares response headers', async () => {
     native: { claim() {} },
   })
 
-  assert.equal(plugin.name, 'request-logger')
   assert.equal(plugin.name, '__PLUGIN_NAME__')
   assert.equal(responseHook.match, undefined)
   const response = await responseHook.handler({
