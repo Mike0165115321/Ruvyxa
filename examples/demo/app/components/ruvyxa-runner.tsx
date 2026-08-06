@@ -388,7 +388,9 @@ const BOSS_VARIANTS: BossVariant[] = [
   {
     label: 'VIRUS',
     frames: VIRUS_FRAMES,
-    color: '#16a34a',
+    // Vivid magenta-pink capsid with a pale pink core.
+    color: '#d61f8d',
+    accent: '#f9a8d4',
     hp: 3,
     spawnY: 140,
     targetX: 450,
@@ -492,6 +494,54 @@ const THEME_STEP = 400
 const AI_MAX_DELAY = 36
 const AI_ACTIONS = ['duck', 'jump'] as const
 
+// Tier rises with both mastery (bosses beaten) and raw distance covered, so a run that is
+// avoiding fights by luck still faces the escalation, not just one that is winning them.
+// From tier 3 onward a boss starts mixing in another variant's attack, so a memorised
+// dodge decays over a long run.
+const BOSS_MIX_TIER = 3
+// Score interval per extra distance-tier. No ceiling on the tier itself — the difficulty
+// ceiling instead lives in scaleBoss()'s per-stat caps below, on the two axes that
+// actually gate dodgeability (fire rate, shot speed). Every other axis — HP, closing
+// speed — is safe to keep raising forever: it makes a fight longer or a boss pushier,
+// never turns a dodgeable pattern into an undodgeable one.
+const DISTANCE_TIER_STEP = 15_000
+
+function bossTier(score: number, bossesDefeated: number) {
+  return bossesDefeated + Math.floor(score / DISTANCE_TIER_STEP)
+}
+
+function scaleBoss(variant: BossVariant, tier: number) {
+  return {
+    // Capped so a marathon run gets a tougher fight, not a bullet-sponge no ammo budget
+    // could ever clear.
+    hp: variant.hp + Math.min(30, Math.floor(tier / 2)),
+    // Floor keeps every burst/split/flicker pattern within the gap the AI (and a human)
+    // proved dodgeable in testing, no matter how large tier grows.
+    fireInterval: Math.max(70, Math.round(variant.fireInterval - tier * 7)),
+    approachSpeed: Math.min(variant.approachSpeed + tier * 0.1, variant.approachSpeed + 6),
+    // Same reasoning as fireInterval: this ceiling is the actual difficulty limiter.
+    shotSpeed: Math.min(1.5, tier * 0.16),
+  }
+}
+
+// There is no finish line you can simply run at. Every objective has to be completed
+// inside a single unbroken life — dying resets all of them, Dino-style.
+//
+// The targets are deliberately near-unreachable. At the pace a flawless run actually
+// sustains, DISTANCE alone is on the order of ten hours of unbroken play, so in practice
+// this behaves like the endless Dino game while still having a real terminal state.
+const WIN_SCORE = 1_000_000
+const WIN_BOSS_EACH = 50
+const WIN_PURGE = 10_000
+const WIN_OVERCLOCK = 500_000
+const MAX_SPEED = 10
+
+// `frame` only advances while unpaused and resets to 0 on death (see reset()), so this is
+// a literal ten thousand hours of unbroken, un-paused play in one life — not accumulated
+// across sessions. It is the real gate; the other four objectives are trivially satisfied
+// long before a run gets anywhere near it.
+const TEN_THOUSAND_HOURS_FRAMES = 10_000 * 60 * 60 * 60
+
 const hexToRgb = (hex: string): [number, number, number] => {
   const n = parseInt(hex.slice(1), 16)
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
@@ -565,6 +615,11 @@ type Boss = {
   animation: number
   sprite: string[]
   variant: BossVariant
+  tier: number
+  fireInterval: number
+  approachSpeed: number
+  shotSpeed: number
+  attack: BossAttack
 }
 type Scenery = {
   x: number
@@ -596,6 +651,17 @@ export default function RuvyxaRunner() {
     let ammoTick = 0
     let ducking = false
     let nextBossAt = 250
+    let won = false
+    let puzzleLines: string[] = []
+    // Objective progress. All of it resets on death — that is what makes the win hard.
+    let bossKills: Record<string, number> = {}
+    let bossesDefeated = 0
+    let purged = 0
+    let overclockFrames = 0
+    // Boss-side learning: samples how the runner actually evades, so it can aim at the
+    // habit instead of firing blind.
+    let dodgeDuckFrames = 0
+    let dodgeAirFrames = 0
     let autoPlay = false
     let aiShotCooldown = 0
     let aiRestartTimer = 0
@@ -664,9 +730,44 @@ export default function RuvyxaRunner() {
       nextBossAt = 250
       gameOver = false
       paused = false
+      won = false
+      puzzleLines = []
+      bossKills = {}
+      bossesDefeated = 0
+      purged = 0
+      overclockFrames = 0
+      dodgeDuckFrames = 0
+      dodgeAirFrames = 0
       aiShotCooldown = 0
       aiRestartTimer = 0
       seedScenery()
+    }
+
+    // Cosmetic-only "cipher" shown on the win screen. It is pure Math.random() noise with
+    // no encoded message and no verification function anywhere in this file — there is
+    // nothing to decode, by construction, because that is the only honest way to hand
+    // someone a puzzle no solver (human or LLM) can crack: don't give it an answer.
+    function generatePuzzle(): string[] {
+      const hex = () =>
+        Math.floor(Math.random() * 0x10000)
+          .toString(16)
+          .toUpperCase()
+          .padStart(4, '0')
+      const glyphs = '∴∵⌬⟁⟡⧉⧫⨳⩣⫷⫸'.split('')
+      const glyph = () => glyphs[Math.floor(Math.random() * glyphs.length)]
+      const block = () => `${hex()}-${hex()}${glyph()}${hex()}-${hex()}`
+      return [block(), block(), block()]
+    }
+
+    function objectivesDone() {
+      const bossesCleared = BOSS_VARIANTS.every((v) => (bossKills[v.label] ?? 0) >= WIN_BOSS_EACH)
+      return (
+        score >= WIN_SCORE &&
+        bossesCleared &&
+        purged >= WIN_PURGE &&
+        overclockFrames >= WIN_OVERCLOCK &&
+        frame >= TEN_THOUSAND_HOURS_FRAMES
+      )
     }
 
     function jump() {
@@ -674,7 +775,7 @@ export default function RuvyxaRunner() {
         started = true
         return
       }
-      if (gameOver) {
+      if (gameOver || won) {
         reset()
         return
       }
@@ -686,7 +787,7 @@ export default function RuvyxaRunner() {
     }
 
     function shoot() {
-      if (!started || gameOver || paused || ammo <= 0) return
+      if (!started || gameOver || won || paused || ammo <= 0) return
       ammo--
       bolts.push({ x: runner.x + 8 * PIXEL, y: runner.y + (ducking ? 6 : 10) })
     }
@@ -724,39 +825,64 @@ export default function RuvyxaRunner() {
       }
     }
 
+    // Reads how the runner has been evading this fight and returns the lane that punishes
+    // that habit: a crouch-heavy player gets the low lane (a crouch cannot clear it), an
+    // air-heavy player gets the high lane. Kept partly random so it stays unpredictable.
+    function adaptiveHigh(b: Boss) {
+      if (b.tier < 1 || Math.random() < 0.3) return b.volley % 2 === 0
+      return dodgeDuckFrames <= dodgeAirFrames
+    }
+
+    // From BOSS_MIX_TIER onward a boss borrows another variant's pattern now and then.
+    function pickAttack(b: Boss): BossAttack {
+      if (b.tier < BOSS_MIX_TIER || b.volley % 3 !== 2) return b.variant.attack
+      return BOSS_VARIANTS[Math.floor(Math.random() * BOSS_VARIANTS.length)].attack
+    }
+
     function fireBoss(b: Boss) {
-      const v = b.variant
-      if (v.attack === 'burst') {
-        // Two rounds down one lane with a readable gap, then a long reload.
+      const attack = pickAttack(b)
+      b.attack = attack
+      const boost = b.shotSpeed
+      if (attack === 'burst') {
+        // Rounds down one lane with a readable gap, then a long reload. Higher tiers add
+        // a third round, so the reload window the player relied on shrinks.
         if (b.burst <= 0) {
-          b.burst = 2
-          b.burstHigh = b.volley % 2 === 0
+          b.burst = b.tier >= 2 ? 3 : 2
+          // A three-round volley is only fair in the high lane, where one held crouch
+          // clears the whole burst. Three low rounds would demand three separate jumps
+          // inside the span of a single jump arc, which is not dodgeable at all.
+          b.burstHigh = b.burst >= 3 ? true : adaptiveHigh(b)
         }
-        shots.push(makeShot(b.x, b.burstHigh ? HIGH_LANE : LOW_LANE, { vx: 5.5 }))
+        shots.push(makeShot(b.x, b.burstHigh ? HIGH_LANE : LOW_LANE, { vx: 5.5 + boost }))
         b.burst--
-        b.cooldown = b.burst > 0 ? 24 : v.fireInterval
-      } else if (v.attack === 'drift') {
+        b.cooldown = b.burst > 0 ? Math.max(20, 24 - b.tier) : b.fireInterval
+      } else if (attack === 'drift') {
         // Lobbed high and sinking — it settles into the standing lane, so it must be ducked.
-        shots.push(makeShot(b.x, GROUND_Y - 64, { vx: 4.6, vy: 0.42, behavior: 'drift' }))
-        b.cooldown = v.fireInterval
-      } else if (v.attack === 'split') {
+        shots.push(makeShot(b.x, GROUND_Y - 64, { vx: 4.6 + boost, vy: 0.42, behavior: 'drift' }))
+        b.cooldown = b.fireInterval
+      } else if (attack === 'split') {
         // One round that clones itself midway: duck the leader, then jump the trailer.
-        shots.push(makeShot(b.x, HIGH_LANE, { vx: 5, behavior: 'split' }))
-        b.cooldown = v.fireInterval
-      } else if (v.attack === 'flicker') {
+        shots.push(makeShot(b.x, HIGH_LANE, { vx: 5 + boost, behavior: 'split' }))
+        b.cooldown = b.fireInterval
+      } else if (attack === 'flicker') {
         // Jumps between lanes while travelling, then locks in with room left to react.
-        shots.push(makeShot(b.x, LOW_LANE, { vx: 5, behavior: 'flicker' }))
-        b.cooldown = v.fireInterval
+        shots.push(
+          makeShot(b.x, adaptiveHigh(b) ? HIGH_LANE : LOW_LANE, {
+            vx: 5 + boost,
+            behavior: 'flicker',
+          }),
+        )
+        b.cooldown = b.fireInterval
       } else {
         // Slow oversized wall — too tall to crouch under, so the only answer is a jump.
-        shots.push(makeShot(b.x, GROUND_Y - 22, { vx: 3, size: 18 }))
-        b.cooldown = v.fireInterval
+        shots.push(makeShot(b.x, GROUND_Y - 22, { vx: 3 + boost * 0.5, size: 18 }))
+        b.cooldown = b.fireInterval
       }
       b.volley++
     }
 
     function togglePause() {
-      if (!started || gameOver) return
+      if (!started || gameOver || won) return
       paused = !paused
       ducking = false
     }
@@ -1108,7 +1234,7 @@ export default function RuvyxaRunner() {
     // Alt+T autopilot. Each frame it plans by simulation rather than by rule-of-thumb
     // timings, then adapts its safety margin from how the previous runs actually ended.
     function autoPilot() {
-      if (!autoPlay || paused) return
+      if (!autoPlay || paused || won) return
       if (!started) {
         jump()
         return
@@ -1129,8 +1255,11 @@ export default function RuvyxaRunner() {
         aiCaution = Math.max(0, aiCaution - 1)
         aiLastDeathScore = score
       }
-      const pad = 1 + aiCaution
-      const horizon = 52 + aiCaution * 6
+      // The horizon tracks track speed only. Letting caution stretch it too was a trap: a
+      // boss firing every ~70 frames means no plan can ever stay clean for 90, so the
+      // planner sat permanently in "doomed" mode and lost its stay-put tie-break.
+      const pad = 2 + aiCaution
+      const horizon = Math.round(46 + speed * 1.6)
       const base = snapshotThreats()
 
       // Searches every plan and keeps the best, but only ever executes its FIRST frame —
@@ -1160,12 +1289,18 @@ export default function RuvyxaRunner() {
       }
 
       let best = planBest(pad)
-      // Nothing survives the padded margin — retry unpadded so a tight-but-real gap still
-      // gets taken instead of the AI freezing and eating the hit.
-      if (best.score < horizon && pad > 0) {
-        const tight = planBest(0)
-        if (tight.score > best.score) best = tight
+      // Nothing survives the comfortable margin — step the margin down rather than jumping
+      // straight to tight play, so the AI keeps as much clearance as the situation allows.
+      if (best.score < horizon) {
+        for (let relax = pad - 1; relax >= 0; relax--) {
+          const looser = planBest(relax)
+          if (looser.score > best.score) best = looser
+          if (best.score >= horizon) break
+        }
       }
+      // Only a genuine near-miss raises caution. Merely not seeing a spotless 60-frame
+      // future is normal under boss fire and must not ratchet the margin up forever.
+      if (best.score < 14) aiCaution = Math.min(4, aiCaution + 1)
 
       ducking = best.action === 'duck'
       if (best.action === 'jump' && runner.onGround) jump()
@@ -1194,6 +1329,13 @@ export default function RuvyxaRunner() {
       // Tracks the sky's light/dark balance continuously, so the runner, boss, and
       // shots stay readable through a theme cross-fade instead of flipping at a hard cutoff.
       const outline = lerpColor('#171717', '#fafafa', theme.nightLevel)
+      // HUD text sitting directly on the live sky (no white backdrop behind it) needs the
+      // same treatment — a fixed dark-gray label reads fine on the day theme and nearly
+      // vanishes on the night/aurora skies. hudPrimary/hudMuted swap toward light readouts
+      // as the theme darkens; text over the paused/won white overlays stays fixed since
+      // that backdrop is bright regardless of theme.
+      const hudPrimary = outline
+      const hudMuted = lerpColor('#525252', '#d4d4d4', theme.nightLevel)
 
       ctx!.strokeStyle = theme.ground
       ctx!.lineWidth = 2
@@ -1202,7 +1344,7 @@ export default function RuvyxaRunner() {
       ctx!.lineTo(WIDTH, GROUND_Y + 2)
       ctx!.stroke()
 
-      if (started && !gameOver && !paused) {
+      if (started && !gameOver && !won && !paused) {
         for (const s of scenery) {
           const factor =
             s.kind === 'star'
@@ -1237,21 +1379,33 @@ export default function RuvyxaRunner() {
         }
 
         if (!boss && score >= nextBossAt) {
-          const variant = pick(BOSS_VARIANTS)
+          // Prefer a variant the run still needs for its objective, so progress is
+          // reachable without grinding on random draws.
+          const owed = BOSS_VARIANTS.filter((v) => (bossKills[v.label] ?? 0) < WIN_BOSS_EACH)
+          const variant = pick(owed.length ? owed : BOSS_VARIANTS)
+          const tier = bossTier(score, bossesDefeated)
+          const scaled = scaleBoss(variant, tier)
           boss = {
             x: WIDTH + 40,
             y: variant.spawnY,
-            hp: variant.hp,
-            maxHp: variant.hp,
+            hp: scaled.hp,
+            maxHp: scaled.hp,
             t: 0,
-            cooldown: variant.fireInterval,
+            cooldown: scaled.fireInterval,
             volley: 0,
             burst: 0,
             burstHigh: false,
             animation: 0,
             sprite: variant.frames[0],
             variant,
+            tier,
+            fireInterval: scaled.fireInterval,
+            approachSpeed: scaled.approachSpeed,
+            shotSpeed: scaled.shotSpeed,
+            attack: variant.attack,
           }
+          dodgeDuckFrames = 0
+          dodgeAirFrames = 0
         }
 
         if (!boss) {
@@ -1272,7 +1426,11 @@ export default function RuvyxaRunner() {
           // Four-frame loop, advanced on the fixed step so every boss idles at the same tempo.
           boss.animation = (boss.animation + 0.12) % v.frames.length
           boss.sprite = v.frames[Math.floor(boss.animation)]
-          if (boss.x > v.targetX) boss.x -= v.approachSpeed
+          if (boss.x > v.targetX) boss.x -= boss.approachSpeed
+          // Sample the runner's evasion habit for adaptiveHigh().
+          if (runner.onGround) {
+            if (ducking) dodgeDuckFrames++
+          } else dodgeAirFrames++
           boss.y = v.spawnY + Math.sin(boss.t / v.bobRate) * v.bobAmplitude
           boss.cooldown--
           if (boss.cooldown <= 0) fireBoss(boss)
@@ -1313,7 +1471,10 @@ export default function RuvyxaRunner() {
               o.hp--
               b.x = WIDTH + 999
               burst(o.x + sprW(o.sprite) / 2, o.y + sprH(o.sprite) / 2, 8)
-              if (o.hp <= 0) score += 25
+              if (o.hp <= 0) {
+                score += 25
+                purged++
+              }
             }
           }
           if (
@@ -1329,8 +1490,13 @@ export default function RuvyxaRunner() {
             if (boss.hp <= 0) {
               score += 150
               burst(boss.x + sprW(boss.sprite) / 2, boss.y + sprH(boss.sprite) / 2, 24)
+              const label = boss.variant.label
+              bossKills[label] = (bossKills[label] ?? 0) + 1
+              bossesDefeated++
               boss = null
-              nextBossAt = score + 350
+              // The gap between fights shrinks with distance (floor 140), so bosses show
+              // up more and more often deep into a run — not just individually stronger.
+              nextBossAt = score + Math.max(140, 350 - Math.floor(score / 20_000) * 5)
               shots = []
             }
           }
@@ -1348,7 +1514,15 @@ export default function RuvyxaRunner() {
         }
 
         if (frame % 6 === 0) score++
-        if (frame % 260 === 0) speed = Math.min(speed + 0.35, 10)
+        if (frame % 260 === 0) speed = Math.min(speed + 0.35, MAX_SPEED)
+        if (speed >= MAX_SPEED) overclockFrames++
+        if (objectivesDone()) {
+          // Generated once, at the instant of the win — not derived from anything
+          // recoverable afterward. There is nothing here to solve; that is the point.
+          if (!won) puzzleLines = generatePuzzle()
+          won = true
+          best = Math.max(best, score)
+        }
       }
 
       // particles
@@ -1397,7 +1571,7 @@ export default function RuvyxaRunner() {
       drawSprite(runSprite, runner.x, runnerDrawY, PIXEL, SPRITE_COLOR)
 
       // HUD
-      ctx!.fillStyle = '#525252'
+      ctx!.fillStyle = hudMuted
       ctx!.font = "13px 'SFMono-Regular', Consolas, monospace"
       ctx!.textBaseline = 'top'
       ctx!.textAlign = 'right'
@@ -1409,6 +1583,7 @@ export default function RuvyxaRunner() {
       }
 
       ctx!.textAlign = 'left'
+      ctx!.fillStyle = hudMuted
       ctx!.fillText('FIX', 20, 14)
       for (let i = 0; i < MAX_AMMO; i++) {
         ctx!.fillStyle = i < ammo ? ACCENT : FAINT
@@ -1416,10 +1591,11 @@ export default function RuvyxaRunner() {
       }
 
       if (boss) {
-        ctx!.fillStyle = '#525252'
-        ctx!.fillText(boss.variant.label, 20, 36)
+        const title = boss.tier > 0 ? `${boss.variant.label} T${boss.tier}` : boss.variant.label
+        ctx!.fillStyle = hudMuted
+        ctx!.fillText(title, 20, 36)
         // Boss names vary in length, so measure rather than assume a fixed bar offset.
-        const barX = 20 + Math.ceil(ctx!.measureText(boss.variant.label).width) + 12
+        const barX = 20 + Math.ceil(ctx!.measureText(title).width) + 12
         for (let i = 0; i < boss.maxHp; i++) {
           ctx!.fillStyle = i < boss.hp ? boss.variant.color : FAINT
           ctx!.fillRect(barX + i * 12, 37, 8, 10)
@@ -1427,7 +1603,9 @@ export default function RuvyxaRunner() {
       }
 
       if (!started || gameOver) {
-        ctx!.fillStyle = INK
+        // No backdrop behind this block — it sits straight on the live sky, so it needs
+        // the same theme-aware colors as the HUD above, not the fixed INK/#525252 pair.
+        ctx!.fillStyle = hudPrimary
         ctx!.font = "15px 'SFMono-Regular', Consolas, monospace"
         ctx!.textAlign = 'center'
         ctx!.fillText(
@@ -1435,12 +1613,12 @@ export default function RuvyxaRunner() {
           WIDTH / 2,
           86,
         )
-        ctx!.fillStyle = '#525252'
+        ctx!.fillStyle = hudMuted
         ctx!.font = "12px 'SFMono-Regular', Consolas, monospace"
         ctx!.fillText('SPACE/W JUMP   S DUCK   X/ARROWS SHOOT   ESC PAUSE', WIDTH / 2, 110)
         ctx!.fillText('ALT+T TOGGLE AI AUTOPLAY', WIDTH / 2, 126)
       }
-      if (paused && !gameOver) {
+      if (paused && !gameOver && !won) {
         ctx!.fillStyle = 'rgba(255, 255, 255, 0.82)'
         ctx!.fillRect(0, 0, WIDTH, HEIGHT)
         ctx!.fillStyle = INK
@@ -1450,6 +1628,29 @@ export default function RuvyxaRunner() {
         ctx!.fillStyle = '#525252'
         ctx!.font = "12px 'SFMono-Regular', Consolas, monospace"
         ctx!.fillText('PRESS ESC TO RESUME', WIDTH / 2, 108)
+      }
+      if (won) {
+        ctx!.fillStyle = 'rgba(255, 255, 255, 0.9)'
+        ctx!.fillRect(0, 0, WIDTH, HEIGHT)
+        ctx!.fillStyle = ACCENT
+        ctx!.font = "20px 'SFMono-Regular', Consolas, monospace"
+        ctx!.textAlign = 'center'
+        ctx!.fillText('SYSTEM SECURED', WIDTH / 2, 40)
+        ctx!.fillStyle = INK
+        ctx!.font = "12px 'SFMono-Regular', Consolas, monospace"
+        ctx!.fillText(`SCORE ${score}   FRAME ${frame}`, WIDTH / 2, 64)
+        ctx!.fillStyle = '#525252'
+        ctx!.font = "11px 'SFMono-Regular', Consolas, monospace"
+        ctx!.fillText('FINAL TRANSMISSION', WIDTH / 2, 88)
+        ctx!.fillStyle = ACCENT
+        ctx!.font = "13px 'SFMono-Regular', Consolas, monospace"
+        puzzleLines.forEach((line, i) => ctx!.fillText(line, WIDTH / 2, 106 + i * 18))
+        ctx!.fillStyle = '#737373'
+        ctx!.font = "10px 'SFMono-Regular', Consolas, monospace"
+        ctx!.fillText('UNREADABLE — NO SYSTEM HAS EVER PARSED THIS', WIDTH / 2, 168)
+        ctx!.fillStyle = '#525252'
+        ctx!.font = "12px 'SFMono-Regular', Consolas, monospace"
+        ctx!.fillText('SPACE TO RUN AGAIN', WIDTH / 2, 192)
       }
       ctx!.textAlign = 'left'
 
