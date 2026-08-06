@@ -357,6 +357,10 @@ fn tree_shake_pass(source: &str) -> String {
     // cascading dead re-export chain) and should still be shaken.
     let used_members = collect_used_members(source);
 
+    // Step 1b: Collect namespaces read as a whole. Nothing can be proven dead
+    // in those modules, because the alias reaches every export.
+    let opaque_modules = collect_opaque_modules(source);
+
     // Step 2: Remove unused `__exports.name = name;` assignments.
     let mut out = String::with_capacity(source.len());
     let mut current_module_id: Option<String> = None;
@@ -389,6 +393,7 @@ fn tree_shake_pass(source: &str) -> String {
         // assignment is judged on its own — dropping the whole line because its
         // first export is unused would take live exports down with it.
         if let Some(ref mod_id) = current_module_id
+            && !opaque_modules.contains(mod_id)
             && let Some(statements) = split_export_assignments(trimmed)
         {
             let (kept, dropped): (Vec<_>, Vec<_>) =
@@ -438,6 +443,67 @@ fn collect_used_members(source: &str) -> BTreeSet<String> {
         collect_used_members_in(line, &mut members);
     }
     members
+}
+
+/// Scan the source for module namespaces read as a whole rather than through a
+/// single member.
+///
+/// The linker binds `import * as ns from "./mod"` to `const ns = __ruv_xxx__;`,
+/// and a default import of a CommonJS package to
+/// `__ruv_xxx__ && __ruv_xxx__.__esModule ? __ruv_xxx__.default : __ruv_xxx__`.
+/// Both hand the whole namespace to a local alias, so later `ns.member` reads
+/// never appear as `__ruv_xxx__.member` and no export of that module can be
+/// proven dead. Those modules are left intact.
+///
+/// A module's own `var __ruv_xxx__ = (function() {` header does not count — it
+/// declares the namespace rather than reading it.
+fn collect_opaque_modules(source: &str) -> BTreeSet<String> {
+    let mut opaque = BTreeSet::new();
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("// [tree-shaken]")
+            || (trimmed.starts_with("var __ruv_") && trimmed.contains("= (function()"))
+        {
+            continue;
+        }
+        collect_opaque_modules_in(line, &mut opaque);
+    }
+    opaque
+}
+
+fn collect_opaque_modules_in(source: &str, opaque: &mut BTreeSet<String>) {
+    for (module_id, rest) in module_id_references(source) {
+        // A `.member` read names exactly one export; anything else (a bare
+        // reference, an index, a call) can reach all of them.
+        let reaches_one_member = rest.strip_prefix('.').is_some_and(|after| {
+            after.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '$')
+        });
+        if !reaches_one_member {
+            opaque.insert(module_id);
+        }
+    }
+}
+
+/// Yield every `__ruv_<id>__` occurrence with the text that follows it.
+fn module_id_references(source: &str) -> Vec<(String, &str)> {
+    let prefix = "__ruv_";
+    let mut found = Vec::new();
+    let mut search = source;
+
+    while let Some(start) = search.find(prefix) {
+        let tail = &search[start..];
+        let after_prefix = &tail[prefix.len()..];
+        let Some(close_offset) = after_prefix.find("__") else {
+            search = &search[start + prefix.len()..];
+            continue;
+        };
+
+        let id_end = prefix.len() + close_offset + 2;
+        found.push((tail[..id_end].to_string(), &tail[id_end..]));
+        search = &search[start + id_end..];
+    }
+
+    found
 }
 
 fn collect_used_members_in(source: &str, members: &mut BTreeSet<String>) {

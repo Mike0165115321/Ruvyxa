@@ -1361,6 +1361,53 @@ mod tests {
     }
 
     #[test]
+    fn tree_shaking_keeps_exports_reached_through_a_namespace_import() {
+        // `import * as ui` binds the whole namespace to a local alias, so
+        // `ui.NsWidget` never appears as `__ruv_x__.NsWidget`. Shaking must not
+        // conclude the export is dead just because it cannot see the read.
+        let temp = tempfile::tempdir().unwrap();
+        let root = ruvyxa_diagnostics::normalized_canonical_path(temp.path());
+        let app = root.join("app");
+        let pkg = root.join("node_modules").join("ns-ui");
+        fs::create_dir_all(&app).unwrap();
+        fs::create_dir_all(&pkg).unwrap();
+
+        fs::write(
+            pkg.join("package.json"),
+            r#"{"type":"module","main":"index.js"}"#,
+        )
+        .unwrap();
+        fs::write(
+            pkg.join("index.js"),
+            "export function NsWidget(props) { return props; }\n\
+             export function NsOther(props) { return props; }\n",
+        )
+        .unwrap();
+
+        let page = app.join("page.tsx");
+        fs::write(
+            &page,
+            "import * as ui from 'ns-ui';\n\
+             export default function Page() { return <ui.NsWidget x={1} />; }\n",
+        )
+        .unwrap();
+
+        let mut input = client_input(&root, &app, page, vec![], "/");
+        input.options.source_map = false;
+        input.options.emit_chunk_manifest = false;
+        let output = bundle(input).unwrap();
+
+        assert!(
+            output
+                .code
+                .lines()
+                .any(|line| line.contains("__exports.NsWidget") && !line.contains("[tree-shaken]")),
+            "an export read through a namespace alias must survive:\n{}",
+            output.code
+        );
+    }
+
+    #[test]
     fn client_bundle_resolves_transitive_commonjs_dependencies() {
         let temp = tempfile::tempdir().unwrap();
         let root = ruvyxa_diagnostics::normalized_canonical_path(temp.path());

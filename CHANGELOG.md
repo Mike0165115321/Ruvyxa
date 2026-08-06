@@ -11,6 +11,11 @@
   pure re-export barrels such as `@ruvyxa/react`'s `dist/index.js`. Consumers then hydrated with
   `undefined` for every imported component (React error #130). Each assignment is now judged on its
   own; lines that are not made up entirely of simple export assignments are left untouched.
+- **Fixed tree-shaking dropping exports that are only reached through a namespace alias.** The
+  linker binds `import * as ns from "./mod"` to `const ns = __ruv_xxx__;`, so a later `ns.member`
+  read never appears as `__ruv_xxx__.member` and the pass concluded every export of that module was
+  dead. A module whose namespace is read as a whole — by a namespace import, or by the
+  default-import interop expression for CommonJS packages — now keeps all of its exports.
 
 ## v1.0.27 (2026-08-05)
 
