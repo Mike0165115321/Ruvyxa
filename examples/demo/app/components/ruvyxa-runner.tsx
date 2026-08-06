@@ -360,14 +360,16 @@ const BOSS_VARIANTS: BossVariant[] = [
   {
     label: 'HACKER',
     frames: HACKER_FRAMES,
-    color: '#4f46e5',
+    // Deep phosphor green with a brighter green visor glow — old CRT terminal look.
+    color: '#14532d',
+    accent: '#22c55e',
     hp: 3,
     spawnY: 148,
     targetX: 470,
-    approachSpeed: 3,
-    bobRate: 34,
-    bobAmplitude: 18,
-    fireInterval: 130,
+    approachSpeed: 2.4,
+    bobRate: 40,
+    bobAmplitude: 16,
+    fireInterval: 160,
     attack: 'burst',
   },
   {
@@ -377,49 +379,49 @@ const BOSS_VARIANTS: BossVariant[] = [
     hp: 3,
     spawnY: 150,
     targetX: 500,
-    approachSpeed: 2.6,
-    bobRate: 26,
-    bobAmplitude: 14,
-    fireInterval: 105,
+    approachSpeed: 2.2,
+    bobRate: 30,
+    bobAmplitude: 12,
+    fireInterval: 140,
     attack: 'drift',
   },
   {
     label: 'VIRUS',
     frames: VIRUS_FRAMES,
     color: '#16a34a',
-    hp: 4,
+    hp: 3,
     spawnY: 140,
     targetX: 450,
-    approachSpeed: 3.4,
-    bobRate: 20,
-    bobAmplitude: 24,
-    fireInterval: 115,
+    approachSpeed: 2.6,
+    bobRate: 26,
+    bobAmplitude: 16,
+    fireInterval: 150,
     attack: 'split',
   },
   {
     label: 'SYSTEM GLITCH',
     frames: SYSTEM_GLITCH_FRAMES,
     color: '#e11d48',
-    hp: 4,
+    hp: 3,
     spawnY: 146,
     targetX: 480,
-    approachSpeed: 3,
-    bobRate: 15,
-    bobAmplitude: 20,
-    fireInterval: 85,
+    approachSpeed: 2.4,
+    bobRate: 22,
+    bobAmplitude: 14,
+    fireInterval: 125,
     attack: 'flicker',
   },
   {
     label: 'HARDWARE FAULT',
     frames: HARDWARE_FAULT_FRAMES,
     color: '#0891b2',
-    hp: 5,
+    hp: 4,
     spawnY: 152,
     targetX: 505,
-    approachSpeed: 2.2,
-    bobRate: 42,
-    bobAmplitude: 12,
-    fireInterval: 120,
+    approachSpeed: 2,
+    bobRate: 46,
+    bobAmplitude: 10,
+    fireInterval: 150,
     attack: 'slab',
   },
 ]
@@ -535,6 +537,7 @@ type BossVariant = {
   label: string
   frames: string[][]
   color: string
+  accent?: string
   hp: number
   spawnY: number
   targetX: number
@@ -710,14 +713,14 @@ export default function RuvyxaRunner() {
     function fireBoss(b: Boss) {
       const v = b.variant
       if (v.attack === 'burst') {
-        // Three fast rounds down one lane, then a long reload to push damage into.
+        // Two rounds down one lane with a readable gap, then a long reload.
         if (b.burst <= 0) {
-          b.burst = 3
+          b.burst = 2
           b.burstHigh = b.volley % 2 === 0
         }
-        shots.push(makeShot(b.x, b.burstHigh ? HIGH_LANE : LOW_LANE, { vx: 6.5 }))
+        shots.push(makeShot(b.x, b.burstHigh ? HIGH_LANE : LOW_LANE, { vx: 5.5 }))
         b.burst--
-        b.cooldown = b.burst > 0 ? 12 : v.fireInterval
+        b.cooldown = b.burst > 0 ? 24 : v.fireInterval
       } else if (v.attack === 'drift') {
         // Lobbed high and sinking — it settles into the standing lane, so it must be ducked.
         shots.push(makeShot(b.x, GROUND_Y - 64, { vx: 4.6, vy: 0.42, behavior: 'drift' }))
@@ -744,14 +747,42 @@ export default function RuvyxaRunner() {
       ducking = false
     }
 
-    function drawSprite(sprite: string[], x: number, y: number, scale = PIXEL, color = INK) {
+    function drawSprite(
+      sprite: string[],
+      x: number,
+      y: number,
+      scale = PIXEL,
+      color = INK,
+      accentColor = ACCENT,
+    ) {
       for (let row = 0; row < sprite.length; row++) {
         const line = sprite[row]
         for (let col = 0; col < line.length; col++) {
           const cell = line[col]
           if (cell === '0') continue
-          ctx!.fillStyle = cell === 'A' ? ACCENT : cell === 'K' ? INK : color
+          ctx!.fillStyle = cell === 'A' ? accentColor : cell === 'K' ? INK : color
           ctx!.fillRect(x + col * scale, y + row * scale, scale, scale)
+        }
+      }
+    }
+
+    // A 1px rim in a background-contrasting color, drawn behind a sprite so it never
+    // blends into a same-hue theme (e.g. a purple runner over a purple night sky).
+    function drawOutline(sprite: string[], x: number, y: number, scale: number, color: string) {
+      ctx!.fillStyle = color
+      const offsets: Array<[number, number]> = [
+        [-1, 0],
+        [1, 0],
+        [0, -1],
+        [0, 1],
+      ]
+      for (let row = 0; row < sprite.length; row++) {
+        const line = sprite[row]
+        for (let col = 0; col < line.length; col++) {
+          if (line[col] === '0') continue
+          for (const [dx, dy] of offsets) {
+            ctx!.fillRect(x + col * scale + dx, y + row * scale + dy, scale, scale)
+          }
         }
       }
     }
@@ -864,6 +895,9 @@ export default function RuvyxaRunner() {
       ctx!.fillStyle = sky
       ctx!.fillRect(0, 0, WIDTH, HEIGHT)
       drawScenery(theme)
+      // Tracks the sky's light/dark balance continuously, so the runner, boss, and
+      // shots stay readable through a theme cross-fade instead of flipping at a hard cutoff.
+      const outline = lerpColor('#171717', '#fafafa', theme.nightLevel)
 
       ctx!.strokeStyle = theme.ground
       ctx!.lineWidth = 2
@@ -962,12 +996,12 @@ export default function RuvyxaRunner() {
           if (s.behavior === 'drift') {
             s.y = Math.min(s.y + s.vy, GROUND_Y - 22)
           } else if (s.behavior === 'flicker') {
-            // Stops swapping once it is close, so the final lane is always readable.
-            if (s.x > 150 && s.t % 22 === 0) s.y = s.y < GROUND_Y - 20 ? LOW_LANE : HIGH_LANE
-          } else if (s.behavior === 'split' && !s.split && s.x < 320) {
+            // Stops swapping well before it arrives, so the final lane is always readable.
+            if (s.x > 220 && s.t % 26 === 0) s.y = s.y < GROUND_Y - 20 ? LOW_LANE : HIGH_LANE
+          } else if (s.behavior === 'split' && !s.split && s.x < 220) {
             s.split = true
             // The clone trails the parent so the pair arrives as two separate reactions.
-            spawnedShots.push(makeShot(s.x + 80, LOW_LANE, { vx: s.vx }))
+            spawnedShots.push(makeShot(s.x + 100, LOW_LANE, { vx: s.vx }))
           }
         }
         shots = shots.concat(spawnedShots).filter((s) => s.x > -30)
@@ -993,8 +1027,9 @@ export default function RuvyxaRunner() {
             boss.hp--
             b.x = WIDTH + 999
             burst(boss.x + sprW(boss.sprite) / 2, boss.y + sprH(boss.sprite) / 2, 12)
-            // Landing a hit buys a short reprieve from return fire.
-            boss.cooldown = Math.max(boss.cooldown, 45)
+            // Landing a hit buys a solid reprieve from return fire.
+            boss.cooldown = Math.max(boss.cooldown, 60)
+            boss.burst = 0
             if (boss.hp <= 0) {
               score += 150
               burst(boss.x + sprW(boss.sprite) / 2, boss.y + sprH(boss.sprite) / 2, 24)
@@ -1035,12 +1070,17 @@ export default function RuvyxaRunner() {
 
       // entities
       for (const o of obstacles) drawSprite(o.sprite, o.x, o.y)
-      if (boss) drawSprite(boss.sprite, boss.x, boss.y, PIXEL, boss.variant.color)
+      if (boss) {
+        drawOutline(boss.sprite, boss.x, boss.y, PIXEL, outline)
+        drawSprite(boss.sprite, boss.x, boss.y, PIXEL, boss.variant.color, boss.variant.accent)
+      }
 
       ctx!.fillStyle = ACCENT
       for (const b of bolts) ctx!.fillRect(b.x, b.y, 10, 4)
       for (const s of shots) {
         const core = Math.max(3, Math.round(s.size / 3))
+        ctx!.fillStyle = outline
+        ctx!.fillRect(s.x - 1, s.y - 1, s.size + 2, s.size + 2)
         ctx!.fillStyle = INK
         ctx!.fillRect(s.x, s.y, s.size, s.size)
         ctx!.fillStyle = ACCENT
@@ -1056,13 +1096,9 @@ export default function RuvyxaRunner() {
           : RUNNER_FRAMES[gaitFrame]
       const gaitBob =
         !duckNow && started && runner.onGround && (gaitFrame === 1 || gaitFrame === 3) ? -1 : 0
-      drawSprite(
-        runSprite,
-        runner.x,
-        (duckNow ? GROUND_Y - sprH(RUNNER_DUCK) : runner.y) + gaitBob,
-        PIXEL,
-        SPRITE_COLOR,
-      )
+      const runnerDrawY = (duckNow ? GROUND_Y - sprH(RUNNER_DUCK) : runner.y) + gaitBob
+      drawOutline(runSprite, runner.x, runnerDrawY, PIXEL, outline)
+      drawSprite(runSprite, runner.x, runnerDrawY, PIXEL, SPRITE_COLOR)
 
       // HUD
       ctx!.fillStyle = '#525252'
