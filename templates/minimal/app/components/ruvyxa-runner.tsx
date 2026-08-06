@@ -17,32 +17,50 @@ const SPRITE_COLOR = '#8b5cf6'
 const MUTED = '#a3a3a3'
 const FAINT = '#e5e5e5'
 
-// 8x8 Ruvyxa runner, with a slimmer purple silhouette and a darker eye accent.
+// 8x8 Ruvyxa octopus runner: black eyes, a uniform purple body, and four swaying tentacles.
 const RUNNER_SPRITE = [
   '00111100',
-  '01111A10',
-  '11011011',
+  '01111110',
+  '11K11K11',
   '01111110',
   '00111100',
-  '00100100',
-  '01000010',
-  '01000010',
+  '11111111',
+  '10100101',
+  '01011010',
 ]
 
-// Alternate leg position so the runner animates while moving.
-const RUNNER_SPRITE_ALT = [
+// Lift one inner tentacle while the opposite side stays planted.
+const RUNNER_SPRITE_STEP_LEFT = [
   '00111100',
-  '01111A10',
-  '11011011',
+  '01111110',
+  '11K11K11',
   '01111110',
   '00111100',
-  '00100100',
-  '00100100',
-  '00011000',
+  '11111111',
+  '10100101',
+  '10010101',
 ]
 
-// Crouched pose — shorter hitbox to slip under flying errors.
-const RUNNER_DUCK = ['0011111000', '0111A11100', '1111111110', '0111111100', '0010001000']
+const RUNNER_SPRITE_STEP_RIGHT = [
+  '00111100',
+  '01111110',
+  '11K11K11',
+  '01111110',
+  '00111100',
+  '11111111',
+  '10100101',
+  '10101001',
+]
+
+const RUNNER_FRAMES = [
+  RUNNER_SPRITE,
+  RUNNER_SPRITE_STEP_LEFT,
+  RUNNER_SPRITE,
+  RUNNER_SPRITE_STEP_RIGHT,
+]
+
+// Crouched octopus pose — same eyes, body color, and four tentacles in a shorter hitbox.
+const RUNNER_DUCK = ['0011111000', '011K11K110', '1111111110', '0111111100', '0101010100']
 
 // Ground bugs, three sizes.
 const BUG_SPRITES = [
@@ -200,7 +218,7 @@ export default function RuvyxaRunner() {
         for (let col = 0; col < line.length; col++) {
           const cell = line[col]
           if (cell === '0') continue
-          ctx!.fillStyle = cell === 'A' ? ACCENT : color
+          ctx!.fillStyle = cell === 'A' ? ACCENT : cell === 'K' ? INK : color
           ctx!.fillRect(x + col * scale, y + row * scale, scale, scale)
         }
       }
@@ -438,15 +456,18 @@ export default function RuvyxaRunner() {
       }
 
       const duckNow = ducking && runner.onGround
+      const gaitFrame = Math.floor(frame / 8) % RUNNER_FRAMES.length
       const runSprite = duckNow
         ? RUNNER_DUCK
-        : !started || !runner.onGround || Math.floor(frame / 6) % 2 === 0
+        : !started || !runner.onGround
           ? RUNNER_SPRITE
-          : RUNNER_SPRITE_ALT
+          : RUNNER_FRAMES[gaitFrame]
+      const gaitBob =
+        !duckNow && started && runner.onGround && (gaitFrame === 1 || gaitFrame === 3) ? -1 : 0
       drawSprite(
         runSprite,
         runner.x,
-        duckNow ? GROUND_Y - sprH(RUNNER_DUCK) : runner.y,
+        (duckNow ? GROUND_Y - sprH(RUNNER_DUCK) : runner.y) + gaitBob,
         PIXEL,
         SPRITE_COLOR,
       )
