@@ -487,6 +487,11 @@ const THEMES: Theme[] = [
 
 const THEME_STEP = 400
 
+// Autopilot planner: how far ahead a committed action may be deferred, and which actions
+// are worth deferring. Deferral has to cover a full jump arc (~38 frames) plus slack.
+const AI_MAX_DELAY = 36
+const AI_ACTIONS = ['duck', 'jump'] as const
+
 const hexToRgb = (hex: string): [number, number, number] => {
   const n = parseInt(hex.slice(1), 16)
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
@@ -591,6 +596,13 @@ export default function RuvyxaRunner() {
     let ammoTick = 0
     let ducking = false
     let nextBossAt = 250
+    let autoPlay = false
+    let aiShotCooldown = 0
+    let aiRestartTimer = 0
+    // Persists across restarts on purpose — that is what makes the autopilot improve
+    // run over run instead of repeating the same death.
+    let aiCaution = 0
+    let aiLastDeathScore = 0
 
     const runner = { x: 48, y: GROUND_Y - 8 * PIXEL, vy: 0, onGround: true }
     let obstacles: Obstacle[] = []
@@ -652,6 +664,8 @@ export default function RuvyxaRunner() {
       nextBossAt = 250
       gameOver = false
       paused = false
+      aiShotCooldown = 0
+      aiRestartTimer = 0
       seedScenery()
     }
 
@@ -881,11 +895,293 @@ export default function RuvyxaRunner() {
       gameOver = true
       best = Math.max(best, score)
       burst(runner.x + 12, runner.y + 12, 14)
+      if (autoPlay) {
+        aiRestartTimer = 45
+        aiCaution = Math.min(4, aiCaution + 1)
+        aiLastDeathScore = 0
+      }
+    }
+
+    // A threat snapshot the planner can fast-forward without touching live game state.
+    type SimThreat = {
+      x: number
+      y: number
+      w: number
+      h: number
+      vx: number
+      vy: number
+      t: number
+      size: number
+      behavior: ShotBehavior
+      split: boolean
+    }
+
+    function snapshotThreats(): SimThreat[] {
+      const list: SimThreat[] = []
+      for (const o of obstacles) {
+        if (o.hp <= 0) continue
+        list.push({
+          x: o.x + 2,
+          y: o.y + 2,
+          w: sprW(o.sprite) - 4,
+          h: sprH(o.sprite) - 4,
+          vx: speed,
+          vy: 0,
+          t: 0,
+          size: 0,
+          behavior: 'straight',
+          split: true,
+        })
+      }
+      for (const s of shots) {
+        list.push({
+          x: s.x,
+          y: s.y,
+          w: s.size + 1,
+          h: s.size + 1,
+          vx: s.vx,
+          vy: s.vy,
+          t: s.t,
+          size: s.size,
+          behavior: s.behavior,
+          split: s.split,
+        })
+      }
+      return list
+    }
+
+    // Mirrors the real shot/obstacle update exactly, including the split clone, so the
+    // planner never mispredicts where a threat will actually be.
+    function advanceThreats(list: SimThreat[]): SimThreat[] {
+      const born: SimThreat[] = []
+      for (const th of list) {
+        th.t++
+        th.x -= th.vx
+        if (th.behavior === 'drift') {
+          th.y = Math.min(th.y + th.vy, GROUND_Y - 22)
+        } else if (th.behavior === 'flicker') {
+          if (th.x > 220 && th.t % 26 === 0) th.y = th.y < GROUND_Y - 20 ? LOW_LANE : HIGH_LANE
+        } else if (th.behavior === 'split' && !th.split && th.x < 220) {
+          th.split = true
+          born.push({
+            x: th.x + 100,
+            y: LOW_LANE,
+            w: th.size + 1,
+            h: th.size + 1,
+            vx: th.vx,
+            vy: 0,
+            t: 0,
+            size: th.size,
+            behavior: 'straight',
+            split: true,
+          })
+        }
+      }
+      return born.length ? list.concat(born) : list
+    }
+
+    type AiAction = 'none' | 'jump' | 'duck'
+
+    function cloneThreats(base: SimThreat[]): SimThreat[] {
+      const out: SimThreat[] = new Array(base.length)
+      for (let i = 0; i < base.length; i++) {
+        const t = base[i]
+        out[i] = {
+          x: t.x,
+          y: t.y,
+          w: t.w,
+          h: t.h,
+          vx: t.vx,
+          vy: t.vy,
+          t: t.t,
+          size: t.size,
+          behavior: t.behavior,
+          split: t.split,
+        }
+      }
+      return out
+    }
+
+    // Evaluates a plan — "wait `delay` frames, then commit to `action` and hold it" — by
+    // rolling the runner's real physics and hitboxes forward, returning frames survived.
+    //
+    // The delay is the whole point. A planner that can only hold an action from right now
+    // cannot express "wait, THEN jump", so it takes the first jump that looks marginally
+    // better and lands straight onto a tall obstacle. Searching the delay lets it hold
+    // position and jump on the frame that actually clears.
+    function simulatePlan(
+      base: SimThreat[],
+      action: AiAction,
+      delay: number,
+      horizon: number,
+      pad: number,
+    ): number {
+      if (action === 'jump' && delay === 0 && !runner.onGround) return -1
+      let ry = runner.y
+      let rvy = runner.vy
+      let onGround = runner.onGround
+      let jumped = false
+      let threats = cloneThreats(base)
+
+      for (let f = 0; f < horizon; f++) {
+        const active = f >= delay
+        if (action === 'jump' && active && !jumped && onGround) {
+          rvy = JUMP_VELOCITY
+          onGround = false
+          jumped = true
+        }
+        const duckHeld = action === 'duck' && active
+        rvy += GRAVITY
+        if (duckHeld && !onGround) rvy += 0.7
+        ry += rvy
+        if (ry >= GROUND_Y - 8 * PIXEL) {
+          ry = GROUND_Y - 8 * PIXEL
+          rvy = 0
+          onGround = true
+        }
+        threats = advanceThreats(threats)
+
+        let box: Box
+        if (onGround) {
+          const sprite = duckHeld ? RUNNER_DUCK : RUNNER_SPRITE
+          const h = sprH(sprite)
+          box = { x: runner.x + 3, y: GROUND_Y - h + 3, w: sprW(sprite) - 6, h: h - 6 }
+        } else {
+          box = { x: runner.x + 3, y: ry + 3, w: 8 * PIXEL - 6, h: 8 * PIXEL - 6 }
+        }
+        const padded = {
+          x: box.x - pad,
+          y: box.y - pad,
+          w: box.w + pad * 2,
+          h: box.h + pad * 2,
+        }
+        for (const th of threats) {
+          if (th.x > WIDTH) continue
+          if (overlap(padded, th)) return f
+        }
+      }
+      return horizon
+    }
+
+    // Would a bolt fired right now actually connect? Keeps the AI from dumping ammo into
+    // empty track and arriving at a boss with nothing loaded.
+    function boltWouldHit(): boolean {
+      const boltY = runner.y + (ducking ? 6 : 10)
+      let bx = runner.x + 8 * PIXEL
+      const targets = obstacles
+        .filter((o) => o.hp > 0)
+        .map((o) => ({
+          x: o.x + 2,
+          y: o.y + 2,
+          w: sprW(o.sprite) - 4,
+          h: sprH(o.sprite) - 4,
+        }))
+      const b = boss
+      let bossX = b ? b.x : 0
+      let bossT = b ? b.t : 0
+
+      for (let f = 0; f < 60; f++) {
+        bx += 15
+        if (bx > WIDTH + 20) break
+        for (const t of targets) t.x -= speed
+        const bolt = { x: bx, y: boltY, w: 10, h: 4 }
+        for (const t of targets) {
+          if (overlap(bolt, t)) return true
+        }
+        if (b && b.hp > 0) {
+          bossT++
+          if (bossX > b.variant.targetX) bossX -= b.variant.approachSpeed
+          const bossY =
+            b.variant.spawnY + Math.sin(bossT / b.variant.bobRate) * b.variant.bobAmplitude
+          const bossBox = {
+            x: bossX,
+            y: bossY,
+            w: sprW(b.sprite),
+            h: sprH(b.sprite),
+          }
+          if (overlap(bolt, bossBox)) return true
+        }
+      }
+      return false
+    }
+
+    // Alt+T autopilot. Each frame it plans by simulation rather than by rule-of-thumb
+    // timings, then adapts its safety margin from how the previous runs actually ended.
+    function autoPilot() {
+      if (!autoPlay || paused) return
+      if (!started) {
+        jump()
+        return
+      }
+      if (gameOver) {
+        if (aiRestartTimer > 0) {
+          aiRestartTimer--
+          return
+        }
+        jump()
+        return
+      }
+
+      // Caution is the learned part: every death widens the margin and lookahead, and a
+      // long clean stretch narrows them again, so the AI settles on the least-twitchy
+      // margin that still survives the speed it is currently running at.
+      if (score - aiLastDeathScore > 500 && aiCaution > 0) {
+        aiCaution = Math.max(0, aiCaution - 1)
+        aiLastDeathScore = score
+      }
+      const pad = 1 + aiCaution
+      const horizon = 52 + aiCaution * 6
+      const base = snapshotThreats()
+
+      // Searches every plan and keeps the best, but only ever executes its FIRST frame —
+      // next frame it re-plans from scratch against whatever actually happened.
+      function planBest(padding: number) {
+        let bestAction: AiAction = 'none'
+        let bestScore = simulatePlan(base, 'none', 0, horizon, padding)
+        let bestPref = 0
+        for (let delay = 0; delay <= AI_MAX_DELAY; delay++) {
+          for (const action of AI_ACTIONS) {
+            const score = simulatePlan(base, action, delay, horizon, padding)
+            if (score < 0) continue
+            const immediate: AiAction = delay === 0 ? action : 'none'
+            const pref = immediate === 'none' ? 0 : immediate === 'duck' ? 1 : 2
+            if (score > bestScore || (score === bestScore && pref < bestPref)) {
+              bestScore = score
+              bestAction = immediate
+              bestPref = pref
+            }
+            // A clean run that needs nothing this frame is the ideal outcome; stop early.
+            if (bestScore >= horizon && bestPref === 0) {
+              return { action: bestAction, score: bestScore }
+            }
+          }
+        }
+        return { action: bestAction, score: bestScore }
+      }
+
+      let best = planBest(pad)
+      // Nothing survives the padded margin — retry unpadded so a tight-but-real gap still
+      // gets taken instead of the AI freezing and eating the hit.
+      if (best.score < horizon && pad > 0) {
+        const tight = planBest(0)
+        if (tight.score > best.score) best = tight
+      }
+
+      ducking = best.action === 'duck'
+      if (best.action === 'jump' && runner.onGround) jump()
+
+      if (aiShotCooldown > 0) aiShotCooldown--
+      // Only shoot from a stable pose; firing mid-dodge is what wastes the clip.
+      if (ammo > 0 && aiShotCooldown <= 0 && best.action === 'none' && boltWouldHit()) {
+        shoot()
+        aiShotCooldown = 8
+      }
     }
 
     function step() {
       if (!running) return
       if (!paused) frame++
+      autoPilot()
 
       ctx!.clearRect(0, 0, WIDTH, HEIGHT)
       const theme = resolveTheme(score)
@@ -1107,6 +1403,10 @@ export default function RuvyxaRunner() {
       ctx!.textAlign = 'right'
       ctx!.fillText(`SCORE ${String(score).padStart(5, '0')}`, WIDTH - 20, 14)
       if (best > 0) ctx!.fillText(`BEST ${String(best).padStart(5, '0')}`, WIDTH - 20, 32)
+      if (autoPlay) {
+        ctx!.fillStyle = ACCENT
+        ctx!.fillText(`AUTO · CAUTION ${aiCaution}`, WIDTH - 20, best > 0 ? 50 : 32)
+      }
 
       ctx!.textAlign = 'left'
       ctx!.fillText('FIX', 20, 14)
@@ -1138,6 +1438,7 @@ export default function RuvyxaRunner() {
         ctx!.fillStyle = '#525252'
         ctx!.font = "12px 'SFMono-Regular', Consolas, monospace"
         ctx!.fillText('SPACE/W JUMP   S DUCK   X/ARROWS SHOOT   ESC PAUSE', WIDTH / 2, 110)
+        ctx!.fillText('ALT+T TOGGLE AI AUTOPLAY', WIDTH / 2, 126)
       }
       if (paused && !gameOver) {
         ctx!.fillStyle = 'rgba(255, 255, 255, 0.82)'
@@ -1161,11 +1462,26 @@ export default function RuvyxaRunner() {
     // No lateral movement in an endless runner, so left/right fire ahead instead of going unused.
     const SHOOT_KEYS = new Set(['KeyX', 'KeyF', 'ArrowLeft', 'ArrowRight', 'KeyA', 'KeyD'])
 
+    function toggleAutoPlay() {
+      autoPlay = !autoPlay
+      ducking = false
+      aiRestartTimer = 0
+    }
+
     function onKeyDown(e: KeyboardEvent) {
+      if (e.altKey && e.code === 'KeyT') {
+        e.preventDefault()
+        if (!e.repeat) toggleAutoPlay()
+        return
+      }
       if (PAUSE_KEYS.has(e.code)) {
         e.preventDefault()
         togglePause()
-      } else if (JUMP_KEYS.has(e.code)) {
+        return
+      }
+      // The AI drives jump/duck/shoot itself; manual input would only fight it.
+      if (autoPlay) return
+      if (JUMP_KEYS.has(e.code)) {
         e.preventDefault()
         jump()
       } else if (DUCK_KEYS.has(e.code)) {
@@ -1178,10 +1494,12 @@ export default function RuvyxaRunner() {
     }
 
     function onKeyUp(e: KeyboardEvent) {
+      if (autoPlay) return
       if (DUCK_KEYS.has(e.code)) ducking = false
     }
 
     function onPointerDown() {
+      if (autoPlay) return
       jump()
     }
 
@@ -1207,7 +1525,7 @@ export default function RuvyxaRunner() {
         width={WIDTH}
         height={HEIGHT}
         role="img"
-        aria-label="Endless runner mini-game: jump, duck, shoot, and pause while dodging bugs, errors, and malware and defeating animated bosses"
+        aria-label="Endless runner mini-game: jump, duck, shoot, and pause while dodging bugs, errors, and malware and defeating animated bosses. Alt+T toggles an AI autopilot."
       />
     </div>
   )
