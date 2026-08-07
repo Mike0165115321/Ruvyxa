@@ -102,6 +102,13 @@ pub enum WorkerRequest {
         #[serde(rename = "routePath")]
         route_path: String,
         params: RouteParams,
+        /// Ordered request headers, so a page can read `cookies()` and
+        /// `headers()` while it renders. Additive: a worker script that
+        /// predates request context ignores the field and renders as before.
+        #[serde(rename = "headerPairs")]
+        header_pairs: Vec<(String, String)>,
+        /// Request method, uppercased.
+        method: String,
     },
     #[serde(rename = "api")]
     Api {
@@ -311,6 +318,12 @@ pub struct WorkerResponse {
     pub warmed: Option<usize>,
     pub module_cache_size: Option<usize>,
     pub params: Option<Vec<RouteParams>>,
+    /// Set when the render read request state — a cookie, a header, draft
+    /// mode. Such HTML belongs to one request and must never be stored in a
+    /// cache other requests can read. Absent from older workers, which is
+    /// treated as `false` because those workers cannot expose the accessors
+    /// that would make it true.
+    pub request_scoped: Option<bool>,
     /// Content hash of the compiled SSG dependency graph.
     pub dependency_hash: Option<String>,
     /// Absolute source files used by the SSG bundle.
@@ -935,6 +948,24 @@ pub struct NodeWorkerPool {
     isolated_renders_per_worker: Option<usize>,
 }
 
+/// One server-side page render.
+///
+/// Grouped into a struct rather than passed as seven positional arguments
+/// because `request_path`, `route_path`, and `method` are all `&str` and
+/// transposing two of them compiles.
+pub struct RenderSsrRequest<'a> {
+    pub project_root: &'a Path,
+    pub app_dir: &'a Path,
+    pub page_file: &'a Path,
+    pub request_path: &'a str,
+    /// Route pattern, not the concrete URL.
+    pub route_path: &'a str,
+    pub params: &'a RouteParams,
+    /// Ordered request headers, for `cookies()` and `headers()`.
+    pub headers: &'a [(String, String)],
+    pub method: &'a str,
+}
+
 pub(crate) struct RenderApiRequest<'a> {
     pub project_root: &'a Path,
     pub route_file: &'a Path,
@@ -1364,23 +1395,17 @@ impl NodeWorkerPool {
 
     // --- Convenience methods for each render type ---
 
-    pub async fn render_ssr(
-        &self,
-        project_root: &Path,
-        app_dir: &Path,
-        page_file: &Path,
-        request_path: &str,
-        route_path: &str,
-        params: &RouteParams,
-    ) -> Result<WorkerResponse> {
+    pub async fn render_ssr(&self, page: RenderSsrRequest<'_>) -> Result<WorkerResponse> {
         let request = WorkerRequest::Ssr {
             id: next_request_id(),
-            project_root: project_root.display().to_string(),
-            app_dir: app_dir.display().to_string(),
-            page_file: page_file.display().to_string(),
-            request_path: request_path.to_string(),
-            route_path: route_path.to_string(),
-            params: params.clone(),
+            project_root: page.project_root.display().to_string(),
+            app_dir: page.app_dir.display().to_string(),
+            page_file: page.page_file.display().to_string(),
+            request_path: page.request_path.to_string(),
+            route_path: page.route_path.to_string(),
+            params: page.params.clone(),
+            header_pairs: page.headers.to_vec(),
+            method: page.method.to_ascii_uppercase(),
         };
         self.send(request).await
     }

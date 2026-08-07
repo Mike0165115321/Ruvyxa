@@ -390,11 +390,12 @@ async function materializeFunction(buildDir, destination, handlerSource, target)
 
   // Copy the generic serverless handler runtime.
   //
-  // `route-match.mjs` travels with it: the handler imports it as a sibling, and
-  // a function directory resolves no bare specifiers. A missing file here would
-  // surface as a broken deployment on the first request rather than a failed
-  // build, so the pair is required rather than copied opportunistically.
-  for (const runtimeFile of ['serverless-handler.mjs', 'route-match.mjs']) {
+  // `route-match.mjs` and `request-context.mjs` travel with it: the handler
+  // imports both as siblings, and a function directory resolves no bare
+  // specifiers. A missing file here would surface as a broken deployment on the
+  // first request rather than a failed build, so the set is required rather
+  // than copied opportunistically.
+  for (const runtimeFile of ['serverless-handler.mjs', 'route-match.mjs', 'request-context.mjs']) {
     const source = path.join(runtimeDir, runtimeFile)
     if (!existsSync(source)) {
       throw new Error(

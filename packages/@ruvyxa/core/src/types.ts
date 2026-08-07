@@ -7,6 +7,19 @@ export interface RuvyxaConfig {
   typescript?: {
     strict?: boolean
   }
+  /**
+   * Generate `.ruvyxa/types/routes.d.ts` so `<Link href>`, `useRouter().push`,
+   * and `useRouter().prefetch` are checked against the routes that exist.
+   *
+   * `ruvyxa dev` rewrites the file whenever route discovery re-runs;
+   * `ruvyxa build` and `ruvyxa check` write it once. The file only takes effect
+   * if `tsconfig.json` includes it, so a project enabling this must also add
+   * `".ruvyxa/types/**\/*.d.ts"` to `include` — `ruvyxa check` says so if it
+   * is missing.
+   *
+   * @default false
+   */
+  typedRoutes?: boolean
   css?: {
     /** Additional project-relative global stylesheet files or directories. */
     entries?: string[]

@@ -303,12 +303,17 @@ describe('vercelAdapter', () => {
         export async function loadRouteModule() { return api }
         `,
       )
-      // The handler and its matcher travel together: `adapter-runner.mjs`
-      // copies both into a function directory, because the handler imports
-      // `./route-match.mjs` as a sibling and a deployed function resolves no
-      // bare specifiers. Copying only the handler here would pass the test
-      // while shipping a bundle that throws on its first request.
-      for (const runtimeFile of ['serverless-handler.mjs', 'route-match.mjs']) {
+      // The handler and its siblings travel together: `adapter-runner.mjs`
+      // copies the whole set into a function directory, because the handler
+      // imports `./route-match.mjs` and `./request-context.mjs` as siblings and
+      // a deployed function resolves no bare specifiers. Copying only the
+      // handler here would pass the test while shipping a bundle that throws on
+      // its first request.
+      for (const runtimeFile of [
+        'serverless-handler.mjs',
+        'route-match.mjs',
+        'request-context.mjs',
+      ]) {
         await copyFile(
           path.join(workspaceRoot, 'packages/ruvyxa/runtime', runtimeFile),
           path.join(root, runtimeFile),

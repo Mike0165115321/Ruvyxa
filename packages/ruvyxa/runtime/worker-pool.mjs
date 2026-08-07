@@ -29,6 +29,7 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createInterface } from 'node:readline'
 
+import { requestContext, runWithRequestContext, usedRequestContext } from './request-context.mjs'
 import {
   clearCompilerCache,
   collectSpecials,
@@ -485,7 +486,14 @@ function ensureReactDeps(resolvedRoot) {
 // during rapid navigation or concurrent crawler hits.
 async function handleSsrCoalesced(request) {
   const { pageFile, requestPath, params } = request
-  const coalesceKey = `ssr:${pageFile}:${requestPath}:${JSON.stringify(params || {})}`
+  // Identity-bearing headers are part of the key. A page may read `cookies()`,
+  // and two concurrent requests for the same URL from different users must not
+  // share one render — that would serve one user's page to the other. Whether
+  // the page actually reads them is not known until it has rendered, so the key
+  // has to be conservative. Only `cookie` and `authorization` are included:
+  // hashing every header would split the key on `accept-encoding` and defeat
+  // coalescing for the ordinary anonymous traffic it exists to help.
+  const coalesceKey = `ssr:${pageFile}:${requestPath}:${JSON.stringify(params || {})}:${identityKey(request.headerPairs)}`
 
   // Check if an identical render is already in-flight.
   if (renderCoalesceMap.has(coalesceKey)) {
@@ -546,6 +554,22 @@ async function handleWarmup(request) {
   return { ok: true, warmed, moduleCacheSize: moduleCache.size }
 }
 
+/**
+ * The part of a request that decides *whose* page this is.
+ *
+ * Empty for an anonymous request, so anonymous traffic coalesces exactly as it
+ * did before request context existed.
+ */
+function identityKey(headerPairs) {
+  if (!Array.isArray(headerPairs)) return ''
+  const parts = []
+  for (const [name, value] of headerPairs) {
+    const lowered = String(name).toLowerCase()
+    if (lowered === 'cookie' || lowered === 'authorization') parts.push(`${lowered}=${value}`)
+  }
+  return parts.join('&')
+}
+
 // --- SSR Handler ---
 async function handleSsr(request) {
   const { projectRoot, appDir, pageFile, requestPath, params, routePath } = request
@@ -565,9 +589,19 @@ async function handleSsr(request) {
     specials,
   )
   const mod = await importModule(outfile, version)
-  const html = await mod.render({ path: requestPath, params: params || {} })
+  const context = requestContext({
+    headerPairs: request.headerPairs,
+    method: request.method,
+    url: requestPath,
+  })
+  const html = await runWithRequestContext(context, () =>
+    mod.render({ path: requestPath, params: params || {} }),
+  )
 
-  return { ok: true, html }
+  // `requestScoped` tells the server this HTML belongs to one request and must
+  // not enter a cache shared with other users. It is reported rather than
+  // inferred: only the render knows whether it read a cookie.
+  return { ok: true, html, requestScoped: usedRequestContext(context) }
 }
 
 // --- SSG Handler with Request Coalescing ---
@@ -828,7 +862,13 @@ async function handleApi(request) {
     }
   }
   const req = new Request(`http://localhost${requestPath}`, requestInit)
-  const result = await handler({ request: req, params: params || {} })
+  // An API route already receives the `Request`, so the ambient accessors are
+  // redundant there — but a helper shared with a page must not stop working
+  // because it was called from a route handler instead.
+  const result = await runWithRequestContext(
+    requestContext({ headerPairs, headers: requestHeaders, method: upperMethod, url: requestPath }),
+    () => handler({ request: req, params: params || {} }),
+  )
   const response = normalizeResponse(result)
   const headerPairsResult = responseHeaderPairs(response)
   const headers = Object.fromEntries(headerPairsResult)
@@ -902,12 +942,21 @@ async function handleAction(request) {
         },
     body: contentType === 'application/x-www-form-urlencoded' ? payloadJson : JSON.stringify(input),
   })
-  const result = await action(input, {
-    request: req,
-    invalidate(key) {
-      invalidated.push(key)
-    },
-  })
+  const result = await runWithRequestContext(
+    requestContext({
+      headerPairs,
+      headers: requestHeaders,
+      method: 'POST',
+      url: requestPath,
+    }),
+    () =>
+      action(input, {
+        request: req,
+        invalidate(key) {
+          invalidated.push(key)
+        },
+      }),
+  )
   let response = normalizeActionResult(result, invalidated)
   const headersWithInternalEventRemoved = new Headers(response.headers)
   headersWithInternalEventRemoved.delete('x-ruvyxa-realtime-event')

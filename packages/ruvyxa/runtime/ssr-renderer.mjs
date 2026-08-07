@@ -13,6 +13,7 @@ import {
   toImportPath,
 } from './compiler.mjs'
 import { metaSourceImports, nodeSsrEntrySource } from './entry-templates.mjs'
+import { requestContext, runWithRequestContext } from './request-context.mjs'
 
 const [projectRootArg, appDirArg, pageFileArg, requestPath = '/', paramsJson = '{}', routePathArg] =
   process.argv.slice(2)
@@ -40,7 +41,13 @@ try {
     specials,
   )
   const mod = await import(pathToFileURL(bundleFile).href + `?t=${Date.now()}`)
-  const html = await mod.render({ path: requestPath, params: JSON.parse(paramsJson) })
+  // A context with no headers, so `cookies()` and `headers()` return empty
+  // rather than throwing. This renderer is driven by `ruvyxa test:parity` and
+  // one-shot tooling, which have no HTTP request to forward.
+  const html = await runWithRequestContext(
+    requestContext({ headerPairs: [], method: 'GET', url: requestPath }),
+    () => mod.render({ path: requestPath, params: JSON.parse(paramsJson) }),
+  )
 
   process.stdout.write(JSON.stringify({ ok: true, html }))
 } catch (error) {

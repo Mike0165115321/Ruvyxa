@@ -34,6 +34,7 @@ mod image_optimizer;
 mod image_usage;
 mod plugins;
 mod prerender;
+mod route_types;
 mod runtime_config;
 mod site_discovery;
 mod ui;
@@ -57,6 +58,7 @@ pub(crate) use image_optimizer::{
 pub(crate) use image_usage::scan_raw_image_usage;
 pub(crate) use plugins::*;
 pub(crate) use prerender::*;
+pub(crate) use route_types::*;
 pub(crate) use runtime_config::*;
 pub(crate) use site_discovery::{SiteConfigOptions, resolve_site_url, write_discovery_files};
 pub(crate) use ui::*;

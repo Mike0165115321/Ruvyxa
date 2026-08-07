@@ -18,12 +18,13 @@
  *
  * ISR/PPR behavior depends on platform capabilities passed via options.
  *
- * The only import this file is allowed to carry is the sibling `route-match.mjs`,
- * which `adapter-runner.mjs` copies into the function bundle next to this file.
- * Everything else must stay inlined: a deployed function directory resolves no
- * bare specifiers.
+ * The only imports this file is allowed to carry are the siblings
+ * `route-match.mjs` and `request-context.mjs`, which `adapter-runner.mjs`
+ * copies into the function bundle next to this file. Everything else must stay
+ * inlined: a deployed function directory resolves no bare specifiers.
  */
 
+import { requestContext, runWithRequestContext, usedRequestContext } from './request-context.mjs'
 import {
   bindPatternParams,
   canonicalRoutePath,
@@ -215,7 +216,14 @@ export function createHandler(options) {
       })
     }
 
-    const result = await handler({ request, params })
+    const result = await runWithRequestContext(
+      requestContext({
+        headerPairs: [...request.headers],
+        method,
+        url: new URL(request.url).pathname,
+      }),
+      () => handler({ request, params }),
+    )
     return normalizeResponse(result)
   }
 
@@ -232,7 +240,7 @@ export function createHandler(options) {
         })
       }
       // Fallback: render the shell
-      return await renderPage(route, pathname, params)
+      return await renderPage(route, pathname, params, request)
     }
 
     // SSG: serve pre-rendered HTML directly
@@ -245,7 +253,7 @@ export function createHandler(options) {
         })
       }
       // Fallback to SSR if pre-rendered not available
-      return await renderPage(route, pathname, params)
+      return await renderPage(route, pathname, params, request)
     }
 
     // ISR: serve cached HTML, revalidate in background if stale
@@ -276,9 +284,12 @@ export function createHandler(options) {
         })
       }
       // Cache miss: render on demand
-      const rendered = await renderPage(route, pathname, params)
+      const rendered = await renderPage(route, pathname, params, request)
       // Cache the result for future requests
-      if (writePrerendered && rendered.status === 200) {
+      // A page that read cookies, headers, or draft mode rendered for one
+      // visitor. Writing it to the shared ISR cache would serve that visitor's
+      // page to everyone who asks for this URL next.
+      if (writePrerendered && rendered.status === 200 && !rendered.requestScoped) {
         const body = await rendered.clone().text()
         writePrerendered(pathname, body, route.render.revalidate ?? 60)
       }
@@ -289,21 +300,37 @@ export function createHandler(options) {
     if (strategy === 'ppr') {
       // For serverless without streaming support, fall back to full SSR
       // Platform wrappers can override this with streaming if available
-      return await renderPage(route, pathname, params)
+      return await renderPage(route, pathname, params, request)
     }
 
     // SSR (default): full server render
-    return await renderPage(route, pathname, params)
+    return await renderPage(route, pathname, params, request)
   }
 
-  async function renderPage(route, pathname, params) {
+  /**
+   * Render a page with the request as ambient context.
+   *
+   * `requestScoped` reports whether the render read that context. A caller that
+   * was about to store the HTML — the ISR cache below — must not, because the
+   * document belongs to whoever sent this request.
+   */
+  async function renderPage(route, pathname, params, request) {
     const mod = await importPage(route.id)
-    const rendered = await mod.render({ path: pathname, params: params ?? {} })
+    const context = requestContext({
+      headerPairs: [...(request?.headers ?? [])],
+      method: request?.method ?? 'GET',
+      url: pathname,
+    })
+    const rendered = await runWithRequestContext(context, () =>
+      mod.render({ path: pathname, params: params ?? {} }),
+    )
     const html = localizeHtmlDocument(rendered, route.path, pathname, params ?? {}, i18n)
-    return new Response(html, {
+    const response = new Response(html, {
       status: 200,
       headers: { 'content-type': 'text/html; charset=utf-8' },
     })
+    response.requestScoped = usedRequestContext(context)
+    return response
   }
 
   function scheduleRevalidation(route, pathname, params) {
@@ -313,6 +340,10 @@ export function createHandler(options) {
     const revalidation = Promise.resolve().then(async () => {
       try {
         const mod = await importPage(route.id)
+        // Deliberately rendered with no request context. A background
+        // revalidation has no visitor, so `cookies()` throws its
+        // "called outside a request" error rather than quietly producing a
+        // page built from nobody's session and caching it for everybody.
         const rendered = await mod.render({ path: pathname, params: params ?? {} })
         const html = localizeHtmlDocument(rendered, route.path, pathname, params ?? {}, i18n)
         writePrerendered(pathname, html, route.render.revalidate ?? 60)

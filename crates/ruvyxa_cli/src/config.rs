@@ -32,6 +32,11 @@ pub(crate) struct ProjectConfig {
     pub(crate) _react: Option<serde_json::Value>,
     #[serde(rename = "typescript")]
     pub(crate) _typescript: Option<serde_json::Value>,
+    /// Generate `.ruvyxa/types/routes.d.ts` so `<Link href>` is checked against
+    /// the real route set. Off by default: the file is inert until the project
+    /// `tsconfig.json` includes it, and turning it on for existing projects
+    /// would only produce a hint they did not ask for.
+    pub(crate) typed_routes: Option<bool>,
     #[serde(default, rename = "render")]
     pub(crate) rendering: RenderingConfigOptions,
     #[serde(default)]
@@ -285,6 +290,11 @@ impl ProjectConfig {
 
     pub(crate) fn out_dir(&self) -> &str {
         self.out_dir.as_deref().unwrap_or(".ruvyxa")
+    }
+
+    /// Whether to emit `.ruvyxa/types/routes.d.ts` for this project.
+    pub(crate) fn typed_routes(&self) -> bool {
+        self.typed_routes.unwrap_or(false)
     }
 
     pub(crate) fn validate_paths(&self) -> anyhow::Result<()> {

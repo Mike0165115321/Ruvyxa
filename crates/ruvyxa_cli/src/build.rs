@@ -254,6 +254,11 @@ pub(crate) async fn build_with_output(args: BuildArgs, show_summary: bool) -> an
             route_discovery_duration,
         );
     }
+    // Written before validation so a build that fails on a route error still
+    // leaves the editor's route types describing what is on disk.
+    if config.typed_routes() {
+        write_route_types(&args.root, &manifest)?;
+    }
     let phase_started = Instant::now();
     let spinner = start_build_phase(show_summary, "validated");
     let validation = validate_app(&args.root, &manifest)?;

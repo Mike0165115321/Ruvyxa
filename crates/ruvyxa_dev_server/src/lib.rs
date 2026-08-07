@@ -246,6 +246,41 @@ fn bun_executable_from_path() -> Option<std::path::PathBuf> {
     None
 }
 
+/// A callback run with every freshly discovered route manifest.
+///
+/// The dev server owns route discovery and re-runs it when the watcher
+/// invalidates its cache, which is exactly when generated artifacts derived
+/// from the route set — today, the typed-routes declaration file — go stale.
+/// Exposing the moment is cheaper and more correct than having the CLI watch
+/// the same directory a second time and race the server's own scan.
+///
+/// A panic in the observer is caught and reported rather than allowed to take
+/// the request down with it: this is a developer convenience running on the
+/// request path, and a failure to write a `.d.ts` must not stop a page from
+/// rendering.
+#[derive(Clone)]
+pub struct RouteManifestObserver(Arc<dyn Fn(&RouteManifest) + Send + Sync>);
+
+impl RouteManifestObserver {
+    pub fn new(observe: impl Fn(&RouteManifest) + Send + Sync + 'static) -> Self {
+        Self(Arc::new(observe))
+    }
+
+    fn notify(&self, manifest: &RouteManifest) {
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (self.0)(manifest))).is_err() {
+            tracing::warn!(
+                "route manifest observer panicked; generated route artifacts may be stale"
+            );
+        }
+    }
+}
+
+impl std::fmt::Debug for RouteManifestObserver {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("RouteManifestObserver")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub root: PathBuf,
@@ -291,6 +326,9 @@ pub struct ServerConfig {
     /// Apply Ruvyxa's default security response headers.
     pub security_headers: bool,
     pub middleware: MiddlewareConfig,
+    /// Notified whenever route discovery runs, so generated artifacts derived
+    /// from the route set stay in step with it.
+    pub route_manifest_observer: Option<RouteManifestObserver>,
     /// Start the TypeScript plugin host for this server.
     pub plugins_enabled: bool,
     /// Head elements plugins declared in `ruvyxa.config.ts`.
@@ -370,6 +408,7 @@ impl ServerConfig {
             trusted_proxies: TrustedProxies::default(),
             security_headers: true,
             middleware: MiddlewareConfig::default(),
+            route_manifest_observer: None,
             plugins_enabled: false,
             plugin_head: Vec::new(),
             default_render_strategy: None,
@@ -408,6 +447,7 @@ impl ServerConfig {
             trusted_proxies: TrustedProxies::default(),
             security_headers: true,
             middleware: MiddlewareConfig::default(),
+            route_manifest_observer: None,
             plugins_enabled: false,
             plugin_head: Vec::new(),
             default_render_strategy: None,
@@ -510,7 +550,9 @@ impl RuntimeCache {
 
     async fn manifest(&self, config: &ServerConfig) -> Result<Arc<RouteManifest>> {
         if !config.cache_route_manifest {
-            return Ok(Arc::new(discover_routes(discover_options(config))?));
+            let manifest = discover_routes(discover_options(config))?;
+            observe_manifest(config, &manifest);
+            return Ok(Arc::new(manifest));
         }
 
         {
@@ -521,6 +563,7 @@ impl RuntimeCache {
         }
 
         let manifest = Arc::new(discover_routes(discover_options(config))?);
+        observe_manifest(config, &manifest);
         {
             let mut cached = self.manifest.write().await;
             *cached = Some(Arc::clone(&manifest));
@@ -640,6 +683,13 @@ fn normalize_cache_path(path: &Path) -> PathBuf {
     }
 }
 
+/// Hand a freshly discovered manifest to the configured observer, if any.
+fn observe_manifest(config: &ServerConfig, manifest: &RouteManifest) {
+    if let Some(observer) = &config.route_manifest_observer {
+        observer.notify(manifest);
+    }
+}
+
 fn discover_options(config: &ServerConfig) -> DiscoverOptions {
     DiscoverOptions::new(&config.app_dir)
         .with_rendering_defaults(config.default_render_strategy, config.default_revalidate)
@@ -650,6 +700,7 @@ pub async fn serve(config: ServerConfig) -> Result<()> {
     config.validate_limits()?;
     let startup_started = Instant::now();
     let manifest = discover_routes(discover_options(&config))?;
+    observe_manifest(&config, &manifest);
     info!(routes = manifest.routes.len(), "discovered routes");
 
     let (reload_tx, _) = broadcast::channel(64);

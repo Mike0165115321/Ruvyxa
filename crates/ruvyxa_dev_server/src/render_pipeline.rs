@@ -266,6 +266,8 @@ pub(crate) async fn render_request_pooled(
                 request_path,
                 &route_match.params,
                 &styles,
+                &worker_request_headers(request_headers),
+                method,
             )
             .await?;
             Ok(cached_html_response(
@@ -301,9 +303,22 @@ async fn render_page_by_strategy(
     request_path: &str,
     params: &RouteParams,
     styles: &str,
+    request_headers: &[(String, String)],
+    method: &str,
 ) -> Result<CachedDocument> {
     match route.render.strategy {
-        RenderStrategy::Ssr => render_page_pooled(state, route, request_path, params, styles).await,
+        RenderStrategy::Ssr => {
+            render_page_pooled(
+                state,
+                route,
+                request_path,
+                params,
+                styles,
+                request_headers,
+                method,
+            )
+            .await
+        }
         RenderStrategy::Ssg => {
             // In dev mode, SSG pages are rendered on-demand like SSR but cached indefinitely.
             render_page_ssg(state, route, request_path, params, styles).await
@@ -792,6 +807,8 @@ pub(crate) async fn render_page_pooled(
     request_path: &str,
     params: &RouteParams,
     styles: &str,
+    request_headers: &[(String, String)],
+    method: &str,
 ) -> Result<CachedDocument> {
     // Check render cache first
     let cache_key = render_cache::ssr_cache_key(request_path, params);
@@ -808,14 +825,16 @@ pub(crate) async fn render_page_pooled(
     // keeps the actionable RUV1004 message without the read.
     let response = state
         .worker_pool
-        .render_ssr(
-            &state.config.root,
-            &state.config.app_dir,
-            &route.file,
+        .render_ssr(crate::worker_pool::RenderSsrRequest {
+            project_root: &state.config.root,
+            app_dir: &state.config.app_dir,
+            page_file: &route.file,
             request_path,
-            &route.path,
+            route_path: &route.path,
             params,
-        )
+            headers: request_headers,
+            method,
+        })
         .await?;
 
     if !response.ok {
@@ -837,6 +856,11 @@ pub(crate) async fn render_page_pooled(
             .suggest("Check the page component, its imports, and whether React dependencies are installed.")
             .into());
     }
+
+    // Reported by the worker when the render actually read a cookie, a header,
+    // or draft mode. Such a document is one user's page: putting it in the
+    // shared render cache would serve it to the next visitor of the same URL.
+    let request_scoped = response.request_scoped.unwrap_or(false);
 
     let rendered = response
         .html
@@ -863,10 +887,15 @@ pub(crate) async fn render_page_pooled(
         params,
     );
 
+    if request_scoped {
+        return Ok(CachedDocument::uncached(Arc::from(html)));
+    }
+
     // Cache the fully rendered page for subsequent requests, and serve the very
     // allocation that was stored.
     Ok(state.render_cache.put(cache_key, html).await)
 }
+
 pub(crate) async fn render_api_pooled(
     state: &AppState,
     route: &RouteEntry,

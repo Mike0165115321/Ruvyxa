@@ -441,3 +441,191 @@ export function notFound(message = 'Not found'): Response {
 export function json(data: unknown, init?: ResponseInit): Response {
   return Response.json(data, init)
 }
+
+/**
+ * Ambient access to the request being served.
+ *
+ * A page component is called by the renderer, not by the router, so it has no
+ * parameter through which a `Request` could reach it. `cookies()`, `headers()`,
+ * and `draftMode()` close that gap the way Next.js does: the host installs a
+ * per-request store before rendering, and these read it.
+ *
+ * ## Why the store lives on `globalThis`
+ *
+ * The host that installs the store (`packages/ruvyxa/runtime/*.mjs`) and the
+ * page that reads it are compiled separately and may each end up with their own
+ * copy of this module — the SSR bundle aliases `ruvyxa/server` to the workspace
+ * source, while a dependency importing it resolves `dist`. A module-level
+ * variable would be per-copy, so a page would read a store the host never set.
+ * A well-known key on `globalThis` is the one thing both copies agree on. The
+ * same reasoning already governs `__RUVYXA_ROUTE_CONTEXT__`.
+ *
+ * ## Why the store is not created here
+ *
+ * Isolating concurrent renders needs `AsyncLocalStorage`, and importing
+ * `node:async_hooks` from this module would put a Node built-in in every edge
+ * and browser bundle that touches `@ruvyxa/core/server`. The host owns that
+ * import and installs an implementation; this module only reads one.
+ */
+
+/** One request's data, as the host provides it. */
+export interface RequestContext {
+  /** Request headers in wire order, so repeated names survive. */
+  headers: readonly (readonly [string, string])[]
+  /** Request method, uppercased. */
+  method: string
+  /** Path and query of the request target. */
+  url: string
+  /** Whether draft mode is enabled for this request. */
+  draft: boolean
+  /**
+   * `Set-Cookie` values a server action or API route has queued.
+   *
+   * Absent during page rendering: the response headers are already being
+   * written by the time a page renders, so a cookie set there would be
+   * silently dropped. `cookies().set()` reports that rather than pretending.
+   */
+  setCookies?: string[]
+}
+
+/** The seam a host installs on `globalThis`. */
+export interface RequestContextHost {
+  /** The context for the request being served on this call stack, if any. */
+  current(): RequestContext | null
+}
+
+const CONTEXT_KEY = '__RUVYXA_REQUEST_CONTEXT__'
+
+function host(): RequestContextHost | null {
+  return (globalThis as Record<string, unknown>)[CONTEXT_KEY] as RequestContextHost | null
+}
+
+/**
+ * Install the per-request store. Called by Ruvyxa's runtime hosts, not by
+ * applications.
+ */
+export function installRequestContextHost(implementation: RequestContextHost): void {
+  ;(globalThis as Record<string, unknown>)[CONTEXT_KEY] = implementation
+}
+
+/**
+ * The active request, or an error naming the accessor that needed one.
+ *
+ * Deliberately not named `require`: a local function by that name is rewritten
+ * to a module load by bundlers targeting CommonJS, which turned every
+ * `cookies()` call into an import of a package called `cookies()`.
+ */
+function activeRequest(api: string): RequestContext {
+  const context = host()?.current()
+  if (!context) {
+    throw new Error(
+      `${api} was called outside a request.\n\n` +
+        'It is available while a page, API route, or server action is being served. ' +
+        'Calling it at module scope runs at import time, when there is no request to read — ' +
+        'move the call inside the component or handler.',
+    )
+  }
+  return context
+}
+
+/** Read-only view of one request's cookies. */
+export interface RequestCookies {
+  get(name: string): string | undefined
+  has(name: string): boolean
+  /** Every cookie on the request, in the order the header listed them. */
+  getAll(): { name: string; value: string }[]
+}
+
+/**
+ * Cookies sent with the request being served.
+ *
+ * Reading a cookie makes a page's output depend on who is asking, so a route
+ * that calls this is served per request and is never stored in a shared render
+ * cache. See `route_reads_request_state` in `crates/ruvyxa_graph/src/lib.rs`.
+ *
+ * @example
+ * ```tsx
+ * export default function Page() {
+ *   const theme = cookies().get('theme') ?? 'light'
+ *   return <main data-theme={theme} />
+ * }
+ * ```
+ */
+export function cookies(): RequestCookies {
+  const context = activeRequest('cookies()')
+  const parsed = parseCookieHeader(headerValue(context, 'cookie'))
+  return {
+    get: (name) => parsed.find((entry) => entry.name === name)?.value,
+    has: (name) => parsed.some((entry) => entry.name === name),
+    getAll: () => parsed.map((entry) => ({ ...entry })),
+  }
+}
+
+/**
+ * Headers sent with the request being served.
+ *
+ * Returns a standard read-only `Headers`, so `get`, `has`, `getSetCookie`, and
+ * iteration all behave as they do on a `Request`.
+ */
+export function headers(): Headers {
+  const context = activeRequest('headers()')
+  const collected = new Headers()
+  for (const [name, value] of context.headers) collected.append(name, value)
+  return collected
+}
+
+/** Draft mode state for the request being served. */
+export interface DraftMode {
+  /** Whether this request is in draft mode. */
+  readonly isEnabled: boolean
+}
+
+/**
+ * Whether the request is previewing unpublished content.
+ *
+ * Enabled by the `__ruvyxa_draft` cookie, which an API route sets after
+ * checking whatever secret the CMS shares with the application. A request in
+ * draft mode is never served from a static or incrementally regenerated cache,
+ * for the same reason a request that reads cookies is not.
+ */
+export function draftMode(): DraftMode {
+  const context = activeRequest('draftMode()')
+  return { isEnabled: context.draft }
+}
+
+/** Cookie name that turns draft mode on. Shared with the Rust request path. */
+export const DRAFT_MODE_COOKIE = '__ruvyxa_draft'
+
+function headerValue(context: RequestContext, name: string): string {
+  const lowered = name.toLowerCase()
+  const values = context.headers
+    .filter(([header]) => header.toLowerCase() === lowered)
+    .map(([, value]) => value)
+  return values.join('; ')
+}
+
+/**
+ * Split a `Cookie` header into name/value pairs.
+ *
+ * Deliberately tolerant: a malformed pair is skipped rather than throwing,
+ * because the header is attacker-controlled and a page must not fail to render
+ * because a browser extension wrote something odd. A value is returned exactly
+ * as sent apart from surrounding whitespace and one layer of double quotes —
+ * percent-decoding is the application's choice, since not every cookie is
+ * percent-encoded and decoding one that is not can throw.
+ */
+export function parseCookieHeader(header: string): { name: string; value: string }[] {
+  const entries: { name: string; value: string }[] = []
+  for (const part of header.split(';')) {
+    const separator = part.indexOf('=')
+    if (separator <= 0) continue
+    const name = part.slice(0, separator).trim()
+    if (!name) continue
+    let value = part.slice(separator + 1).trim()
+    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+      value = value.slice(1, -1)
+    }
+    entries.push({ name, value })
+  }
+  return entries
+}

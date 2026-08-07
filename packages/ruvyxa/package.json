@@ -21,6 +21,7 @@
     "runtime/config-renderer.mjs",
     "runtime/entry-templates.mjs",
     "runtime/plugin-runtime.mjs",
+    "runtime/request-context.mjs",
     "runtime/route-match.mjs",
     "runtime/serverless-handler.mjs",
     "runtime/ssr-renderer.mjs",

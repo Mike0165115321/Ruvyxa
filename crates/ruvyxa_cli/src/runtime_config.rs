@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -89,7 +90,48 @@ pub(crate) fn dev_server_config(
     server.dynamic_images.enabled = config.images.on_demand.enabled();
     server.dynamic_images.max_width = config.images.on_demand.max_width();
     server.dynamic_images.default_quality = config.images.quality.clamp(1, 100);
+    if config.typed_routes() {
+        server.route_manifest_observer = Some(route_types_observer(args.root.clone()));
+    }
     Ok(server)
+}
+
+/// Keep `.ruvyxa/types/routes.d.ts` in step with the dev server's route set.
+///
+/// Only `dev` installs this. A production server serves a build whose routes
+/// cannot change while it runs, and rewriting a source-tree file from a running
+/// production process would be a surprise, not a convenience.
+///
+/// The last emitted route set is remembered here so an invalidation that did
+/// not change the routes — the overwhelmingly common case, since any edit to
+/// any file under `app/` invalidates the manifest — costs a comparison rather
+/// than a filesystem read.
+fn route_types_observer(root: PathBuf) -> ruvyxa_dev_server::RouteManifestObserver {
+    let last_written: Mutex<Option<String>> = Mutex::new(None);
+    ruvyxa_dev_server::RouteManifestObserver::new(move |manifest| {
+        let source = route_types_source(manifest);
+        let mut last = match last_written.lock() {
+            Ok(last) => last,
+            // A poisoned lock means a previous write panicked. Regenerating is
+            // idempotent, so recovering is strictly better than giving up on
+            // route types for the rest of the session.
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if last.as_deref() == Some(source.as_str()) {
+            return;
+        }
+        match write_route_types(&root, manifest) {
+            Ok(_) => *last = Some(source),
+            Err(error) => {
+                // A page render must not fail because a convenience file could
+                // not be written; report and let the next discovery retry.
+                eprintln!(
+                    "{}",
+                    warn_text(format!("typed routes not written: {error:#}"))
+                );
+            }
+        }
+    })
 }
 
 pub(crate) fn production_server_config(

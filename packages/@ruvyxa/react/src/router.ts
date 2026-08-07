@@ -32,6 +32,8 @@ import {
   type RouteParams,
 } from '@ruvyxa/core/route-match'
 
+import type { RouteHref } from './route-types.js'
+
 /**
  * The active route, as seen by the routing hooks.
  *
@@ -60,16 +62,24 @@ export interface NavigateOptions {
   viewTransition?: boolean
 }
 
-/** Public navigation surface returned by {@link useRouter}. */
+/**
+ * Public navigation surface returned by {@link useRouter}.
+ *
+ * `href` is narrowed to the project's real routes once
+ * `.ruvyxa/types/routes.d.ts` is generated and included by `tsconfig.json`, and
+ * is plain `string` otherwise. `RouterInstance` below stays untyped in that
+ * respect on purpose: it is the engine seam `<Link>` and the hooks call, and it
+ * must accept the URLs the browser hands back on `popstate`.
+ */
 export interface RuvyxaRouter {
-  push(href: string, options?: NavigateOptions): Promise<void>
-  replace(href: string, options?: NavigateOptions): Promise<void>
+  push(href: RouteHref, options?: NavigateOptions): Promise<void>
+  replace(href: RouteHref, options?: NavigateOptions): Promise<void>
   back(): void
   forward(): void
   /** Re-render the current route from its already-loaded bundle. */
   refresh(): void
   /** Warm a route's bundle so a later navigation renders immediately. */
-  prefetch(href: string): void
+  prefetch(href: RouteHref): void
   /** `true` while a navigation is loading a bundle. */
   readonly pending: boolean
 }

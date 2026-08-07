@@ -9,6 +9,7 @@ import {
 } from 'react'
 
 import { getRouterInstance } from './router.js'
+import type { RouteHref } from './route-types.js'
 
 /** When to warm the target route's bundle. */
 export type LinkPrefetch = boolean | 'hover' | 'viewport' | 'none'
@@ -20,8 +21,14 @@ export type LinkPrefetch = boolean | 'hover' | 'viewport' | 'none'
  * `target` behave exactly as they do on a plain `<a>`.
  */
 export interface LinkProps extends Omit<AnchorHTMLAttributes<HTMLAnchorElement>, 'href'> {
-  /** Destination URL. Relative paths resolve against the current document. */
-  href: string
+  /**
+   * Destination URL. Relative paths resolve against the current document.
+   *
+   * Narrowed to the project's real routes once `.ruvyxa/types/routes.d.ts` is
+   * generated and included by `tsconfig.json`; plain `string` otherwise. Wrap a
+   * URL computed at runtime in `route()` to satisfy the narrowed type.
+   */
+  href: RouteHref
   /** Replace the current history entry instead of pushing a new one. */
   replace?: boolean
   /** Scroll to the top after navigating. Defaults to `true`. */

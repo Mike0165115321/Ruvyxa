@@ -1,0 +1,187 @@
+/**
+ * The per-request store behind `cookies()`, `headers()`, and `draftMode()`.
+ *
+ * The two halves of this feature live in files that cannot import each other:
+ * `@ruvyxa/core/src/server.ts` declares the accessors and is bundled
+ * for edge targets, while `packages/ruvyxa/runtime/request-context.mjs` owns
+ * the storage and is copied into function bundles that resolve no bare
+ * specifiers. They agree only on a `globalThis` key and a cookie name. Nothing
+ * but a test can hold that agreement, so the first suite below does.
+ */
+
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { describe, it } from 'node:test'
+
+import {
+  DRAFT_MODE_COOKIE as RUNTIME_DRAFT_COOKIE,
+  requestContext,
+  runWithRequestContext,
+  usedRequestContext,
+} from '../../../packages/ruvyxa/runtime/request-context.mjs'
+import {
+  DRAFT_MODE_COOKIE as CORE_DRAFT_COOKIE,
+  cookies,
+  draftMode,
+  headers,
+  parseCookieHeader,
+} from '../../../packages/@ruvyxa/core/dist/server.js'
+
+const CONTEXT_KEY = '__RUVYXA_REQUEST_CONTEXT__'
+
+function sourceOf(relative) {
+  return readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8')
+}
+
+describe('the two halves agree', () => {
+  it('uses the same draft cookie name on both sides', () => {
+    assert.equal(RUNTIME_DRAFT_COOKIE, CORE_DRAFT_COOKIE)
+    assert.equal(CORE_DRAFT_COOKIE, '__ruvyxa_draft')
+  })
+
+  it('uses the same globalThis key on both sides', () => {
+    // A rename on one side alone would not fail to build or import; it would
+    // make every accessor report "called outside a request" at runtime.
+    for (const file of [
+      '../../../packages/@ruvyxa/core/src/server.ts',
+      '../../../packages/ruvyxa/runtime/request-context.mjs',
+    ]) {
+      assert.ok(sourceOf(file).includes(CONTEXT_KEY), `${file} must reference ${CONTEXT_KEY}`)
+    }
+    assert.equal(typeof globalThis[CONTEXT_KEY]?.current, 'function')
+  })
+})
+
+describe('cookie parsing', () => {
+  it('splits pairs and trims whitespace', () => {
+    assert.deepEqual(parseCookieHeader('a=1; b=2'), [
+      { name: 'a', value: '1' },
+      { name: 'b', value: '2' },
+    ])
+  })
+
+  it('keeps a value containing "=" intact', () => {
+    // Base64 and JWT cookie values routinely end in padding.
+    assert.deepEqual(parseCookieHeader('token=abc=='), [{ name: 'token', value: 'abc==' }])
+  })
+
+  it('unwraps one layer of quoting', () => {
+    assert.deepEqual(parseCookieHeader('a="hello world"'), [{ name: 'a', value: 'hello world' }])
+  })
+
+  it('skips malformed pairs rather than throwing', () => {
+    // The header is attacker-controlled; a page must not fail to render
+    // because something wrote junk into it.
+    assert.deepEqual(parseCookieHeader('broken; =novalue; a=1'), [{ name: 'a', value: '1' }])
+  })
+
+  it('returns nothing for an empty header', () => {
+    assert.deepEqual(parseCookieHeader(''), [])
+  })
+})
+
+describe('accessors inside a request', () => {
+  const context = () =>
+    requestContext({
+      headerPairs: [
+        ['cookie', 'theme=dark; session=abc'],
+        ['x-forwarded-for', '203.0.113.1'],
+        ['accept-language', 'th-TH'],
+      ],
+      method: 'get',
+      url: '/dashboard',
+    })
+
+  it('reads cookies', () => {
+    runWithRequestContext(context(), () => {
+      assert.equal(cookies().get('theme'), 'dark')
+      assert.equal(cookies().get('session'), 'abc')
+      assert.equal(cookies().get('missing'), undefined)
+      assert.ok(cookies().has('theme'))
+      assert.deepEqual(
+        cookies()
+          .getAll()
+          .map((entry) => entry.name),
+        ['theme', 'session'],
+      )
+    })
+  })
+
+  it('reads headers as a standard Headers', () => {
+    runWithRequestContext(context(), () => {
+      assert.equal(headers().get('accept-language'), 'th-TH')
+      assert.equal(headers().get('Accept-Language'), 'th-TH', 'lookup is case-insensitive')
+      assert.equal(headers().get('x-missing'), null)
+    })
+  })
+
+  it('reports draft mode from the cookie', () => {
+    runWithRequestContext(context(), () => {
+      assert.equal(draftMode().isEnabled, false)
+    })
+    const drafting = requestContext({
+      headerPairs: [['cookie', `theme=dark; ${CORE_DRAFT_COOKIE}=1`]],
+    })
+    runWithRequestContext(drafting, () => {
+      assert.equal(draftMode().isEnabled, true)
+    })
+  })
+
+  it('survives an await, so a render that suspends keeps its request', async () => {
+    await runWithRequestContext(context(), async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1))
+      assert.equal(cookies().get('theme'), 'dark')
+    })
+  })
+
+  it('keeps concurrent requests apart', async () => {
+    // The failure this guards against is a cross-user data leak, which a
+    // plain module-level variable would produce the first time two renders
+    // interleave.
+    const read = (value) =>
+      runWithRequestContext(
+        requestContext({ headerPairs: [['cookie', `who=${value}`]] }),
+        async () => {
+          await new Promise((resolve) => setTimeout(resolve, value === 'a' ? 10 : 1))
+          return cookies().get('who')
+        },
+      )
+
+    assert.deepEqual(await Promise.all([read('a'), read('b')]), ['a', 'b'])
+  })
+})
+
+describe('use tracking', () => {
+  it('reports nothing used when no accessor is called', () => {
+    const store = requestContext({ headerPairs: [['cookie', 'a=1']] })
+    runWithRequestContext(store, () => 'rendered without reading anything')
+    assert.equal(usedRequestContext(store), false, 'such a page stays cacheable')
+  })
+
+  it('reports used after any accessor reads the request', () => {
+    for (const read of [() => cookies().get('a'), () => headers().get('a'), () => draftMode()]) {
+      const store = requestContext({ headerPairs: [['cookie', 'a=1']] })
+      runWithRequestContext(store, read)
+      assert.equal(usedRequestContext(store), true)
+    }
+  })
+})
+
+describe('outside a request', () => {
+  it('throws an actionable error rather than returning empty data', () => {
+    // Returning empty cookies here would turn "I called this at module scope"
+    // into a logged-out page with no explanation.
+    for (const [name, accessor] of [
+      ['cookies()', cookies],
+      ['headers()', headers],
+      ['draftMode()', draftMode],
+    ]) {
+      assert.throws(accessor, (error) => {
+        assert.match(error.message, new RegExp(`^${name.replace('()', '\\(\\)')} was called`))
+        assert.match(error.message, /move the call inside the component or handler/)
+        return true
+      })
+    }
+  })
+})

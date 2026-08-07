@@ -17,6 +17,7 @@ import {
   type RouteContextValue,
   type RuvyxaRouter,
 } from './router.js'
+import type { RouteHref } from './route-types.js'
 import type { RouteParams } from '@ruvyxa/core/route-match'
 
 const CONTEXT_KEY = '__RUVYXA_ROUTE_CONTEXT__'
@@ -95,8 +96,8 @@ export function useRouter(): RuvyxaRouter {
   )
 
   return {
-    push: (href: string, options?: NavigateOptions) => instance.navigate(href, { ...options }),
-    replace: (href: string, options?: NavigateOptions) =>
+    push: (href: RouteHref, options?: NavigateOptions) => instance.navigate(href, { ...options }),
+    replace: (href: RouteHref, options?: NavigateOptions) =>
       instance.navigate(href, { ...options, replace: true }),
     back: () => {
       if (typeof window !== 'undefined') window.history.back()
@@ -105,7 +106,7 @@ export function useRouter(): RuvyxaRouter {
       if (typeof window !== 'undefined') window.history.forward()
     },
     refresh: () => instance.refresh(),
-    prefetch: (href: string) => instance.prefetch(href),
+    prefetch: (href: RouteHref) => instance.prefetch(href),
     pending,
   }
 }

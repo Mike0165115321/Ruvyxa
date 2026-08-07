@@ -12,6 +12,8 @@ export type {
   PictureProps,
   PictureSource,
 } from './image.js'
+export { Script, resetInjectedScripts } from './script.js'
+export type { ScriptProps, ScriptStrategy } from './script.js'
 export { Seo } from './seo.js'
 export type { SeoArticle, SeoAuthor, SeoBreadcrumb, SeoProps } from './seo.js'
 export type { Meta, MetaAlternate, MetaContext, MetaExport, MetaFactory } from './meta.js'
@@ -28,6 +30,15 @@ export {
   useSearchParams,
   useSelectedRoute,
 } from './route-context.js'
+export { route } from './route-types.js'
+export type {
+  ExternalHref,
+  KnownRoute,
+  RouteFromPattern,
+  RouteHref,
+  RoutePattern,
+  RuvyxaRouteRegistry,
+} from './route-types.js'
 export { getRouterInstance } from './router.js'
 export type { NavigateOptions, RouteContextValue, RouterInstance, RuvyxaRouter } from './router.js'
 export { isNotFoundError, notFound, NOT_FOUND_PROPERTY } from './not-found.js'

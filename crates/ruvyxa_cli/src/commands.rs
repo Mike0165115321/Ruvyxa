@@ -241,10 +241,39 @@ pub(crate) async fn check(args: ProjectArgs) -> anyhow::Result<()> {
     print_field("root", path_text(&args.root));
     println!();
 
+    // Route types must exist before `tsc` runs, or the first `check` in a fresh
+    // clone type-checks against a registry the build has not written yet and
+    // reports every `<Link href>` as an error.
+    generate_route_types(&args.root)?;
     run_typecheck(&args.root)?;
     test_parity(args).await?;
 
     print_success_banner("Production readiness checks passed", started.elapsed());
+    Ok(())
+}
+
+/// Write `.ruvyxa/types/routes.d.ts` for `check`, and report a config that
+/// generates it without ever type-checking it.
+///
+/// The unreferenced-file case is a warning rather than a failure: the project
+/// still builds and runs correctly, it simply gets none of the benefit.
+pub(crate) fn generate_route_types(root: &Path) -> anyhow::Result<()> {
+    let config = load_project_config(root)?;
+    if !config.typed_routes() {
+        return Ok(());
+    }
+
+    let manifest = discover_project_routes(root, &config)?;
+    let output = write_route_types(root, &manifest)?;
+    if output.included_by_tsconfig {
+        println!(
+            "{} typed routes generated ({} routes)",
+            success(),
+            output.routes
+        );
+    } else {
+        println!("{}", tsconfig_include_diagnostic(root));
+    }
     Ok(())
 }
 
