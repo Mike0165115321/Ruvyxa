@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.0.28 (2026-08-07)
 
 ### Breaking
 
@@ -93,6 +93,105 @@
   read never appears as `__ruv_xxx__.member` and the pass concluded every export of that module was
   dead. A module whose namespace is read as a whole — by a namespace import, or by the
   default-import interop expression for CommonJS packages — now keeps all of its exports.
+- **Fixed `ruvyxa check`/`analyze` rejecting a client component that `ruvyxa build` compiled without
+  complaint.** `ruvyxa_graph` carried its own copy of the private-environment-variable filter for
+  the RUV1008 diagnostic, separate from the one `ruvyxa build` enforces, and the copy had silently
+  lost the `NODE_ENV` exemption. A client component containing the single most common line in React
+  — `process.env.NODE_ENV !== 'production'` — built cleanly and failed `check`. The rule is now one
+  function, `ruvyxa_bundler::boundary::env_read_is_private`, read by both.
+- **Added full JSONC support for `tsconfig.json`/`jsconfig.json`.** Only `//` line comments were
+  stripped; `/* */` block comments and trailing commas — both valid JSONC, and both what
+  `tsc --init` generates, since every option it writes is documented in a `/* */` block — made
+  parsing fail, and a failed parse silently contributed no `baseUrl`/`paths`. Every aliased import
+  in a project whose tsconfig used block comments failed to resolve, with the reported error naming
+  the import rather than the config that had been skipped.
+- **A malformed tsconfig is now reported instead of silently ignored.** `ruvyxa doctor` showed
+  `tsconfig.json  exists` whether or not the file could actually be parsed. It now reports the parse
+  error by name, and a broken `tsconfig.json` no longer blocks a valid `jsconfig.json` sitting
+  beside it from loading — each candidate is tried in turn.
+
+### Dev Server Correctness
+
+- **Fixed CSR pages never being invalidated in the dev server's render cache.** The prefix list
+  `invalidate_route` strips before matching a cache key against a changed route covered
+  `ssg:`/`isr:`/`ppr:` but not `csr:`, so a CSR page's cached render was never found by file-change
+  invalidation and kept serving a stale version of an edited file until its entry's TTL (5 minutes
+  in dev) expired. Key construction and the prefix list are now the single function and constant
+  (`page_cache_key`, `RENDER_NAMESPACES`) that both sides read.
+- **Fixed a weak ETag never matching itself on revalidation.** The `If-None-Match` comparison
+  stripped a candidate value's `W/` prefix but not the locally-computed target's, so a client
+  holding a weak validator — now produced for every streamed large asset, see Performance below —
+  always missed and re-received the full body instead of a `304`.
+- Client bundle requests (`/__ruvyxa/client/<hash>.js`) now answer a revalidation from the same
+  fingerprint cache `public/` files already used, instead of re-reading and blake3-hashing the whole
+  bundle to produce an empty `304` response.
+- **Fixed the Rust and JavaScript servers disagreeing about a `public/` file's Content-Type.** The
+  two tables were written independently: `.wasm` fell back to `application/octet-stream` in Rust,
+  which makes `WebAssembly.instantiateStreaming` refuse the module outright; `.woff`, `.woff2`,
+  `.gif`, `.ico`, `.map`, and `.html` fell back the same way; `.webmanifest` fell back in the
+  JavaScript table instead. Separately, the list of extensions routing recognizes as a static asset
+  and the list with a Content-Type for one had different membership — `.webm`, `.mp4`, `.mp3`,
+  `.ogg`, `.wav`, `.mov`, `.ttf`, `.otf`, `.eot`, `.bmp`, and `.apng` were routed as assets and then
+  served as an opaque download, which stops a `<video>` from playing and makes a browser download a
+  font instead of using it. Both tables and both lists are now pinned to
+  `tests/fixtures/static-asset-conformance.json`, replayed by a Rust test and a JavaScript test.
+- **Fixed the default security-header list being maintained as two hand-written copies inside one
+  file** — one that adds the seven headers, one that removes them when `security.headers: false`. A
+  header added to one copy and not the other meant disabling security could silently keep sending a
+  header the project had asked to turn off. Both directions now read one list
+  (`DEFAULT_SECURITY_HEADERS`), pinned against the equivalent JavaScript table — which cannot share
+  the Rust code — by `tests/fixtures/security-headers-conformance.json`.
+
+### Reliability
+
+- **Consolidated four independently-written atomic file writers into one.** The bundler's compile
+  cache, its incremental graph manifest, the CLI's client-artifact cache, and the image optimizer's
+  cache each wrote their own "temp file, then rename" sequence, and had drifted in the way a copy
+  drifts: two derived a temporary's name only from the target path, so two writers publishing the
+  same cache entry could race on one temporary file; one recovered from a failed rename by reading
+  the temporary back with `unwrap_or_default()`, so a recovery that itself failed replaced a good
+  cache entry with zero bytes; one leaked its temporary file whenever the first write failed,
+  leaving `.tmp` files behind on every attempt under a full disk. All four now publish through
+  `ruvyxa_bundler::atomic_file::write_atomic`.
+
+### Performance
+
+- **Cached pages now serve a pre-compressed copy on every hit after the first.** A cache hit
+  previously still paid a full brotli/gzip pass through the outer compression layer for identical
+  bytes on every single request. Render-cache entries now carry a compressed copy built lazily
+  alongside the HTML — built once, on the first request that can use it, and shared by every later
+  hit, including concurrent ones. Documents under 256 bytes are left uncompressed (the header
+  overhead usually outweighs the saving), and every cached response now carries
+  `Vary: Accept-Encoding`.
+- **Large public assets are streamed instead of being read into memory before the first byte is
+  written.** A file above 8 MiB (`RUVYXA_STREAM_ASSET_THRESHOLD_BYTES`) is now sent to the response
+  as a stream; previously, peak server memory scaled with the number of large files being served
+  concurrently, so a handful of clients downloading a large video was enough to exhaust it. A
+  streamed asset's ETag is weak (size + modification time), since a content hash cannot be produced
+  without holding the whole file in memory at once.
+- **Bounded how large one NDJSON line from a Node/Bun worker's stdout or stderr can grow before
+  being read.** `AsyncBufReadExt::lines()` accumulates without limit until it finds a newline, so a
+  worker emitting one very large or corrupted line was buffered in full on the Rust side before
+  anything could reject it — the failure mode was the whole server process running out of memory,
+  with nothing naming the worker that caused it. Defaults to 64 MiB, configurable with
+  `RUVYXA_WORKER_MAX_LINE_BYTES`; over the limit, the pool replaces the worker instead of trying to
+  resynchronize a framing it can no longer trust.
+
+### Templates and Examples
+
+- Continued building out the Ruvyxa runner game added in 1.0.27: a pause mechanic and a four-frame
+  gait animation, an expanded obstacle and boss sprite library with animation frames,
+  boss-difficulty balancing and visual-clarity passes, an autopilot AI (Alt+T) that plans by
+  simulating the runner's actual physics and hitboxes — including an exact early-exit over its
+  delayed-action search — rather than following fixed timings, and win conditions with adaptive boss
+  scaling.
+- Fixed a projectile able to score a hit against both an obstacle and the boss standing behind it in
+  the same frame: "this shot is spent" was represented only by moving it off-screen, which the
+  remaining collision checks in that frame never re-read.
+- Fixed a single death able to run the end-of-game logic once per overlapping hazard instead of once
+  per death — one collision against multiple hazards fired the death particle burst several times
+  and, more importantly, could jump the autopilot's caution level up by more than one step per
+  death, defeating its gradual difficulty-adaptation design.
 
 ### Plugin Scaffolding
 
@@ -109,6 +208,17 @@
 
 ### Internal
 
+- New `ruvyxa_dev_server::response` module: response construction and the shared security-header
+  table, extracted out of `lib.rs`.
+- New `ruvyxa_bundler::atomic_file` module: the durable-write primitive behind the Reliability fix
+  above.
+- Added `scripts/check-template-mirrors.mjs`, wired into `pnpm release:validate`, keeping
+  `templates/minimal/app/components/ruvyxa-runner.tsx` and its `examples/demo` copy byte-identical —
+  five commits had edited both by hand, and the projectile/end-of-game defects above lived in both
+  copies as a result.
+- Declared `brotli` and `flate2` (already compiled into the build through `tower-http`'s compression
+  features) and `tokio-util` (for the streaming response body) as direct `ruvyxa_dev_server`
+  dependencies, adding no new crate to the build.
 - Documented the bundler's custom tree-shaking pass (Pass 0) in `ARCHITECTURE.md`, including the
   per-assignment and opacity rules that carry its correctness.
 - Corrected the linker's module docs: named imports bind per-member (`const a = __ruv_xxx__.a`), not

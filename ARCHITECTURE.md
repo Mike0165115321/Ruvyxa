@@ -975,6 +975,15 @@ Resolution order:
 3. `tsconfig.json`/`jsconfig.json` aliases
 4. Bare package specifier or package subpath
 
+`tsconfig.json`/`jsconfig.json` is read as JSONC — `//` and `/* */` comments and trailing commas,
+not plain JSON — since that is the format `tsc` reads and `tsc --init` generates (every option
+documented in a `/* */` block). A file that fails to parse for any reason contributes no aliases
+rather than failing resolution, so a malformed config degrades to "no `paths`/`baseUrl`" instead of
+stopping the build; `TsConfigPaths::load_reporting()` also returns _why_ it degraded
+(`TsConfigProblem { path, message }`), which `ruvyxa doctor` surfaces instead of only showing that
+the file exists. A broken `tsconfig.json` does not block a valid `jsconfig.json` sitting beside it —
+each candidate is tried in turn, and only the first failure is the one reported.
+
 #### Source scanning (`ast`)
 
 `ast::parse_module()` is the only JavaScript byte scanner in the workspace, and every stage that
@@ -1041,6 +1050,27 @@ format instead: fields added later are `Option`, which keeps "absent" distinguis
 A reader declines to reuse an entry that predates a field it needs, and the fresh resolve rewrites
 that entry complete — so an older cache self-heals one module at a time instead of being discarded
 wholesale.
+
+#### Durable cache writes (`atomic_file.rs`)
+
+```rust
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()>
+```
+
+Every on-disk cache — the compile cache, the incremental graph manifest above, the CLI's
+client-artifact cache, and the image optimizer's cache — publishes through this one function: write
+to a uniquely-named temporary file (process id + an atomic counter, so two writers publishing the
+same entry never share a temporary), then rename over the target, falling back to a direct write on
+platforms where the rename can be rejected (cross-device, or a Windows replacement). The temporary
+is removed on every path out, including the error paths.
+
+The four call sites used to each write this by hand and had drifted in exactly the ways a copy
+drifts: two derived the temporary's name only from the target path, so two writers publishing one
+entry could race on the same temporary; one recovered from a failed rename by reading the temporary
+back with `unwrap_or_default()`, so a recovery that itself failed replaced a good cache entry with
+zero bytes; one leaked its temporary when the first write failed. Every caller writes
+content-addressed entries — the key is a hash of the bytes — so two writers racing to publish the
+same entry always agree on its content and the race has no observable outcome.
 
 ---
 
@@ -1258,11 +1288,11 @@ The bundler returns a `BundleOutput`; writing it is the CLI's job (`client_bundl
 ## Dev Server
 
 **Crate**: `ruvyxa_dev_server` —
-`crates/ruvyxa_dev_server/src/{lib,router,render_cache,hmr_tracker,worker_pool,style,action_security,port_binding,render_pipeline,plugin_bridge,plugin_head,html_document,env_file,static_assets,cli_output}.rs`
+`crates/ruvyxa_dev_server/src/{lib,router,render_cache,response,hmr_tracker,worker_pool,style,action_security,port_binding,render_pipeline,plugin_bridge,plugin_head,html_document,env_file,static_assets,cli_output}.rs`
 
-Axum HTTP server with HMR (WebSocket), radix-trie route matching, LRU render cache, persistent
-Node/Bun worker pool, style collection pipeline, action security middleware, TypeScript plugin host,
-and realtime event broadcasting.
+Axum HTTP server with HMR (WebSocket), radix-trie route matching, LRU render cache with lazily-built
+compressed copies, persistent Node/Bun worker pool, style collection pipeline, action security
+middleware, TypeScript plugin host, and realtime event broadcasting.
 
 ---
 
@@ -1370,9 +1400,9 @@ impl RenderCache {
     pub fn new(capacity: usize, ttl_secs: u64) -> Self;
     pub fn default_dev() -> Self;        // 1024 entries, 300s TTL
     pub fn default_production() -> Self; // 512 entries, 1800s TTL
-    pub async fn get_arc(&self, key: &str) -> Option<Arc<str>>;
-    pub async fn get_stale_with_age(&self, key: &str) -> Option<(Arc<str>, Duration)>;
-    pub async fn put(&self, key: String, value: String) -> Arc<str>;
+    pub async fn get_document(&self, key: &str) -> Option<CachedDocument>;
+    pub async fn get_stale_with_age(&self, key: &str) -> Option<(CachedDocument, Duration)>;
+    pub async fn put(&self, key: String, value: String) -> CachedDocument;
     pub async fn invalidate_all(&self) -> usize;
     pub async fn invalidate_prefix(&self, prefix: &str) -> usize;
     pub async fn invalidate_route(&self, route_path: &str) -> usize;
@@ -1380,16 +1410,47 @@ impl RenderCache {
     pub fn invalidate_prefix_blocking(&self, prefix: &str) -> usize;
     pub fn invalidate_route_blocking(&self, route_path: &str) -> usize;
 }
+
+pub fn page_cache_key(namespace: &str, request_path: &str, params: &RouteParams) -> String;
+pub const RENDER_NAMESPACES: [&str; 4] = ["ssg:", "isr:", "ppr:", "csr:"];
 ```
 
 Thread-safe LRU with O(1) get/put/eviction via hash-indexed doubly-linked recency list. Entries
 TTL-expired on read. ISR uses `get_stale_with_age` to serve stale while revalidating. `blocking_*`
 methods for file-watcher sync context.
 
-Entries are stored as `Arc<str>` and every read hands back the stored handle, so serving a cache hit
-does not copy the document. `put` returns the same handle it stored — including when the cache is
-disabled (`capacity == 0`), so the caller always gets its value back and never needs a second copy
-for the response.
+`page_cache_key` is the single place a page's cache key is built, and `RENDER_NAMESPACES` is the
+same list `invalidate_route`'s prefix-stripping reads. They used to be a `format!("csr:{…}")` at
+each call site matched against a hand-copied list that was missing `csr:` — a CSR page's cache entry
+could never be found by route invalidation, so editing a CSR page's source left its previous render
+served from cache until the entry's TTL expired.
+
+#### CachedDocument and compressed responses (`render_cache.rs`, `response.rs`)
+
+```rust
+pub struct CachedDocument { pub html: Arc<str>, /* private compressed slot */ }
+impl CachedDocument {
+    pub fn uncached(html: Arc<str>) -> Self;
+    pub fn compressed(&self, accepts: impl Fn(&str) -> bool, encode: impl FnOnce(&str) -> Option<CompressedDocument>) -> Option<&CompressedDocument>;
+}
+pub struct CompressedDocument { pub encoding: &'static str, pub bytes: Arc<[u8]> }
+
+// response.rs
+pub(crate) fn cached_html_response(status: StatusCode, document: &CachedDocument, request_headers: Option<&HeaderMap>) -> Response;
+```
+
+Every cache entry carries a `OnceLock` slot for a compressed copy alongside its HTML, shared by
+every clone of that `CachedDocument`. `get_document`/`get_stale_with_age`/`put` all return one, and
+`cached_html_response` is the one place that reads it: on the first request that can use an
+encoding, it brotli- or gzip-encodes the document and stores the result; every later hit — from any
+concurrent request — reuses that stored `Arc<[u8]>` rather than compressing the identical bytes
+again. Before this, the outermost `CompressionLayer` (see Middleware) re-compressed a cache hit's
+HTML on every single request, which meant a fully-cached SSG page still paid a full compression pass
+per request. Documents under 256 bytes skip compression (the header overhead usually outweighs any
+savings), and every response — compressed or not — carries `Vary: Accept-Encoding`, since which body
+a client received depended on that header either way. A document with nowhere to keep a compressed
+copy (`CachedDocument::uncached`, used for error pages and other not-cache-backed responses) is
+compressed by the outer layer exactly as before.
 
 #### HmrTracker (`hmr_tracker.rs`)
 
@@ -1871,6 +1932,14 @@ An `api` response is **framed** rather than a single message: `api-start`, then 
 makes streaming responses possible across the boundary. `WorkerResponse::is_terminal()` decides when
 a response is complete, and `header_pairs` is preferred over the legacy `headers` map so repeated
 `Set-Cookie` values survive.
+
+Lines are read with a bounded reader rather than `AsyncBufReadExt::lines()`, capped at 64 MiB by
+default (`RUVYXA_WORKER_MAX_LINE_BYTES`). `lines()` grows without limit until it finds a newline, so
+a worker emitting one very large or corrupted line would be buffered in full on the Rust side before
+anything could reject it — the failure mode was the whole server process running out of memory
+rather than the misbehaving worker being flagged and replaced. A line over the limit desynchronizes
+the NDJSON framing, so the reader stops and the pool's normal failure-recovery path (below) takes
+over instead of trying to resynchronize.
 
 ---
 
@@ -2411,7 +2480,23 @@ re-evaluated against current source.
 Production build output serves precompiled bundles from `.ruvyxa/client/<blake3-hash>.js` as static
 files (`static_assets.rs`), with `Cache-Control: public, max-age=31536000, immutable` — safe only
 because the filename changes when the content does. This is the file the route manifest
-(`/__ruvyxa/client/route-manifest.json`) points browsers at.
+(`/__ruvyxa/client/route-manifest.json`) points browsers at. A revalidation of a bundle answers from
+the same in-memory ETag fingerprint index `public/` files use (below), instead of re-reading and
+re-hashing the file to produce a `304` with an empty body.
+
+#### `public/` files (`serve_public_file`, `static_assets.rs`)
+
+Served with `Cache-Control: public, max-age=3600, must-revalidate` and an ETag. A bounded
+insertion-ordered `(path → (len, mtime) → etag)` index answers a matching `If-None-Match` without
+touching the file, so the steady state — a browser re-asking for a file it already has, which
+`must-revalidate` guarantees happens on every navigation — costs a map lookup rather than a read and
+a blake3 hash.
+
+A file above a threshold (8 MiB default, `RUVYXA_STREAM_ASSET_THRESHOLD_BYTES`) is streamed to the
+response instead of read into memory first; peak memory otherwise scales with the number of large
+files being served concurrently. A streamed file's ETag is weak (`W/"<len>-<mtime>"`) rather than a
+content hash, since no hash can be computed without holding the whole file at once — HTTP defines
+weak validators for exactly this case.
 
 #### Wire format (both modes)
 
@@ -3217,14 +3302,22 @@ graph fails the build instead of being silently blanked:
 
 ```rust
 // crates/ruvyxa_bundler/src/boundary.rs
-module.ast.env_reads
-    .iter()
-    .filter(|name| name.as_str() != "NODE_ENV" && !name.starts_with("RUVYXA_PUBLIC_"))
+#[must_use]
+pub fn env_read_is_private(name: &str) -> bool {
+    name != "NODE_ENV" && !name.starts_with("RUVYXA_PUBLIC_")
+}
 ```
 
 `NODE_ENV` is exempt because it is substituted at build time; `RUVYXA_PUBLIC_*` is public by
 contract. The Node-side compiler (`packages/ruvyxa/runtime/compiler.mjs`) applies the identical
-filter so the two halves of the build cannot disagree about what counts as private.
+filter so `build` cannot disagree with itself about what counts as private.
+
+`env_read_is_private` is also the only place `ruvyxa_graph` reads this rule for the `check` and
+`analyze` diagnostics — it used to carry its own copy of the filter, which had silently lost the
+`NODE_ENV` exemption: `check` rejected the single most common line in a React client component
+(`process.env.NODE_ENV !== 'production'`) with RUV1008 while `build` compiled the same file without
+complaint. Both the fact (`env_reads`, from the bundler's scanner) and the rule that judges it now
+have exactly one home, so `check`, `build`, and the Node-side compiler cannot disagree.
 
 Failing rather than rewriting is the safer default: a blanked-out read turns a missing secret into a
 confusing runtime `undefined`, while a build error names the file and the variable.
@@ -3253,8 +3346,9 @@ What is actually bounded:
 
 ### 7. Default Headers
 
-Every response gets 7 headers unless `security.headers: false` (`apply_security_headers` in
-`ruvyxa_dev_server/src/lib.rs`), each only set if the application has not already set it:
+Every response gets 7 headers unless `security.headers: false`
+(`apply_security_headers`/`finalize_security_headers` in `ruvyxa_dev_server/src/response.rs`), each
+only set if the application has not already set it:
 
 ```
 X-Content-Type-Options: nosniff
@@ -3265,6 +3359,15 @@ Cross-Origin-Resource-Policy: same-origin
 X-Frame-Options: DENY
 X-Permitted-Cross-Domain-Policies: none
 ```
+
+The seven names and values are a single `DEFAULT_SECURITY_HEADERS` list that both directions read:
+applying walks it to insert what is missing, and disabling walks the same list to remove exactly
+what applying would have added. They used to be two hand-written sequences of the same headers —
+adding one meant remembering to update both, and the removal half had drifted, so `security: false`
+could keep sending a header the project had asked to turn off. The JavaScript runtimes serve the
+same seven from `DEFAULT_SECURITY_HEADERS` in `packages/@ruvyxa/core/src/utils.ts`, which the two
+implementations cannot share as code; `tests/fixtures/security-headers-conformance.json` pins the
+list for both.
 
 **There is no default Content-Security-Policy or HSTS.** Both are application-specific — a safe CSP
 depends on the app's own script/style/image sources, and HSTS is only safe once HTTPS is guaranteed

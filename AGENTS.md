@@ -72,6 +72,17 @@ cargo run -p ruvyxa_cli -- test:parity --root examples/demo
 - Runtime/config/package behavior needs Node tests under `tests/packages/**`.
 - Template changes should stay package-manager neutral and must match
   `templates/minimal/package.json`.
+- `templates/minimal/app/components/ruvyxa-runner.tsx` and
+  `examples/demo/app/components/ruvyxa-runner.tsx` are required to be byte-identical, so the demo
+  fixture exercises exactly what a scaffolded project ships with. After editing either, run
+  `node scripts/check-template-mirrors.mjs` to resync and commit both; `pnpm release:validate` fails
+  on drift. Five commits edited both copies by hand before this existed, and a real defect (a
+  projectile scoring against two targets in one frame) lived in both copies as a result.
+- A cross-language table that cannot be shared as code — a Content-Type map, a security-header list,
+  a route-matching rule — belongs in `tests/fixtures/*-conformance.json` with a test in each
+  language that replays it, not in a comment promising the two stay in sync. `env_read_is_private`
+  (private env var policy), `STATIC_CONTENT_TYPES` (static asset Content-Type), and
+  `DEFAULT_SECURITY_HEADERS` all drifted silently before gaining this.
 - Documentation changes should describe actual supported behavior, not intended future behavior.
 - If a check was already failing before your work, report it as baseline and do not weaken tests to
   pass.
