@@ -478,6 +478,8 @@ export interface RequestContext {
   url: string
   /** Whether draft mode is enabled for this request. */
   draft: boolean
+  /** URLs {@link revalidatePath} has queued for the host to refresh. */
+  revalidate?: Set<string>
   /**
    * `Set-Cookie` values a server action or API route has queued.
    *
@@ -492,6 +494,17 @@ export interface RequestContext {
 export interface RequestContextHost {
   /** The context for the request being served on this call stack, if any. */
   current(): RequestContext | null
+  /**
+   * The context without recording a read.
+   *
+   * `current()` marks the render as depending on this request, which is what
+   * keeps a personalised page out of a shared cache. `revalidatePath()` needs
+   * the context but is not a read of request state, so it uses this instead —
+   * otherwise queuing a revalidation would quietly make the calling page
+   * uncacheable. Optional so an older host still works, with `current()` as the
+   * fallback.
+   */
+  peek?(): RequestContext | null
 }
 
 const CONTEXT_KEY = '__RUVYXA_REQUEST_CONTEXT__'
@@ -591,6 +604,55 @@ export interface DraftMode {
 export function draftMode(): DraftMode {
   const context = activeRequest('draftMode()')
   return { isEnabled: context.draft }
+}
+
+/**
+ * Ask the server to re-render one URL on its next request.
+ *
+ * The URL is a concrete path (`/blog/hello`), not a route pattern. It reaches
+ * the server with the handler's response, so the invalidation and the write
+ * that caused it land together: a client that follows a successful action with
+ * a navigation cannot arrive before the cache has been cleared.
+ *
+ * Every rendering strategy is covered. For SSR and CSR the cached document is
+ * dropped; for SSG, ISR, and PPR the next request additionally bypasses the
+ * HTML the build wrote to disk, which is the document that would otherwise keep
+ * being served.
+ *
+ * There is no `revalidateTag()`. In Next.js a tag labels a `fetch()` cache
+ * entry, and Ruvyxa has no fetch cache for one to label — supporting tags would
+ * mean inventing a page-level tag declaration and a tag-to-route index, which
+ * is a design decision rather than an addition to this one.
+ *
+ * @example
+ * ```ts
+ * export const POST = async ({ request }: { request: Request }) => {
+ *   const { slug } = await request.json()
+ *   revalidatePath(`/blog/${slug}`)
+ *   return new Response(null, { status: 204 })
+ * }
+ * ```
+ */
+export function revalidatePath(path: string): void {
+  if (!path.startsWith('/')) {
+    throw new Error(
+      `revalidatePath() needs an absolute path, got ${JSON.stringify(path)}.\n\n` +
+        'Pass the URL a visitor would request, such as "/blog/hello" — not a route ' +
+        'pattern like "/blog/[slug]" and not a relative path.',
+    )
+  }
+  const host = (globalThis as Record<string, unknown>)[CONTEXT_KEY] as
+    RequestContextHost | undefined
+  const context = host?.peek?.() ?? host?.current() ?? null
+  if (!context) {
+    throw new Error(
+      'revalidatePath() was called outside a request.\n\n' +
+        'It queues work onto the response of the API route or server action that ' +
+        'calls it, so there has to be one. Calling it at module scope runs at ' +
+        'import time, when there is no response to attach it to.',
+    )
+  }
+  context.revalidate?.add(path)
 }
 
 /** Cookie name that turns draft mode on. Shared with the Rust request path. */

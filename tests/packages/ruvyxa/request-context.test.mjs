@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, it } from 'node:test'
 
 import {
+  collectRevalidations,
   DRAFT_MODE_COOKIE as RUNTIME_DRAFT_COOKIE,
   requestContext,
   runWithRequestContext,
@@ -26,6 +27,7 @@ import {
   draftMode,
   headers,
   parseCookieHeader,
+  revalidatePath,
 } from '../../../packages/@ruvyxa/core/dist/server.js'
 
 const CONTEXT_KEY = '__RUVYXA_REQUEST_CONTEXT__'
@@ -183,5 +185,49 @@ describe('outside a request', () => {
         return true
       })
     }
+  })
+})
+
+describe('revalidatePath', () => {
+  it('collects absolute paths for the host to act on', () => {
+    const store = requestContext({ headerPairs: [] })
+    runWithRequestContext(store, () => {
+      revalidatePath('/blog/hello')
+      revalidatePath('/blog/world')
+    })
+    assert.deepEqual(collectRevalidations(store), ['/blog/hello', '/blog/world'])
+  })
+
+  it('collapses a path revalidated more than once', () => {
+    const store = requestContext({ headerPairs: [] })
+    runWithRequestContext(store, () => {
+      revalidatePath('/blog/hello')
+      revalidatePath('/blog/hello')
+    })
+    assert.deepEqual(collectRevalidations(store), ['/blog/hello'])
+  })
+
+  it('does not make the caller uncacheable', () => {
+    // Queuing a revalidation says nothing about who sent the request, so it
+    // must not trip the flag that keeps a personalised render out of the cache.
+    const store = requestContext({ headerPairs: [] })
+    runWithRequestContext(store, () => revalidatePath('/blog/hello'))
+    assert.equal(usedRequestContext(store), false)
+  })
+
+  it('rejects a route pattern and a relative path', () => {
+    const store = requestContext({ headerPairs: [] })
+    runWithRequestContext(store, () => {
+      for (const bad of ['blog/hello', './hello', '']) {
+        assert.throws(() => revalidatePath(bad), /needs an absolute path/)
+      }
+      // A pattern is absolute, so it passes the check — and is still wrong.
+      // The error text says so; the type system cannot.
+      assert.doesNotThrow(() => revalidatePath('/blog/[slug]'))
+    })
+  })
+
+  it('throws outside a request', () => {
+    assert.throws(() => revalidatePath('/blog/hello'), /was called outside a request/)
   })
 })

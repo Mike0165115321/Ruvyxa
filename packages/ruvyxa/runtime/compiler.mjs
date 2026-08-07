@@ -268,6 +268,21 @@ function existingManifestFiles(root) {
   return PROJECT_MANIFEST_FILES.filter((fileName) => existsSync(path.join(root, fileName)))
 }
 
+/**
+ * Names Ruvyxa accepts for the project instrumentation hook, in priority order.
+ *
+ * Shared by the Node worker and the adapter runner. They run the hook in
+ * different processes — one lazily per worker, one as a top-level await in the
+ * function bundle — but a project that works in `ruvyxa dev` and not after
+ * deployment because only one side recognised `.mjs` would be a bad surprise,
+ * so the list has one home.
+ */
+export const INSTRUMENTATION_FILES = Object.freeze([
+  'instrumentation.ts',
+  'instrumentation.js',
+  'instrumentation.mjs',
+])
+
 export function runtimeAliases(runtimeDir = path.dirname(fileURLToPath(import.meta.url))) {
   const packageRoot = path.resolve(runtimeDir, '..')
   const workspaceRoot = path.resolve(packageRoot, '..')

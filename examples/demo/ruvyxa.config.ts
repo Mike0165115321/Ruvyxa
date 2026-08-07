@@ -5,6 +5,7 @@ import { demoPlugins } from './plugins'
 const settings: RuvyxaConfig = {
   appDir: 'app',
   outDir: '.ruvyxa',
+  typedRoutes: true,
 
   server: {
     host: 'localhost',

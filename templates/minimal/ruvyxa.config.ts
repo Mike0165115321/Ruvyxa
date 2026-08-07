@@ -3,6 +3,10 @@ import { config, type RuvyxaConfig } from 'ruvyxa/config'
 const settings: RuvyxaConfig = {
   appDir: 'app',
   outDir: '.ruvyxa',
+  // Generates .ruvyxa/types/routes.d.ts, which narrows `<Link href>` and
+  // `useRouter().push` to the routes this project actually has. The tsconfig
+  // `include` below is what makes TypeScript read it.
+  typedRoutes: true,
   server: {
     host: 'localhost',
     port: 3000,

@@ -136,3 +136,86 @@ boundaries.
 
 **Previous:** [Data, actions, and API routes](05-data-actions-api.md) · **Next:**
 [Configuration and environment](07-configuration.md)
+
+## Typed routes
+
+With `typedRoutes: true` in `ruvyxa.config.ts`, Ruvyxa writes `.ruvyxa/types/routes.d.ts` from the
+discovered route graph. `<Link href>`, `useRouter().push`, `useRouter().replace`, and
+`useRouter().prefetch` are then checked against the routes that exist, and a mistyped path is a
+compile error rather than a 404 someone finds later.
+
+The file is rewritten by `ruvyxa dev` whenever route discovery re-runs, and once by `ruvyxa build`
+and `ruvyxa check`. It is generated output: do not edit it, and do not commit it.
+
+TypeScript only reads the file if your `tsconfig.json` includes it:
+
+```json
+{
+  "include": ["app", "ruvyxa.config.ts", ".ruvyxa/types/**/*.d.ts"]
+}
+```
+
+Projects scaffolded by `create-ruvyxa` have both the config flag and this `include` already.
+`ruvyxa check` reports `RUV1502` if the flag is on and the `include` is missing, because a generated
+file nothing reads looks exactly like a working feature.
+
+Without the flag — and in every project that predates it — `href` stays `string` and nothing about
+type-checking changes.
+
+### What is and is not caught
+
+A dynamic segment expands to `${string}`, which is as precise as a TypeScript template literal type
+can be: there is no way to say "any string without a slash". So:
+
+```tsx
+<Link href="/blog/hello">Post</Link>        // ok
+<Link href="/blog/hello?draft=1">Post</Link> // ok — query and hash are allowed
+<Link href="https://example.com">Docs</Link> // ok — external URLs stay valid
+<Link href="/abuot">About</Link>             // error: no such route
+<Link href="/blogs/hello">Post</Link>        // error: the static prefix is wrong
+<Link href="/blog/a/b">Post</Link>           // accepted, though `[slug]` is one segment
+```
+
+The last line is the known limitation, and it is the same one Next.js has. What the check reliably
+catches is the common mistake: a wrong static part of a path.
+
+### URLs built at runtime
+
+A path assembled from data is a `string`, and `string` is not assignable to a union of literals.
+Wrap it in `route()`:
+
+```tsx
+import { Link, route } from '@ruvyxa/react'
+
+;<Link href={route(record.canonicalUrl)}>Open</Link>
+```
+
+`route()` asserts rather than validates. Prefer a template built from a literal pattern —
+`` `/blog/${slug}` `` type-checks on its own — and keep `route()` for values you genuinely cannot
+know at compile time.
+
+## Third-party scripts
+
+`<Script>` loads an external or inline script without putting it on the critical path, and fetches
+it once per document however many routes render it.
+
+```tsx
+import { Script } from '@ruvyxa/react'
+
+<Script src="https://plausible.io/js/script.js" strategy="lazyOnload" />
+<Script id="consent" strategy="beforeInteractive">{`window.__consent = true`}</Script>
+```
+
+| `strategy`                   | When it runs                                         | Use for                                  |
+| ---------------------------- | ---------------------------------------------------- | ---------------------------------------- |
+| `beforeInteractive`          | Rendered into the server HTML, runs before hydration | Consent gating, A/B bucketing, polyfills |
+| `afterInteractive` (default) | Appended to `<body>` after hydration                 | Analytics, tag managers                  |
+| `lazyOnload`                 | Appended when the browser is idle after `load`       | Chat widgets, support popovers           |
+
+Deduplication is keyed by `id`, falling back to `src`. That key survives client-side navigation, so
+navigating away from a route and back does not run its analytics tag a second time. A script that
+fails to load releases its key, so a later render can retry it.
+
+`beforeInteractive` is the only strategy that works on a page with `export const hydrate = false`:
+the others are appended by an effect, and such a page ships no client runtime for an effect to run
+in. Inline scripts need an `id` — they have no `src` to be identified by.

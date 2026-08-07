@@ -75,3 +75,77 @@ route handler ต้อง validate body ที่ไม่น่าเชื่
 
 **ก่อนหน้า:** [Routing และ rendering](04-routing-rendering.md) · **ถัดไป:**
 [UI, navigation, metadata และ asset](06-ui-navigation-metadata-and-assets.md)
+
+## อ่านข้อมูลจาก request
+
+`cookies()`, `headers()` และ `draftMode()` อ่าน request ที่กำลังถูกให้บริการอยู่ ใช้ได้ทั้งใน page
+component, API route handler และ server action ไม่ต้องส่งพารามิเตอร์ผ่านลงไปเอง: runtime ติดตั้ง
+store ต่อ request ครอบ render และ handler ไว้ให้ แล้วฟังก์ชันเหล่านี้อ่านจากตรงนั้น
+
+```tsx
+// app/dashboard/page.tsx
+import { cookies, draftMode, headers } from 'ruvyxa/server'
+
+export default function Dashboard() {
+  const theme = cookies().get('theme') ?? 'light'
+  const locale = headers().get('accept-language') ?? 'en'
+  if (draftMode().isEnabled) return <DraftPreview locale={locale} />
+  return <main data-theme={theme} lang={locale} />
+}
+```
+
+- `cookies()` คืน `{ get, has, getAll }` ที่อ่านจากเฮดเดอร์ `Cookie` ค่าที่ได้เป็นค่าที่ส่งมาจริง
+  ตัดเพียงช่องว่างหัวท้ายและเครื่องหมายคำพูดหนึ่งชั้น ส่วนการ percent-decode เป็นหน้าที่ของคุณ
+  เพราะไม่ใช่ทุก cookie ที่เข้ารหัสไว้ และการ decode ค่าที่ไม่ได้เข้ารหัสจะ throw
+- `headers()` คืน `Headers` มาตรฐานแบบอ่านอย่างเดียว `get`, `has` และการวนลูปทำงานเหมือนบน `Request`
+- `draftMode()` บอกว่ามี cookie `__ruvyxa_draft` อยู่หรือไม่ ให้ตั้งค่าจาก API route หลังตรวจ secret
+  ที่ CMS ของคุณใช้ร่วมกับแอปแล้ว
+
+### การเรียกเหล่านี้เปลี่ยนวิธี cache หน้า
+
+การเรียกฟังก์ชันใดก็ตามข้างต้นเป็นการบอก Ruvyxa ว่า HTML ที่ได้เป็นของผู้เข้าชมคนเดียว เอกสารนั้นจะ
+ไม่ถูกเก็บใน render cache และถ้าเป็นกลยุทธ์แบบ prerender ก็จะไม่ถูกเขียนลง ISR cache ด้วย
+ไม่ต้องประกาศอะไรและไม่ต้อง export อะไร — ตัวการเรียกคือการประกาศในตัวมันเอง
+
+ผลที่ควรรู้: หน้าที่อ่าน request จะ render ใหม่ทุกครั้ง ถ้าคุณต้องการ cookie แค่กับส่วนเล็ก ๆ
+ของหน้า การย้ายส่วนนั้นไปไว้ใน island ที่มี `'use client'` จะทำให้ส่วนที่เหลือยัง cache ได้
+
+### เรียกนอก request
+
+ทั้งสองกรณีจะ throw พร้อมข้อความที่ระบุชื่อฟังก์ชัน:
+
+- **ที่ระดับ module** โค้ดระดับ module ทำงานตอน import ซึ่งยังไม่มี request ให้ย้ายการเรียกเข้าไป ใน
+  component หรือ handler
+- **ระหว่าง ISR revalidation เบื้องหลัง** การ re-render ตามกำหนดเวลาไม่มีผู้เข้าชม นี่เป็นเจตนา:
+  ทางเลือกอีกทางคือได้หน้าที่สร้างจาก session ของ "ไม่มีใคร" แล้วเอาไป cache ให้ทุกคน
+
+## Revalidate ตามคำสั่ง
+
+`revalidatePath(path)` สั่งให้เซิร์ฟเวอร์ render URL หนึ่งใหม่ในคำขอถัดไป เรียกได้จาก API route หรือ
+server action — คำสั่งจะเดินทางกลับไปพร้อมกับ response ของ handler นั้น ดังนั้น client ที่นำทางต่อ
+หลังได้ผลสำเร็จจะไม่มีทางมาถึงก่อนที่ cache จะถูกล้าง
+
+```ts
+// app/api/revalidate/route.ts
+import { revalidatePath } from 'ruvyxa/server'
+
+export async function POST({ request }: { request: Request }) {
+  const { path } = await request.json()
+  revalidatePath(path)
+  return Response.json({ revalidated: path })
+}
+```
+
+อาร์กิวเมนต์คือ URL จริง (`/blog/hello`) ไม่ใช่ route pattern (`/blog/[slug]`) ครอบคลุมทุกกลยุทธ์
+การ render: เอกสารใน cache จะถูกทิ้ง และสำหรับ SSG, ISR และ PPR คำขอถัดไปจะข้าม HTML ที่ build
+เขียนลงดิสก์ด้วย — ไม่อย่างนั้นไฟล์นั้นจะถูกเสิร์ฟต่อไปเรื่อย ๆ การ revalidate URL ที่ยังไม่เคยมีใคร
+ร้องขอเป็นเรื่องปกติและเป็นเคสของ webhook ทั่วไป
+
+Ruvyxa ไม่มี `revalidateTag()` ใน Next.js tag ใช้กำกับรายการใน cache ของ `fetch()` แต่ Ruvyxa ไม่มี
+fetch cache ให้กำกับ การรองรับ tag จึงต้องมีการประกาศ tag ระดับหน้าและดัชนี tag-to-route
+ซึ่งเป็นการตัดสินใจเชิงออกแบบ ไม่ใช่ส่วนเพิ่มของฟังก์ชันนี้
+
+บน deployment แบบ serverless `revalidatePath` จะล้าง function instance ที่เรียกมัน และคำขอถัดไป
+จะเขียนเอกสารที่เก็บไว้ใหม่ให้กับคำขอหลังจากนั้นทั้งหมด ส่วน instance
+อื่นที่อุ่นอยู่แล้วจะเสิร์ฟสำเนา ของตัวเองจนกว่า TTL ของมันจะหมด ซึ่งเป็นขอบเขตเดียวกับที่ ISR
+มีอยู่แล้ว

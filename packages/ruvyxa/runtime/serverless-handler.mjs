@@ -24,7 +24,12 @@
  * inlined: a deployed function directory resolves no bare specifiers.
  */
 
-import { requestContext, runWithRequestContext, usedRequestContext } from './request-context.mjs'
+import {
+  collectRevalidations,
+  requestContext,
+  runWithRequestContext,
+  usedRequestContext,
+} from './request-context.mjs'
 import {
   bindPatternParams,
   canonicalRoutePath,
@@ -104,6 +109,19 @@ export function createHandler(options) {
     optimizeImage,
   } = options
   const pendingRevalidations = new Map()
+  /**
+   * URLs `revalidatePath()` named, waiting for their next request.
+   *
+   * Held in the instance rather than pushed to the platform's cache store,
+   * because the only universal capability an adapter provides is read and
+   * write — there is no delete. The next request for one of these paths
+   * bypasses `readPrerendered` and renders fresh, and `writePrerendered` then
+   * replaces the stored document for every later request and every other
+   * instance. What this cannot do is reach an instance that is already warm
+   * elsewhere; that one keeps serving until its own TTL expires, which is the
+   * same bound ISR already has.
+   */
+  const forcedRevalidations = new Set()
   const fetchMiddleware = createFetchMiddleware(middleware)
 
   // Pre-compile route patterns for matching. Sort by specificity so a
@@ -216,14 +234,13 @@ export function createHandler(options) {
       })
     }
 
-    const result = await runWithRequestContext(
-      requestContext({
-        headerPairs: [...request.headers],
-        method,
-        url: new URL(request.url).pathname,
-      }),
-      () => handler({ request, params }),
-    )
+    const context = requestContext({
+      headerPairs: [...request.headers],
+      method,
+      url: new URL(request.url).pathname,
+    })
+    const result = await runWithRequestContext(context, () => handler({ request, params }))
+    for (const path of collectRevalidations(context)) forcedRevalidations.add(path)
     return normalizeResponse(result)
   }
 
@@ -243,23 +260,29 @@ export function createHandler(options) {
       return await renderPage(route, pathname, params, request)
     }
 
+    const forced = forcedRevalidations.delete(pathname)
+
     // SSG: serve pre-rendered HTML directly
     if (strategy === 'ssg') {
-      const cached = normalizeCacheEntry(readPrerendered?.(pathname))
+      const cached = forced ? null : normalizeCacheEntry(readPrerendered?.(pathname))
       if (cached) {
         return new Response(cached.html, {
           status: 200,
           headers: { 'content-type': 'text/html; charset=utf-8' },
         })
       }
-      // Fallback to SSR if pre-rendered not available
-      return await renderPage(route, pathname, params, request)
+      // Either nothing was pre-rendered, or `revalidatePath()` replaced it.
+      const rendered = await renderPage(route, pathname, params, request)
+      if (forced && writePrerendered && rendered.status === 200 && !rendered.requestScoped) {
+        writePrerendered(pathname, await rendered.clone().text())
+      }
+      return rendered
     }
 
     // ISR: serve cached HTML, revalidate in background if stale
     if (strategy === 'isr') {
       const revalidate = route.render.revalidate ?? 60
-      const cached = normalizeCacheEntry(readPrerendered?.(pathname, revalidate))
+      const cached = forced ? null : normalizeCacheEntry(readPrerendered?.(pathname, revalidate))
       if (cached) {
         if (cached.stale) {
           const revalidation = scheduleRevalidation(route, pathname, params)

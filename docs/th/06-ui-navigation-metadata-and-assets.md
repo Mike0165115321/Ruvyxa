@@ -132,3 +132,86 @@ dependency ให้ใช้ style ที่ build resolve ได้ และ�
 
 **ก่อนหน้า:** [ข้อมูล, action และ API route](05-data-actions-api.md) · **ถัดไป:**
 [Configuration และ environment](07-configuration.md)
+
+## Typed routes
+
+เมื่อตั้ง `typedRoutes: true` ใน `ruvyxa.config.ts` Ruvyxa จะเขียน `.ruvyxa/types/routes.d.ts` จาก
+route graph ที่ค้นพบ จากนั้น `<Link href>`, `useRouter().push`, `useRouter().replace` และ
+`useRouter().prefetch` จะถูกตรวจกับ route ที่มีอยู่จริง path ที่พิมพ์ผิดจะกลายเป็น compile error
+แทนที่จะเป็น 404 ที่มีคนไปเจอทีหลัง
+
+ไฟล์นี้ถูกเขียนใหม่โดย `ruvyxa dev` ทุกครั้งที่ค้นหา route ใหม่ และเขียนหนึ่งครั้งโดย `ruvyxa build`
+กับ `ruvyxa check` มันคือไฟล์ที่ถูก generate: อย่าแก้เอง และอย่า commit
+
+TypeScript จะอ่านไฟล์นี้ก็ต่อเมื่อ `tsconfig.json` include มันไว้:
+
+```json
+{
+  "include": ["app", "ruvyxa.config.ts", ".ruvyxa/types/**/*.d.ts"]
+}
+```
+
+โปรเจกต์ที่สร้างด้วย `create-ruvyxa` มีทั้งค่าใน config และ `include` นี้มาให้แล้ว `ruvyxa check`
+จะรายงาน `RUV1502` ถ้าเปิดค่านี้ไว้แต่ไม่มี `include` เพราะไฟล์ที่ถูก generate แล้วไม่มีใครอ่าน
+หน้าตาเหมือนฟีเจอร์ที่ทำงานอยู่ทุกประการ
+
+ถ้าไม่เปิดค่านี้ — และในทุกโปรเจกต์ที่มีมาก่อนฟีเจอร์นี้ — `href` ยังเป็น `string` เหมือนเดิม
+และการตรวจ type ไม่เปลี่ยนแปลงอะไรเลย
+
+### อะไรที่จับได้และจับไม่ได้
+
+segment แบบ dynamic จะขยายเป็น `${string}` ซึ่งละเอียดที่สุดเท่าที่ template literal type ของ
+TypeScript ทำได้: ไม่มีวิธีเขียนว่า "string ใด ๆ ที่ไม่มี slash" ดังนั้น:
+
+```tsx
+<Link href="/blog/hello">Post</Link>        // ผ่าน
+<Link href="/blog/hello?draft=1">Post</Link> // ผ่าน — query และ hash ใช้ได้
+<Link href="https://example.com">Docs</Link> // ผ่าน — URL ภายนอกยังใช้ได้
+<Link href="/abuot">About</Link>             // error: ไม่มี route นี้
+<Link href="/blogs/hello">Post</Link>        // error: ส่วน static ผิด
+<Link href="/blog/a/b">Post</Link>           // ผ่าน ทั้งที่ `[slug]` คือหนึ่ง segment
+```
+
+บรรทัดสุดท้ายคือข้อจำกัดที่รู้อยู่ และเป็นข้อจำกัดเดียวกับที่ Next.js มี
+สิ่งที่การตรวจนี้จับได้แน่นอน คือความผิดพลาดที่พบบ่อยกว่ามาก: ส่วน static ของ path ที่ผิด
+
+### URL ที่สร้างตอน runtime
+
+path ที่ประกอบจากข้อมูลมีชนิดเป็น `string` และ `string` ไม่สามารถ assign เข้า union ของ literal ได้
+ให้ครอบด้วย `route()`:
+
+```tsx
+import { Link, route } from '@ruvyxa/react'
+
+;<Link href={route(record.canonicalUrl)}>Open</Link>
+```
+
+`route()` เป็นการ assert ไม่ใช่การตรวจสอบ ควรใช้ template ที่สร้างจาก pattern ที่เป็น literal ก่อน —
+`` `/blog/${slug}` `` ผ่านการตรวจ type ได้ด้วยตัวเอง — และเก็บ `route()`
+ไว้สำหรับค่าที่รู้ไม่ได้จริง ๆ ตอน compile
+
+## สคริปต์จากภายนอก
+
+`<Script>` โหลดสคริปต์ภายนอกหรือสคริปต์ inline โดยไม่วางไว้บนเส้นทางวิกฤต และดาวน์โหลดครั้งเดียว
+ต่อหนึ่งเอกสารไม่ว่าจะมีกี่ route ที่ render มัน
+
+```tsx
+import { Script } from '@ruvyxa/react'
+
+<Script src="https://plausible.io/js/script.js" strategy="lazyOnload" />
+<Script id="consent" strategy="beforeInteractive">{`window.__consent = true`}</Script>
+```
+
+| `strategy`                     | ทำงานเมื่อไร                                           | เหมาะกับ                                |
+| ------------------------------ | ------------------------------------------------------ | --------------------------------------- |
+| `beforeInteractive`            | ถูก render ลง HTML ฝั่งเซิร์ฟเวอร์ ทำงานก่อน hydration | consent gating, A/B bucketing, polyfill |
+| `afterInteractive` (ค่าปริยาย) | ต่อท้าย `<body>` หลัง hydration                        | analytics, tag manager                  |
+| `lazyOnload`                   | ต่อท้ายเมื่อเบราว์เซอร์ว่างหลัง `load`                 | chat widget, ป็อปอัปช่วยเหลือ           |
+
+การกันซ้ำใช้ `id` เป็นกุญแจ ถ้าไม่มีจะใช้ `src` แทน กุญแจนี้อยู่รอดข้ามการนำทางฝั่ง client ดังนั้น
+การออกจาก route แล้วกลับมาจะไม่รัน analytics tag ซ้ำอีกรอบ สคริปต์ที่โหลดล้มเหลวจะปล่อยกุญแจคืน
+เพื่อให้การ render ครั้งถัดไปลองใหม่ได้
+
+`beforeInteractive` เป็นกลยุทธ์เดียวที่ใช้ได้บนหน้าที่มี `export const hydrate = false`: กลยุทธ์อื่น
+ถูกต่อท้ายด้วย effect และหน้าแบบนั้นไม่ส่ง client runtime ไปให้ effect ทำงาน สคริปต์ inline ต้องมี
+`id` เพราะไม่มี `src` ให้ใช้ระบุตัวตน

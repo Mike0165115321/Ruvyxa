@@ -324,6 +324,10 @@ pub struct WorkerResponse {
     /// treated as `false` because those workers cannot expose the accessors
     /// that would make it true.
     pub request_scoped: Option<bool>,
+    /// Concrete URLs `revalidatePath()` asked the host to refresh, collected
+    /// from the API route or server action that just ran. Absent from older
+    /// workers, which never call it.
+    pub revalidate: Option<Vec<String>>,
     /// Content hash of the compiled SSG dependency graph.
     pub dependency_hash: Option<String>,
     /// Absolute source files used by the SSG bundle.

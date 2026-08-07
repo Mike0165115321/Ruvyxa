@@ -343,10 +343,15 @@ async fn render_page_ssg(
         return Ok(cached);
     }
 
+    // `revalidatePath()` named this URL. The build's HTML on disk is exactly
+    // what it asked to replace, so this one request skips it and renders fresh.
+    let forced = state.render_cache.take_forced(request_path).await;
+
     // In production, serve the pre-rendered HTML file. Read it from disk once
     // and serve subsequent requests from the in-memory render cache — a
     // synchronous file open per request otherwise dominates the hot path.
-    if !state.config.watch
+    if !forced
+        && !state.config.watch
         && let Some(html) = store_prerendered_html(
             &state.render_cache,
             &state.config.prerender_dir,
@@ -435,8 +440,10 @@ async fn render_page_isr(
 
     // In production, try the pre-rendered HTML file. Storing it means the first
     // background revalidation waits until the route's declared interval instead
-    // of firing once per request.
-    if !state.config.watch
+    // of firing once per request. A path `revalidatePath()` named skips it: the
+    // build's document is the stale one the caller is replacing.
+    if !state.render_cache.take_forced(request_path).await
+        && !state.config.watch
         && let Some(html) = store_prerendered_html(
             &state.render_cache,
             &state.config.prerender_dir,
@@ -896,6 +903,30 @@ pub(crate) async fn render_page_pooled(
     Ok(state.render_cache.put(cache_key, html).await)
 }
 
+/// Act on the `revalidatePath()` calls an API route or server action made.
+///
+/// Applied after the handler succeeded and before its response is returned, so
+/// a client that navigates on success cannot beat the invalidation to the
+/// cache. Paths are bounded and validated here rather than trusted: they cross
+/// a process boundary, and a handler that loops could otherwise ask the server
+/// to walk an unbounded list on the request path.
+async fn apply_revalidations(state: &AppState, paths: Option<Vec<String>>) {
+    let Some(paths) = paths else { return };
+    for path in paths.into_iter().take(MAX_REVALIDATED_PATHS) {
+        if !path.starts_with('/') || path.len() > MAX_REVALIDATED_PATH_LEN {
+            tracing::warn!(path, "ignoring revalidatePath() for an unusable path");
+            continue;
+        }
+        let dropped = state.render_cache.revalidate_path(&path).await;
+        tracing::debug!(path, dropped, "revalidated path");
+    }
+}
+
+/// How many paths one handler may revalidate.
+const MAX_REVALIDATED_PATHS: usize = 64;
+/// Longest revalidated path accepted, matching the realtime metadata bound.
+const MAX_REVALIDATED_PATH_LEN: usize = 2_048;
+
 pub(crate) async fn render_api_pooled(
     state: &AppState,
     route: &RouteEntry,
@@ -937,6 +968,8 @@ pub(crate) async fn render_api_pooled(
             .suggest("Check the route handler export and its imports.")
             .into());
     }
+
+    apply_revalidations(state, response.revalidate.take()).await;
 
     let status = response.status.unwrap_or(200);
     let status = StatusCode::from_u16(status)
@@ -1067,7 +1100,7 @@ pub(crate) async fn render_server_action_pooled(
             )
     })?;
 
-    let response = state
+    let mut response = state
         .worker_pool
         .render_action(RenderActionRequest {
             project_root: &state.config.root,
@@ -1099,8 +1132,10 @@ pub(crate) async fn render_server_action_pooled(
         return Err(diagnostic.into());
     }
 
+    apply_revalidations(state, response.revalidate.take()).await;
+
     let status = StatusCode::from_u16(response.status.unwrap_or(200)).unwrap_or(StatusCode::OK);
-    let mut http_response = (status, response.body.unwrap_or_default()).into_response();
+    let mut http_response = (status, response.body.take().unwrap_or_default()).into_response();
     let mut realtime_event = None;
 
     if let Some(headers) = response.header_pairs.or_else(|| {

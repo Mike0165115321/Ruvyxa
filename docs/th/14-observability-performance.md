@@ -24,6 +24,42 @@ telemetry sink ของคุณ ไม่ใช่ metrics/tracing backend ท
 `npm run analyze:html` สำหรับ local build/route analysis page และ `npm run trace -- /` เพื่อตรวจ
 route manifest entry
 
+## `instrumentation.ts`
+
+ไฟล์ชื่อ `instrumentation.ts` (หรือ `.js`/`.mjs`) ที่รากโปรเจกต์จะถูกรันหนึ่งครั้งต่อหนึ่ง process
+ของเซิร์ฟเวอร์ ก่อนให้บริการคำขอแรก นี่คือที่ติดตั้ง observability SDK ระดับ process — plugin
+`observability()` ข้างบนจัดรูป response แต่ละตัว ส่วนไฟล์นี้รันการตั้งค่าที่ SDK
+ต้องมีก่อนจะจัดรูปอะไรได้
+
+```ts
+// instrumentation.ts
+export async function register(): Promise<void> {
+  const { NodeSDK } = await import('@opentelemetry/sdk-node')
+  new NodeSDK({ serviceName: 'my-app' }).start()
+}
+```
+
+เรียกเฉพาะ `register` ที่ export ออกมาเท่านั้น มันทำงาน:
+
+- ใน render worker ภายใต้ `ruvyxa dev` และ `ruvyxa start` หนึ่งครั้งต่อหนึ่ง worker process
+- ในทุก function instance หลัง deploy โดยเป็น top-level `await` ใน route registry ที่ถูก generate
+  ก่อนที่ route module ใดจะถูกใช้
+
+ตำแหน่งนี้คือสาระสำคัญ telemetry ต้องถูกติดตั้งใน process ที่ render จริง ๆ การรันมันใน CLI ที่สร้าง
+worker จะเป็นการ instrument ผิด process
+
+ความล้มเหลวจะถูก log แล้วกลืนไว้ และไฟล์ที่ไม่ export `register` จะถูกแจ้งทาง stderr แทนที่จะถูก
+เพิกเฉย ทั้งสองอย่างเป็นเจตนา: telemetry มีไว้สังเกตเว็บที่ทำงานอยู่ exporter
+ที่ตั้งค่าผิดจึงต้องไม่ใช่ เหตุผลที่เว็บหยุดให้บริการ — แต่ hook
+ที่เงียบและไม่ทำอะไรเลยก็หน้าตาเหมือน hook ที่ทำงานอยู่ทุกประการ
+
+`register` ถูก `await` ดังนั้นจะไม่มีคำขอไหนถูกให้บริการก่อนมันทำงานเสร็จ ควรทำให้เร็ว เพราะคำขอแรก
+เป็นคนจ่ายค่านี้
+
+ภายใน `register()` ให้เขียนด้วย `console.error` แทน `console.log` ใน Node worker standard output
+คือช่องสัญญาณ NDJSON ที่ worker ใช้ตอบคำขอ บรรทัดที่เขียนลงไปจากที่อื่น จะทำให้ response
+ที่คำขอกำลังรออยู่เสียหาย
+
 ## Performance control
 
 - เลือก route strategy อย่างตั้งใจ: SSR สำหรับ HTML สดทุก request; SSG สำหรับ build output คงที่;

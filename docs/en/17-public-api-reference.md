@@ -5,16 +5,18 @@ separates implementation details in Rust/runtime files from the APIs application
 
 ## `ruvyxa`, `ruvyxa/server`, and `ruvyxa/config`
 
-| Export                               | Signature / purpose                                                                    |
-| ------------------------------------ | -------------------------------------------------------------------------------------- |
-| `config`                             | `<T extends RuvyxaConfig>(config: T) => T`; typed config identity helper.              |
-| `loader`                             | `(handler: LoaderHandler<T>) => Loader<T>`; handler gets `params`, `request`, `cache`. |
-| `action`                             | Builder: `.input(schema)`, `.realtime(channels?)`, `.handler(fn)`.                     |
-| `cache`                              | `(key) => CacheBuilder`; `.ttl(string)`, `.swr(string)`, `.get(producer)`.             |
-| `invalidateCache`, `cacheStats`      | Remove exact/prefix/all cache entries; report `{ size, maxEntries }`.                  |
-| `json`, `redirect`, `notFound`       | Response helpers; redirect only permits 3xx statuses.                                  |
-| `definePlugin`, `withResponseHeader` | Plugin definition and response-header helper.                                          |
-| `standaloneServerSource`             | Source generator for the standalone server artifact.                                   |
+| Export                               | Signature / purpose                                                                       |
+| ------------------------------------ | ----------------------------------------------------------------------------------------- |
+| `config`                             | `<T extends RuvyxaConfig>(config: T) => T`; typed config identity helper.                 |
+| `loader`                             | `(handler: LoaderHandler<T>) => Loader<T>`; handler gets `params`, `request`, `cache`.    |
+| `action`                             | Builder: `.input(schema)`, `.realtime(channels?)`, `.handler(fn)`.                        |
+| `cache`                              | `(key) => CacheBuilder`; `.ttl(string)`, `.swr(string)`, `.get(producer)`.                |
+| `invalidateCache`, `cacheStats`      | Remove exact/prefix/all cache entries; report `{ size, maxEntries }`.                     |
+| `json`, `redirect`, `notFound`       | Response helpers; redirect only permits 3xx statuses.                                     |
+| `cookies`, `headers`, `draftMode`    | Read the request being served. Calling any of them keeps the render out of shared caches. |
+| `revalidatePath`                     | `(path: string) => void`; queue one concrete URL for re-render on its next request.       |
+| `definePlugin`, `withResponseHeader` | Plugin definition and response-header helper.                                             |
+| `standaloneServerSource`             | Source generator for the standalone server artifact.                                      |
 
 Types include `RuvyxaConfig`, `PageProps`, `GetStaticParams`, `RenderStrategy`, `Adapter`,
 `MiddlewareConfig`, `ImageConfig`, `I18nConfig`, `SiteConfig`, and plugin contracts. Use imports
@@ -28,11 +30,15 @@ from `ruvyxa` for public primitives and `ruvyxa/config` or `ruvyxa/plugin` for e
 | Rendering errors | `RuvyxaErrorBoundary`, `notFound`, `isNotFoundError`, `RouteErrorProps`                                   |
 | Metadata/content | `Seo`, `Meta`, `MetaFactory`, `Answer`                                                                    |
 | Browser/runtime  | `hydrate`, `reportHydrationError`, `useRuvyxaLoader`                                                      |
-| Assets           | `Image`                                                                                                   |
+| Assets           | `Image`, `Picture`, `Script`                                                                              |
+| Typed routes     | `route`, `RouteHref`, `RoutePattern`, `KnownRoute`, `RuvyxaRouteRegistry`                                 |
 
 `useRuvyxaLoader<T>(loader, { enabled?, deps? })` returns `{ data, loading, error, refetch }`.
 `hydrate({ root?, onError? })` dispatches the hydration event and installs optional reporting.
-`notFound()` from this package always throws and therefore returns `never`.
+`notFound()` from this package always throws and therefore returns `never`. `<Script strategy>` is
+`beforeInteractive`, `afterInteractive` (default), or `lazyOnload`. `RouteHref` is `string` unless
+`typedRoutes` is enabled and the generated declaration file is in the tsconfig `include`;
+`route(href)` asserts a runtime string into it.
 
 ## `@ruvyxa/core/route-match`
 

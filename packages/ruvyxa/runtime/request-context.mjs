@@ -96,8 +96,15 @@ globalThis.__RUVYXA_REQUEST_CONTEXT__ = {
   current() {
     const store = storage.getStore()
     if (!store) return null
+    // Reading request state is what makes a render uncacheable. `revalidatePath`
+    // also goes through here but must not set this: it writes an instruction for
+    // the host and tells you nothing about who sent the request.
     store.used = true
     return store
+  },
+  /** Reach the store without recording a read. */
+  peek() {
+    return storage.getStore() ?? null
   },
 }
 
@@ -119,7 +126,16 @@ export function requestContext({ headerPairs, headers, method = 'GET', url = '/'
     url: String(url),
     draft: hasDraftCookie(pairs),
     used: false,
+    // URLs `revalidatePath()` asked the server to refresh. A Set because the
+    // same path revalidated twice in one handler is one instruction, and the
+    // host has to send each one across the worker protocol.
+    revalidate: new Set(),
   }
+}
+
+/** URLs this request asked to revalidate, for the host to act on. */
+export function collectRevalidations(context) {
+  return context?.revalidate ? [...context.revalidate] : []
 }
 
 /** Run `task` with `context` as the ambient request. */

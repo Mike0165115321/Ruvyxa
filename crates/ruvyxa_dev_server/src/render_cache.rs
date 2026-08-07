@@ -13,7 +13,7 @@
 //! - Values are stored behind `Arc<str>` so concurrent readers share memory
 //!   rather than cloning large HTML/JS strings.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -275,6 +275,15 @@ pub struct RenderCache {
     entries: RwLock<HashMap<Arc<str>, CacheEntry>>,
     /// Least-to-most recently used key order.
     order: RwLock<RecencyList>,
+    /// Request paths an application asked to revalidate, not yet re-rendered.
+    ///
+    /// Dropping the in-memory entry is not enough for a prerendered strategy:
+    /// SSG and ISR fall back to the HTML the build wrote to disk, so the next
+    /// request would read the same stale document and re-cache it. This set
+    /// makes that one request skip the disk shortcut and render fresh. Deleting
+    /// the build artifact instead would work once and leave the deployment
+    /// without a file to serve if the fresh render then failed.
+    forced: RwLock<HashSet<String>>,
     capacity: usize,
     ttl: Duration,
     hits: AtomicU64,
@@ -286,6 +295,7 @@ impl RenderCache {
         Self {
             entries: RwLock::new(HashMap::with_capacity(capacity)),
             order: RwLock::new(RecencyList::with_capacity(capacity)),
+            forced: RwLock::new(HashSet::new()),
             capacity,
             ttl: Duration::from_secs(ttl_secs),
             hits: AtomicU64::new(0),
@@ -474,6 +484,38 @@ impl RenderCache {
         before - entries.len()
     }
 
+    /// Drop every cached render of one concrete URL and force the next one.
+    ///
+    /// This is what `revalidatePath()` reaches. It matches across every render
+    /// namespace, because the caller names a URL and does not know — and should
+    /// not have to know — whether that URL is served as SSR, SSG, ISR, PPR, or
+    /// CSR. Parameterised variants of the same path are matched too: the key
+    /// carries the bound parameters after a `?`, and they belong to this URL.
+    ///
+    /// Returns the number of entries dropped, which is zero for a path that was
+    /// never rendered — a legitimate outcome, since a webhook may revalidate a
+    /// URL no one has requested yet. The path is still marked, so the first
+    /// request for it renders fresh rather than serving the build's HTML.
+    pub async fn revalidate_path(&self, request_path: &str) -> usize {
+        let matches = |key: &str| cache_key_matches_path(key, request_path);
+        let mut entries = self.entries.write().await;
+        let before = entries.len();
+        entries.retain(|key, _| !matches(key));
+        self.order.write().await.retain(|key| !matches(key));
+        drop(entries);
+        self.forced.write().await.insert(request_path.to_string());
+        before - self.entries.read().await.len()
+    }
+
+    /// Claim a pending revalidation for `request_path`.
+    ///
+    /// Consuming rather than peeking: exactly one render should bypass the
+    /// prerendered file, and it stores its result, so a second bypass would be
+    /// a duplicate render of a document already refreshed.
+    pub async fn take_forced(&self, request_path: &str) -> bool {
+        self.forced.write().await.remove(request_path)
+    }
+
     /// Invalidate SSR/client entries belonging to a route pattern.
     pub async fn invalidate_route(&self, route_path: &str) -> usize {
         let mut entries = self.entries.write().await;
@@ -587,6 +629,32 @@ pub fn client_cache_key(request_path: &str, params: &RouteParams) -> String {
         let params_str = serde_json::to_string(params).unwrap_or_default();
         format!("client:{request_path}?{params_str}")
     }
+}
+
+/// Does `cache_key` hold a render of exactly `request_path`?
+///
+/// Shares the structural prefix stripping with `cache_key_matches_route` and
+/// for the same reason: a catch-all path or a serialized parameter can contain
+/// the text `ssr:`, so searching for the marker anywhere in the key leaves
+/// stale entries alive.
+fn cache_key_matches_path(cache_key: &str, request_path: &str) -> bool {
+    let Some(keyed_path) = cache_key_request_path(cache_key) else {
+        return false;
+    };
+    keyed_path == request_path
+}
+
+/// The request path a cache key was built from, or `None` if it is not a page
+/// or client key.
+fn cache_key_request_path(cache_key: &str) -> Option<&str> {
+    let without_namespace = RENDER_NAMESPACES
+        .into_iter()
+        .find_map(|namespace| cache_key.strip_prefix(namespace))
+        .unwrap_or(cache_key);
+    ["client:", "ssr:"]
+        .into_iter()
+        .find_map(|marker| without_namespace.strip_prefix(marker))
+        .map(|path| path.split('?').next().unwrap_or(path))
 }
 
 fn cache_key_matches_route(cache_key: &str, route_path: &str) -> bool {
@@ -1005,6 +1073,96 @@ mod tests {
         cache.invalidate_all().await;
         assert_index_and_order_consistent(&cache).await;
         assert!(cache.entries.read().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn revalidate_path_drops_every_strategy_for_that_url() {
+        // The caller names a URL, not a strategy. A page moved from SSG to ISR
+        // must not need the webhook that revalidates it to be updated too.
+        let cache = RenderCache::new(32, 60);
+        let params = RouteParams::new();
+        for namespace in ["", "ssg:", "isr:", "ppr:", "csr:"] {
+            cache
+                .put(
+                    page_cache_key(namespace, "/blog/hello", &params),
+                    "old".into(),
+                )
+                .await;
+        }
+        cache
+            .put(client_cache_key("/blog/hello", &params), "bundle".into())
+            .await;
+        cache
+            .put(
+                page_cache_key("ssg:", "/blog/other", &params),
+                "keep".into(),
+            )
+            .await;
+
+        let dropped = cache.revalidate_path("/blog/hello").await;
+
+        assert_eq!(dropped, 6);
+        assert!(
+            cache
+                .get(&page_cache_key("ssg:", "/blog/other", &params))
+                .await
+                .is_some()
+        );
+        assert_index_and_order_consistent(&cache).await;
+    }
+
+    #[tokio::test]
+    async fn revalidate_path_drops_parameterised_variants_of_the_same_url() {
+        let cache = RenderCache::new(32, 60);
+        let mut params = RouteParams::new();
+        params.insert("slug".into(), serde_json::json!("hello"));
+        cache
+            .put(page_cache_key("isr:", "/blog/hello", &params), "old".into())
+            .await;
+
+        assert_eq!(cache.revalidate_path("/blog/hello").await, 1);
+    }
+
+    #[tokio::test]
+    async fn revalidate_path_does_not_match_a_longer_url_with_the_same_prefix() {
+        // Prefix matching would make revalidating `/blog` drop every post.
+        let cache = RenderCache::new(32, 60);
+        let params = RouteParams::new();
+        cache
+            .put(
+                page_cache_key("ssg:", "/blog/hello", &params),
+                "keep".into(),
+            )
+            .await;
+
+        assert_eq!(cache.revalidate_path("/blog").await, 0);
+        assert!(
+            cache
+                .get(&page_cache_key("ssg:", "/blog/hello", &params))
+                .await
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_revalidated_path_is_forced_once_and_then_not_again() {
+        // Exactly one render bypasses the prerendered file. That render stores
+        // its result, so a second bypass would re-render a fresh document.
+        let cache = RenderCache::new(32, 60);
+        cache.revalidate_path("/blog/hello").await;
+
+        assert!(cache.take_forced("/blog/hello").await);
+        assert!(!cache.take_forced("/blog/hello").await);
+        assert!(!cache.take_forced("/blog/never-revalidated").await);
+    }
+
+    #[tokio::test]
+    async fn revalidating_an_unrendered_path_still_forces_it() {
+        // A webhook may name a URL nobody has requested yet. Dropping nothing
+        // is correct; leaving the build's HTML in place for it is not.
+        let cache = RenderCache::new(32, 60);
+        assert_eq!(cache.revalidate_path("/blog/brand-new").await, 0);
+        assert!(cache.take_forced("/blog/brand-new").await);
     }
 
     #[test]

@@ -11,5 +11,5 @@
       "~/*": ["./*"]
     }
   },
-  "include": ["app", "ruvyxa.config.ts"]
+  "include": ["app", "ruvyxa.config.ts", ".ruvyxa/types/**/*.d.ts"]
 }

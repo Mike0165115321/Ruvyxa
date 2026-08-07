@@ -24,6 +24,42 @@ foundation for your telemetry sink, not a complete metrics/tracing backend. In a
 application, `npm run analyze:html` provides a local build/route analysis page; `npm run trace -- /`
 inspects a route manifest entry.
 
+## `instrumentation.ts`
+
+A file named `instrumentation.ts` (or `.js`/`.mjs`) at the project root is run once per server
+process, before the first request is served. It is where a process-wide observability SDK is
+installed — the `observability()` plugin above shapes individual responses, while this runs the
+setup an SDK needs before anything is shaped.
+
+```ts
+// instrumentation.ts
+export async function register(): Promise<void> {
+  const { NodeSDK } = await import('@opentelemetry/sdk-node')
+  new NodeSDK({ serviceName: 'my-app' }).start()
+}
+```
+
+Only an exported `register` is called. It runs:
+
+- in the render worker under `ruvyxa dev` and `ruvyxa start`, once per worker process;
+- in each function instance after a deploy, as a top-level `await` in the generated route registry,
+  before any route module is used.
+
+That placement is the point. Telemetry has to be installed in the process that actually renders, so
+running it in the CLI that spawns workers would instrument the wrong process.
+
+Failures are logged and swallowed, and a file exporting no `register` is called out on stderr rather
+than ignored. Both are deliberate: telemetry exists to observe a working site, so a misconfigured
+exporter must not be the reason the site stops serving — but a hook that silently does nothing looks
+exactly like a hook that works.
+
+`register` is `await`ed, so a request is never served before it has finished. Keep it quick; the
+first request pays for it.
+
+Inside `register()`, write to `console.error` rather than `console.log`. In the Node worker,
+standard output is the NDJSON channel the worker uses to answer requests; a line written to it from
+anywhere else corrupts the response a request is waiting on.
+
 ## Performance controls
 
 - Select the route strategy intentionally: SSR for request-fresh HTML; SSG for immutable build

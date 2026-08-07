@@ -5,16 +5,18 @@ detail ใน Rust/runtime file ออกจาก API ที่ application imp
 
 ## `ruvyxa`, `ruvyxa/server` และ `ruvyxa/config`
 
-| Export                               | Signature / วัตถุประสงค์                                                             |
-| ------------------------------------ | ------------------------------------------------------------------------------------ |
-| `config`                             | `<T extends RuvyxaConfig>(config: T) => T`; typed config identity helper             |
-| `loader`                             | `(handler: LoaderHandler<T>) => Loader<T>`; handler รับ `params`, `request`, `cache` |
-| `action`                             | Builder: `.input(schema)`, `.realtime(channels?)`, `.handler(fn)`                    |
-| `cache`                              | `(key) => CacheBuilder`; `.ttl(string)`, `.swr(string)`, `.get(producer)`            |
-| `invalidateCache`, `cacheStats`      | ลบ cache entry แบบ exact/prefix/all; รายงาน `{ size, maxEntries }`                   |
-| `json`, `redirect`, `notFound`       | Response helper; redirect อนุญาตเฉพาะ status 3xx                                     |
-| `definePlugin`, `withResponseHeader` | plugin definition และ response-header helper                                         |
-| `standaloneServerSource`             | source generator สำหรับ standalone server artifact                                   |
+| Export                               | Signature / วัตถุประสงค์                                                                        |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| `config`                             | `<T extends RuvyxaConfig>(config: T) => T`; typed config identity helper                        |
+| `loader`                             | `(handler: LoaderHandler<T>) => Loader<T>`; handler รับ `params`, `request`, `cache`            |
+| `action`                             | Builder: `.input(schema)`, `.realtime(channels?)`, `.handler(fn)`                               |
+| `cache`                              | `(key) => CacheBuilder`; `.ttl(string)`, `.swr(string)`, `.get(producer)`                       |
+| `invalidateCache`, `cacheStats`      | ลบ cache entry แบบ exact/prefix/all; รายงาน `{ size, maxEntries }`                              |
+| `json`, `redirect`, `notFound`       | Response helper; redirect อนุญาตเฉพาะ status 3xx                                                |
+| `cookies`, `headers`, `draftMode`    | อ่าน request ที่กำลังให้บริการ เรียกตัวใดตัวหนึ่งแล้วจะกัน render นี้ออกจาก cache ที่ใช้ร่วมกัน |
+| `revalidatePath`                     | `(path: string) => void`; คิว URL จริงหนึ่งอันให้ render ใหม่ในคำขอถัดไป                        |
+| `definePlugin`, `withResponseHeader` | plugin definition และ response-header helper                                                    |
+| `standaloneServerSource`             | source generator สำหรับ standalone server artifact                                              |
 
 type มี `RuvyxaConfig`, `PageProps`, `GetStaticParams`, `RenderStrategy`, `Adapter`,
 `MiddlewareConfig`, `ImageConfig`, `I18nConfig`, `SiteConfig` และ plugin contract ใช้ import จาก
@@ -28,11 +30,15 @@ type มี `RuvyxaConfig`, `PageProps`, `GetStaticParams`, `RenderStrategy`, `A
 | Rendering error  | `RuvyxaErrorBoundary`, `notFound`, `isNotFoundError`, `RouteErrorProps`                                   |
 | Metadata/content | `Seo`, `Meta`, `MetaFactory`, `Answer`                                                                    |
 | Browser/runtime  | `hydrate`, `reportHydrationError`, `useRuvyxaLoader`                                                      |
-| Asset            | `Image`                                                                                                   |
+| Asset            | `Image`, `Picture`, `Script`                                                                              |
+| Typed routes     | `route`, `RouteHref`, `RoutePattern`, `KnownRoute`, `RuvyxaRouteRegistry`                                 |
 
 `useRuvyxaLoader<T>(loader, { enabled?, deps? })` คืน `{ data, loading, error, refetch }`
 `hydrate({ root?, onError? })` dispatch hydration event และติดตั้ง reporting ที่เลือกได้
-`notFound()` จาก package นี้ throw เสมอ จึงคืน `never`
+`notFound()` จาก package นี้ throw เสมอ จึงคืน `never` `<Script strategy>` มีค่าเป็น
+`beforeInteractive`, `afterInteractive` (ปริยาย) หรือ `lazyOnload` `RouteHref` เป็น `string`
+เว้นแต่เปิด `typedRoutes` และไฟล์ declaration ที่ generate อยู่ใน `include` ของ tsconfig;
+`route(href)` assert string ตอน runtime ให้เป็นชนิดนี้
 
 ## `@ruvyxa/core/route-match`
 

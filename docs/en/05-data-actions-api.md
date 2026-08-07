@@ -77,3 +77,78 @@ Route handlers must validate untrusted bodies before using them. API payload lim
 
 **Previous:** [Routing and rendering](04-routing-rendering.md) · **Next:**
 [UI, navigation, metadata, and assets](06-ui-navigation-metadata-and-assets.md)
+
+## Reading the request
+
+`cookies()`, `headers()`, and `draftMode()` read the request currently being served. They work in a
+page component, an API route handler, and a server action. There is no parameter to thread: the
+runtime installs a per-request store around each render and handler, and these read it.
+
+```tsx
+// app/dashboard/page.tsx
+import { cookies, draftMode, headers } from 'ruvyxa/server'
+
+export default function Dashboard() {
+  const theme = cookies().get('theme') ?? 'light'
+  const locale = headers().get('accept-language') ?? 'en'
+  if (draftMode().isEnabled) return <DraftPreview locale={locale} />
+  return <main data-theme={theme} lang={locale} />
+}
+```
+
+- `cookies()` returns `{ get, has, getAll }` over the request's `Cookie` header. Values are returned
+  as sent, minus surrounding whitespace and one layer of quoting; percent-decoding is yours to do,
+  because not every cookie is encoded and decoding one that is not throws.
+- `headers()` returns a read-only standard `Headers`, so `get`, `has`, and iteration behave exactly
+  as they do on a `Request`.
+- `draftMode()` reports whether the `__ruvyxa_draft` cookie is present. Set it from an API route
+  after checking whatever secret your CMS shares with the application.
+
+### These calls change how the page is cached
+
+Calling any of them tells Ruvyxa the rendered HTML belongs to one visitor. That document is not
+stored in the render cache, and on a prerendered strategy it is not written to the ISR cache either.
+Nothing is declared and no export is needed — the call is the declaration.
+
+The consequence worth knowing: a page that reads the request renders on every request. If you only
+need one cookie for a small part of the page, keeping that part in a `'use client'` island leaves
+the rest cacheable.
+
+### Calling them outside a request
+
+Both cases throw with a message naming the accessor:
+
+- **At module scope.** Module bodies run at import time, when there is no request. Move the call
+  inside the component or handler.
+- **During a background ISR revalidation.** A scheduled re-render has no visitor. This is
+  deliberate: the alternative is a page built from nobody's session and then cached for everybody.
+
+## On-demand revalidation
+
+`revalidatePath(path)` asks the server to re-render one URL on its next request. Call it from an API
+route or a server action — the instruction travels back with that handler's response, so a client
+that navigates on success cannot arrive before the cache has been cleared.
+
+```ts
+// app/api/revalidate/route.ts
+import { revalidatePath } from 'ruvyxa/server'
+
+export async function POST({ request }: { request: Request }) {
+  const { path } = await request.json()
+  revalidatePath(path)
+  return Response.json({ revalidated: path })
+}
+```
+
+The argument is a concrete URL (`/blog/hello`), not a route pattern (`/blog/[slug]`). Every
+rendering strategy is covered: the cached document is dropped, and for SSG, ISR, and PPR the next
+request additionally bypasses the HTML the build wrote to disk — otherwise that file would keep
+being served. Revalidating a URL nothing has requested yet is fine and is the normal webhook case.
+
+Ruvyxa has no `revalidateTag()`. In Next.js a tag labels a `fetch()` cache entry; Ruvyxa has no
+fetch cache for one to label, so tags would need a page-level tag declaration and a tag-to-route
+index — a design decision rather than an addition to this function.
+
+On a serverless deployment, `revalidatePath` clears the calling function instance and the next
+request rewrites the stored document for every later request. A different instance that is already
+warm keeps serving its copy until its own TTL expires, which is the bound ISR already has.

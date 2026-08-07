@@ -29,11 +29,17 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createInterface } from 'node:readline'
 
-import { requestContext, runWithRequestContext, usedRequestContext } from './request-context.mjs'
+import {
+  collectRevalidations,
+  requestContext,
+  runWithRequestContext,
+  usedRequestContext,
+} from './request-context.mjs'
 import {
   clearCompilerCache,
   collectSpecials,
   compileBundleWithMetadata,
+  INSTRUMENTATION_FILES,
   invalidateCompilerCache,
   runtimeAliases,
   serverPlatform,
@@ -472,6 +478,79 @@ function isolatedVersion(version) {
 }
 
 // --- Fast React resolution (cached per project root) ---
+/**
+ * Project roots whose `instrumentation.ts` has already run in this worker.
+ *
+ * Keyed by root rather than a single boolean because one worker process can
+ * serve more than one project during tests, and because a `register()` that ran
+ * for another root has not initialised this one.
+ */
+const instrumentedRoots = new Map()
+
+/**
+ * Run the project's `instrumentation.ts` once per worker process.
+ *
+ * The hook exists to install process-wide observability — an OpenTelemetry SDK,
+ * an error reporter, a metrics exporter — which means it has to run *inside* the
+ * process that renders, not in the CLI that spawned it. That is this worker, and
+ * a worker learns its project root from its first request, so registration is
+ * lazy rather than done at startup.
+ *
+ * A failure is reported and remembered as done. Retrying on every request would
+ * turn one broken import into a per-request penalty, and refusing to serve would
+ * make a telemetry misconfiguration take the site down — the wrong trade for a
+ * hook whose whole purpose is to observe a site that is working.
+ */
+async function ensureInstrumentation(resolvedRoot) {
+  const existing = instrumentedRoots.get(resolvedRoot)
+  if (existing) return existing
+
+  const pending = (async () => {
+    const entry = INSTRUMENTATION_FILES.map((name) => path.join(resolvedRoot, name)).find(
+      (candidate) => existsSync(candidate),
+    )
+    if (!entry) return
+
+    try {
+      const { outfile, version } = await bundleInstrumentationModule(resolvedRoot, entry)
+      const mod = await importModule(outfile, version)
+      if (typeof mod.register === 'function') {
+        await mod.register()
+      } else {
+        note(
+          'warn',
+          `${path.basename(entry)} has no exported register() function; nothing was run.`,
+        )
+      }
+    } catch (error) {
+      note('error', `instrumentation failed: ${error instanceof Error ? error.stack : error}`)
+    }
+  })()
+
+  instrumentedRoots.set(resolvedRoot, pending)
+  return pending
+}
+
+async function bundleInstrumentationModule(projectRoot, entryFile) {
+  const cacheDir = path.join(projectRoot, '.ruvyxa', 'cache', 'instrumentation')
+  await ensureDir(cacheDir)
+
+  const moduleCode = `export * from ${JSON.stringify(toImportPath(entryFile))}`
+  const hash = createHash('sha256').update(moduleCode).update(entryFile).digest('hex').slice(0, 16)
+  const outfile = path.join(cacheDir, `${hash}.mjs`)
+
+  const bundle = await compileBundleWithMetadata({
+    projectRoot,
+    entrySource: moduleCode,
+    sourcefile: 'ruvyxa:instrumentation-entry.ts',
+    outfile,
+    platform: serverPlatform(),
+    aliases: runtimeAliases(runtimeDir),
+  })
+
+  return { outfile, version: bundle.contentHash }
+}
+
 function ensureReactDeps(resolvedRoot) {
   if (reactResolvedRoots.has(resolvedRoot)) return
   const requireFromProject = createRequire(path.join(resolvedRoot, 'package.json'))
@@ -576,6 +655,7 @@ async function handleSsr(request) {
 
   const resolvedRoot = path.resolve(projectRoot || process.cwd())
   ensureReactDeps(resolvedRoot)
+  await ensureInstrumentation(resolvedRoot)
 
   const layouts = collectLayouts(appDir, path.dirname(pageFile))
   const specials = collectSpecials(appDir, path.dirname(pageFile))
@@ -627,6 +707,7 @@ async function handleSsg(request) {
   const { projectRoot, appDir, pageFile, requestPath, params, mode, fresh, routePath } = request
 
   const resolvedRoot = path.resolve(projectRoot || process.cwd())
+  await ensureInstrumentation(resolvedRoot)
   ensureReactDeps(resolvedRoot)
 
   const layouts = collectLayouts(appDir, path.dirname(pageFile))
@@ -834,6 +915,7 @@ async function handleApi(request) {
   } = request
 
   const resolvedRoot = path.resolve(projectRoot || process.cwd())
+  await ensureInstrumentation(resolvedRoot)
   const { outfile, version } = await bundleApiModule(resolvedRoot, routeFile)
   const mod = await importModule(outfile, version)
   const handler = mod[method.toUpperCase()]
@@ -865,10 +947,16 @@ async function handleApi(request) {
   // An API route already receives the `Request`, so the ambient accessors are
   // redundant there — but a helper shared with a page must not stop working
   // because it was called from a route handler instead.
-  const result = await runWithRequestContext(
-    requestContext({ headerPairs, headers: requestHeaders, method: upperMethod, url: requestPath }),
-    () => handler({ request: req, params: params || {} }),
+  const context = requestContext({
+    headerPairs,
+    headers: requestHeaders,
+    method: upperMethod,
+    url: requestPath,
+  })
+  const result = await runWithRequestContext(context, () =>
+    handler({ request: req, params: params || {} }),
   )
+  const revalidate = collectRevalidations(context)
   const response = normalizeResponse(result)
   const headerPairsResult = responseHeaderPairs(response)
   const headers = Object.fromEntries(headerPairsResult)
@@ -879,13 +967,21 @@ async function handleApi(request) {
       status: response.status,
       headers,
       headerPairs: headerPairsResult,
+      revalidate,
       streamResponse: response,
     }
   }
 
   const body = await response.text()
 
-  return { ok: true, status: response.status, headers, headerPairs: headerPairsResult, body }
+  return {
+    ok: true,
+    status: response.status,
+    headers,
+    headerPairs: headerPairsResult,
+    revalidate,
+    body,
+  }
 }
 
 function responseHeaderPairs(response) {
@@ -913,6 +1009,7 @@ async function handleAction(request) {
   } = request
 
   const resolvedRoot = path.resolve(projectRoot || process.cwd())
+  await ensureInstrumentation(resolvedRoot)
   const { outfile, version } = await bundleActionModule(resolvedRoot, actionFile)
   const mod = await importModule(outfile, version)
   const action = mod[actionName]
@@ -942,20 +1039,19 @@ async function handleAction(request) {
         },
     body: contentType === 'application/x-www-form-urlencoded' ? payloadJson : JSON.stringify(input),
   })
-  const result = await runWithRequestContext(
-    requestContext({
-      headerPairs,
-      headers: requestHeaders,
-      method: 'POST',
-      url: requestPath,
+  const context = requestContext({
+    headerPairs,
+    headers: requestHeaders,
+    method: 'POST',
+    url: requestPath,
+  })
+  const result = await runWithRequestContext(context, () =>
+    action(input, {
+      request: req,
+      invalidate(key) {
+        invalidated.push(key)
+      },
     }),
-    () =>
-      action(input, {
-        request: req,
-        invalidate(key) {
-          invalidated.push(key)
-        },
-      }),
   )
   let response = normalizeActionResult(result, invalidated)
   const headersWithInternalEventRemoved = new Headers(response.headers)
@@ -979,7 +1075,14 @@ async function handleAction(request) {
   const headerPairsResult = responseHeaderPairs(response)
   const headers = Object.fromEntries(headerPairsResult)
 
-  return { ok: true, status: response.status, headers, headerPairs: headerPairsResult, body }
+  return {
+    ok: true,
+    status: response.status,
+    headers,
+    headerPairs: headerPairsResult,
+    revalidate: collectRevalidations(context),
+    body,
+  }
 }
 
 function actionRealtimeEvent(action, actionName, requestPath, invalidated) {

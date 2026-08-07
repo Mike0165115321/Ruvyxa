@@ -11,6 +11,7 @@ import {
   collectSpecials,
   runtimeAliases,
   serverPlatform,
+  INSTRUMENTATION_FILES,
   toImportPath,
 } from './compiler.mjs'
 import {
@@ -487,6 +488,7 @@ async function materializeRouteModules(manifest, destination, target) {
 
   const registrySource = `${imports.join('\n')}
 
+${instrumentationPrelude()}
 ${definitions.join('\n\n')}
 
 const routeModules = Object.freeze({
@@ -508,6 +510,37 @@ export async function loadRouteModule(routeId) {
     bundlePackages: true,
     aliases: runtimeAliases(runtimeDir),
   })
+}
+
+/**
+ * Source that runs the project's `instrumentation.ts` inside a function bundle.
+ *
+ * Emitted into the route registry rather than into each platform's handler
+ * entry point, because the registry is the one module every adapter wrapper
+ * imports and reaching it does not mean editing ten handler templates.
+ * Top-level `await` runs it exactly once per runtime instance, before the first
+ * route module is used — the same guarantee `ensureInstrumentation` gives in
+ * the Node worker.
+ *
+ * A failure is logged and swallowed. A misconfigured telemetry SDK must not
+ * make every route in the deployment fail to import.
+ */
+function instrumentationPrelude() {
+  const entry = INSTRUMENTATION_FILES.map((name) => path.join(projectRoot, name)).find(
+    (candidate) => existsSync(candidate),
+  )
+  if (!entry) return ''
+
+  return [
+    `import * as __ruvyxaInstrumentation from ${JSON.stringify(toImportPath(entry))}`,
+    'try {',
+    "  if (typeof __ruvyxaInstrumentation.register === 'function') {",
+    '    await __ruvyxaInstrumentation.register()',
+    '  }',
+    '} catch (error) {',
+    "  console.error('[ruvyxa] instrumentation failed:', error)",
+    '}',
+  ].join('\n')
 }
 
 function resolveProjectRouteFile(routeFile, routeId) {
