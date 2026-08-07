@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import readline from 'node:readline'
 import { STARTER_TEMPLATES, createRuvyxaApp, detectPackageManager } from '../dist/index.js'
+import { createFrame } from '../dist/tty.js'
 
 const args = process.argv.slice(2)
 if (args.includes('--help') || args.includes('-h')) {
@@ -245,23 +246,20 @@ function selectTemplate() {
     }))
     let index = 0
 
-    const renderMenu = () =>
-      [
-        `  ${bold(magenta('?'))} ${bold('Select a starter template')} ${dim('(↑/↓ to move, enter to confirm)')}`,
-        '',
-        ...items.map((item, i) => {
-          const active = i === index
-          const pointer = active ? magenta('❯') : ' '
-          const label = active ? bold(magenta(item.value)) : item.value
-          const desc = item.desc ? dim(` — ${item.desc}`) : ''
-          return `  ${pointer} ${label}${desc}`
-        }),
-      ].join('\n')
+    const renderMenu = () => [
+      `  ${bold(magenta('?'))} ${bold('Select a starter template')} ${dim('(↑/↓ to move, enter to confirm)')}`,
+      '',
+      ...items.map((item, i) => {
+        const active = i === index
+        const pointer = active ? magenta('❯') : ' '
+        const label = active ? bold(magenta(item.value)) : item.value
+        const desc = item.desc ? dim(` — ${item.desc}`) : ''
+        return `  ${pointer} ${label}${desc}`
+      }),
+    ]
 
-    const redraw = () => {
-      process.stdout.write('\x1b[u\x1b[J')
-      process.stdout.write(renderMenu())
-    }
+    const frame = createFrame(process.stdout, true)
+    const redraw = () => frame.render(renderMenu())
 
     // Wipe the whole menu with no trace left behind — the spinner/banner that follows
     // takes over the same screen space, so nothing from this prompt should linger.
@@ -269,7 +267,7 @@ function selectTemplate() {
       process.stdin.setRawMode?.(false)
       process.stdin.removeListener('keypress', onKeypress)
       process.stdin.pause()
-      process.stdout.write('\x1b[u\x1b[J\x1b[?25h')
+      frame.clear()
     }
 
     const onKeypress = (_str, key) => {
@@ -290,9 +288,7 @@ function selectTemplate() {
       }
     }
 
-    process.stdout.write('\x1b[?25l')
-    process.stdout.write('\x1b[s')
-    process.stdout.write(renderMenu())
+    redraw()
     readline.emitKeypressEvents(process.stdin)
     if (process.stdin.isTTY) process.stdin.setRawMode(true)
     process.stdin.on('keypress', onKeypress)
@@ -304,21 +300,31 @@ const MASCOT_FRAME_MS = 160
 const MASCOT_MIN_LOOPS = 1
 
 function startMascotSpinner(label) {
-  const idleFrame = bannerLines(RUNNER_FRAMES[0], label).join('\n')
-  if (!color) {
-    console.log(idleFrame)
-    return async () => {}
+  // One line per state, printed as it happens. Used whenever the region cannot
+  // be redrawn: with no colour there is no cursor control to rely on, and a
+  // banner at least as tall as the viewport has already scrolled its top row
+  // out of reach, so there is nothing to move the cursor back to. Either way,
+  // drawing once beats animating into the stack of copies this used to produce.
+  const printOnce = () => {
+    console.log(bannerLines(RUNNER_FRAMES[0], label).join('\n'))
+    // The completion line is printed here too. Returning a no-op dropped it
+    // silently, so a piped or redirected run reported that scaffolding had
+    // started and never that it finished.
+    return async (finalLabel) => {
+      console.log(`  ${green('✓')} ${finalLabel ?? label}`)
+    }
   }
+
+  if (!color) return printOnce()
+
+  const frame = createFrame(process.stdout, true)
+  if (!frame.canRedraw(bannerLines(RUNNER_FRAMES[0], label))) return printOnce()
+
   const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
   let gait = 0
   let spin = 0
   const startedAt = Date.now()
-  process.stdout.write('\x1b[?25l')
-  process.stdout.write('\x1b[s')
-  const redraw = (status) => {
-    process.stdout.write('\x1b[u\x1b[J')
-    process.stdout.write(bannerLines(RUNNER_FRAMES[gait], status).join('\n'))
-  }
+  const redraw = (status) => frame.render(bannerLines(RUNNER_FRAMES[gait], status))
   redraw(`${cyan(spinner[0])} ${label}`)
   const timer = setInterval(() => {
     gait = (gait + 1) % RUNNER_FRAMES.length
@@ -332,9 +338,7 @@ function startMascotSpinner(label) {
       await new Promise((resolve) => setTimeout(resolve, minDuration - elapsed))
     }
     clearInterval(timer)
-    redraw(`${green('✓')} ${finalLabel ?? label}`)
-    process.stdout.write('\n')
-    process.stdout.write('\x1b[?25h')
+    frame.finish(bannerLines(RUNNER_FRAMES[gait], `${green('✓')} ${finalLabel ?? label}`))
   }
 }
 
