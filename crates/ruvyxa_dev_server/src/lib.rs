@@ -14,8 +14,8 @@ use axum::Router;
 use axum::body::{Body, Bytes, to_bytes};
 use axum::extract::ws::{Message, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Query, State};
-use axum::http::{HeaderMap, HeaderName, HeaderValue, Request, StatusCode, header};
-use axum::response::{Html, IntoResponse, Response};
+use axum::http::{HeaderMap, HeaderValue, Request, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use ruvyxa_bundler::JsxRuntime;
@@ -124,7 +124,14 @@ mod router;
 pub use router::RadixRouter;
 
 mod render_cache;
+mod response;
+// Re-exported so every existing `crate::html_response`-style path keeps
+// resolving: moving these into a module is a relocation, not an interface change.
 pub use render_cache::RenderCache;
+pub(crate) use response::{
+    apply_security_headers, finalize_security_headers, html_response, json_response,
+    shared_html_response, shared_text_body, with_security_headers,
+};
 
 mod hmr_tracker;
 pub use hmr_tracker::{HmrEventType, HmrTracker, HmrUpdate};
@@ -1885,159 +1892,6 @@ fn status_text(status: StatusCode) -> String {
     paint(status.as_u16().to_string(), color)
 }
 
-fn html_response(status: StatusCode, body: String) -> Response {
-    html_response_from_body(status, Body::from(body))
-}
-
-/// Serve an HTML document that is already stored behind an [`Arc<str>`].
-///
-/// The render cache hands out shared allocations, so a cache hit can build the
-/// response body without copying the document. Building it from a `String`
-/// instead meant one full copy of every cached page on every hit.
-pub(crate) fn shared_html_response(status: StatusCode, body: Arc<str>) -> Response {
-    html_response_from_body(status, shared_text_body(body))
-}
-
-/// Lets `Bytes` borrow an `Arc<str>` as its backing storage.
-struct SharedText(Arc<str>);
-
-impl AsRef<[u8]> for SharedText {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
-}
-
-/// Build a response body from a shared string without copying it.
-pub(crate) fn shared_text_body(text: Arc<str>) -> Body {
-    Body::from(Bytes::from_owner(SharedText(text)))
-}
-
-fn html_response_from_body(status: StatusCode, body: Body) -> Response {
-    let mut response = (status, Html(body)).into_response();
-    if status.is_client_error() || status.is_server_error() {
-        response.headers_mut().insert(
-            header::CACHE_CONTROL,
-            HeaderValue::from_static("no-store, max-age=0"),
-        );
-    }
-    apply_security_headers(&mut response);
-    response
-}
-
-fn json_response<T: Serialize>(status: StatusCode, value: &T) -> Response {
-    match serde_json::to_string(value) {
-        Ok(body) => {
-            let mut response = (status, body).into_response();
-            response.headers_mut().insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("application/json; charset=utf-8"),
-            );
-            apply_security_headers(&mut response);
-            response
-        }
-        Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to serialize JSON response: {error}"),
-        )
-            .into_response(),
-    }
-}
-
-fn apply_security_headers(response: &mut Response) {
-    let headers = response.headers_mut();
-    insert_default_header(
-        headers,
-        header::X_CONTENT_TYPE_OPTIONS,
-        HeaderValue::from_static("nosniff"),
-    );
-    insert_default_header(
-        headers,
-        HeaderName::from_static("referrer-policy"),
-        HeaderValue::from_static("strict-origin-when-cross-origin"),
-    );
-    insert_default_header(
-        headers,
-        HeaderName::from_static("permissions-policy"),
-        HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
-    );
-    insert_default_header(
-        headers,
-        HeaderName::from_static("cross-origin-opener-policy"),
-        HeaderValue::from_static("same-origin"),
-    );
-    insert_default_header(
-        headers,
-        HeaderName::from_static("cross-origin-resource-policy"),
-        HeaderValue::from_static("same-origin"),
-    );
-    insert_default_header(
-        headers,
-        HeaderName::from_static("x-frame-options"),
-        HeaderValue::from_static("DENY"),
-    );
-    insert_default_header(
-        headers,
-        HeaderName::from_static("x-permitted-cross-domain-policies"),
-        HeaderValue::from_static("none"),
-    );
-}
-
-fn insert_default_header(headers: &mut HeaderMap, name: HeaderName, value: HeaderValue) {
-    if !headers.contains_key(&name) {
-        headers.insert(name, value);
-    }
-}
-
-fn finalize_security_headers(mut response: Response, enabled: bool) -> Response {
-    if enabled {
-        apply_security_headers(&mut response);
-    } else {
-        let headers = response.headers_mut();
-        remove_default_header(headers, header::X_CONTENT_TYPE_OPTIONS, "nosniff");
-        remove_default_header(
-            headers,
-            HeaderName::from_static("referrer-policy"),
-            "strict-origin-when-cross-origin",
-        );
-        remove_default_header(
-            headers,
-            HeaderName::from_static("permissions-policy"),
-            "camera=(), microphone=(), geolocation=()",
-        );
-        remove_default_header(
-            headers,
-            HeaderName::from_static("cross-origin-opener-policy"),
-            "same-origin",
-        );
-        remove_default_header(
-            headers,
-            HeaderName::from_static("cross-origin-resource-policy"),
-            "same-origin",
-        );
-        remove_default_header(headers, HeaderName::from_static("x-frame-options"), "DENY");
-        remove_default_header(
-            headers,
-            HeaderName::from_static("x-permitted-cross-domain-policies"),
-            "none",
-        );
-    }
-    response
-}
-
-fn remove_default_header(headers: &mut HeaderMap, name: HeaderName, default_value: &str) {
-    if headers
-        .get(&name)
-        .is_some_and(|value| value.as_bytes() == default_value.as_bytes())
-    {
-        headers.remove(name);
-    }
-}
-
-fn with_security_headers(mut response: Response) -> Response {
-    apply_security_headers(&mut response);
-    response
-}
-
 #[cfg(test)]
 fn classify_hmr_event(paths: &[PathBuf]) -> &'static str {
     if paths.is_empty() {
@@ -2075,6 +1929,7 @@ fn extension_is(path: &Path, expected: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::HeaderName;
     use base64::Engine;
     use std::time::SystemTime;
 

@@ -392,26 +392,64 @@ pub struct TsConfigPaths {
     pub paths: Vec<(String, Vec<String>)>,
 }
 
+/// A `tsconfig.json` that exists but could not be read as JSONC.
+///
+/// A project with no tsconfig and a project whose tsconfig is malformed both end
+/// up with no aliases, and until this existed the two were indistinguishable:
+/// resolution simply stopped honouring `paths` and every aliased import failed
+/// with "module not found", naming the import rather than the config that was
+/// skipped. Reported by `ruvyxa doctor`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TsConfigProblem {
+    pub path: PathBuf,
+    pub message: String,
+}
+
 impl TsConfigPaths {
     /// Load and parse `tsconfig.json` (or `jsconfig.json`) from the given root.
     ///
     /// Only `compilerOptions.baseUrl` and `compilerOptions.paths` are read.
     /// Returns an empty config if the file is missing or malformed.
     pub fn load(project_root: &Path) -> Self {
+        Self::load_reporting(project_root).0
+    }
+
+    /// Load as [`TsConfigPaths::load`], also reporting a file that failed to parse.
+    ///
+    /// Resolution cannot fail on a malformed config — a build that stopped dead
+    /// because a comma was in the wrong place would be worse than one that
+    /// resolves what it can — so the aliases are still dropped. The difference is
+    /// that the reason is now available to say out loud.
+    pub fn load_reporting(project_root: &Path) -> (Self, Option<TsConfigProblem>) {
         let candidates = [
             project_root.join("tsconfig.json"),
             project_root.join("jsconfig.json"),
         ];
 
+        let mut problem = None;
         for path in &candidates {
-            if let Ok(content) = fs::read_to_string(path)
-                && let Some(config) = parse_tsconfig_paths(&content, project_root)
-            {
-                return config;
+            let Ok(content) = fs::read_to_string(path) else {
+                continue;
+            };
+            match parse_jsonc(&content) {
+                Ok(value) => {
+                    if let Some(config) = paths_from_value(&value, project_root) {
+                        return (config, None);
+                    }
+                }
+                // Keep looking: a broken `tsconfig.json` beside a valid
+                // `jsconfig.json` should still resolve through the one that
+                // parses. The first failure is what gets reported if neither does.
+                Err(error) => {
+                    problem.get_or_insert_with(|| TsConfigProblem {
+                        path: path.clone(),
+                        message: error.to_string(),
+                    });
+                }
             }
         }
 
-        TsConfigPaths::default()
+        (TsConfigPaths::default(), problem)
     }
 
     /// Attempt to resolve a specifier using the path aliases.
@@ -473,11 +511,16 @@ impl TsConfigPaths {
 /// `compilerOptions.paths` without pulling in a full JSON parser.
 ///
 /// We use `serde_json` which is already in scope.
-fn parse_tsconfig_paths(content: &str, project_root: &Path) -> Option<TsConfigPaths> {
-    // Strip JSON comments (tsconfig files may use `//` comments).
-    let stripped = strip_json_comments(content);
+/// Parse tsconfig text as JSONC, keeping the error for the caller to report.
+fn parse_jsonc(content: &str) -> std::result::Result<serde_json::Value, serde_json::Error> {
+    serde_json::from_str(&strip_json_comments(content))
+}
 
-    let value: serde_json::Value = serde_json::from_str(&stripped).ok()?;
+/// Read `compilerOptions.baseUrl` and `compilerOptions.paths` from parsed JSON.
+///
+/// `None` means the file declares no compiler options at all, which is a valid
+/// config rather than a failure — the caller keeps looking at the next candidate.
+fn paths_from_value(value: &serde_json::Value, project_root: &Path) -> Option<TsConfigPaths> {
     let compiler_options = value.get("compilerOptions")?;
 
     let base_url = compiler_options
@@ -2087,6 +2130,51 @@ export default function Card() { return <div className={cn("card")} /> }"#,
         );
     }
 
+    /// A project with no tsconfig and a project with a broken one both resolve
+    /// no aliases; only one of them is a problem the user needs told about.
+    #[test]
+    fn a_malformed_tsconfig_is_reported_rather_than_silently_ignored() {
+        let temp = tempfile::tempdir().expect("temp dir");
+
+        let (paths, problem) = TsConfigPaths::load_reporting(temp.path());
+        assert!(paths.paths.is_empty());
+        assert_eq!(problem, None, "an absent tsconfig is not a problem");
+
+        fs::write(
+            temp.path().join("tsconfig.json"),
+            "{ \"compilerOptions\": }",
+        )
+        .expect("write malformed config");
+        let (paths, problem) = TsConfigPaths::load_reporting(temp.path());
+        assert!(
+            paths.paths.is_empty(),
+            "resolution still degrades rather than failing the build"
+        );
+        let problem = problem.expect("a malformed tsconfig must be reported");
+        assert_eq!(problem.path, temp.path().join("tsconfig.json"));
+        assert!(!problem.message.is_empty(), "the reason must be carried");
+    }
+
+    /// A broken `tsconfig.json` must not cost a project the `jsconfig.json`
+    /// sitting beside it that parses perfectly well.
+    #[test]
+    fn a_valid_jsconfig_still_loads_past_a_broken_tsconfig() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        fs::write(temp.path().join("tsconfig.json"), "{ not json").expect("write");
+        fs::write(
+            temp.path().join("jsconfig.json"),
+            r#"{"compilerOptions": {"paths": {"@/*": ["./src/*"]}}}"#,
+        )
+        .expect("write");
+
+        let (paths, problem) = TsConfigPaths::load_reporting(temp.path());
+        assert_eq!(
+            paths.paths,
+            vec![("@/*".to_string(), vec!["./src/*".to_string()])]
+        );
+        assert_eq!(problem, None, "a config that loaded is not a failure");
+    }
+
     /// End to end: the aliases must survive a tsconfig written the way `tsc`
     /// generates one.
     #[test]
@@ -2101,8 +2189,9 @@ export default function Card() { return <div className={cn("card")} /> }"#,
             },
         }"#;
 
-        let parsed = parse_tsconfig_paths(content, Path::new("/project"))
-            .expect("a tsc --init style config must parse");
+        let value = parse_jsonc(content).expect("a tsc --init style config must parse");
+        let parsed =
+            paths_from_value(&value, Path::new("/project")).expect("compilerOptions are present");
         assert_eq!(parsed.base_url, Some(Path::new("/project").join("./src")));
         assert_eq!(
             parsed.paths,

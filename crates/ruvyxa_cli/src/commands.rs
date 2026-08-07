@@ -279,6 +279,7 @@ pub(crate) fn doctor(args: DoctorArgs) -> anyhow::Result<()> {
     let app_dir = args.root.join(config.app_dir());
     let package_json = args.root.join("package.json");
     let tsconfig = args.root.join("tsconfig.json");
+    let (_, tsconfig_problem) = ruvyxa_bundler::resolver::TsConfigPaths::load_reporting(&args.root);
     let manifest = discover_project_routes(&args.root, &config)?;
     let validation = validate_app(&args.root, &manifest)?;
     let build_target = config.build_target(args.target);
@@ -343,6 +344,10 @@ pub(crate) fn doctor(args: DoctorArgs) -> anyhow::Result<()> {
                 "adapter": adapter,
                 "routes": manifest.routes.len(),
                 "unsupportedRoutes": unsupported_routes,
+                "tsconfigProblem": tsconfig_problem.as_ref().map(|problem| serde_json::json!({
+                    "path": problem.path,
+                    "message": problem.message,
+                })),
                 "diagnostics": validation.diagnostics,
             }))?
         );
@@ -396,7 +401,17 @@ pub(crate) fn doctor(args: DoctorArgs) -> anyhow::Result<()> {
     print_field("out dir", path_text(&args.root.join(config.out_dir())));
     print_field("app directory", exists_status(&app_dir));
     print_field("package.json", exists_status(&package_json));
-    print_field("tsconfig.json", exists_status(&tsconfig));
+    // "exists" was the whole answer here, and it was the wrong question: a
+    // tsconfig Ruvyxa cannot parse exists just as hard as one it can, and the
+    // only symptom was every aliased import failing to resolve with no mention
+    // of the config that had been skipped.
+    match &tsconfig_problem {
+        Some(problem) => print_field(
+            "tsconfig.json",
+            warn_text(format!("unreadable — {}", problem.message)),
+        ),
+        None => print_field("tsconfig.json", exists_status(&tsconfig)),
+    }
 
     print_section("toolchain");
     print_field("package manager", info(detect_package_manager(&args.root)));
