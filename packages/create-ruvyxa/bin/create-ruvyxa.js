@@ -1,23 +1,26 @@
 #!/usr/bin/env node
+import readline from 'node:readline'
 import { STARTER_TEMPLATES, createRuvyxaApp, detectPackageManager } from '../dist/index.js'
 
 const args = process.argv.slice(2)
 if (args.includes('--help') || args.includes('-h')) {
   console.log(`Usage: create-ruvyxa [directory] [--template ${STARTER_TEMPLATES.join('|')}]`)
+  console.log('Run with no flags in an interactive terminal to be prompted for both.')
   process.exit(0)
 }
 const templateArg = args.find((arg) => arg.startsWith('--template='))
 const templateIndex = args.findIndex((arg) => arg === '--template' || arg === '-t')
 const templateValue = templateIndex >= 0 ? args[templateIndex + 1] : undefined
-const template = templateArg?.slice('--template='.length) ?? templateValue
+const explicitTemplate = templateArg?.slice('--template='.length) ?? templateValue
 const missingTemplate =
   templateArg === '--template=' ||
   (templateIndex >= 0 && (!templateValue || templateValue.startsWith('-')))
-const target =
-  args.find(
-    (arg, index) => !arg.startsWith('-') && index !== (templateIndex >= 0 ? templateIndex + 1 : -1),
-  ) ?? 'my-ruvyxa-app'
+const explicitTarget = args.find(
+  (arg, index) => !arg.startsWith('-') && index !== (templateIndex >= 0 ? templateIndex + 1 : -1),
+)
 const color = process.stdout.isTTY && !process.env.NO_COLOR
+const interactive =
+  process.stdin.isTTY && process.stdout.isTTY && !explicitTemplate && !missingTemplate
 
 // A muted dark-editor palette, used throughout: true color where the terminal advertises
 // it, otherwise the nearest xterm-256 slot so it still reads the same in a 256-color one.
@@ -212,6 +215,91 @@ function countEntries(node, startIndex) {
     .reduce((total, [, child]) => total + 1 + (child === null ? 0 : countEntries(child, 0)), 0)
 }
 
+const TEMPLATE_DESCRIPTIONS = {
+  minimal: 'Blank starter — layout and a single page',
+  blog: 'Content site with blog and about routes',
+  crud: 'Task list backed by server actions and forms',
+  'api-backend': 'API-only routes, no page UI',
+}
+
+/** Line-editing prompt (readline's own cooked-mode handling covers backspace, paste, etc). */
+function promptText(question, defaultValue) {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+    const hint = defaultValue ? dim(` (${defaultValue})`) : ''
+    rl.question(`  ${bold(cyan('?'))} ${question}${hint} `, (answer) => {
+      rl.close()
+      const value = answer.trim()
+      resolve(value === '' ? defaultValue : value)
+    })
+    rl.on('SIGINT', () => process.exit(130))
+  })
+}
+
+/** Arrow-key template picker, redrawn in place with the same cursor-save trick as the spinner. */
+function selectTemplate() {
+  return new Promise((resolve) => {
+    const items = STARTER_TEMPLATES.map((value) => ({
+      value,
+      desc: TEMPLATE_DESCRIPTIONS[value] ?? '',
+    }))
+    let index = 0
+
+    const renderMenu = () =>
+      [
+        `  ${bold(magenta('?'))} ${bold('Select a starter template')} ${dim('(↑/↓ to move, enter to confirm)')}`,
+        '',
+        ...items.map((item, i) => {
+          const active = i === index
+          const pointer = active ? magenta('❯') : ' '
+          const label = active ? bold(magenta(item.value)) : item.value
+          const desc = item.desc ? dim(` — ${item.desc}`) : ''
+          return `  ${pointer} ${label}${desc}`
+        }),
+      ].join('\n')
+
+    const redraw = () => {
+      process.stdout.write('\x1b[u\x1b[J')
+      process.stdout.write(renderMenu())
+    }
+
+    // Wipe the whole menu with no trace left behind — the spinner/banner that follows
+    // takes over the same screen space, so nothing from this prompt should linger.
+    const cleanup = () => {
+      process.stdin.setRawMode?.(false)
+      process.stdin.removeListener('keypress', onKeypress)
+      process.stdin.pause()
+      process.stdout.write('\x1b[u\x1b[J\x1b[?25h')
+    }
+
+    const onKeypress = (_str, key) => {
+      if (!key) return
+      if (key.name === 'up' || key.name === 'k') {
+        index = (index - 1 + items.length) % items.length
+        redraw()
+      } else if (key.name === 'down' || key.name === 'j') {
+        index = (index + 1) % items.length
+        redraw()
+      } else if (key.name === 'return') {
+        const chosen = items[index].value
+        cleanup()
+        resolve(chosen)
+      } else if ((key.name === 'c' && key.ctrl) || key.name === 'escape') {
+        cleanup()
+        process.exit(130)
+      }
+    }
+
+    process.stdout.write('\x1b[?25l')
+    process.stdout.write('\x1b[s')
+    process.stdout.write(renderMenu())
+    readline.emitKeypressEvents(process.stdin)
+    if (process.stdin.isTTY) process.stdin.setRawMode(true)
+    process.stdin.on('keypress', onKeypress)
+    process.stdin.resume()
+  })
+}
+
 const MASCOT_FRAME_MS = 160
 const MASCOT_MIN_LOOPS = 1
 
@@ -258,6 +346,12 @@ try {
   }
 
   console.log('')
+  const target =
+    explicitTarget ??
+    (interactive ? await promptText('Project name?', 'my-ruvyxa-app') : 'my-ruvyxa-app')
+  const template = explicitTemplate ?? (interactive ? await selectTemplate() : undefined)
+  if (interactive) console.log('')
+
   const stopSpinner = startMascotSpinner(`Scaffolding ${bold(target)}...`)
   const result = await createRuvyxaApp(target, template ? { template } : undefined)
   await stopSpinner(`Created ${bold(cyan(target))}`)
