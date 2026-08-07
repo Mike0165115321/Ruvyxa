@@ -23,18 +23,21 @@
     "Add a case here first when changing what an extension serves as; a port that",
     "drifts then fails in the language that drifted, not after deployment."
   ],
-
   "$contentTypeNotes": [
     "`html` is served as a document because a file placed in `public/` is authored",
     "by the developer, not uploaded by a user; the JavaScript server already did",
     "this and forcing a download in `ruvyxa start` only made the two disagree.",
     "`txt` and `xml` carry an explicit charset to match the robots.txt and sitemap",
     "declarations the build generates. `webmanifest` needs its own type or the",
-    "browser ignores the manifest."
+    "browser ignores the manifest.",
+    "Every entry in `staticAssetExtensions` also has a content type here. They were two lists with different membership: a video or font in `public/` was recognized as an asset by routing and then served as `application/octet-stream`, which stops a `<video>` from playing and makes a browser download the font instead of using it."
   ],
   "contentTypes": {
+    "apng": "image/apng",
     "avif": "image/avif",
+    "bmp": "image/bmp",
     "css": "text/css; charset=utf-8",
+    "eot": "application/vnd.ms-fontobject",
     "gif": "image/gif",
     "html": "text/html; charset=utf-8",
     "ico": "image/x-icon",
@@ -44,27 +47,32 @@
     "json": "application/json; charset=utf-8",
     "map": "application/json; charset=utf-8",
     "mjs": "text/javascript; charset=utf-8",
+    "mov": "video/quicktime",
+    "mp3": "audio/mpeg",
+    "mp4": "video/mp4",
+    "ogg": "audio/ogg",
+    "otf": "font/otf",
     "png": "image/png",
     "svg": "image/svg+xml",
+    "ttf": "font/ttf",
     "txt": "text/plain; charset=utf-8",
     "wasm": "application/wasm",
+    "wav": "audio/wav",
+    "webm": "video/webm",
     "webmanifest": "application/manifest+json; charset=utf-8",
     "webp": "image/webp",
     "woff": "font/woff",
     "woff2": "font/woff2",
     "xml": "application/xml; charset=utf-8"
   },
-
   "$fallbackNote": "An extension with no entry, and a file with no extension at all, must be served as this rather than guessed at.",
   "fallbackContentType": "application/octet-stream",
-
   "$caseNote": "File systems preserve case, so `hero.PNG` reaches the handler spelled that way. Every implementation lowercases before lookup; these cases pin that.",
   "caseInsensitiveExamples": {
     "PNG": "image/png",
     "JpEg": "image/jpeg",
     "WOFF2": "font/woff2"
   },
-
   "$staticAssetNote": [
     "Extensions that only ever name a build or public asset. A request ending in",
     "one of these has already missed both the client bundle directory and the",

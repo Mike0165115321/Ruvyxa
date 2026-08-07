@@ -68,6 +68,20 @@ describe('static asset contract', () => {
   })
 
   /**
+   * The two lists answer different questions — "is this URL an asset?" and "how
+   * is this file served?" — but every answer to the first needs an answer to the
+   * second. They had different membership: a video or font in `public/` was
+   * recognised as an asset and then served as `application/octet-stream`, which
+   * stops a `<video>` playing and makes a browser download the font.
+   */
+  it('gives every recognised asset extension a content type', () => {
+    const missing = STATIC_ASSET_EXTENSIONS.filter(
+      (extension) => !(extension in STATIC_CONTENT_TYPES),
+    )
+    assert.deepEqual(missing, [], 'these would be served as an opaque download')
+  })
+
+  /**
    * The table used to be a literal inside the string `standaloneServerSource`
    * returns, which put it beyond the reach of every check above — that is how it
    * drifted from Rust in the first place. This asserts the generated server

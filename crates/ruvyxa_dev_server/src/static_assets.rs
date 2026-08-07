@@ -150,6 +150,25 @@ pub(crate) async fn serve_public_file(
         return Ok(Some(not_modified_response()));
     }
 
+    let content_type = content_type_for(&file);
+
+    // Above the threshold the file reaches the socket as a stream. Reading it in
+    // full first makes peak memory the sum of every large asset being served at
+    // once — one 200 MB video and a handful of clients is enough to end the
+    // process — and none of that memory buys anything, because the bytes are
+    // written out and dropped immediately.
+    if metadata.len() > streamed_asset_threshold() {
+        let identity = identity.as_ref().and_then(weak_validator);
+        if let Some(etag) = &identity
+            && request_matches_etag(request_headers, etag)
+        {
+            return Ok(Some(not_modified_response()));
+        }
+        return Ok(Some(
+            streamed_file_response(&file, &metadata, content_type, identity.as_deref()).await?,
+        ));
+    }
+
     let bytes = tokio::fs::read(&file)
         .await
         .map_err(|source| RuvyxaError::Io {
@@ -171,7 +190,6 @@ pub(crate) async fn serve_public_file(
         return Ok(Some(not_modified_response()));
     }
 
-    let content_type = content_type_for(&file);
     let mut response = bytes.into_response();
     let headers = response.headers_mut();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
@@ -185,6 +203,75 @@ pub(crate) async fn serve_public_file(
     );
     apply_security_headers(&mut response);
     Ok(Some(response))
+}
+
+/// Size above which a public asset is streamed rather than buffered.
+///
+/// 8 MiB is chosen so nothing a page actually waits on changes behaviour:
+/// scripts, stylesheets, fonts and ordinary images sit far below it, while the
+/// files above it — video, archives, large downloads — are already-compressed
+/// formats that gain nothing from the compression a buffered body would allow.
+const DEFAULT_STREAMED_ASSET_THRESHOLD: u64 = 8 * 1024 * 1024;
+
+const STREAMED_ASSET_THRESHOLD_ENV: &str = "RUVYXA_STREAM_ASSET_THRESHOLD_BYTES";
+
+fn streamed_asset_threshold() -> u64 {
+    std::env::var(STREAMED_ASSET_THRESHOLD_ENV)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_STREAMED_ASSET_THRESHOLD)
+}
+
+/// A weak validator built from the file's size and modification time.
+///
+/// A streamed response never holds all of its bytes at once, so it cannot carry
+/// the content hash the buffered path uses. `W/` marks the difference honestly:
+/// the validator identifies a version of the file rather than its exact bytes,
+/// which is what HTTP defines weak validators for and what every general-purpose
+/// static server sends for a large file.
+fn weak_validator(identity: &AssetIdentity) -> Option<String> {
+    let modified = identity
+        .modified
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .ok()?;
+    Some(format!("W/\"{:x}-{:x}\"", identity.len, modified.as_secs()))
+}
+
+/// Send a file as a stream, with `Content-Length` so the response is still sized.
+async fn streamed_file_response(
+    file: &Path,
+    metadata: &std::fs::Metadata,
+    content_type: &'static str,
+    etag: Option<&str>,
+) -> Result<Response> {
+    let handle = tokio::fs::File::open(file)
+        .await
+        .map_err(|source| RuvyxaError::Io {
+            message: format!("Failed to open public file {}", file.display()),
+            source,
+        })?;
+    let body = axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(handle));
+
+    let mut response = body.into_response();
+    let headers = response.headers_mut();
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    // Axum cannot infer a length for a stream, and a large download with no
+    // length gives the client no progress and forces chunked framing.
+    if let Ok(length) = HeaderValue::from_str(&metadata.len().to_string()) {
+        headers.insert(header::CONTENT_LENGTH, length);
+    }
+    if let Some(etag) = etag
+        && let Ok(value) = HeaderValue::from_str(etag)
+    {
+        headers.insert(header::ETAG, value);
+    }
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=3600, must-revalidate"),
+    );
+    apply_security_headers(&mut response);
+    Ok(response)
 }
 
 /// Sync fallback for static file serving (used by render_request test/bench path).
@@ -264,9 +351,21 @@ pub(crate) async fn serve_client_file(
     let Some(file) = contained_public_asset(client_dir, &client_dir.join(file_name)) else {
         return Ok(None);
     };
-    match tokio::fs::metadata(&file).await {
-        Ok(meta) if meta.is_file() => {}
+    let metadata = match tokio::fs::metadata(&file).await {
+        Ok(meta) if meta.is_file() => meta,
         _ => return Ok(None),
+    };
+    let identity = asset_identity(&metadata);
+
+    // Answer a revalidation from the fingerprint index, before touching the
+    // file — the same index `serve_public_file` uses, which this path had never
+    // consulted. A 304 carries no body, so reading the bundle and hashing every
+    // byte of it only to send an empty response is pure waste.
+    if let Some(identity) = &identity
+        && let Some(etag) = cached_asset_etag(&file, identity)
+        && request_matches_etag(request_headers, &etag)
+    {
+        return Ok(Some(not_modified_response()));
     }
 
     let bytes = tokio::fs::read(&file)
@@ -276,16 +375,17 @@ pub(crate) async fn serve_client_file(
             source,
         })?;
 
-    // Client bundles are content-hashed, so use immutable caching with ETag
+    // Hash the bytes actually being served rather than trusting the index: the
+    // file could have been rewritten between the metadata read and this one, and
+    // an ETag that does not describe the body stays wrong in every downstream
+    // cache until the file changes again.
     let etag = compute_etag(&bytes);
+    if let Some(identity) = &identity {
+        store_asset_etag(&file, identity, &etag);
+    }
 
-    if let Some(headers) = request_headers
-        && let Some(if_none_match) = headers.get(header::IF_NONE_MATCH)
-        && etag_matches(if_none_match, &etag)
-    {
-        let mut response = StatusCode::NOT_MODIFIED.into_response();
-        apply_security_headers(&mut response);
-        return Ok(Some(response));
+    if request_matches_etag(request_headers, &etag) {
+        return Ok(Some(not_modified_response()));
     }
 
     let mut response = bytes.into_response();
@@ -434,21 +534,31 @@ pub(crate) fn compute_etag(bytes: &[u8]) -> String {
     format!("\"{}\"", &hash.to_hex()[..16])
 }
 
+/// An entity tag reduced to the part that identifies the representation.
+///
+/// `W/"abc"` and `"abc"` name the same version; the weak marker says only that
+/// the two are semantically rather than byte-for-byte equivalent, which is not
+/// what an `If-None-Match` comparison is deciding.
+fn normalized_etag(value: &str) -> &str {
+    value
+        .trim()
+        .strip_prefix("W/")
+        .unwrap_or(value.trim())
+        .trim_matches('"')
+}
+
 pub(crate) fn etag_matches(value: &HeaderValue, etag: &str) -> bool {
     let Ok(value) = value.to_str() else {
         return false;
     };
-    let target = etag.trim_matches('"');
+    // Normalize both sides the same way. The candidate was already stripped of a
+    // `W/` prefix while the target was only unquoted, which was invisible while
+    // every validator this server produced was strong — a weak one never matched
+    // itself, so a large streamed asset revalidated into a full 200 every time.
+    let target = normalized_etag(etag);
     value.split(',').any(|candidate| {
         let candidate = candidate.trim();
-        if candidate == "*" {
-            return true;
-        }
-        candidate
-            .strip_prefix("W/")
-            .unwrap_or(candidate)
-            .trim_matches('"')
-            == target
+        candidate == "*" || normalized_etag(candidate) == target
     })
 }
 
@@ -487,6 +597,17 @@ pub(crate) fn content_type_for(path: &Path) -> &'static str {
         // `application/wasm`, so the fallback did not merely mislabel the module
         // — it made streaming instantiation fail outright.
         Some("wasm") => "application/wasm",
+        Some("apng") => "image/apng",
+        Some("bmp") => "image/bmp",
+        Some("eot") => "application/vnd.ms-fontobject",
+        Some("mov") => "video/quicktime",
+        Some("mp3") => "audio/mpeg",
+        Some("mp4") => "video/mp4",
+        Some("ogg") => "audio/ogg",
+        Some("otf") => "font/otf",
+        Some("ttf") => "font/ttf",
+        Some("wav") => "audio/wav",
+        Some("webm") => "video/webm",
         _ => "application/octet-stream",
     }
 }
@@ -504,6 +625,91 @@ pub(crate) fn public_asset_links(public_dir: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A large asset must not be read into memory in full before the first byte
+    /// is written: peak memory was the sum of every large file being served at
+    /// once, with nothing bounding it.
+    #[tokio::test]
+    async fn a_large_public_asset_is_streamed_rather_than_buffered() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let big = vec![b'x'; (DEFAULT_STREAMED_ASSET_THRESHOLD + 1) as usize];
+        std::fs::write(temp.path().join("movie.webm"), &big).expect("write");
+
+        let response = serve_public_file(temp.path(), "/movie.webm", None)
+            .await
+            .expect("serving must succeed")
+            .expect("the file exists");
+
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "video/webm");
+        assert_eq!(
+            response.headers()[header::CONTENT_LENGTH],
+            big.len().to_string(),
+            "a streamed download still needs its length"
+        );
+        assert!(
+            response.headers()[header::ETAG]
+                .to_str()
+                .unwrap()
+                .starts_with("W/"),
+            "a streamed body cannot carry a content hash and must say so"
+        );
+        // The stream has to actually deliver the file, not just be shaped like one.
+        let delivered = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("a streamed body must read back");
+        assert_eq!(delivered.len(), big.len());
+        assert_eq!(&delivered[..], &big[..]);
+    }
+
+    /// Everything a page waits on stays on the buffered path, with the strong
+    /// content-hash validator it had before.
+    #[tokio::test]
+    async fn an_ordinary_asset_keeps_its_strong_validator() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        std::fs::write(temp.path().join("hero.png"), b"png-bytes").expect("write");
+
+        let response = serve_public_file(temp.path(), "/hero.png", None)
+            .await
+            .expect("serving must succeed")
+            .expect("the file exists");
+
+        let etag = response.headers()[header::ETAG]
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            !etag.starts_with("W/"),
+            "{etag} should be a strong content-hash validator"
+        );
+
+        let delivered = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("a buffered body must read back");
+        assert_eq!(&delivered[..], b"png-bytes");
+    }
+
+    /// A streamed asset must still answer a revalidation without opening the file.
+    #[tokio::test]
+    async fn a_streamed_asset_answers_its_own_weak_validator() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let big = vec![b'x'; (DEFAULT_STREAMED_ASSET_THRESHOLD + 1) as usize];
+        std::fs::write(temp.path().join("movie.webm"), &big).expect("write");
+
+        let first = serve_public_file(temp.path(), "/movie.webm", None)
+            .await
+            .unwrap()
+            .unwrap();
+        let etag = first.headers()[header::ETAG].clone();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::IF_NONE_MATCH, etag);
+        let second = serve_public_file(temp.path(), "/movie.webm", Some(&headers))
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    }
 
     /// Replay the shared cross-language static-asset table.
     ///
@@ -572,6 +778,15 @@ mod tests {
             assert!(
                 is_static_asset_request(&format!("/media/file.{extension}")),
                 ".{extension} must be recognized as a static asset request"
+            );
+            // Recognising a URL as an asset and knowing how to serve the file are
+            // two different lists, and they had different membership: a video or
+            // font was routed as an asset and then handed over as an opaque
+            // download.
+            assert_ne!(
+                content_type_for(&PathBuf::from(format!("file.{extension}"))),
+                fallback,
+                ".{extension} is routed as an asset but has no content type"
             );
         }
     }

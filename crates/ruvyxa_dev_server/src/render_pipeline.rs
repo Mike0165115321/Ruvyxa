@@ -25,7 +25,7 @@ use crate::html_document::{
     client_hydration_script, compose_localized_document, error_page, hmr_client_script,
 };
 use crate::plugin_head::render_plugin_head;
-use crate::render_cache::RenderCache;
+use crate::render_cache::{CachedDocument, RenderCache};
 use crate::router::RadixRouter;
 use crate::static_assets::{
     contained_public_asset, is_safe_relative_path, is_static_asset_request, public_asset_links,
@@ -33,8 +33,8 @@ use crate::static_assets::{
 };
 use crate::worker_pool::{RenderActionRequest, RenderApiRequest, WorkerApiResponse};
 use crate::{
-    AppState, RuntimeCache, RuntimeTrace, ServerConfig, TraceAssets, html_response, project_env,
-    shared_html_response, with_security_headers,
+    AppState, RuntimeCache, RuntimeTrace, ServerConfig, TraceAssets, cached_html_response,
+    html_response, project_env, with_security_headers,
 };
 use crate::{render_cache, style::collect_styles};
 
@@ -268,7 +268,11 @@ pub(crate) async fn render_request_pooled(
                 &styles,
             )
             .await?;
-            Ok(shared_html_response(StatusCode::OK, html))
+            Ok(cached_html_response(
+                StatusCode::OK,
+                &html,
+                Some(request_headers),
+            ))
         }
         RouteKind::Api => {
             let headers = worker_request_headers(request_headers);
@@ -297,7 +301,7 @@ async fn render_page_by_strategy(
     request_path: &str,
     params: &RouteParams,
     styles: &str,
-) -> Result<Arc<str>> {
+) -> Result<CachedDocument> {
     match route.render.strategy {
         RenderStrategy::Ssr => render_page_pooled(state, route, request_path, params, styles).await,
         RenderStrategy::Ssg => {
@@ -318,9 +322,9 @@ async fn render_page_ssg(
     request_path: &str,
     params: &RouteParams,
     styles: &str,
-) -> Result<Arc<str>> {
-    let cache_key = format!("ssg:{}", render_cache::ssr_cache_key(request_path, params));
-    if let Some(cached) = state.render_cache.get_arc(&cache_key).await {
+) -> Result<CachedDocument> {
+    let cache_key = render_cache::page_cache_key("ssg:", request_path, params);
+    if let Some(cached) = state.render_cache.get_document(&cache_key).await {
         return Ok(cached);
     }
 
@@ -400,8 +404,8 @@ async fn render_page_isr(
     request_path: &str,
     params: &RouteParams,
     styles: &str,
-) -> Result<Arc<str>> {
-    let cache_key = format!("isr:{}", render_cache::ssr_cache_key(request_path, params));
+) -> Result<CachedDocument> {
+    let cache_key = render_cache::page_cache_key("isr:", request_path, params);
 
     let revalidate_after = Duration::from_secs(route.render.revalidate.unwrap_or(60));
 
@@ -624,7 +628,7 @@ async fn store_prerendered_html(
     prerender_dir: &Path,
     request_path: &str,
     cache_key: &str,
-) -> Option<Arc<str>> {
+) -> Option<CachedDocument> {
     let html = read_prerendered_html(prerender_dir, request_path).await?;
     Some(render_cache.put(cache_key.to_string(), html).await)
 }
@@ -638,13 +642,13 @@ async fn render_page_csr(
     request_path: &str,
     params: &RouteParams,
     styles: &str,
-) -> Result<Arc<str>> {
+) -> Result<CachedDocument> {
     // In production, serve the pre-rendered CSR shell. The disk read is cached
     // like every other prerendered strategy: without it each request re-opens
     // and re-reads the same shell file for the life of the process.
     if !state.config.watch {
-        let cache_key = format!("csr:{}", render_cache::ssr_cache_key(request_path, params));
-        if let Some(cached) = state.render_cache.get_arc(&cache_key).await {
+        let cache_key = render_cache::page_cache_key("csr:", request_path, params);
+        if let Some(cached) = state.render_cache.get_document(&cache_key).await {
             return Ok(cached);
         }
         if let Some(html) = store_prerendered_html(
@@ -694,7 +698,9 @@ async fn render_page_csr(
 </html>"#
     );
 
-    Ok(Arc::from(shell))
+    // Not cache-backed: the shell is built for this request only, so there is
+    // nowhere to keep an encoded copy and the layer compresses it as before.
+    Ok(CachedDocument::uncached(Arc::from(shell)))
 }
 
 /// PPR: render the static shell (Suspense fallbacks) and stream dynamic slots.
@@ -707,9 +713,9 @@ async fn render_page_ppr(
     request_path: &str,
     params: &RouteParams,
     styles: &str,
-) -> Result<Arc<str>> {
-    let cache_key = format!("ppr:{}", render_cache::ssr_cache_key(request_path, params));
-    if let Some(cached) = state.render_cache.get_arc(&cache_key).await {
+) -> Result<CachedDocument> {
+    let cache_key = render_cache::page_cache_key("ppr:", request_path, params);
+    if let Some(cached) = state.render_cache.get_document(&cache_key).await {
         return Ok(cached);
     }
 
@@ -786,10 +792,10 @@ pub(crate) async fn render_page_pooled(
     request_path: &str,
     params: &RouteParams,
     styles: &str,
-) -> Result<Arc<str>> {
+) -> Result<CachedDocument> {
     // Check render cache first
     let cache_key = render_cache::ssr_cache_key(request_path, params);
-    if let Some(cached) = state.render_cache.get_arc(&cache_key).await {
+    if let Some(cached) = state.render_cache.get_document(&cache_key).await {
         return Ok(cached);
     }
 
@@ -933,7 +939,7 @@ pub(crate) async fn render_api_pooled(
 pub(crate) async fn render_client_bundle_pooled(
     state: &AppState,
     request_path: &str,
-) -> Result<Arc<str>> {
+) -> Result<CachedDocument> {
     let (manifest, router) = state.runtime_cache.router(&state.config).await?;
     let Some(route_match) = router.find(&manifest, request_path) else {
         return Err(Diagnostic::new("RUV1303", "Client route was not found")
@@ -954,7 +960,7 @@ pub(crate) async fn render_client_bundle_pooled(
 
     // Check render cache for client bundles
     let cache_key = render_cache::client_cache_key(request_path, &route_match.params);
-    if let Some(cached) = state.render_cache.get_arc(&cache_key).await {
+    if let Some(cached) = state.render_cache.get_document(&cache_key).await {
         return Ok(cached);
     }
 
@@ -1695,7 +1701,10 @@ mod tests {
         let cache_key = "csr:ssr:/pricing";
 
         let first = store_prerendered_html(&cache, prerender_dir, "/pricing", cache_key).await;
-        assert_eq!(first.as_deref(), Some("<h1>pricing</h1>"));
+        assert_eq!(
+            first.as_ref().map(|document| document.html.as_ref()),
+            Some("<h1>pricing</h1>")
+        );
 
         std::fs::remove_dir_all(&page_dir).unwrap();
 
@@ -1717,9 +1726,10 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let cache = RenderCache::new(8, 60);
 
-        assert_eq!(
-            store_prerendered_html(&cache, temp.path(), "/absent", "ppr:ssr:/absent").await,
-            None
+        assert!(
+            store_prerendered_html(&cache, temp.path(), "/absent", "ppr:ssr:/absent")
+                .await
+                .is_none()
         );
         assert_eq!(cache.get("ppr:ssr:/absent").await, None);
     }

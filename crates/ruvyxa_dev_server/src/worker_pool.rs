@@ -631,9 +631,28 @@ impl Worker {
         // blocking the Node process. Severity comes from the worker (see
         // `log_worker_stderr`); untagged lines stay warnings.
         tokio::spawn(async move {
-            let mut reader = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = reader.next_line().await {
-                log_worker_stderr(&line);
+            let limit = max_worker_line_bytes();
+            let mut reader = BufReader::new(stderr);
+            let mut buffer = Vec::new();
+            loop {
+                match read_line_bounded(&mut reader, &mut buffer, limit).await {
+                    Ok(LineRead::Line) => log_worker_stderr(&String::from_utf8_lossy(&buffer)),
+                    Ok(LineRead::Eof { had_data }) => {
+                        if had_data {
+                            log_worker_stderr(&String::from_utf8_lossy(&buffer));
+                        }
+                        break;
+                    }
+                    Ok(LineRead::TooLong) => {
+                        warn!(
+                            limit,
+                            "worker stderr line exceeded {MAX_WORKER_LINE_BYTES_ENV}; \
+                             dropping the rest of the diagnostic stream"
+                        );
+                        break;
+                    }
+                    Err(_) => break,
+                }
             }
         });
 
@@ -641,9 +660,30 @@ impl Worker {
         let reader_pending = pending.clone();
         let reader_alive = alive.clone();
         tokio::spawn(async move {
-            let mut reader = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = reader.next_line().await {
-                let response: WorkerResponse = match serde_json::from_str(&line) {
+            let limit = max_worker_line_bytes();
+            let mut reader = BufReader::new(stdout);
+            let mut buffer = Vec::new();
+            loop {
+                match read_line_bounded(&mut reader, &mut buffer, limit).await {
+                    Ok(LineRead::Line) => {}
+                    // A partial trailing line is not a response: the worker died
+                    // mid-write, and the teardown below is what the waiters need.
+                    Ok(LineRead::Eof { .. }) | Err(_) => break,
+                    Ok(LineRead::TooLong) => {
+                        // The reader is parked mid-line, so the NDJSON framing is
+                        // lost and nothing after this point can be trusted. Fall
+                        // through to teardown: the pool replaces this worker and
+                        // its waiters get an error instead of the server dying
+                        // somewhere unrelated with an allocation failure.
+                        error!(
+                            limit,
+                            "worker response exceeded {MAX_WORKER_LINE_BYTES_ENV}; \
+                             replacing the worker"
+                        );
+                        break;
+                    }
+                }
+                let response: WorkerResponse = match serde_json::from_slice(&buffer) {
                     Ok(response) => response,
                     Err(error) => {
                         warn!(%error, "worker returned invalid JSON");
@@ -1559,6 +1599,82 @@ fn positive_worker_timeout_ms(value: &str) -> Option<u64> {
         .filter(|value| *value > 0 && *value <= MAX_NODE_TIMEOUT_MS)
 }
 
+/// Largest NDJSON line this process will accumulate from a worker.
+///
+/// `AsyncBufReadExt::lines` grows without bound: it returns only when it finds a
+/// newline, so a worker that emits an enormous line — a runaway render, a
+/// corrupted pipe, a response that echoed its own input — is allocated in full
+/// on this side before anything gets to reject it. The failure mode is the
+/// server running out of memory, which reports nothing useful about the worker
+/// that caused it.
+///
+/// 64 MiB is far above any real response. A rendered page is measured in
+/// hundreds of kilobytes and JSON escaping at worst doubles it, so this is a
+/// backstop against a broken worker rather than a limit a working one can meet.
+const DEFAULT_MAX_WORKER_LINE_BYTES: usize = 64 * 1024 * 1024;
+
+const MAX_WORKER_LINE_BYTES_ENV: &str = "RUVYXA_WORKER_MAX_LINE_BYTES";
+
+fn max_worker_line_bytes() -> usize {
+    std::env::var(MAX_WORKER_LINE_BYTES_ENV)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_MAX_WORKER_LINE_BYTES)
+}
+
+/// Why a bounded read stopped.
+#[derive(Debug, PartialEq, Eq)]
+enum LineRead {
+    /// A complete line, newline consumed and not included.
+    Line,
+    /// The stream ended. `had_data` distinguishes a trailing unterminated line
+    /// from a clean EOF.
+    Eof { had_data: bool },
+    /// The line exceeded the limit. The reader is left mid-line: the stream is
+    /// no longer interpretable, so the caller must stop rather than resynchronize.
+    TooLong,
+}
+
+/// Read one newline-delimited line into `buffer`, refusing to grow past `limit`.
+///
+/// `buffer` is cleared first and reused across calls so a steady stream of
+/// responses does not reallocate per line.
+async fn read_line_bounded<R>(
+    reader: &mut BufReader<R>,
+    buffer: &mut Vec<u8>,
+    limit: usize,
+) -> io::Result<LineRead>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    buffer.clear();
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            return Ok(LineRead::Eof {
+                had_data: !buffer.is_empty(),
+            });
+        }
+
+        if let Some(index) = available.iter().position(|byte| *byte == b'\n') {
+            if buffer.len() + index > limit {
+                return Ok(LineRead::TooLong);
+            }
+            buffer.extend_from_slice(&available[..index]);
+            reader.consume(index + 1);
+            return Ok(LineRead::Line);
+        }
+
+        let consumed = available.len();
+        if buffer.len() + consumed > limit {
+            return Ok(LineRead::TooLong);
+        }
+        buffer.extend_from_slice(available);
+        reader.consume(consumed);
+    }
+}
+
 fn find_worker_script(root: &Path) -> Option<PathBuf> {
     // Shared with every other runtime script so a project that resolves its
     // renderers cannot fail to resolve the worker that runs them.
@@ -1568,6 +1684,94 @@ fn find_worker_script(root: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `lines()` grows until it finds a newline, so a worker emitting one huge
+    /// line was allocated in full before anything could reject it — the server
+    /// died of an allocation failure rather than reporting a broken worker.
+    #[tokio::test]
+    async fn a_bounded_read_refuses_to_grow_past_its_limit() {
+        let payload = format!("{}\n", "x".repeat(1024));
+        let mut reader = BufReader::new(payload.as_bytes());
+        let mut buffer = Vec::new();
+
+        assert_eq!(
+            read_line_bounded(&mut reader, &mut buffer, 64)
+                .await
+                .unwrap(),
+            LineRead::TooLong
+        );
+        assert!(
+            buffer.len() <= 64 + 1,
+            "an over-limit line must not be accumulated: {} bytes",
+            buffer.len()
+        );
+    }
+
+    /// The limit is a backstop, not a ceiling real traffic meets: a line that
+    /// fits must come back whole, and the reader must stay framed for the next.
+    #[tokio::test]
+    async fn bounded_reads_return_whole_lines_and_stay_framed() {
+        let mut reader = BufReader::new(&b"first\n\nsecond\ntrailing"[..]);
+        let mut buffer = Vec::new();
+
+        assert_eq!(
+            read_line_bounded(&mut reader, &mut buffer, 1024)
+                .await
+                .unwrap(),
+            LineRead::Line
+        );
+        assert_eq!(buffer, b"first");
+
+        assert_eq!(
+            read_line_bounded(&mut reader, &mut buffer, 1024)
+                .await
+                .unwrap(),
+            LineRead::Line
+        );
+        assert!(buffer.is_empty(), "an empty line is a line, not an EOF");
+
+        assert_eq!(
+            read_line_bounded(&mut reader, &mut buffer, 1024)
+                .await
+                .unwrap(),
+            LineRead::Line
+        );
+        assert_eq!(buffer, b"second");
+
+        assert_eq!(
+            read_line_bounded(&mut reader, &mut buffer, 1024)
+                .await
+                .unwrap(),
+            LineRead::Eof { had_data: true },
+            "a final line with no newline is still data the worker sent"
+        );
+        assert_eq!(buffer, b"trailing");
+
+        assert_eq!(
+            read_line_bounded(&mut reader, &mut buffer, 1024)
+                .await
+                .unwrap(),
+            LineRead::Eof { had_data: false }
+        );
+    }
+
+    /// A JSON response exactly at the limit still parses; the guard must not
+    /// shave a byte off what a working worker is allowed to send.
+    #[tokio::test]
+    async fn a_line_at_the_limit_is_accepted() {
+        let line = "{\"id\":\"a\",\"ok\":true}";
+        let payload = format!("{line}\n");
+        let mut reader = BufReader::new(payload.as_bytes());
+        let mut buffer = Vec::new();
+
+        assert_eq!(
+            read_line_bounded(&mut reader, &mut buffer, line.len())
+                .await
+                .unwrap(),
+            LineRead::Line
+        );
+        assert!(serde_json::from_slice::<WorkerResponse>(&buffer).is_ok());
+    }
 
     #[test]
     fn worker_stderr_severity_comes_from_the_tag() {

@@ -14,8 +14,8 @@
 //!   rather than cloning large HTML/JS strings.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use ruvyxa_graph::RouteParams;
@@ -38,8 +38,74 @@ const MAX_ENV_RENDER_CACHE_CAPACITY: usize = 16_384;
 struct CacheEntry {
     /// Shared reference to the cached value — avoids cloning large strings.
     value: Arc<str>,
+    /// Compressed copy of `value`, built on the first hit that can use one.
+    compressed: Arc<OnceLock<CompressedDocument>>,
     /// Time the entry was created (for TTL expiration).
     created_at: Instant,
+}
+
+/// One content-encoded copy of a cached document.
+#[derive(Debug)]
+pub struct CompressedDocument {
+    /// `Content-Encoding` this copy carries.
+    pub encoding: &'static str,
+    pub bytes: Arc<[u8]>,
+}
+
+/// A cached document together with the compressed copy that shares its lifetime.
+///
+/// Serving a cached page used to cost a full compression pass per request: the
+/// render cache stored the HTML, and the `CompressionLayer` outside it saw only
+/// a response body and re-compressed the identical bytes every time. Sharing the
+/// stored `Arc<str>` saved a copy measured in microseconds while the compression
+/// it fed cost milliseconds — the optimisation was one layer short.
+///
+/// The compressed copy is built on the first hit that can use it, not at `put`,
+/// so a page rendered and never requested again pays nothing.
+#[derive(Debug, Clone)]
+pub struct CachedDocument {
+    pub html: Arc<str>,
+    compressed: Arc<OnceLock<CompressedDocument>>,
+}
+
+impl CachedDocument {
+    /// A document with nowhere to keep a compressed copy.
+    ///
+    /// Used by responses that are not cache-backed — error pages, dev-mode
+    /// documents — so they behave exactly as before: compressed once, by the
+    /// layer, for this request only.
+    pub fn uncached(html: Arc<str>) -> Self {
+        Self {
+            html,
+            compressed: Arc::new(OnceLock::new()),
+        }
+    }
+
+    /// The compressed copy, building it with `encode` on first use.
+    ///
+    /// Returns `None` when the caller cannot use any encoding this document has
+    /// or could produce; the plain body is then served and the outer layer
+    /// decides what to do with it.
+    pub fn compressed(
+        &self,
+        accepts: impl Fn(&str) -> bool,
+        encode: impl FnOnce(&str) -> Option<CompressedDocument>,
+    ) -> Option<&CompressedDocument> {
+        if let Some(existing) = self.compressed.get() {
+            // A stored copy is only usable by a client that accepts it. Anyone
+            // else falls through rather than forcing a second encoding into a
+            // slot sized for one.
+            return accepts(existing.encoding).then_some(existing);
+        }
+        let built = encode(&self.html)?;
+        // A concurrent hit may have won the race; either copy encodes the same
+        // bytes, so whichever landed first stands.
+        let stored = match self.compressed.set(built) {
+            Ok(()) => self.compressed.get()?,
+            Err(_) => self.compressed.get()?,
+        };
+        accepts(stored.encoding).then_some(stored)
+    }
 }
 
 /// Neighbor links for one key in the recency order.
@@ -274,12 +340,22 @@ impl RenderCache {
     }
 
     /// Get a cached value as an `Arc<str>`, sharing the stored allocation.
+    #[cfg(test)]
     pub async fn get_arc(&self, key: &str) -> Option<Arc<str>> {
+        self.get_document(key).await.map(|document| document.html)
+    }
+
+    /// Get a cached document, sharing both the stored allocation and the slot
+    /// holding its compressed copy.
+    pub async fn get_document(&self, key: &str) -> Option<CachedDocument> {
         let cached = {
             let entries = self.entries.read().await;
             if let Some(entry) = entries.get(key) {
                 if entry.created_at.elapsed() <= self.ttl {
-                    Some(Arc::clone(&entry.value))
+                    Some(CachedDocument {
+                        html: Arc::clone(&entry.value),
+                        compressed: Arc::clone(&entry.compressed),
+                    })
                 } else {
                     None
                 }
@@ -304,11 +380,17 @@ impl RenderCache {
     /// Return a cached value and its age without applying the cache TTL.
     /// ISR deliberately serves stale output while it regenerates in the
     /// background, so it cannot use the normal freshness-enforcing getters.
-    pub async fn get_stale_with_age(&self, key: &str) -> Option<(Arc<str>, Duration)> {
+    pub async fn get_stale_with_age(&self, key: &str) -> Option<(CachedDocument, Duration)> {
         let cached = {
             let entries = self.entries.read().await;
             let entry = entries.get(key)?;
-            (Arc::clone(&entry.value), entry.created_at.elapsed())
+            (
+                CachedDocument {
+                    html: Arc::clone(&entry.value),
+                    compressed: Arc::clone(&entry.compressed),
+                },
+                entry.created_at.elapsed(),
+            )
         };
         self.hits.fetch_add(1, Ordering::Relaxed);
         self.promote(key).await;
@@ -321,15 +403,19 @@ impl RenderCache {
     /// allocation it just cached. Callers used to pass `value.clone()` and keep
     /// the original, which made a second full copy of every rendered page on top
     /// of the one this method has to make to build the `Arc`.
-    pub async fn put(&self, key: String, value: String) -> Arc<str> {
+    pub async fn put(&self, key: String, value: String) -> CachedDocument {
         let stored: Arc<str> = Arc::from(value);
+        let compressed = Arc::new(OnceLock::new());
 
         // A zero-sized cache is explicitly disabled. Without this guard, the
         // capacity check cannot evict an item and the cache would grow forever.
         // The value is still returned so a disabled cache changes only caching,
         // never what the caller serves.
         if self.capacity == 0 {
-            return stored;
+            return CachedDocument {
+                html: stored,
+                compressed,
+            };
         }
 
         let key: Arc<str> = Arc::from(key);
@@ -355,12 +441,16 @@ impl RenderCache {
             Arc::clone(&key),
             CacheEntry {
                 value: Arc::clone(&stored),
+                compressed: Arc::clone(&compressed),
                 created_at: Instant::now(),
             },
         );
         order.push_back(key);
         debug_assert_eq!(entries.len(), order.len());
-        stored
+        CachedDocument {
+            html: stored,
+            compressed,
+        }
     }
 
     /// Invalidate all entries (called on file change).
@@ -459,14 +549,34 @@ fn render_cache_capacity(value: Option<&str>, default: usize) -> usize {
         .unwrap_or(default)
 }
 
-/// Generate a cache key for SSR pages.
-pub fn ssr_cache_key(request_path: &str, params: &RouteParams) -> String {
+/// The render strategies that give a cached page its own key space.
+///
+/// Both halves of the key contract live here: the prefix a key is built with and
+/// the prefix invalidation strips off. They used to be apart — keys were built at
+/// each call site with `format!("csr:{…}")` and stripped from a list in
+/// `cache_key_matches_route` — and the list had never gained `csr:`. A CSR page
+/// therefore matched no route during invalidation: editing its file left the
+/// cached document in place until its TTL expired, so the dev server kept serving
+/// the previous render of a file the author had just changed.
+pub const RENDER_NAMESPACES: [&str; 4] = ["ssg:", "isr:", "ppr:", "csr:"];
+
+/// Build the cache key for a page render.
+///
+/// `namespace` is one of [`RENDER_NAMESPACES`], or empty for plain SSR. Taking it
+/// here rather than wrapping the result in a second `format!` also drops one
+/// string allocation from every page request.
+pub fn page_cache_key(namespace: &str, request_path: &str, params: &RouteParams) -> String {
     if params.is_empty() {
-        format!("ssr:{request_path}")
+        format!("{namespace}ssr:{request_path}")
     } else {
         let params_str = serde_json::to_string(params).unwrap_or_default();
-        format!("ssr:{request_path}?{params_str}")
+        format!("{namespace}ssr:{request_path}?{params_str}")
     }
+}
+
+/// Generate a cache key for SSR pages.
+pub fn ssr_cache_key(request_path: &str, params: &RouteParams) -> String {
+    page_cache_key("", request_path, params)
 }
 
 /// Generate a cache key for client bundles.
@@ -485,7 +595,7 @@ fn cache_key_matches_route(cache_key: &str, route_path: &str) -> bool {
     // the marker anywhere in the key would mis-parse catch-all request
     // paths or serialized params that contain "ssr:"/"client:" as text,
     // leaving stale entries alive after a file change.
-    let without_namespace = ["ssg:", "isr:", "ppr:"]
+    let without_namespace = RENDER_NAMESPACES
         .into_iter()
         .find_map(|namespace| cache_key.strip_prefix(namespace))
         .unwrap_or(cache_key);
@@ -556,7 +666,7 @@ mod tests {
         let read = cache.get_arc("ssr:/").await.expect("just stored");
 
         assert!(
-            Arc::ptr_eq(&stored, &read),
+            Arc::ptr_eq(&stored.html, &read),
             "a cache hit must share the stored allocation, not copy it"
         );
 
@@ -572,7 +682,7 @@ mod tests {
         let cache = RenderCache::new(0, 60);
         let stored = cache.put("ssr:/".into(), "<p>page</p>".into()).await;
 
-        assert_eq!(&*stored, "<p>page</p>");
+        assert_eq!(&*stored.html, "<p>page</p>");
         assert!(cache.get_arc("ssr:/").await.is_none());
         assert!(cache.entries.read().await.is_empty());
     }
@@ -588,7 +698,7 @@ mod tests {
             .get_stale_with_age("isr:/")
             .await
             .expect("stale reads ignore the TTL");
-        assert!(Arc::ptr_eq(&stored, &read));
+        assert!(Arc::ptr_eq(&stored.html, &read.html));
         assert!(age >= Duration::from_millis(10));
     }
 
@@ -664,7 +774,7 @@ mod tests {
             cache
                 .get_stale_with_age("isr:/")
                 .await
-                .map(|(value, _)| value.to_string()),
+                .map(|(value, _)| value.html.to_string()),
             Some("stale".to_string())
         );
         assert_eq!(cache.get("isr:/").await, None);
@@ -693,6 +803,50 @@ mod tests {
         assert_eq!(cache.get("ssr:/b").await, None);
         assert_eq!(cache.get("client:/a").await, Some("3".into()));
         assert_index_and_order_consistent(&cache).await;
+    }
+
+    /// Every namespace a page key can carry must be reachable by invalidation.
+    /// `csr:` was not, so editing a CSR page left its previous render cached
+    /// until the TTL expired.
+    #[tokio::test]
+    async fn invalidate_route_reaches_every_render_namespace() {
+        let params = RouteParams::new();
+        let cache = RenderCache::new(16, 60);
+
+        for namespace in RENDER_NAMESPACES {
+            cache
+                .put(page_cache_key(namespace, "/about", &params), "stale".into())
+                .await;
+        }
+        cache
+            .put(ssr_cache_key("/about", &params), "stale".into())
+            .await;
+
+        assert_eq!(
+            cache.invalidate_route("/about").await,
+            RENDER_NAMESPACES.len() + 1,
+            "a page render must be invalidated whatever strategy produced it"
+        );
+        assert!(cache.entries.read().await.is_empty());
+        assert_index_and_order_consistent(&cache).await;
+    }
+
+    /// The builder and the matcher have to agree by construction, not by two
+    /// people remembering the same list.
+    #[tokio::test]
+    async fn every_namespace_key_is_matched_by_its_own_route() {
+        let params = RouteParams::new();
+        for namespace in RENDER_NAMESPACES.into_iter().chain([""]) {
+            let key = page_cache_key(namespace, "/blog/one", &params);
+            assert!(
+                cache_key_matches_route(&key, "/blog/[slug]"),
+                "{key} must match the route that produced it"
+            );
+            assert!(
+                !cache_key_matches_route(&key, "/other"),
+                "{key} must not match an unrelated route"
+            );
+        }
     }
 
     #[tokio::test]

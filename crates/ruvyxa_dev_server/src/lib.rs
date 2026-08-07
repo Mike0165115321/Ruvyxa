@@ -129,8 +129,8 @@ mod response;
 // resolving: moving these into a module is a relocation, not an interface change.
 pub use render_cache::RenderCache;
 pub(crate) use response::{
-    apply_security_headers, finalize_security_headers, html_response, json_response,
-    shared_html_response, shared_text_body, with_security_headers,
+    apply_security_headers, cached_html_response, finalize_security_headers, html_response,
+    json_response, shared_text_body, with_security_headers,
 };
 
 mod hmr_tracker;
@@ -1393,11 +1393,11 @@ async fn client_bundle(
     let response = match render_client_bundle_pooled(&state, &query.path).await {
         Ok(script) => {
             if state.config.watch {
-                state.devtools.record_bundle(&query.path, script.len());
+                state.devtools.record_bundle(&query.path, script.html.len());
             }
             // The client bundle is cached behind an `Arc<str>`; serve that
             // allocation instead of copying the whole script per request.
-            let mut response = shared_text_body(script).into_response();
+            let mut response = shared_text_body(script.html).into_response();
             response.headers_mut().insert(
                 header::CONTENT_TYPE,
                 HeaderValue::from_static("text/javascript; charset=utf-8"),

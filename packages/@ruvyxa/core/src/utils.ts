@@ -68,8 +68,11 @@ export function staticAssetGlobs(): string[] {
  * `standaloneServerSource` returns, which put it beyond the reach of any check.
  */
 export const STATIC_CONTENT_TYPES: Readonly<Record<string, string>> = {
+  apng: 'image/apng',
   avif: 'image/avif',
+  bmp: 'image/bmp',
   css: 'text/css; charset=utf-8',
+  eot: 'application/vnd.ms-fontobject',
   gif: 'image/gif',
   html: 'text/html; charset=utf-8',
   ico: 'image/x-icon',
@@ -79,14 +82,22 @@ export const STATIC_CONTENT_TYPES: Readonly<Record<string, string>> = {
   json: 'application/json; charset=utf-8',
   map: 'application/json; charset=utf-8',
   mjs: 'text/javascript; charset=utf-8',
+  mov: 'video/quicktime',
+  mp3: 'audio/mpeg',
+  mp4: 'video/mp4',
+  ogg: 'audio/ogg',
+  otf: 'font/otf',
   png: 'image/png',
   svg: 'image/svg+xml',
+  ttf: 'font/ttf',
   txt: 'text/plain; charset=utf-8',
   wasm: 'application/wasm',
+  wav: 'audio/wav',
+  webm: 'video/webm',
   webmanifest: 'application/manifest+json; charset=utf-8',
   webp: 'image/webp',
-  woff: 'font/woff',
   woff2: 'font/woff2',
+  woff: 'font/woff',
   xml: 'application/xml; charset=utf-8',
 }
 
