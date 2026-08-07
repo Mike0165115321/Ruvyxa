@@ -34,6 +34,59 @@
   `packages/@ruvyxa/react/test/route-match.test.mjs`, which also drives the serverless handler's own
   dispatch path. A behaviour change made in one language and not the other now fails a test.
 
+### On-demand Revalidation
+
+- **Added `revalidatePath()`, callable from an API route or a server action.** It takes a concrete
+  URL (`/blog/hello`), not a route pattern, and rejects anything else with a message naming the
+  mistake. The invalidation is queued onto the calling request's response, so a client that follows
+  a successful action with a navigation cannot arrive before the cached document has been cleared.
+  Every render strategy is covered: for SSR and CSR the cached document is dropped; for SSG, ISR,
+  and PPR the next request additionally bypasses the HTML the build wrote to disk — the copy that
+  would otherwise keep being served regardless of cache state. There is deliberately no
+  `revalidateTag()`: in Next.js a tag labels a fetch-cache entry, and Ruvyxa has no fetch cache for
+  one to label. Supporting tags would mean inventing a page-level tag declaration and a tag-to-route
+  index, which is a design decision rather than an addition to this API.
+- Pending revalidations are tracked separately from the cache's own LRU lifecycle and are handed to
+  exactly one renderer, so two requests arriving together cannot rebuild the same page twice. The
+  serverless handler and the worker runtime pass revalidations through to the function instance the
+  response returns from.
+- **An application can now provide `instrumentation.ts`, whose `register()` runs once per server
+  process before the first request.** That is the process a render runs in: the worker under
+  `ruvyxa dev` and `ruvyxa start`, and the function instance after a deploy. It is where an
+  OpenTelemetry SDK, an error reporter, or a metrics exporter is installed, and revalidation events
+  are observable through the same host. Note that stdout in that process is the worker's NDJSON
+  response channel, so hooks must write to stderr.
+- The demo gained `/api/revalidate` — a minimal webhook that validates a path and revalidates it —
+  plus a page that exercises fresh renders. The English and Thai data-actions, UI/navigation, and
+  observability guides document `revalidatePath()` and the instrumentation entry point, and both
+  configuration guides add the `typedRoutes` option.
+
+### Typed Routes
+
+- **`<Link href>` and the imperative router are now checked against the routes the project actually
+  has.** Setting `typedRoutes: true` in `ruvyxa.config.ts` (default `false`) makes `ruvyxa dev`,
+  `build`, and `check` write `.ruvyxa/types/routes.d.ts` — generated before each run's validation so
+  the editor is never behind — with one key per discovered route pattern. The file augments
+  `RuvyxaRouteRegistry` on `@ruvyxa/react/routes`; the extension point must be that subpath rather
+  than `@ruvyxa/react`, because re-exported interfaces do not take part in declaration merging.
+  `RouteHref`, the type `Link`'s `href` now takes, is the union of the URLs each pattern actually
+  serves: `[slug]` and `[...rest]` expand to `${string}`, `[[...rest]]` adds the parent path (a
+  trailing slash is dropped so the optional segment's root matches), plus `?query` and `#hash`
+  variants. External URLs stay legal — `<Link>` renders a real anchor, so any scheme, a `mailto:`,
+  an in-page anchor, and a `//host` are all accepted. A URL computed at runtime is marked with
+  `route(url)`, which narrows a plain `string` to `RouteHref`.
+- **Opt-in and strictly additive.** Until the file is generated and the project's tsconfig includes
+  `.ruvyxa/types/**/*.d.ts`, the registry is empty and `RouteHref` collapses to `string`, so every
+  project that never opts in — and every project that predates the feature — type-checks exactly as
+  it did before. The minimal template ships both the generated-types `include` and a
+  `typedRoutes: true` setting with an explanatory comment.
+- **Added `<Script>`, a third-party script component with a loading strategy.** `beforeInteractive`
+  emits a real `<script>` into the server HTML — the only strategy that works on a page with
+  `export const hydrate = false`, which ships no client runtime for an effect to run in;
+  `afterInteractive` and `lazyOnload` defer execution, and an external URL is fetched once per page
+  no matter how many times it is rendered. `resetInjectedScripts()` resets the once-per-page table
+  for tests.
+
 ### Process Lifecycle
 
 - **Fixed builds hanging forever on an unresponsive TypeScript build plugin.** The build-side plugin
@@ -193,6 +246,31 @@
   and, more importantly, could jump the autopilot's caution level up by more than one step per
   death, defeating its gradual difficulty-adaptation design.
 
+### create-ruvyxa CLI
+
+- **Scaffolding is now interactive on a real terminal.** When no template or project name is given
+  and both stdin and stdout are TTYs, `create-ruvyxa` prompts for a project name (line editing, with
+  a default accepted on Enter) and lets the template be chosen through an arrow-key menu — `j`/`k`
+  also work, vim-style — with a one-line description per starter. Terminal state and cursor
+  visibility are restored when the prompts finish.
+- **A branded startup banner** draws the Ruvyxa mascot in the same One Dark palette the rest of the
+  output now uses, and scaffolding runs under an animated braille spinner. The mascot spinner runs
+  for a minimum of one full loop before it can stop, its stop is awaited so the interval is cleared
+  in order, and the completion message is no longer dropped when output is piped or redirected.
+  Next-steps print with syntax-highlighted commands.
+- **The project summary is now the real file tree.** The hardcoded six-line summary is gone;
+  `createRuvyxaApp` returns the files it actually wrote, and the scaffolder renders them nested,
+  directories first, capped at 24 entries with an overflow line. Entries are coloured by role —
+  directories, markup, modules, styles, config, assets, docs, and dotfiles each get their own hue
+  from a One Dark palette that emits truecolor when `COLORTERM` advertises it and falls back to the
+  nearest xterm-256 slot otherwise. Help text and the missing-template error source from the same
+  `STARTER_TEMPLATES` map as the menu.
+- **Terminal redrawing is now frame-aware.** A `createFrame` utility owns cursor position and screen
+  updates; relative cursor movement replaces the previous DECSC/DECRU save/restore, which drew stale
+  content once the terminal scrolled. `tty.ts` provides `visibleWidth`, `stripAnsi`, and
+  `physicalRows` so wrapping is measured as the terminal sees it, and a `canRedraw` check falls back
+  to plain sequential output when in-place drawing is not possible.
+
 ### Plugin Scaffolding
 
 - **Fixed `ruvyxa plugin create` generating a test that fails for every plugin name except one.**
@@ -228,6 +306,14 @@
   the linker never emits (it emits `return module.exports;`) and which could not match a trimmed
   line anyway.
 - Dropped the unused `chrono` dependency from `ruvyxa_dev_server`.
+- Added a request-context runtime: the Rust dev server, worker pool, adapter runner, and serverless
+  handler carry the route pattern, request headers, queued `setCookies`, and revalidation state
+  through a shared `request-context` module, installed on `@ruvyxa/core/server` via
+  `installRequestContextHost()` so the `node:async_hooks` built-in never reaches an edge or browser
+  bundle. `revalidatePath()`, `cookies()`, `headers()`, and `draftMode()` all read from it.
+- `ruvyxa_tui`'s column-alignment test now strips ANSI escape sequences before measuring text width,
+  so its field-and-phase-line assertion holds on an interactive terminal with colour enabled instead
+  of only in CI where colour is off.
 
 ## v1.0.27 (2026-08-05)
 

@@ -111,6 +111,11 @@ documents: [ARCHITECTURE.md](ARCHITECTURE.md), [CHANGELOG.md](CHANGELOG.md),
 - **Partial Pre-rendering (PPR)** — static shell with streamed dynamic slots via React `<Suspense>`
   boundaries and `onShellReady` streaming.
 - **Incremental Static Regeneration (ISR)** — stale-while-revalidate with configurable TTL.
+- **On-demand revalidation** — `revalidatePath()` from `ruvyxa/server` queues one URL for a fresh
+  render on its next request from any API route or server action. For SSR and CSR the cached
+  document is dropped; for SSG, ISR, and PPR the next request also bypasses the per-rendered HTML.
+  The invalidation arrives with the write that caused it, so a client following the action cannot
+  outrun the cache clear. Works in `dev`, `start`, and serverless.
 - **`getStaticParams`** — generate static paths at build time for dynamic SSG routes.
 - **Deferred and zero-JS hydration** — route exports accept `hydrate = 'visible'`, `'idle'`, or
   `false`. Deferred routes do not preload their React bundle; one small shared loader imports it
@@ -187,6 +192,14 @@ documents: [ARCHITECTURE.md](ARCHITECTURE.md), [CHANGELOG.md](CHANGELOG.md),
 - **Client loader hook** — `useRuvyxaLoader` loads client-side data and returns
   `{ data, loading, error, refetch }` with built-in race-condition handling and mount-safety checks.
   See the [client loader guide](docs/en/05-data-actions-api.md).
+- **Typed routes** — set `typedRoutes: true` and `dev`/`build`/`check` generate
+  `.ruvyxa/types/routes.d.ts`; `<Link href>` and the imperative router are then narrowed to the
+  routes the project actually has, with `route(url)` for URLs computed at runtime. Opt-in — until
+  the file exists, the type collapses back to plain `string`.
+- **`<Script>`** — third-party scripts with `beforeInteractive`, `afterInteractive`, and
+  `lazyOnload` strategies; an external URL is fetched once per page.
+- **Instrumentation** — an optional `instrumentation.ts` whose `register()` runs once per server
+  process, for installing OpenTelemetry, error reporters, or metrics exporters.
 
 ### Security
 
@@ -244,7 +257,9 @@ documents: [ARCHITECTURE.md](ARCHITECTURE.md), [CHANGELOG.md](CHANGELOG.md),
 ### Deploy Anywhere (10 Adapters)
 
 - **Four starters** — `npm create ruvyxa@latest` defaults to the focused `minimal` app, with `blog`,
-  `crud`, and `api-backend` available through `--template`.
+  `crud`, and `api-backend` available through `--template`. Run it with no arguments on a real
+  terminal and it prompts for a project name and offers an arrow-key template menu (`j`/`k` also
+  work); the scaffold summary prints the actual generated file tree, colored by role.
 - **10 Deployment Adapters** — Zero-config native output for Vercel, Netlify, Cloudflare, Node.js,
   Bun, Static, AWS Amplify, Firebase, Railway, and Render. See the
   [Deployment Guide](docs/en/15-deploy-run-and-operate.md) for platform-specific configurations.

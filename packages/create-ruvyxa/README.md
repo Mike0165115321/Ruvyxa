@@ -19,6 +19,11 @@ npm create ruvyxa@latest my-admin -- --template crud
 npm create ruvyxa@latest my-api -- --template api-backend
 ```
 
+Run it with no arguments on a terminal and it becomes interactive: it prompts for a project name and
+lets you pick the starter with an arrow-key menu (`j`/`k` also navigate). The scaffold output shows
+the real generated file tree — nested, directories first, colored by role — and runs under an
+animated mascot spinner.
+
 Available starters are `minimal` (the default), `blog`, `crud`, and `api-backend`.
 
 The generated project starts with:
