@@ -107,15 +107,19 @@ function bannerLines(sprite, status) {
   return lines
 }
 
+const MASCOT_FRAME_MS = 160
+const MASCOT_MIN_LOOPS = 1
+
 function startMascotSpinner(label) {
   const idleFrame = bannerLines(RUNNER_FRAMES[0], label).join('\n')
   if (!color) {
     console.log(idleFrame)
-    return () => {}
+    return async () => {}
   }
   const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
   let gait = 0
   let spin = 0
+  const startedAt = Date.now()
   process.stdout.write('\x1b[?25l')
   process.stdout.write('\x1b[s')
   const redraw = (status) => {
@@ -127,8 +131,13 @@ function startMascotSpinner(label) {
     gait = (gait + 1) % RUNNER_FRAMES.length
     spin = (spin + 1) % spinner.length
     redraw(`${cyan(spinner[spin])} ${label}`)
-  }, 160)
-  return (finalLabel) => {
+  }, MASCOT_FRAME_MS)
+  return async (finalLabel) => {
+    const minDuration = RUNNER_FRAMES.length * MASCOT_FRAME_MS * MASCOT_MIN_LOOPS
+    const elapsed = Date.now() - startedAt
+    if (elapsed < minDuration) {
+      await new Promise((resolve) => setTimeout(resolve, minDuration - elapsed))
+    }
     clearInterval(timer)
     redraw(`${green('✓')} ${finalLabel ?? label}`)
     process.stdout.write('\n')
@@ -146,7 +155,7 @@ try {
   console.log('')
   const stopSpinner = startMascotSpinner(`Scaffolding ${bold(target)}...`)
   await createRuvyxaApp(target, template ? { template } : undefined)
-  stopSpinner(`Created ${bold(cyan(target))}`)
+  await stopSpinner(`Created ${bold(cyan(target))}`)
 
   const pm = detectPackageManager()
 
