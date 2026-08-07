@@ -156,16 +156,25 @@ fn a_zero_total_leaves_the_track_empty() {
 fn field_and_phase_lines_put_their_value_in_the_same_column() {
     // The alignment the two widths exist to produce: a field line and a phase
     // line read as one table.
-    // Compared in characters, not bytes: the phase status glyph is one column
-    // wide but three bytes long.
+    //
+    // Measured on the visible text. Counting the raw string instead compared a
+    // number that includes the CSI sequences `paint` wraps values in, and those
+    // are not the same on both lines: `phase_line` colours its detail, so five
+    // characters of `\x1b[36m` sit immediately before the value, while
+    // `field_line` emits the value bare. That made this assertion pass only
+    // when colour was off — which is every piped run and no interactive one, so
+    // it held in CI and failed on the developer's terminal while never checking
+    // the alignment that colour users actually see.
     fn value_column(line: &str) -> usize {
-        line[..line.find("value").expect("value is present")]
+        let visible = strip_ansi(line);
+        visible[..visible.find("value").expect("value is present")]
             .chars()
             .count()
     }
 
+    let field = value_column(&field_line("app dir", "value".to_string()));
     assert_eq!(
-        value_column(&field_line("app dir", "value".to_string())),
+        field,
         value_column(&phase_line(
             "routes discovered",
             "value".to_string(),
@@ -173,6 +182,10 @@ fn field_and_phase_lines_put_their_value_in_the_same_column() {
         )),
         "field and phase lines disagree on the value column"
     );
+    // Pinned, so a change to either width has to be a deliberate edit here
+    // rather than two mistakes that happen to cancel out. This is the column
+    // the module documentation promises.
+    assert_eq!(field, 25, "both lines should put their value in column 25");
 }
 
 #[test]
@@ -258,4 +271,43 @@ fn a_spinner_on_a_non_animating_terminal_still_reports_its_phase() {
     // degrades to the plain phase line.
     let spinner = Spinner::start("bundling");
     spinner.finish("12 chunks".to_string());
+}
+
+/// Remove CSI sequences so a rendered line can be measured in visible columns.
+///
+/// Terminal styling is invisible width: `\x1b[36mvalue\x1b[0m` occupies five
+/// columns, not fourteen. Any assertion about where a value lands on screen has
+/// to strip it first, or it silently measures something else whenever colour is
+/// enabled — which is exactly the environment the alignment is for.
+///
+/// Only the `\x1b[…<final>` form is handled, because that is the only form
+/// `paint` emits.
+fn strip_ansi(value: &str) -> String {
+    let mut visible = String::with_capacity(value.len());
+    let mut chars = value.chars();
+    while let Some(character) = chars.next() {
+        if character != '\x1b' {
+            visible.push(character);
+            continue;
+        }
+        if chars.next() != Some('[') {
+            continue;
+        }
+        // Parameter and intermediate bytes run until the final byte in 0x40..=0x7E.
+        for parameter in chars.by_ref() {
+            if ('\u{40}'..='\u{7e}').contains(&parameter) {
+                break;
+            }
+        }
+    }
+    visible
+}
+
+#[test]
+fn stripping_ansi_leaves_only_what_the_terminal_shows() {
+    assert_eq!(strip_ansi("\x1b[36mvalue\x1b[0m"), "value");
+    assert_eq!(strip_ansi("plain"), "plain");
+    assert_eq!(strip_ansi("\x1b[1;96m7\x1b[0m routes"), "7 routes");
+    // A multi-byte glyph is content, not styling.
+    assert_eq!(strip_ansi("\x1b[32m✓\x1b[0m ok"), "✓ ok");
 }
