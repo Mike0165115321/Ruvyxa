@@ -14,6 +14,15 @@ export interface CreateRuvyxaOptions {
   template?: StarterTemplate
 }
 
+export interface CreateRuvyxaResult {
+  /** Absolute path of the scaffolded project. */
+  targetDir: string
+  /** Starter that was copied. */
+  template: StarterTemplate
+  /** Every file written, as project-relative POSIX paths, sorted. */
+  files: string[]
+}
+
 /** Required files that must exist in the template for a valid scaffold. */
 const REQUIRED_TEMPLATE_FILES = [
   'AGENTS.md',
@@ -48,12 +57,13 @@ const RESERVED_WINDOWS_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i
  * 5. Copies the template with recursive directory creation
  *
  * @param targetDir - Path where the new project will be created
+ * @returns The scaffolded project's location, starter, and the files it now contains
  * @throws Error with descriptive message on any validation failure
  */
 export async function createRuvyxaApp(
   targetDir: string,
   options: CreateRuvyxaOptions = {},
-): Promise<void> {
+): Promise<CreateRuvyxaResult> {
   // --- Input Validation ---
   if (!targetDir || typeof targetDir !== 'string') {
     throw new Error('Project directory name is required.\n' + '  Usage: npx create-ruvyxa my-app')
@@ -198,6 +208,11 @@ export async function createRuvyxaApp(
     })
     await restorePackagedGitignore(resolvedTarget)
     await writeProjectPackageName(resolvedTarget, toPackageName(dirName))
+    return {
+      targetDir: resolvedTarget,
+      template,
+      files: await listProjectFiles(resolvedTarget),
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     throw new Error(
@@ -206,6 +221,21 @@ export async function createRuvyxaApp(
         '  Check disk space and filesystem access.',
     )
   }
+}
+
+/**
+ * List the scaffolded project's files so callers can describe the real tree
+ * instead of assuming a layout that only some starters share.
+ */
+async function listProjectFiles(targetDir: string): Promise<string[]> {
+  const entries = await readdir(targetDir, { recursive: true, withFileTypes: true })
+  const files: string[] = []
+  for (const entry of entries) {
+    if (!entry.isFile()) continue
+    const path = relative(targetDir, resolve(entry.parentPath, entry.name))
+    files.push(path.split(/[\\/]/).join('/'))
+  }
+  return files.sort()
 }
 
 /** Keep generated output out even when a local starter was built before scaffolding. */

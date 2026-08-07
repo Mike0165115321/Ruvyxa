@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 
 import {
+  STARTER_TEMPLATES,
   createRuvyxaApp,
   detectPackageManager,
 } from '../../../packages/create-ruvyxa/dist/index.js'
@@ -188,6 +189,22 @@ describe('createRuvyxaApp', () => {
         const packageJson = await readPackageJson(target)
         assert.equal(packageJson.name, `${template}-app`)
         assert.deepEqual(packageJson.scripts, starterScripts)
+      } finally {
+        await rm(tempRoot, { recursive: true, force: true })
+      }
+    })
+  }
+
+  for (const template of STARTER_TEMPLATES) {
+    it(`reports the files it actually wrote for the ${template} starter`, async () => {
+      const tempRoot = await mkdtemp(join(tmpdir(), 'ruvyxa-create-'))
+      const target = join(tempRoot, `${template}-report`)
+
+      try {
+        const result = await createRuvyxaApp(target, { template })
+        assert.equal(result.template, template)
+        assert.deepEqual(result.files, await listFiles(target))
+        assert.ok(result.files.includes('ruvyxa.config.ts'))
       } finally {
         await rm(tempRoot, { recursive: true, force: true })
       }
