@@ -164,20 +164,37 @@ fn is_inside_server_dir(path: &Path, project_root: &Path) -> bool {
         .is_some_and(|component| component.as_os_str() == "server")
 }
 
+/// Whether a `process.env` name is one a browser bundle must not carry.
+///
+/// `NODE_ENV` is substituted with a literal at build time and never reaches the
+/// output as an env read; `RUVYXA_PUBLIC_*` is public by contract. Everything
+/// else statically named is a leak.
+///
+/// This predicate is the single home of that policy. [`ast`] deliberately keeps
+/// policy out of the scanner and leaves it to this module — but "this module"
+/// had become two: `ruvyxa_graph` carried its own copy for the `check` and
+/// `analyze` diagnostics, and the copy was missing the `NODE_ENV` exemption. A
+/// client component containing the most ordinary line in React —
+/// `process.env.NODE_ENV !== 'production'` — therefore built fine and failed
+/// validation with RUV1008. Sharing the fact (`env_reads`) while duplicating the
+/// rule that reads it left exactly the disagreement the shared scanner exists to
+/// prevent.
+#[must_use]
+pub fn env_read_is_private(name: &str) -> bool {
+    name != "NODE_ENV" && !name.starts_with("RUVYXA_PUBLIC_")
+}
+
 /// The `process.env` reads in `module` that must not reach a browser bundle.
 ///
-/// `NODE_ENV` is substituted at build time and `RUVYXA_PUBLIC_*` is public by
-/// contract; everything else statically named is a leak.
-///
 /// Which reads exist is decided by the one scanner in [`ast`]; this function
-/// only applies the policy. It used to walk the bytes itself, and that second
-/// walk is exactly where a regex-literal bug hid every env read in a module
-/// twice over.
+/// only applies [`env_read_is_private`]. It used to walk the bytes itself, and
+/// that second walk is exactly where a regex-literal bug hid every env read in a
+/// module twice over.
 fn private_env_reads(module: &ast::ModuleAst) -> Vec<String> {
     module
         .env_reads
         .iter()
-        .filter(|name| name.as_str() != "NODE_ENV" && !name.starts_with("RUVYXA_PUBLIC_"))
+        .filter(|name| env_read_is_private(name))
         .cloned()
         .collect()
 }

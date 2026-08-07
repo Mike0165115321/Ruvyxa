@@ -345,19 +345,7 @@ impl IncrementalGraphCache {
         };
         let json = serde_json::to_string(&manifest).map_err(std::io::Error::other)?;
 
-        // Atomic write via temp file + rename.
-        let temp_path = self.manifest_path.with_extension("json.tmp");
-        fs::write(&temp_path, json.as_bytes())?;
-        if fs::rename(&temp_path, &self.manifest_path).is_err() {
-            // Cross-device and Windows replacement semantics can reject rename.
-            // Preserve the manifest update and always clean the temporary file,
-            // including when the direct write itself fails.
-            let write_result = fs::write(&self.manifest_path, json.as_bytes());
-            let _ = fs::remove_file(&temp_path);
-            write_result?;
-        }
-
-        Ok(())
+        crate::atomic_file::write_atomic(&self.manifest_path, json.as_bytes())
     }
 
     /// Clear the persisted manifest (forces full rebuild on next run).

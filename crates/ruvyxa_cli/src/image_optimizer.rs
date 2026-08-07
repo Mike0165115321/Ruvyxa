@@ -550,18 +550,8 @@ fn write_cache_entry(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     if path.is_file() {
         return Ok(());
     }
-    let worker = rayon::current_thread_index().unwrap_or(usize::MAX);
-    let temporary = path.with_extension(format!("{}.{worker}.tmp", std::process::id()));
-    fs::write(&temporary, bytes)
-        .with_context(|| format!("failed to write image cache entry {}", temporary.display()))?;
-    match fs::rename(&temporary, path) {
-        Ok(()) => Ok(()),
-        Err(_) if path.is_file() => {
-            let _ = fs::remove_file(temporary);
-            Ok(())
-        }
-        Err(error) => Err(error).context("failed to publish image cache entry"),
-    }
+    ruvyxa_bundler::atomic_file::write_atomic(path, bytes)
+        .with_context(|| format!("failed to publish image cache entry {}", path.display()))
 }
 
 fn materialize_cached(cached: &Path, output: &Path) -> anyhow::Result<()> {

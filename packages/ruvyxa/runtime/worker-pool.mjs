@@ -20,7 +20,7 @@
  *   - Memory pressure monitoring with automatic cache eviction
  */
 import { availableParallelism } from 'node:os'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { once } from 'node:events'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
@@ -765,14 +765,22 @@ async function readStaticParamsCache(file, dependencyHash, contextHash) {
 }
 
 async function writeStaticParamsCache(file, value) {
-  const temporary = `${file}.${process.pid}.${Date.now()}.tmp`
-  await writeFile(temporary, `${JSON.stringify(value)}\n`)
+  // `randomUUID` rather than a timestamp: two resolutions of the same route
+  // landing in one millisecond produced one temporary path for both, so each
+  // could rename a file the other was still writing. The `finally` is what keeps
+  // a failed publish from leaving the temporary behind on every attempt.
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
   try {
-    await rename(temporary, file)
-  } catch (error) {
-    if (error?.code !== 'EEXIST' && error?.code !== 'EPERM') throw error
-    await rm(file, { force: true })
-    await rename(temporary, file)
+    await writeFile(temporary, `${JSON.stringify(value)}\n`)
+    try {
+      await rename(temporary, file)
+    } catch (error) {
+      if (error?.code !== 'EEXIST' && error?.code !== 'EPERM') throw error
+      await rm(file, { force: true })
+      await rename(temporary, file)
+    }
+  } finally {
+    await rm(temporary, { force: true })
   }
 }
 

@@ -514,7 +514,19 @@ fn parse_tsconfig_paths(content: &str, project_root: &Path) -> Option<TsConfigPa
     })
 }
 
-/// Strip `//` line comments from a JSON string so `serde_json` can parse it.
+/// Rewrite JSONC into JSON that `serde_json` accepts.
+///
+/// TypeScript reads `tsconfig.json` as JSONC, which adds three things to JSON:
+/// `//` comments, `/* */` comments, and trailing commas. This handled only the
+/// first. The other two are not exotic — `tsc --init` emits a file whose every
+/// option is documented in `/* */` blocks — and the cost of missing them was
+/// silent: `parse_tsconfig_paths` turns any parse failure into "this project
+/// declares no aliases", so a perfectly valid tsconfig stopped contributing
+/// `baseUrl` and `paths` and every aliased import failed to resolve with no
+/// mention of the config that was skipped.
+///
+/// Comment bodies collapse to nothing but their newlines are kept, so a parse
+/// error still points at the line the user wrote.
 fn strip_json_comments(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut in_string = false;
@@ -548,7 +560,73 @@ fn strip_json_comments(input: &str) -> String {
                         }
                     }
                 }
+                '/' if chars.peek() == Some(&'*') => {
+                    chars.next();
+                    let mut previous = '\0';
+                    for c in chars.by_ref() {
+                        if previous == '*' && c == '/' {
+                            break;
+                        }
+                        // Keep the line count so reported positions stay honest.
+                        if c == '\n' {
+                            out.push('\n');
+                        }
+                        previous = c;
+                    }
+                }
                 _ => out.push(ch),
+            }
+        }
+    }
+
+    strip_trailing_commas(&out)
+}
+
+/// Drop the comma in `[1, 2, ]` and `{"a": 1, }`, which JSONC allows.
+///
+/// Runs after comment removal so a comma separated from its bracket only by a
+/// comment is still recognized as trailing.
+fn strip_trailing_commas(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut in_string = false;
+    let mut chars = input.chars().peekable();
+    // Index in `out` of a comma that has seen only whitespace since.
+    let mut pending_comma: Option<usize> = None;
+
+    while let Some(ch) = chars.next() {
+        if in_string {
+            out.push(ch);
+            if ch == '\\' {
+                if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => {
+                in_string = true;
+                pending_comma = None;
+                out.push(ch);
+            }
+            ',' => {
+                pending_comma = Some(out.len());
+                out.push(ch);
+            }
+            ']' | '}' => {
+                if let Some(comma) = pending_comma.take() {
+                    out.remove(comma);
+                }
+                out.push(ch);
+            }
+            _ => {
+                if !ch.is_whitespace() {
+                    pending_comma = None;
+                }
+                out.push(ch);
             }
         }
     }
@@ -1961,6 +2039,75 @@ export default function Card() { return <div className={cn("card")} /> }"#,
         let stripped = strip_json_comments(input);
         let parsed: serde_json::Value = serde_json::from_str(&stripped).unwrap();
         assert_eq!(parsed["key"], "value");
+    }
+
+    /// `tsc --init` documents every option in a `/* */` block. A tsconfig kept in
+    /// that shape parsed as nothing, so `baseUrl` and `paths` silently vanished
+    /// and every aliased import failed to resolve.
+    #[test]
+    fn strip_json_comments_handles_block_comments_and_trailing_commas() {
+        let input = r#"{
+            /* Visit https://aka.ms/tsconfig to read more about this file */
+            "compilerOptions": {
+                "baseUrl": ".", /* Base directory to resolve non-relative modules. */
+                "paths": {
+                    "@/*": ["./src/*"],
+                },
+            },
+        }"#;
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&strip_json_comments(input)).expect("JSONC must parse");
+        assert_eq!(parsed["compilerOptions"]["baseUrl"], ".");
+        assert_eq!(parsed["compilerOptions"]["paths"]["@/*"][0], "./src/*");
+    }
+
+    /// The stripper must not reach inside string values. Path patterns are full
+    /// of `/*`, and rewriting one would corrupt the alias it is meant to read.
+    #[test]
+    fn strip_json_comments_leaves_string_contents_alone() {
+        let input = r#"{"paths": {"@/*": ["./src/*"], "x": ["a//b", "c/*d", "e,"]}}"#;
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&strip_json_comments(input)).expect("must parse");
+        assert_eq!(parsed["paths"]["@/*"][0], "./src/*");
+        assert_eq!(parsed["paths"]["x"][0], "a//b");
+        assert_eq!(parsed["paths"]["x"][1], "c/*d");
+        assert_eq!(parsed["paths"]["x"][2], "e,");
+    }
+
+    /// A block comment keeps its newlines so a later parse error still names the
+    /// line the author wrote.
+    #[test]
+    fn strip_json_comments_preserves_line_numbers() {
+        let input = "{\n/* one\ntwo\nthree */\n\"key\": 1\n}";
+        assert_eq!(
+            strip_json_comments(input).lines().count(),
+            input.lines().count()
+        );
+    }
+
+    /// End to end: the aliases must survive a tsconfig written the way `tsc`
+    /// generates one.
+    #[test]
+    fn parse_tsconfig_paths_reads_a_tsc_init_style_config() {
+        let content = r#"{
+            "compilerOptions": {
+                /* Modules */
+                "baseUrl": "./src", /* resolve non-relative modules from here */
+                "paths": {
+                    "@app/*": ["./app/*"],
+                },
+            },
+        }"#;
+
+        let parsed = parse_tsconfig_paths(content, Path::new("/project"))
+            .expect("a tsc --init style config must parse");
+        assert_eq!(parsed.base_url, Some(Path::new("/project").join("./src")));
+        assert_eq!(
+            parsed.paths,
+            vec![("@app/*".to_string(), vec!["./app/*".to_string()])]
+        );
     }
 
     #[test]

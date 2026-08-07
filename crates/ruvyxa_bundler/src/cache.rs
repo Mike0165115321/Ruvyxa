@@ -39,9 +39,6 @@ const COMPILER_VERSION: &str = concat!(
     ":ast-build-hooks"
 );
 
-/// Atomic counter for unique temp file names.
-static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-
 /// LRU-ordered in-memory cache entry.
 #[derive(Debug)]
 struct MemEntry {
@@ -245,19 +242,10 @@ impl CompileCache {
             return;
         }
 
+        // A cache miss costs a recompile, never a wrong answer, so a failed
+        // publish is dropped rather than propagated.
         let path = self.cache_dir.join(format!("{key}.js"));
-        let temp_path = self.cache_dir.join(format!(
-            "{}.tmp{}.tmp",
-            key,
-            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
-
-        if fs::write(&temp_path, compiled_js.as_bytes()).is_ok() {
-            if fs::rename(&temp_path, &path).is_err() && !path.exists() {
-                let _ = fs::write(&path, compiled_js.as_bytes());
-            }
-            let _ = fs::remove_file(&temp_path);
-        }
+        let _ = crate::atomic_file::write_atomic(&path, compiled_js.as_bytes());
     }
 
     /// Insert a value into the in-memory LRU cache, evicting the LRU entry

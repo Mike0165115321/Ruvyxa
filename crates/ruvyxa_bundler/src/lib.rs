@@ -23,6 +23,7 @@
 //! ```
 
 pub mod ast;
+pub mod atomic_file;
 pub mod boundary;
 pub mod cache;
 pub mod chunking;

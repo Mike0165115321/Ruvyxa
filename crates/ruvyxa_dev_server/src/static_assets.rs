@@ -463,8 +463,12 @@ pub(crate) fn content_type_for(path: &Path) -> &'static str {
     match extension.as_deref() {
         Some("css") => "text/css; charset=utf-8",
         Some("js" | "mjs") => "text/javascript; charset=utf-8",
-        Some("json") => "application/json; charset=utf-8",
+        // `.map` is JSON. Left to the fallback it was served as a binary
+        // download, and a browser will not attach a source map it is handed as
+        // `application/octet-stream`.
+        Some("json" | "map") => "application/json; charset=utf-8",
         Some("webmanifest") => "application/manifest+json; charset=utf-8",
+        Some("html") => "text/html; charset=utf-8",
         // RFC 9309 requires robots.txt to use text/plain. Sitemap XML is
         // likewise served as XML instead of the binary fallback, while the
         // explicit UTF-8 charset matches the generated declarations.
@@ -475,6 +479,14 @@ pub(crate) fn content_type_for(path: &Path) -> &'static str {
         Some("jpg" | "jpeg") => "image/jpeg",
         Some("webp") => "image/webp",
         Some("avif") => "image/avif",
+        Some("gif") => "image/gif",
+        Some("ico") => "image/x-icon",
+        Some("woff") => "font/woff",
+        Some("woff2") => "font/woff2",
+        // `WebAssembly.instantiateStreaming` rejects any response that is not
+        // `application/wasm`, so the fallback did not merely mislabel the module
+        // — it made streaming instantiation fail outright.
+        Some("wasm") => "application/wasm",
         _ => "application/octet-stream",
     }
 }
@@ -492,6 +504,77 @@ pub(crate) fn public_asset_links(public_dir: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Replay the shared cross-language static-asset table.
+    ///
+    /// The JavaScript servers read `STATIC_CONTENT_TYPES` from
+    /// `@ruvyxa/core/utils`; this handler cannot, so the two are held together
+    /// by `tests/fixtures/static-asset-conformance.json` instead.
+    /// `tests/packages/core/static-asset-contract.test.mjs` drives the same file
+    /// through the JavaScript table. A change made in one language and not the
+    /// other fails here rather than after deployment.
+    #[test]
+    fn serves_the_shared_cross_language_content_type_table() {
+        let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/static-asset-conformance.json");
+        let fixture: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&fixture_path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", fixture_path.display())),
+        )
+        .expect("conformance fixture is valid JSON");
+
+        let content_types = fixture["contentTypes"]
+            .as_object()
+            .expect("fixture declares contentTypes");
+        for (extension, expected) in content_types {
+            let expected = expected.as_str().expect("content type is a string");
+            let path = PathBuf::from(format!("public/asset.{extension}"));
+            assert_eq!(
+                content_type_for(&path),
+                expected,
+                "content type for .{extension}"
+            );
+        }
+
+        let fallback = fixture["fallbackContentType"]
+            .as_str()
+            .expect("fixture declares a fallback");
+        assert_eq!(
+            content_type_for(&PathBuf::from("public/archive.bin")),
+            fallback
+        );
+        assert_eq!(content_type_for(&PathBuf::from("public/LICENSE")), fallback);
+
+        for (spelling, expected) in fixture["caseInsensitiveExamples"]
+            .as_object()
+            .expect("fixture declares case examples")
+        {
+            let expected = expected.as_str().expect("content type is a string");
+            let path = PathBuf::from(format!("public/asset.{spelling}"));
+            assert_eq!(
+                content_type_for(&path),
+                expected,
+                "content type for .{spelling}"
+            );
+        }
+
+        let declared: Vec<&str> = fixture["staticAssetExtensions"]
+            .as_array()
+            .expect("fixture declares staticAssetExtensions")
+            .iter()
+            .map(|value| value.as_str().expect("extension is a string"))
+            .collect();
+        assert_eq!(
+            declared, STATIC_ASSET_EXTENSIONS,
+            "the asset-extension list is copied into three languages; the fixture is the one that decides it"
+        );
+        for extension in &declared {
+            assert!(
+                is_static_asset_request(&format!("/media/file.{extension}")),
+                ".{extension} must be recognized as a static asset request"
+            );
+        }
+    }
 
     /// Serve `file` and report the status plus the body length actually sent.
     async fn serve(

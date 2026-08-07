@@ -1018,6 +1018,14 @@ export default function RuvyxaRunner() {
     }
 
     function endGame() {
+      // One death, one call. Three separate collision passes run per frame — the boss
+      // box, every obstacle, every shot — and none of them stops at the first hit, so
+      // a single crash reached this function once per overlapping thing. That made the
+      // death burst fire 14 particles per overlap, and worse, it stepped `aiCaution`
+      // once per overlap: the autopilot jumped straight to the widest margin on its
+      // first death instead of widening one notch at a time, which is the whole point
+      // of the adaptation below.
+      if (gameOver) return
       gameOver = true
       best = Math.max(best, score)
       burst(runner.x + 12, runner.y + 12, 14)
@@ -1108,24 +1116,51 @@ export default function RuvyxaRunner() {
 
     type AiAction = 'none' | 'jump' | 'duck'
 
+    // Scratch storage for the planner's working copy. `simPool` only ever grows and its
+    // objects are overwritten in place; `simView` is the array handed to the simulation.
+    //
+    // The planner runs up to ~75 simulations per frame and each one used to allocate a
+    // fresh object per live threat, which at 60fps is six figures of short-lived objects
+    // a second purely for garbage collection to clean up. Nothing retains the returned
+    // array — `simulatePlan` reads it and returns a number — so one buffer can serve
+    // every call. A split spawns a genuinely new threat mid-simulation and still
+    // allocates; that path is rare and stays as it was.
+    const simPool: SimThreat[] = []
+    const simView: SimThreat[] = []
+
     function cloneThreats(base: SimThreat[]): SimThreat[] {
-      const out: SimThreat[] = new Array(base.length)
+      simView.length = base.length
       for (let i = 0; i < base.length; i++) {
         const t = base[i]
-        out[i] = {
-          x: t.x,
-          y: t.y,
-          w: t.w,
-          h: t.h,
-          vx: t.vx,
-          vy: t.vy,
-          t: t.t,
-          size: t.size,
-          behavior: t.behavior,
-          split: t.split,
+        let out = simPool[i]
+        if (!out) {
+          out = {
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 0,
+            vx: 0,
+            vy: 0,
+            t: 0,
+            size: 0,
+            behavior: 'straight',
+            split: false,
+          }
+          simPool[i] = out
         }
+        out.x = t.x
+        out.y = t.y
+        out.w = t.w
+        out.h = t.h
+        out.vx = t.vx
+        out.vy = t.vy
+        out.t = t.t
+        out.size = t.size
+        out.behavior = t.behavior
+        out.split = t.split
+        simView[i] = out
       }
-      return out
+      return simView
     }
 
     // Evaluates a plan — "wait `delay` frames, then commit to `action` and hold it" — by
@@ -1268,7 +1303,18 @@ export default function RuvyxaRunner() {
         let bestAction: AiAction = 'none'
         let bestScore = simulatePlan(base, 'none', 0, horizon, padding)
         let bestPref = 0
+        const baseline = bestScore
         for (let delay = 0; delay <= AI_MAX_DELAY; delay++) {
+          // A plan does nothing until its delay elapses, so up to that frame it is the
+          // do-nothing plan byte for byte. If doing nothing already dies at frame
+          // `baseline`, every plan that waits longer than that dies on the same frame
+          // with the same score — they cannot beat `bestScore` (which is at least
+          // `baseline`), and they cannot win a tie either, because a tie at `baseline`
+          // only happens when nothing beat it, and the do-nothing plan already holds
+          // that slot with the lowest possible preference. Stopping here is therefore
+          // exact, not an approximation: it drops the deep half of the search precisely
+          // when the track is busy and the search is most expensive.
+          if (delay > baseline) break
           for (const action of AI_ACTIONS) {
             const score = simulatePlan(base, action, delay, horizon, padding)
             if (score < 0) continue
@@ -1464,20 +1510,32 @@ export default function RuvyxaRunner() {
         bolts = bolts.filter((b) => b.x < WIDTH + 20)
 
         // bolts vs obstacles
+        //
+        // A bolt is spent by the first thing it hits. `spent` carries that, not the
+        // `b.x = WIDTH + 999` sweep marker: the hitbox below is read from a snapshot
+        // taken before these checks, so moving `b` off-screen does not stop the
+        // remaining ones. Without an explicit flag one bolt punched through an
+        // obstacle and still took a point off the boss standing behind it — bosses
+        // hold x 450-505 and obstacles cross that band on every pass, so the double
+        // hit was routine rather than a corner case.
         for (const b of bolts) {
           const bBox = { x: b.x, y: b.y, w: 10, h: 4 }
+          let spent = false
           for (const o of obstacles) {
             if (o.hp > 0 && overlap(bBox, obstacleBox(o))) {
               o.hp--
               b.x = WIDTH + 999
+              spent = true
               burst(o.x + sprW(o.sprite) / 2, o.y + sprH(o.sprite) / 2, 8)
               if (o.hp <= 0) {
                 score += 25
                 purged++
               }
+              break
             }
           }
           if (
+            !spent &&
             boss &&
             overlap(bBox, { x: boss.x, y: boss.y, w: sprW(boss.sprite), h: sprH(boss.sprite) })
           ) {

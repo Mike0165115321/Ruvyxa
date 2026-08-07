@@ -1,9 +1,11 @@
 import {
   CLIENT_BUNDLE_PREFIX,
   DEFAULT_SECURITY_HEADERS,
+  FALLBACK_CONTENT_TYPE,
   IMMUTABLE_CACHE_CONTROL,
   PUBLIC_ASSET_CACHE_CONTROL,
   STATIC_ASSET_EXTENSIONS,
+  STATIC_CONTENT_TYPES,
 } from './utils.js'
 
 /** Runtime-specific options for the generated standalone HTTP server. */
@@ -91,27 +93,9 @@ const handler = createHandler({
   supportedStrategies: ['ssr', 'ssg', 'csr', 'isr', 'ppr', 'api'],
 });
 
-const MIME_TYPES = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.mjs': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json',
-  '.map': 'application/json',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.webp': 'image/webp',
-  '.avif': 'image/avif',
-  '.gif': 'image/gif',
-  '.ico': 'image/x-icon',
-  '.txt': 'text/plain; charset=utf-8',
-  '.xml': 'application/xml; charset=utf-8',
-  '.woff': 'font/woff',
-  '.woff2': 'font/woff2',
-  '.wasm': 'application/wasm',
-};
+// Serialized from STATIC_CONTENT_TYPES so this server and the Rust one answer
+// from the same table; see tests/fixtures/static-asset-conformance.json.
+const MIME_TYPES = ${JSON.stringify(STATIC_CONTENT_TYPES)};
 
 // Resolve a request path to a file inside publicDir, or null. Containment is
 // enforced by resolving and prefix-checking before touching the file system.
@@ -165,7 +149,11 @@ function isAssetPath(pathname) {
 }
 
 function sendStatic(req, res, hit, pathname) {
-  const contentType = MIME_TYPES[path.extname(hit.file).toLowerCase()] ?? 'application/octet-stream';
+  // Keyed without the leading dot, and lowercased because a file system hands
+  // back \`hero.PNG\` exactly as it was written.
+  const contentType =
+    MIME_TYPES[path.extname(hit.file).slice(1).toLowerCase()] ??
+    ${JSON.stringify(FALLBACK_CONTENT_TYPE)};
   res.statusCode = 200;
   res.setHeader('content-type', contentType);
   res.setHeader('content-length', hit.size);

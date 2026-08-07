@@ -383,17 +383,12 @@ pub(crate) fn store_client_artifact(
 }
 
 pub(crate) fn write_client_cache_file(path: PathBuf, source: Vec<u8>) {
-    let Some(parent) = path.parent() else {
-        return;
-    };
-    if fs::create_dir_all(parent).is_err() {
-        return;
-    }
-    let temp = path.with_extension("json.tmp");
-    if fs::write(&temp, source).is_ok() && fs::rename(&temp, &path).is_err() {
-        let _ = fs::write(&path, fs::read(&temp).unwrap_or_default());
-        let _ = fs::remove_file(temp);
-    }
+    // A cache miss costs a rebuild, never a wrong answer, so a failed publish is
+    // dropped. It must not fall back to writing *something*: the previous
+    // recovery read the temporary back with `unwrap_or_default()`, so a recovery
+    // that itself failed replaced a good entry with zero bytes and the next build
+    // served an empty client bundle from cache.
+    let _ = ruvyxa_bundler::atomic_file::write_atomic(&path, &source);
 }
 
 #[cfg(test)]

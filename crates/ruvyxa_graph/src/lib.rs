@@ -731,15 +731,19 @@ fn resolve_relative_import(from: &Path, specifier: &str) -> Option<PathBuf> {
 
 /// Statically-known `process.env` reads that must not reach the browser.
 ///
-/// The reads come from the bundler's scanner, so `check` and `build` cannot
-/// disagree about which env vars a module touches. This used to be a private
-/// marker search over a privately-masked copy of the source: a second answer to
-/// the same question, kept in step with the bundler only by hand.
+/// The reads come from the bundler's scanner and the rule that judges them comes
+/// from the bundler's boundary check, so `check` and `build` cannot disagree
+/// about either which env vars a module touches or which of them are allowed.
+///
+/// Both halves used to be local. The scan was a private marker search over a
+/// privately-masked copy of the source; the rule was a hand-copied filter that
+/// had lost the `NODE_ENV` exemption, so `check` rejected with RUV1008 what
+/// `build` compiled without complaint.
 fn private_env_reads(ast: &ruvyxa_bundler::ast::ModuleAst) -> impl Iterator<Item = &str> {
     ast.env_reads
         .iter()
-        .filter(|name| !name.starts_with("RUVYXA_PUBLIC_"))
         .map(String::as_str)
+        .filter(|name| ruvyxa_bundler::boundary::env_read_is_private(name))
 }
 
 fn relative_starts_with_server(relative: &Path) -> bool {
@@ -1236,6 +1240,42 @@ mod tests {
 
     fn import_specifiers(source: &str) -> Vec<String> {
         ruvyxa_bundler::ast::parse_module(source).import_specifiers()
+    }
+
+    /// `check` must allow exactly what `build` allows. A local copy of the rule
+    /// had lost the `NODE_ENV` exemption, so the most ordinary line in a React
+    /// client component raised RUV1008 while the same file built cleanly.
+    #[test]
+    fn env_boundary_rule_matches_the_bundler_that_compiles_the_bundle() {
+        assert!(
+            private_env_reads("const dev = process.env.NODE_ENV !== 'production'").is_empty(),
+            "NODE_ENV is substituted at build time and must not be reported as a leak"
+        );
+        assert!(
+            private_env_reads("const url = process.env.RUVYXA_PUBLIC_API_URL").is_empty(),
+            "RUVYXA_PUBLIC_* is public by contract"
+        );
+        assert_eq!(
+            private_env_reads("const secret = process.env.DATABASE_URL"),
+            vec!["DATABASE_URL".to_string()],
+            "a genuinely private read must still be reported"
+        );
+
+        // Same names, judged by the bundler's own predicate: the two must agree
+        // name for name, or `check` and `build` have drifted again.
+        for name in [
+            "NODE_ENV",
+            "RUVYXA_PUBLIC_API_URL",
+            "DATABASE_URL",
+            "API_KEY",
+        ] {
+            let source = format!("const value = process.env.{name}");
+            assert_eq!(
+                private_env_reads(&source).is_empty(),
+                !ruvyxa_bundler::boundary::env_read_is_private(name),
+                "check and build disagree about `{name}`"
+            );
+        }
     }
 
     #[test]

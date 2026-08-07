@@ -734,7 +734,7 @@ function patchPrerenderedHtml(
     if (!routes.some((route) => matchSource(route, routePath) !== null)) continue
     const html = readFileSync(file, 'utf8')
     const injected = injectPwaMarkup(html, manifestPath, registerPath)
-    if (injected !== html) writeTextFileAtomic(file, injected)
+    if (injected !== html) writeFileAtomic(file, injected)
   }
 }
 
@@ -2719,7 +2719,7 @@ function writePublicAsset(context: PluginBuildContext, fileName: string, content
   const assetsDir = path.join(context.outDir, 'assets')
   const destination = path.join(assetsDir, ...normalized.split('/'))
   mkdirSync(path.dirname(destination), { recursive: true })
-  writeTextFileAtomic(destination, contents)
+  writeFileAtomic(destination, contents)
 }
 
 /** Same placement rules as `writePublicAsset`, for bytes rather than text. */
@@ -2734,19 +2734,21 @@ function writePublicBinaryAsset(
   ).slice(1)
   const destination = path.join(context.outDir, 'assets', ...normalized.split('/'))
   mkdirSync(path.dirname(destination), { recursive: true })
+  writeFileAtomic(destination, contents)
+}
+
+/**
+ * Publish `contents` at `destination` so a reader sees the whole file or the
+ * previous one, never a partial write.
+ *
+ * Text and bytes went through two copies of this that differed only in the
+ * encoding argument — and `writeFileSync` already infers utf8 for a string, so
+ * there was nothing for the second copy to carry.
+ */
+function writeFileAtomic(destination: string, contents: string | Buffer): void {
   const temporary = `${destination}.tmp-${process.pid}-${randomUUID()}`
   try {
     writeFileSync(temporary, contents)
-    renameSync(temporary, destination)
-  } finally {
-    rmSync(temporary, { force: true })
-  }
-}
-
-function writeTextFileAtomic(destination: string, contents: string): void {
-  const temporary = `${destination}.tmp-${process.pid}-${randomUUID()}`
-  try {
-    writeFileSync(temporary, contents, 'utf8')
     renameSync(temporary, destination)
   } finally {
     rmSync(temporary, { force: true })

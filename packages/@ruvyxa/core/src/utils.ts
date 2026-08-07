@@ -53,6 +53,46 @@ export function staticAssetGlobs(): string[] {
   return STATIC_ASSET_EXTENSIONS.map((extension) => `/*.${extension}`)
 }
 
+/**
+ * Content-Type for each extension a `public/` file may carry.
+ *
+ * Held to `tests/fixtures/static-asset-conformance.json` alongside
+ * `content_type_for` in `crates/ruvyxa_dev_server/src/static_assets.rs`, which
+ * answers the same question for `ruvyxa dev`, `start`, and `preview`. The two
+ * tables were written independently and had drifted: the same file was a
+ * `font/woff2` on one and an `application/octet-stream` on the other, and a
+ * `.wasm` module served by the wrong one could not be streamed at all.
+ *
+ * Lives here rather than inside the generated server source so a test can read
+ * it. It used to be a literal in the middle of the template string that
+ * `standaloneServerSource` returns, which put it beyond the reach of any check.
+ */
+export const STATIC_CONTENT_TYPES: Readonly<Record<string, string>> = {
+  avif: 'image/avif',
+  css: 'text/css; charset=utf-8',
+  gif: 'image/gif',
+  html: 'text/html; charset=utf-8',
+  ico: 'image/x-icon',
+  jpeg: 'image/jpeg',
+  jpg: 'image/jpeg',
+  js: 'text/javascript; charset=utf-8',
+  json: 'application/json; charset=utf-8',
+  map: 'application/json; charset=utf-8',
+  mjs: 'text/javascript; charset=utf-8',
+  png: 'image/png',
+  svg: 'image/svg+xml',
+  txt: 'text/plain; charset=utf-8',
+  wasm: 'application/wasm',
+  webmanifest: 'application/manifest+json; charset=utf-8',
+  webp: 'image/webp',
+  woff: 'font/woff',
+  woff2: 'font/woff2',
+  xml: 'application/xml; charset=utf-8',
+}
+
+/** Served when an extension has no entry, rather than guessing from content. */
+export const FALLBACK_CONTENT_TYPE = 'application/octet-stream'
+
 /** URL prefix of the content-hashed client bundles. */
 export const CLIENT_BUNDLE_PREFIX = '/__ruvyxa/client/'
 
