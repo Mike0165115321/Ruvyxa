@@ -1,5 +1,10 @@
 # Development และ testing
 
+> **เป้าหมายของ tutorial:** ตั้ง contributor loop และเลือก test
+> ที่เล็กที่สุดซึ่งพิสูจน์การเปลี่ยนแปลงได้ **เริ่มจาก:** boundary map ใน
+> [Architecture](11-architecture.md) **Checkpoint:** รัน check ที่แคบที่สุดซึ่งเกี่ยวข้องก่อนเลือก
+> repository gate ที่กว้างขึ้น
+
 ## การตั้งค่าสำหรับ framework contributor
 
 นี่คือ Rust workspace พร้อม pnpm workspace ติดตั้ง Node version และ pnpm ที่ประกาศไว้ จากนั้นใช้

@@ -1,5 +1,10 @@
 # Deploy, run, and operate in production
 
+> **Tutorial goal:** turn a verified build into a deployable artifact with an explicit operating
+> plan. **Start from:** the evidence you collected in
+> [Observability and performance](14-observability-performance.md). **Checkpoint:** complete the
+> pre-deploy commands and probe one application-owned health route.
+
 ## Build and select a target
 
 ```bash

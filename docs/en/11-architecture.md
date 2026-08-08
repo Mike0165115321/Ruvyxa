@@ -1,5 +1,9 @@
 # Architecture
 
+> **Tutorial goal:** trace one request and one build so you can reason about framework boundaries.
+> **Start from:** the application workflow in [CLI](10-cli.md). **Checkpoint:** explain which layer
+> discovers routes, builds modules, and renders a response.
+
 ## Boundary map
 
 ```mermaid

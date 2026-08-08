@@ -1,5 +1,9 @@
 # Public API reference
 
+> **Tutorial goal:** choose the smallest public API for the lesson you are implementing. **Start
+> from:** the practical route and data examples in chapters 4–9. **Checkpoint:** import from a
+> documented public entry point rather than an internal source path.
+
 This reference lists stable exported surfaces found in package entry points. It intentionally
 separates implementation details in Rust/runtime files from the APIs applications import.
 

@@ -1,5 +1,9 @@
 # Observability และ performance
 
+> **เป้าหมายของ tutorial:** สังเกต request จริงก่อนปรับ rendering หรือ cache behavior ของมัน
+> **เริ่มจาก:** security baseline ใน [Security](13-security.md) **Checkpoint:** เก็บ trace หรือ
+> metric signal แล้วเปลี่ยนเฉพาะ bottleneck ที่ signal ระบุ
+
 ## Observability
 
 ใช้ first-party plugin `observability()` เพื่อเพิ่ม request identifier, W3C `traceparent`,

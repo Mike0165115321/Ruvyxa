@@ -1,5 +1,9 @@
 # Security
 
+> **Tutorial goal:** turn framework safeguards into an application security routine. **Start from:**
+> your configuration in [Configuration](07-configuration.md). **Checkpoint:** review the application
+> checklist and prove one protected boundary in your app.
+
 Security is layered: framework validation and defaults reduce risk, but application authorization,
 secret storage, upstream network controls, and infrastructure policy remain your responsibility.
 

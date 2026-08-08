@@ -1,5 +1,9 @@
 # สร้าง Ruvyxa app แรกของคุณ
 
+> **เป้าหมายของ tutorial:** สร้าง รัน และตรวจแอป Ruvyxa ที่มีหน้าเว็บและ health API route
+> **เริ่มจาก:** [บทนำ](01-introduction.md) **Checkpoint:** readiness, production-build และ
+> route-parity check สำเร็จในแอปของคุณ
+
 ## สร้าง application
 
 workspace เผยแพร่ `create-ruvyxa` และ source ของมันมี template `minimal`, `blog`, `crud` และ

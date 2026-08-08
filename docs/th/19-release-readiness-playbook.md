@@ -1,5 +1,9 @@
 # Release-readiness playbook
 
+> **เป้าหมายของ tutorial:** ซ้อม release path หนึ่งแบบและตรวจ configuration ที่ขาดหายก่อน deploy
+> **เริ่มจาก:** production plan จาก [Deploy, run และ operate](15-deploy-run-and-operate.md)
+> **Checkpoint:** ทำ release gate ทุกข้อให้ครบสำหรับ delivery model ที่เลือก
+
 ใช้หน้านี้เป็นเส้นทางสุดท้ายจาก application ที่ทำงานใน local ไปสู่ release candidate มันใช้เฉพาะ
 command และ framework behavior ที่มีอยู่ใน repository นี้; การ upload, secret, health check และ
 rollback ของ platform ยังเป็นของ host ที่คุณเลือก

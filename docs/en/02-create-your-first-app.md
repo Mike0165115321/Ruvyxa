@@ -1,5 +1,9 @@
 # Create your first Ruvyxa app
 
+> **Tutorial goal:** create, run, and verify a Ruvyxa app with a page and a health API route.
+> **Start from:** [Introduction](01-introduction.md). **Checkpoint:** the readiness,
+> production-build, and route-parity checks succeed for your app.
+
 ## Create an application
 
 The workspace publishes `create-ruvyxa`, and its source contains `minimal`, `blog`, `crud`, and

@@ -1,5 +1,9 @@
 # UI, navigation, metadata, and assets
 
+> **Tutorial goal:** make your app navigable, accessible, and ready to present real content. **Start
+> from:** a working page or API flow from [Data, actions, and API routes](05-data-actions-api.md).
+> **Checkpoint:** navigate with a Link, inspect page metadata, and confirm one asset loads.
+
 `@ruvyxa/react` exports framework-aware React helpers. They are optional; normal React components
 continue to work.
 

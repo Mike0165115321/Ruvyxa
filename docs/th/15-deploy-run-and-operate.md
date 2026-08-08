@@ -1,5 +1,10 @@
 # Deploy, run และ operate ใน production
 
+> **เป้าหมายของ tutorial:** เปลี่ยน build ที่ตรวจแล้วเป็น artifact สำหรับ deploy
+> พร้อมแผนปฏิบัติการที่ชัดเจน **เริ่มจาก:** หลักฐานที่เก็บได้ใน
+> [Observability และ performance](14-observability-performance.md) **Checkpoint:** ทำคำสั่งก่อน
+> deploy ให้ครบ และ probe health route หนึ่งรายการที่แอปคุณเป็นเจ้าของ
+
 ## Build และเลือก target
 
 ```bash

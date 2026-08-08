@@ -1,5 +1,9 @@
 # Public API reference
 
+> **เป้าหมายของ tutorial:** เลือก public API ที่เล็กที่สุดสำหรับบทเรียนที่คุณกำลังทำ **เริ่มจาก:**
+> ตัวอย่าง route และ data ในบท 4–9 **Checkpoint:** import จาก public entry point ที่ระบุไว้ แทน
+> internal source path
+
 reference นี้แสดง stable exported surface ที่พบใน package entry point โดยตั้งใจแยก implementation
 detail ใน Rust/runtime file ออกจาก API ที่ application import
 

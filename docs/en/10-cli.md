@@ -1,5 +1,10 @@
 # CLI and application scripts
 
+> **Tutorial goal:** use the CLI as a feedback loop—from local development through release checks.
+> **Start from:** an app with at least one route;
+> [Create your first app](02-create-your-first-app.md) provides one. **Checkpoint:** inspect the
+> route list, application check, and analyzer output for your app.
+
 The root [README](../../README.md) is the authoritative project overview. In a generated Ruvyxa
 application, use the npm scripts below. They are the stable, copy-pasteable interface provided by
 every starter; in particular, use `routes:json` and `analyze:html` rather than teaching readers to

@@ -1,5 +1,10 @@
 # Configuration และ environment
 
+> **เป้าหมายของ tutorial:** เปลี่ยนแอป development เป็นแอปที่กำหนดค่าอย่างตั้งใจและเก็บ secret
+> อย่างปลอดภัย **เริ่มจาก:** UI และ asset ใน
+> [UI, navigation, metadata และ asset](06-ui-navigation-metadata-and-assets.md) **Checkpoint:**
+> commit environment example ที่ปลอดภัย เก็บ secret ไว้เฉพาะ server และรัน app check
+
 `ruvyxa.config.ts` ถูกประเมินโดย configuration renderer แล้ว validate ใช้ `config()` จาก
 `ruvyxa/config` เพื่อเขียนแบบ typed ชื่อ configuration ด้านล่างมาจาก `RuvyxaConfig` และ nested
 source type ของมัน

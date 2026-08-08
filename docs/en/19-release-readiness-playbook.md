@@ -1,5 +1,9 @@
 # Release-readiness playbook
 
+> **Tutorial goal:** rehearse one release path and catch missing configuration before deployment.
+> **Start from:** a production plan from [Deploy, run, and operate](15-deploy-run-and-operate.md).
+> **Checkpoint:** complete every release gate for the delivery model you selected.
+
 Use this page as the final path from a working local application to a release candidate. It only
 uses commands and framework behavior present in this repository; platform-specific upload, secrets,
 health-check, and rollback controls remain owned by your chosen host.

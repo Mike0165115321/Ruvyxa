@@ -1,5 +1,10 @@
 # Integrations: authentication, data, realtime, adapters, and testing
 
+> **Tutorial goal:** connect an application concern to the framework without assuming unsupported
+> infrastructure. **Start from:** route policy in
+> [Plugins and middleware](08-plugins-middleware.md). **Checkpoint:** choose one integration,
+> implement its smallest flow, and test the failure path too.
+
 ## Authentication
 
 `@ruvyxa/auth` exports `createAuth`, provider helpers `google` and `github`, memory stores, types,

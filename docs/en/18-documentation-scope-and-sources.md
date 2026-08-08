@@ -1,5 +1,9 @@
 # Documentation scope and sources
 
+> **Tutorial goal:** know which claims are implemented, tested, and safe to rely on in your app.
+> **Start from:** any chapter whose capability you need to verify. **Checkpoint:** distinguish a
+> supported framework contract from a provider-owned implementation detail.
+
 This page is the documented-source inventory used to write this set. It records the code paths
 inspected and the chapter that describes their user-relevant behavior. It is not a claim that
 undocumented private implementation is public API.

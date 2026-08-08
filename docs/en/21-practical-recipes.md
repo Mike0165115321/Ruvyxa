@@ -1,5 +1,9 @@
 # Practical recipes
 
+> **Tutorial goal:** extend the starter app by adapting one complete, source-backed pattern at a
+> time. **Start from:** the matching foundational chapter linked by each recipe. **Checkpoint:**
+> copy one recipe, replace its placeholder data, and run the application check.
+
 Each recipe uses a public API or route convention implemented by this repository. Copy the shown
 file into an application that already completed
 [Create your first app](02-create-your-first-app.md), then run `npm run check` before building.

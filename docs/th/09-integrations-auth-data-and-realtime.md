@@ -1,5 +1,9 @@
 # การเชื่อมต่อ: authentication, data, realtime, adapter และ testing
 
+> **เป้าหมายของ tutorial:** เชื่อมต่อความสามารถของแอปเข้ากับ framework โดยไม่สมมติ infrastructure
+> ที่ไม่มี **เริ่มจาก:** นโยบาย route ใน [Plugin และ middleware](08-plugins-middleware.md)
+> **Checkpoint:** เลือก integration หนึ่งอย่าง สร้าง flow ที่เล็กที่สุด และทดสอบ failure path ด้วย
+
 ## Authentication
 
 `@ruvyxa/auth` export `createAuth`, provider helper `google` และ `github`, memory store, type และ

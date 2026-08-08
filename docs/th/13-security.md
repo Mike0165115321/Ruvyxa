@@ -1,5 +1,9 @@
 # Security
 
+> **เป้าหมายของ tutorial:** เปลี่ยน safeguard ของ framework ให้เป็น security routine ของแอป
+> **เริ่มจาก:** configuration ของคุณใน [Configuration](07-configuration.md) **Checkpoint:** ตรวจ
+> application checklist และพิสูจน์ protected boundary หนึ่งจุดในแอปของคุณ
+
 security เป็นหลายชั้น: framework validation และ default ลดความเสี่ยง แต่ application authorization,
 secret storage, upstream network control และ infrastructure policy ยังเป็นความรับผิดชอบของคุณ
 

@@ -1,5 +1,9 @@
 # บทนำ
 
+> **เป้าหมายของ tutorial:** เลือกจุดเริ่มต้นที่เหมาะสมและเข้าใจแอปขนาดเล็กที่คุณจะสร้าง
+> **เริ่มจาก:** [ดัชนีเอกสาร](README.md) **Checkpoint:** ยืนยันว่าเครื่องของคุณตรงตามข้อกำหนด
+> แล้วจึงไปบท 2
+
 Ruvyxa ออกแบบมาสำหรับ React application ที่ต้องการ file-system route, server rendering, static
 output, server action, API route, plugin และ native build/dev pipeline โดยยังควบคุม deployment
 target ได้ชัดเจน npm entry point แบบ public คือ `ruvyxa`; React helper อยู่ใน `@ruvyxa/react`;

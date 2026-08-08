@@ -1,5 +1,9 @@
 # Plugin และ middleware
 
+> **เป้าหมายของ tutorial:** เพิ่มพฤติกรรมที่ใช้ร่วมกันครั้งเดียว แล้วใช้กับ route ที่ต้องการ
+> **เริ่มจาก:** แอปที่กำหนดค่าแล้วใน [Configuration](07-configuration.md) **Checkpoint:** ตรวจ route
+> ที่ตรงและไม่ตรงอย่างละหนึ่งรายการหลังเปิดใช้ plugin หรือ middleware rule
+
 plugin คือ value ที่คืนจาก `definePlugin()` ใน `ruvyxa/plugin` (ถูก re-export โดย `ruvyxa` ด้วย)
 เพิ่มมันใน `plugins` ของ `ruvyxa.config.ts` plugin ต้องมีชื่อที่ไม่ว่าง และต้องมี declarative
 behavior หรือ `register(api)` definition ที่ไม่ถูกต้องล้มเหลวด้วย `RUV2102`

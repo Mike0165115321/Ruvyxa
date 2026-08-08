@@ -1,5 +1,9 @@
 # Practical recipes
 
+> **เป้าหมายของ tutorial:** ต่อขยาย starter app โดยดัดแปลง pattern ที่สมบูรณ์และมี source
+> รองรับครั้งละหนึ่งแบบ **เริ่มจาก:** foundational chapter ที่ตรงกันซึ่งแต่ละ recipe ลิงก์ไว้
+> **Checkpoint:** คัดลอก recipe หนึ่งรายการ แทนที่ placeholder data แล้วรัน application check
+
 แต่ละ recipe ใช้ public API หรือ route convention ที่ repository นี้ implement อยู่จริง ให้ copy
 ไฟล์ที่แสดงไปยัง app ที่ทำ [สร้าง app แรก](02-create-your-first-app.md) เสร็จแล้ว และรัน
 `npm run check` ก่อน build

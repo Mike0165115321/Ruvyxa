@@ -1,5 +1,10 @@
 # Configuration and environment
 
+> **Tutorial goal:** turn a development app into a deliberately configured, secret-safe application.
+> **Start from:** the UI and assets in
+> [UI, navigation, metadata, and assets](06-ui-navigation-metadata-and-assets.md). **Checkpoint:**
+> commit a harmless environment example, keep secrets server-only, and run the app check.
+
 `ruvyxa.config.ts` is evaluated by the configuration renderer then validated. Use `config()` from
 `ruvyxa/config` for typed authoring. Configuration names below come from `RuvyxaConfig` and its
 nested source types.

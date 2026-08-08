@@ -1,5 +1,9 @@
 # Project structure
 
+> **Tutorial goal:** place route files where Ruvyxa can discover them and add one complete page.
+> **Start from:** a working app from [Create your first app](02-create-your-first-app.md).
+> **Checkpoint:** the route listing includes the page you added.
+
 Ruvyxa discovers routes from the configured `appDir` (`app` when configured as in the templates).
 The file name expresses route behavior; JavaScript exports express rendering behavior.
 

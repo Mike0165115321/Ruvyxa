@@ -1,5 +1,9 @@
 # Troubleshooting and upgrade compatibility
 
+> **Tutorial goal:** diagnose a failed command from evidence and upgrade without skipping
+> compatibility checks. **Start from:** the command loop in [CLI](10-cli.md). **Checkpoint:**
+> reproduce the symptom, apply the matching fix, then rerun the command that failed.
+
 Run the narrowest diagnostic first, from the application root:
 
 ```bash

@@ -1,5 +1,9 @@
 # Introduction
 
+> **Tutorial goal:** choose the right starting point and understand the small app you will build.
+> **Start from:** the [documentation index](README.md). **Checkpoint:** confirm that your machine
+> meets the requirements, then continue to chapter 2.
+
 Ruvyxa is intended for React applications that need file-system routes, server rendering, static
 output, server actions, API routes, plugins, and a native build/dev pipeline without hiding the
 deployment target. The public npm entry point is `ruvyxa`; React helpers live in `@ruvyxa/react`;

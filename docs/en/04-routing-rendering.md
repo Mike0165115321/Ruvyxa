@@ -1,5 +1,9 @@
 # Routing and rendering
 
+> **Tutorial goal:** add a dynamic route and deliberately choose how it renders. **Start from:** the
+> route conventions in [Project structure](03-project-structure.md). **Checkpoint:** visit one
+> concrete dynamic URL in development, then run the application check.
+
 Route discovery turns the file tree into a manifest. Run `npm run routes` while developing to
 inspect it; use `npm run routes:json` when a script needs machine-readable output. A page's strategy
 is selected from its exports and the `render` configuration.

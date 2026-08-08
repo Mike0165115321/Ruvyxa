@@ -1,5 +1,9 @@
 # UI, navigation, metadata และ asset
 
+> **เป้าหมายของ tutorial:** ทำให้แอปนำทางได้ เข้าถึงได้ และพร้อมนำเสนอเนื้อหาจริง **เริ่มจาก:** page
+> หรือ API flow ที่ทำงานได้จาก [ข้อมูล, action และ API route](05-data-actions-api.md)
+> **Checkpoint:** นำทางด้วย Link ตรวจ metadata ของหน้า และยืนยันว่า asset หนึ่งรายการโหลดได้
+
 `@ruvyxa/react` export React helper ที่รู้จัก framework helper เหล่านี้เป็น optional; React
 component ปกติยังทำงานได้
 

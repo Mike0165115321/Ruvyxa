@@ -1,5 +1,9 @@
 # Troubleshooting และ compatibility เมื่ออัปเกรด
 
+> **เป้าหมายของ tutorial:** วินิจฉัย command ที่ล้มเหลวจากหลักฐาน และอัปเกรดโดยไม่ข้าม compatibility
+> check **เริ่มจาก:** command loop ใน [CLI](10-cli.md) **Checkpoint:** ทำให้อาการเกิดซ้ำ
+> ใช้วิธีแก้ที่ตรงกัน แล้วรัน command ที่เคยล้มเหลวอีกครั้ง
+
 รัน diagnostic ที่แคบที่สุดก่อน จาก application root:
 
 ```bash

@@ -1,5 +1,10 @@
 # ข้อมูล, action และ API route
 
+> **เป้าหมายของ tutorial:** ย้ายการอ่านข้อมูลและการเขียนไปฝั่ง server แล้วเปิด HTTP API
+> ขนาดเล็กอย่างปลอดภัย **เริ่มจาก:** route ที่ render ถูกต้องจาก
+> [Routing และ rendering](04-routing-rendering.md) **Checkpoint:** ทดสอบ loader, action หรือ API
+> route อย่างน้อยหนึ่งรายการด้วย input ที่ถูกและผิด
+
 ## Loader และ in-memory cache
 
 `loader(handler)` สร้าง async callable ที่ติดเครื่องหมายเป็น Ruvyxa loader handler รับ

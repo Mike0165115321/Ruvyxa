@@ -1,5 +1,9 @@
 # Routing และ rendering
 
+> **เป้าหมายของ tutorial:** เพิ่ม dynamic route และเลือกวิธี render อย่างตั้งใจ **เริ่มจาก:** กติกา
+> route ใน [โครงสร้างโปรเจกต์](03-project-structure.md) **Checkpoint:** เปิด dynamic URL
+> จริงหนึ่งรายการในโหมด development แล้วรัน application check
+
 route discovery แปลง file tree เป็น manifest รัน `npm run routes` ระหว่างพัฒนาเพื่อดู manifest
 และใช้ `npm run routes:json` เมื่อ script ต้องการข้อมูลที่เครื่องอ่านได้ strategy ของหน้าถูกเลือกจาก
 export ของหน้าและ configuration `render`

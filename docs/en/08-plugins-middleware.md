@@ -1,5 +1,9 @@
 # Plugins and middleware
 
+> **Tutorial goal:** add cross-cutting behavior once, then apply it to the routes that need it.
+> **Start from:** a configured application in [Configuration](07-configuration.md). **Checkpoint:**
+> verify one matching and one non-matching route after enabling a plugin or middleware rule.
+
 Plugins are values returned by `definePlugin()` from `ruvyxa/plugin` (also re-exported by `ruvyxa`).
 Add them to `plugins` in `ruvyxa.config.ts`. A plugin needs a non-empty name and either declarative
 behavior or `register(api)`; invalid definitions fail with `RUV2102`.

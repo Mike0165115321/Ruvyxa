@@ -1,5 +1,9 @@
 # Development and testing
 
+> **Tutorial goal:** set up a contributor loop and choose the smallest test that proves a change.
+> **Start from:** the boundary map in [Architecture](11-architecture.md). **Checkpoint:** run the
+> narrowest relevant check before choosing a broader repository gate.
+
 ## Framework contributor setup
 
 This is a Rust workspace plus pnpm workspace. Install the declared Node version and pnpm, then use a

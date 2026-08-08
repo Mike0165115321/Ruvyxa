@@ -1,5 +1,10 @@
 # CLI และ application script
 
+> **เป้าหมายของ tutorial:** ใช้ CLI เป็น feedback loop ตั้งแต่ development ในเครื่องไปจนถึง release
+> check **เริ่มจาก:** แอปที่มี route อย่างน้อยหนึ่งรายการ;
+> [สร้าง app แรก](02-create-your-first-app.md) มีตัวอย่างให้ **Checkpoint:** ตรวจ route list,
+> application check และ analyzer output ของแอปคุณ
+
 [README](../../README.md) ที่ root คือภาพรวมโครงการที่ใช้อ้างอิงหลัก ภายใน Ruvyxa application ที่
 สร้างแล้ว ให้ใช้ npm script ตามตารางด้านล่าง นี่คือ interface ที่ starter ทุกตัวเตรียมไว้และ
 copy-paste ได้จริง โดยเฉพาะให้ใช้ `routes:json` และ `analyze:html` แทนการให้ผู้อ่านประกอบ flag หลัง

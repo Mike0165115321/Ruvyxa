@@ -1,5 +1,9 @@
 # โครงสร้างโปรเจกต์
 
+> **เป้าหมายของ tutorial:** วาง route file ในตำแหน่งที่ Ruvyxa ค้นพบได้
+> และเพิ่มหน้าที่สมบูรณ์หนึ่งหน้า **เริ่มจาก:** แอปที่ทำงานได้จาก
+> [สร้าง app แรก](02-create-your-first-app.md) **Checkpoint:** รายการ route แสดงหน้าที่คุณเพิ่ม
+
 Ruvyxa ค้นหา route จาก `appDir` ที่ตั้งค่าไว้ (`app` เมื่อกำหนดแบบ template) ชื่อไฟล์บอกพฤติกรรม
 route ส่วน JavaScript export บอกพฤติกรรม rendering
 

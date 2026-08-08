@@ -1,5 +1,9 @@
 # Observability and performance
 
+> **Tutorial goal:** observe a real request before tuning its rendering or cache behavior. **Start
+> from:** the security baseline in [Security](13-security.md). **Checkpoint:** capture a trace or
+> metric signal, then change only the bottleneck it identifies.
+
 ## Observability
 
 Use the first-party `observability()` plugin to add a request identifier, W3C `traceparent`,

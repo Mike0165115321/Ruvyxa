@@ -1,5 +1,10 @@
 # Data, actions, and API routes
 
+> **Tutorial goal:** move data access and writes to the server, then expose a small HTTP API safely.
+> **Start from:** a route that renders correctly from
+> [Routing and rendering](04-routing-rendering.md). **Checkpoint:** exercise one loader, action, or
+> API route with valid and invalid input.
+
 ## Loaders and the in-memory cache
 
 `loader(handler)` creates an async callable marked as a Ruvyxa loader. Its handler receives

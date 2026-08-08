@@ -1,5 +1,10 @@
 # คู่มือ platform adapter
 
+> **เป้าหมายของ tutorial:** จับคู่ build target ที่ทดสอบแล้วกับ artifact และ handoff ที่ platform
+> ของคุณต้องการ **เริ่มจาก:** delivery model ที่เลือกใน
+> [Release-readiness playbook](19-release-readiness-playbook.md) **Checkpoint:** ตรวจ generated
+> artifact และทำ provider handoff checklist ให้ครบ
+
 หน้านี้บันทึก deployment artifact ที่ first-party adapter สร้างจริง มันบอกว่า Ruvyxa เขียนอะไรและ
 command ใดใช้เริ่มมัน แต่ไม่สร้างขั้นตอน dashboard, account, DNS, IAM หรือ billing ของ provider
 ที่ไม่มีใน repository นี้ path ของ artifact ทุกอันอยู่ใต้ `outDir`; เมื่อใช้ default ให้ใช้

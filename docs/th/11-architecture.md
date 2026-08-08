@@ -1,5 +1,9 @@
 # Architecture
 
+> **เป้าหมายของ tutorial:** ตามรอย request และ build อย่างละหนึ่งครั้ง เพื่อให้เหตุผลกับขอบเขตของ
+> framework ได้ **เริ่มจาก:** application workflow ใน [CLI](10-cli.md) **Checkpoint:** อธิบายได้ว่า
+> layer ใดค้นหา route, build module และ render response
+
 ## Boundary map
 
 ```mermaid
