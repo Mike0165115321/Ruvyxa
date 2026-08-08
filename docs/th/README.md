@@ -6,7 +6,7 @@
 บทก่อนหน้าที่ควรอ่าน และ checkpoint ที่ต้องทำให้ครบก่อนกดลิงก์ **ถัดไป** บท 8–21 เป็น tutorial
 เฉพาะเรื่องและ reference ที่กลับมาใช้ได้เมื่อแอปของคุณเติบโตขึ้น
 
-Ruvyxa คือ React web framework ที่ให้ CLI, pipeline สำหรับ route/build ที่เขียนด้วย Rust และ runtime
+Ruvyxa คือ Web framework ที่ให้ CLI, pipeline สำหรับ route/build ที่เขียนด้วย Rust และ runtime
 TypeScript ทำงานร่วมกันเพื่อค้นหา route ใน `app/`, compile และ serve หรือจัดแพ็กเกจผลลัพธ์
 คู่มือนี้อธิบายพฤติกรรมที่มี implementation อยู่จริงใน repository ณ revision ที่คุณกำลังอ่านอยู่
 

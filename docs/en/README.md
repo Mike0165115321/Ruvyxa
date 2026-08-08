@@ -7,9 +7,9 @@ chapter tells you its goal, the prerequisite lesson, and a checkpoint to complet
 its **Next** link. Chapters 8–21 are focused tutorials and references you can return to as your app
 grows.
 
-Ruvyxa is a React web framework whose CLI, Rust route/build pipeline, and TypeScript runtime work
-together to discover `app/` routes, compile them, and serve or package the result. This guide
-describes the behavior implemented in this repository at the revision you are reading it from.
+Ruvyxa is a Web framework whose CLI, Rust route/build pipeline, and TypeScript runtime work together
+to discover `app/` routes, compile them, and serve or package the result. This guide describes the
+behavior implemented in this repository at the revision you are reading it from.
 
 ## Read by role
 
