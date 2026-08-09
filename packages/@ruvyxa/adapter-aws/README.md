@@ -5,10 +5,10 @@ builds auto-select it through `AWS_APP_ID` and receive `.amplify-hosting/static`
 `.amplify-hosting/compute/default`, and `deploy-manifest.json`.
 
 ```ts
-import { awsAdapter } from '@ruvyxa/adapter-aws'
+import { aws } from '@ruvyxa/adapter-aws'
 import { config } from 'ruvyxa/config'
 
-export default config({ adapter: awsAdapter() })
+export default config({ adapter: aws() })
 ```
 
 The compute server listens on Amplify's required port 3000, stores runtime ISR refreshes under

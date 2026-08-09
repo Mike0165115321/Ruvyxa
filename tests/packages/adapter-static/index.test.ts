@@ -1,11 +1,11 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { staticAdapter } from '../../../packages/@ruvyxa/adapter-static/src/index.ts'
+import { static as staticOutput } from '../../../packages/@ruvyxa/adapter-static/src/index.ts'
 
-describe('staticAdapter', () => {
+describe('static', () => {
   it('returns static deployment output', async () => {
-    const output = await staticAdapter().build({ root: '.', outDir: '.ruvyxa' })
+    const output = await staticOutput().build({ root: '.', outDir: '.ruvyxa' })
 
     assert.deepEqual(
       output.artifacts?.map(({ kind, path }) => ({ kind, path })),
@@ -47,7 +47,7 @@ describe('staticAdapter', () => {
   })
 
   it('materializes custom output inside the build directory', async () => {
-    const output = await staticAdapter({ outputDir: 'deploy/public' }).build({
+    const output = await staticOutput({ outputDir: 'deploy/public' }).build({
       root: '.',
       outDir: '.ruvyxa',
     })
@@ -63,8 +63,8 @@ describe('staticAdapter', () => {
   })
 
   it('rejects output paths that escape the build directory', () => {
-    assert.throws(() => staticAdapter({ outputDir: '../public' }), /inside the build output/)
-    assert.throws(() => staticAdapter({ outputDir: 'C:\\public' }), /inside the build output/)
-    assert.throws(() => staticAdapter({ outputDir: 'assets' }), /overlaps protected build output/)
+    assert.throws(() => staticOutput({ outputDir: '../public' }), /inside the build output/)
+    assert.throws(() => staticOutput({ outputDir: 'C:\\public' }), /inside the build output/)
+    assert.throws(() => staticOutput({ outputDir: 'assets' }), /overlaps protected build output/)
   })
 })

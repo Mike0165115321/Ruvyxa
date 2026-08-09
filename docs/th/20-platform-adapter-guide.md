@@ -21,9 +21,9 @@ npm run build -- --adapter railway
 
 ```ts
 import { config } from 'ruvyxa/config'
-import { railwayAdapter } from '@ruvyxa/adapter-railway'
+import { railway } from '@ruvyxa/adapter-railway'
 
-export default config({ adapter: railwayAdapter() })
+export default config({ adapter: railway() })
 ```
 
 CLI ตรวจ Vercel, Netlify, Cloudflare, Railway, Render และ AWS จาก build-environment marker variable
@@ -82,17 +82,18 @@ generated server ทั้งคู่ใช้ `PORT=3000` และ `HOST=0.0.
 npm run build -- --target static
 ```
 
-publish folder ปริยายคือ `<outDir>/static/` `staticAdapter({ outputDir })` รับเฉพาะ relative
-directory ที่ไม่ว่างและไม่ทับ protected build folder ให้ publish folder นั้น `_headers`
-ถูกสร้างสำหรับ host ที่รู้จักไฟล์นี้; host ที่ไม่สนใจไม่ได้รับผล หาก build ปฏิเสธ route ให้คง route
-เป็น static/CSR หรือเลือก server-capable adapter—อย่า publish static build ที่ทำ SSR/API behavior
-ของคุณไม่ได้
+publish folder ปริยายคือ `<outDir>/static/` factory `static` รับเฉพาะ relative directory ที่ไม่ว่าง
+และไม่ทับ protected build folder เนื่องจาก `static` เป็น reserved word เมื่อเรียก function โดยตรง
+ให้ import ด้วย alias เช่น `staticOutput` แล้วเรียก `staticOutput({ outputDir })` ให้ publish folder
+นั้น `_headers` ถูกสร้างสำหรับ host ที่รู้จักไฟล์นี้; host ที่ไม่สนใจไม่ได้รับผล หาก build ปฏิเสธ
+route ให้คง route เป็น static/CSR หรือเลือก server-capable adapter—อย่า publish static build ที่ทำ
+SSR/API behavior ของคุณไม่ได้
 
 ## Vercel, Netlify และ Cloudflare
 
 | Platform   | Artifact ที่แน่นอน                                                                             | รายละเอียดเชิงปฏิบัติการ                                                                                                                                                                         |
 | ---------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Vercel     | `<outDir>/deploy/vercel/.vercel/output/`; project-root `.vercel/output/` โดยปริยาย             | มี static file, `__ruvyxa_handler.func`, function config และ route config serverless เป็น default; `vercelAdapter({ edge: true })` เลือก edge output                                             |
+| Vercel     | `<outDir>/deploy/vercel/.vercel/output/`; project-root `.vercel/output/` โดยปริยาย             | มี static file, `__ruvyxa_handler.func`, function config และ route config serverless เป็น default; `vercel({ edge: true })` เลือก edge output                                                    |
 | Netlify    | `<outDir>/deploy/netlify/` พร้อม project-root `.netlify/v1/` Frameworks API artifact โดยปริยาย | ISR/PPR ไม่อยู่ใน static publish เพื่อให้ request ไป function และ revalidate ได้ root `netlify.toml` สร้างเฉพาะ `projectConfig: true` และไม่เขียนทับ                                             |
 | Cloudflare | `<outDir>/deploy/cloudflare/worker`, `assets/` และ `wrangler.jsonc`                            | Worker จัดการ dynamic traffic และ assets binding serve static file ใช้ `wrangler deploy -c .ruvyxa/deploy/cloudflare/wrangler.jsonc` `projectConfig: true` เขียน root config เฉพาะเมื่อไม่มีไฟล์ |
 
@@ -102,9 +103,9 @@ runtime
 
 ## Railway และ Render
 
-`railwayAdapter()` เขียน root `railway.json` โดยปริยาย; `renderAdapter()` เขียน root `render.yaml`
-โดยปริยาย ทั้งคู่ไม่เขียนทับ user-maintained file configuration ที่สร้างใช้ `npm run build` และเริ่ม
-handler เหล่านี้:
+`railway()` เขียน root `railway.json` โดยปริยาย; `render()` เขียน root `render.yaml` โดยปริยาย
+ทั้งคู่ไม่เขียนทับ user-maintained file configuration ที่สร้างใช้ `npm run build` และเริ่ม handler
+เหล่านี้:
 
 ```text
 node .ruvyxa/deploy/railway/server/index.mjs
@@ -117,17 +118,17 @@ Railway config ที่สร้างใช้ Railpack และ `ON_FAILURE`
 
 ## Firebase และ AWS Amplify Hosting
 
-`firebaseAdapter()` สร้าง `<outDir>/deploy/firebase/public`, Functions bundle, function
-`package.json` และ `firebase.json`; root `firebase.json` ถูกสร้างโดยปริยายแต่ไม่เขียนทับ README ที่
-adapter สร้างให้ handoff command ที่ยืนยันแล้ว:
+`firebase()` สร้าง `<outDir>/deploy/firebase/public`, Functions bundle, function `package.json` และ
+`firebase.json`; root `firebase.json` ถูกสร้างโดยปริยายแต่ไม่เขียนทับ README ที่ adapter สร้างให้
+handoff command ที่ยืนยันแล้ว:
 
 ```bash
 npm run build -- --adapter firebase
 firebase deploy --only hosting,functions
 ```
 
-`awsAdapter()` เขียน Amplify `.amplify-hosting/` static-plus-compute bundle โดยปริยายที่ project
-root และใต้ `<outDir>/deploy/aws/` deploy manifest route static asset ไป static hosting และ dynamic
+`aws()` เขียน Amplify `.amplify-hosting/` static-plus-compute bundle โดยปริยายที่ project root
+และใต้ `<outDir>/deploy/aws/` deploy manifest route static asset ไป static hosting และ dynamic
 traffic ไป compute resource `default` compute runtime ปริยายคือ `nodejs22.x`; เลือก `nodejs20.x`
 หรือ `nodejs24.x` ได้ ตั้ง `projectOutput: false` เฉพาะเมื่อ build system อื่นเก็บ deploy artifact
 

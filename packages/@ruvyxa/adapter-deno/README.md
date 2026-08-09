@@ -8,9 +8,9 @@ npm install @ruvyxa/adapter-deno
 
 ```ts
 import { config } from 'ruvyxa/config'
-import { denoAdapter } from '@ruvyxa/adapter-deno'
+import { deno } from '@ruvyxa/adapter-deno'
 
-export default config({ adapter: denoAdapter() })
+export default config({ adapter: deno() })
 ```
 
 Build with `ruvyxa build`, copy `.ruvyxa/deploy/deno/`, then run:

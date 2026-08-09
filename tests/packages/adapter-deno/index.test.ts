@@ -1,16 +1,16 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { denoAdapter } from '../../../packages/@ruvyxa/adapter-deno/src/index.ts'
+import { deno } from '../../../packages/@ruvyxa/adapter-deno/src/index.ts'
 
-describe('denoAdapter', () => {
+describe('deno', () => {
   it('returns a self-contained Deno deployment', async () => {
-    const output = await denoAdapter().build({ root: '.', outDir: '.ruvyxa' })
+    const output = await deno().build({ root: '.', outDir: '.ruvyxa' })
     assert.equal(output.name, 'deno')
     assert.equal(output.target, 'node')
     assert.equal(output.platform, 'deno')
     assert.equal(output.runtime, 'deno')
-    assert.deepEqual(denoAdapter().supports, ['ssr', 'ssg', 'csr', 'isr', 'ppr', 'api'])
+    assert.deepEqual(deno().supports, ['ssr', 'ssg', 'csr', 'isr', 'ppr', 'api'])
     assert.deepEqual(
       output.artifacts?.map(({ kind, path }) => ({ kind, path })),
       [

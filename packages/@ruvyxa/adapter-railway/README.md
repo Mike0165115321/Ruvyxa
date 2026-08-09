@@ -4,10 +4,10 @@ Full-stack Railway adapter for Ruvyxa. Railway builds auto-select it through `RA
 no `ruvyxa.config.ts` change or separate install is required.
 
 ```ts
-import { railwayAdapter } from '@ruvyxa/adapter-railway'
+import { railway } from '@ruvyxa/adapter-railway'
 import { config } from 'ruvyxa/config'
 
-export default config({ adapter: railwayAdapter() })
+export default config({ adapter: railway() })
 ```
 
 The build emits a standalone server at `.ruvyxa/deploy/railway/server/index.mjs` and a safe

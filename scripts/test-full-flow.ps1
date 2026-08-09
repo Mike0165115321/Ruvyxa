@@ -434,7 +434,7 @@ if ($SkipAdapters) {
     Write-Section "BUILD TARGETS / ADAPTERS"
 
     # `--target` selects the public build target. Bun is a deployment adapter,
-    # not a standalone --target value; bunAdapter() emits a Node-compatible
+    # not a standalone --target value; bun() emits a Node-compatible
     # self-contained server and is covered in the adapter matrix below.
     $targetExpectations = @(
         @{ Name = "node";   Supported = $true }

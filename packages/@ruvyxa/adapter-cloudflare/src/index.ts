@@ -115,14 +115,14 @@ export default {
  * @example
  * ```ts
  * import { config } from "ruvyxa/config"
- * import { cloudflareAdapter } from "@ruvyxa/adapter-cloudflare"
+ * import { cloudflare } from "@ruvyxa/adapter-cloudflare"
  *
  * export default config({
- *   adapter: cloudflareAdapter()
+ *   adapter: cloudflare()
  * })
  * ```
  */
-export function cloudflareAdapter(options: CloudflareAdapterOptions = {}): Adapter {
+export function cloudflare(options: CloudflareAdapterOptions = {}): Adapter {
   if (options.workerEntry !== undefined && typeof options.workerEntry !== 'string') {
     throw new Error(
       `[RUV2001] cloudflareAdapter: "workerEntry" must be a string, got ${typeof options.workerEntry}`,
@@ -220,4 +220,4 @@ export function cloudflareAdapter(options: CloudflareAdapterOptions = {}): Adapt
   }
 }
 
-export default cloudflareAdapter
+export default cloudflare

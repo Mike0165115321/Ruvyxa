@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { railwayAdapter } from '../../../packages/@ruvyxa/adapter-railway/src/index.ts'
+import { railway } from '../../../packages/@ruvyxa/adapter-railway/src/index.ts'
 
-describe('railwayAdapter', () => {
+describe('railway', () => {
   it('produces a standalone full-stack deployment and safe Railway config', async () => {
-    const adapter = railwayAdapter()
+    const adapter = railway()
     const output = await adapter.build({ root: '.', outDir: '.ruvyxa' })
 
     assert.equal(output.platform, 'railway')
@@ -41,7 +41,7 @@ describe('railwayAdapter', () => {
   })
 
   it('can avoid project-root configuration', async () => {
-    const output = await railwayAdapter({ projectConfig: false }).build({
+    const output = await railway({ projectConfig: false }).build({
       root: '.',
       outDir: '.ruvyxa',
     })

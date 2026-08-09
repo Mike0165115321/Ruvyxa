@@ -3,10 +3,10 @@
 Full-stack Render adapter for Ruvyxa. Render builds auto-select it through `RENDER=true`.
 
 ```ts
-import { renderAdapter } from '@ruvyxa/adapter-render'
+import { render } from '@ruvyxa/adapter-render'
 import { config } from 'ruvyxa/config'
 
-export default config({ adapter: renderAdapter() })
+export default config({ adapter: render() })
 ```
 
 The build emits `.ruvyxa/deploy/render/server/index.mjs` plus a Render Blueprint. Existing

@@ -27,14 +27,14 @@ export interface NodeAdapterOptions {
  * @example
  * ```ts
  * import { config } from "ruvyxa/config"
- * import { nodeAdapter } from "@ruvyxa/adapter-node"
+ * import { node } from "@ruvyxa/adapter-node"
  *
  * export default config({
- *   adapter: nodeAdapter()
+ *   adapter: node()
  * })
  * ```
  */
-export function nodeAdapter(options: NodeAdapterOptions = {}): Adapter {
+export function node(options: NodeAdapterOptions = {}): Adapter {
   if (options.entry !== undefined && typeof options.entry !== 'string') {
     throw new Error(`[RUV2001] nodeAdapter: "entry" must be a string, got ${typeof options.entry}`)
   }
@@ -92,4 +92,4 @@ export function nodeAdapter(options: NodeAdapterOptions = {}): Adapter {
   }
 }
 
-export default nodeAdapter
+export default node

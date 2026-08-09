@@ -7,13 +7,13 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { staticAssetPattern } from '../../../packages/@ruvyxa/core/src/utils.ts'
-import { vercelAdapter } from '../../../packages/@ruvyxa/adapter-vercel/src/index.ts'
+import { vercel } from '../../../packages/@ruvyxa/adapter-vercel/src/index.ts'
 
 const workspaceRoot = path.resolve(fileURLToPath(new URL('../../..', import.meta.url)))
 
-describe('vercelAdapter', () => {
+describe('vercel', () => {
   it('returns serverless deployment output with function artifacts', async () => {
-    const output = await vercelAdapter().build({ root: '.', outDir: '.ruvyxa' })
+    const output = await vercel().build({ root: '.', outDir: '.ruvyxa' })
 
     assert.deepEqual(
       output.artifacts?.map(({ kind, path, scope }) => ({ kind, path, scope })),
@@ -136,7 +136,7 @@ describe('vercelAdapter', () => {
 
     // Verify projectOutput: false disables project-scope artifacts
     assert.deepEqual(
-      vercelAdapter({ projectOutput: false })
+      vercel({ projectOutput: false })
         .build({ root: '.', outDir: '.ruvyxa' })
         .artifacts?.map(({ path }) => path),
       [
@@ -173,12 +173,12 @@ describe('vercelAdapter', () => {
   })
 
   it('declares supported strategies', () => {
-    const adapter = vercelAdapter()
+    const adapter = vercel()
     assert.deepEqual(adapter.supports, ['ssr', 'ssg', 'csr', 'isr', 'ppr', 'api'])
   })
 
   it('allows custom runtime and maxDuration', () => {
-    const output = vercelAdapter({ runtime: 'nodejs22.x', maxDuration: 30 }).build({
+    const output = vercel({ runtime: 'nodejs22.x', maxDuration: 30 }).build({
       root: '.',
       outDir: '.ruvyxa',
     })
@@ -191,17 +191,17 @@ describe('vercelAdapter', () => {
   })
 
   it('pins function regions when asked, and rejects malformed region lists', () => {
-    const output = vercelAdapter({ regions: ['sin1'] }).build({ root: '.', outDir: '.ruvyxa' })
+    const output = vercel({ regions: ['sin1'] }).build({ root: '.', outDir: '.ruvyxa' })
     const vcConfig = output.artifacts?.find((a) => a.path.endsWith('.vc-config.json'))
     const config = JSON.parse(vcConfig && 'contents' in vcConfig ? String(vcConfig.contents) : '{}')
     assert.deepEqual(config.regions, ['sin1'])
 
-    assert.throws(() => vercelAdapter({ regions: [] }), /RUV2001/)
-    assert.throws(() => vercelAdapter({ regions: [''] }), /RUV2001/)
+    assert.throws(() => vercel({ regions: [] }), /RUV2001/)
+    assert.throws(() => vercel({ regions: [''] }), /RUV2001/)
   })
 
   it('emits a Web-standard Edge Function with validated runtime policy', () => {
-    const adapter = vercelAdapter({ edge: true, regions: ['sin1'], projectOutput: false })
+    const adapter = vercel({ edge: true, regions: ['sin1'], projectOutput: false })
     const output = adapter.build({
       root: '.',
       outDir: '.ruvyxa',
@@ -230,12 +230,12 @@ describe('vercelAdapter', () => {
     assert.doesNotMatch(source, /node:/)
     assert.doesNotMatch(source, /Buffer|process\.|readFileSync/)
 
-    assert.throws(() => vercelAdapter({ edge: true, runtime: 'nodejs22.x' }), /RUV2001/)
-    assert.throws(() => vercelAdapter({ edge: true, maxDuration: 30 }), /RUV2001/)
+    assert.throws(() => vercel({ edge: true, runtime: 'nodejs22.x' }), /RUV2001/)
+    assert.throws(() => vercel({ edge: true, maxDuration: 30 }), /RUV2001/)
   })
 
   it('configures Vercel native same-origin image optimization on demand', () => {
-    const output = vercelAdapter({ projectOutput: false }).build({
+    const output = vercel({ projectOutput: false }).build({
       root: '.',
       outDir: '.ruvyxa',
       buildInfo: {
@@ -264,7 +264,7 @@ describe('vercelAdapter', () => {
   it('forwards streamed requests, repeated Set-Cookie headers, and binary responses', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'ruvyxa-vercel-handler-'))
     try {
-      const output = vercelAdapter({ projectOutput: false }).build({ root, outDir: '.ruvyxa' })
+      const output = vercel({ projectOutput: false }).build({ root, outDir: '.ruvyxa' })
       const artifact = output.artifacts?.find((item) => item.kind === 'function')
       assert.ok(artifact?.handlerSource)
       await mkdir(path.join(root, 'prerender'), { recursive: true })

@@ -12,10 +12,10 @@ npm install @ruvyxa/adapter-bun
 
 ```ts
 import { config } from 'ruvyxa/config'
-import { bunAdapter } from '@ruvyxa/adapter-bun'
+import { bun } from '@ruvyxa/adapter-bun'
 
 export default config({
-  adapter: bunAdapter(),
+  adapter: bun(),
 })
 ```
 

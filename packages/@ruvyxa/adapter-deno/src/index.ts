@@ -12,7 +12,7 @@ export interface DenoAdapterOptions {
 }
 
 /** Create a self-contained Deno deployment for a Ruvyxa application. */
-export function denoAdapter(options: DenoAdapterOptions = {}): Adapter {
+export function deno(options: DenoAdapterOptions = {}): Adapter {
   if (options.entry !== undefined && typeof options.entry !== 'string') {
     throw new Error(`[RUV2001] denoAdapter: "entry" must be a string, got ${typeof options.entry}`)
   }
@@ -63,4 +63,4 @@ export function denoAdapter(options: DenoAdapterOptions = {}): Adapter {
   }
 }
 
-export default denoAdapter
+export default deno

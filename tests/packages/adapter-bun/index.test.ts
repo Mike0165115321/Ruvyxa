@@ -1,11 +1,11 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { bunAdapter } from '../../../packages/@ruvyxa/adapter-bun/src/index.ts'
+import { bun } from '../../../packages/@ruvyxa/adapter-bun/src/index.ts'
 
-describe('bunAdapter', () => {
+describe('bun', () => {
   it('returns bun deployment output', async () => {
-    const output = await bunAdapter().build({ root: '.', outDir: '.ruvyxa' })
+    const output = await bun().build({ root: '.', outDir: '.ruvyxa' })
 
     // A launcher alone made a Bun host depend on the ruvyxa CLI and its native
     // binary at runtime, unlike every other self-hosted target.
@@ -36,7 +36,7 @@ describe('bunAdapter', () => {
       output.artifacts?.find((artifact) => artifact.kind === 'static-site')?.optional,
       true,
     )
-    assert.deepEqual(bunAdapter().supports, ['ssr', 'ssg', 'csr', 'isr', 'ppr', 'api'])
+    assert.deepEqual(bun().supports, ['ssr', 'ssg', 'csr', 'isr', 'ppr', 'api'])
 
     assert.deepEqual(
       {

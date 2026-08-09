@@ -23,7 +23,7 @@ export interface FirebaseAdapterOptions {
 }
 
 /** Create a Firebase Hosting adapter backed by a second-generation HTTPS function. */
-export function firebaseAdapter(options: FirebaseAdapterOptions = {}): Adapter {
+export function firebase(options: FirebaseAdapterOptions = {}): Adapter {
   const functionName = options.functionName ?? 'ruvyxaServer'
   const region = options.region ?? 'us-central1'
 
@@ -244,4 +244,4 @@ export const ${functionName} = onRequest(
 `
 }
 
-export default firebaseAdapter
+export default firebase

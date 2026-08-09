@@ -19,14 +19,14 @@ export interface StaticAdapterOptions {
  * @example
  * ```ts
  * import { config } from "ruvyxa/config"
- * import { staticAdapter } from "@ruvyxa/adapter-static"
+ * import { static as staticOutput } from "@ruvyxa/adapter-static"
  *
  * export default config({
- *   adapter: staticAdapter({ outputDir: "public" })
+ *   adapter: staticOutput({ outputDir: "public" })
  * })
  * ```
  */
-export function staticAdapter(options: StaticAdapterOptions = {}): Adapter {
+function createStatic(options: StaticAdapterOptions = {}): Adapter {
   if (options.outputDir !== undefined && typeof options.outputDir !== 'string') {
     throw new Error(
       `[RUV2001] staticAdapter: "outputDir" must be a string, got ${typeof options.outputDir}`,
@@ -97,4 +97,5 @@ function normalizeOutputDir(value: string | undefined): string {
   return normalized
 }
 
-export default staticAdapter
+export { createStatic as static }
+export default createStatic

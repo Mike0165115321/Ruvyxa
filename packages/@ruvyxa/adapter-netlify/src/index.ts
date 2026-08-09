@@ -133,14 +133,14 @@ export const config = {
  * @example
  * ```ts
  * import { config } from "ruvyxa/config"
- * import { netlifyAdapter } from "@ruvyxa/adapter-netlify"
+ * import { netlify } from "@ruvyxa/adapter-netlify"
  *
  * export default config({
- *   adapter: netlifyAdapter()
+ *   adapter: netlify()
  * })
  * ```
  */
-export function netlifyAdapter(options: NetlifyAdapterOptions = {}): Adapter {
+export function netlify(options: NetlifyAdapterOptions = {}): Adapter {
   if (options.functionsDir !== undefined && typeof options.functionsDir !== 'string') {
     throw new Error(
       `[RUV2001] netlifyAdapter: "functionsDir" must be a string, got ${typeof options.functionsDir}`,
@@ -279,4 +279,4 @@ export function netlifyAdapter(options: NetlifyAdapterOptions = {}): Adapter {
   }
 }
 
-export default netlifyAdapter
+export default netlify

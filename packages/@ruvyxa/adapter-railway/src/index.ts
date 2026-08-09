@@ -17,7 +17,7 @@ export interface RailwayAdapterOptions {
 }
 
 /** Create a zero-config Railway deployment adapter for Ruvyxa. */
-export function railwayAdapter(options: RailwayAdapterOptions = {}): Adapter {
+export function railway(options: RailwayAdapterOptions = {}): Adapter {
   return {
     name: 'railway',
     target: 'node',
@@ -89,4 +89,4 @@ export function railwayAdapter(options: RailwayAdapterOptions = {}): Adapter {
   }
 }
 
-export default railwayAdapter
+export default railway

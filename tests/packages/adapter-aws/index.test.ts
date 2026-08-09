@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { awsAdapter } from '../../../packages/@ruvyxa/adapter-aws/src/index.ts'
+import { aws } from '../../../packages/@ruvyxa/adapter-aws/src/index.ts'
 
-describe('awsAdapter', () => {
+describe('aws', () => {
   it('emits an Amplify Hosting static and compute deployment bundle', async () => {
-    const adapter = awsAdapter({ runtime: 'nodejs24.x' })
+    const adapter = aws({ runtime: 'nodejs24.x' })
     const output = await adapter.build({ root: '.', outDir: '.ruvyxa' })
 
     assert.equal(output.platform, 'aws')
@@ -79,7 +79,7 @@ describe('awsAdapter', () => {
   })
 
   it('can keep output inside the Ruvyxa build directory', async () => {
-    const output = await awsAdapter({ projectOutput: false }).build({
+    const output = await aws({ projectOutput: false }).build({
       root: '.',
       outDir: '.ruvyxa',
     })

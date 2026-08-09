@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { renderAdapter } from '../../../packages/@ruvyxa/adapter-render/src/index.ts'
+import { render } from '../../../packages/@ruvyxa/adapter-render/src/index.ts'
 
-describe('renderAdapter', () => {
+describe('render', () => {
   it('produces a standalone full-stack deployment and Render Blueprint', async () => {
-    const adapter = renderAdapter({ serviceName: 'shop-web' })
+    const adapter = render({ serviceName: 'shop-web' })
     const output = await adapter.build({ root: '.', outDir: '.ruvyxa' })
 
     assert.equal(output.platform, 'render')
@@ -35,9 +35,6 @@ describe('renderAdapter', () => {
   })
 
   it('rejects unsafe Blueprint service names', () => {
-    assert.throws(
-      () => renderAdapter({ serviceName: 'bad\nname' }),
-      /serviceName.*lowercase letters/,
-    )
+    assert.throws(() => render({ serviceName: 'bad\nname' }), /serviceName.*lowercase letters/)
   })
 })

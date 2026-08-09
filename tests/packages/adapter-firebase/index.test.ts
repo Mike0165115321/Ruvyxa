@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { firebaseAdapter } from '../../../packages/@ruvyxa/adapter-firebase/src/index.ts'
+import { firebase } from '../../../packages/@ruvyxa/adapter-firebase/src/index.ts'
 
-describe('firebaseAdapter', () => {
+describe('firebase', () => {
   it('emits Hosting, Functions v2, cache, and rewrite artifacts', async () => {
-    const adapter = firebaseAdapter({ functionName: 'webApp', region: 'asia-east1' })
+    const adapter = firebase({ functionName: 'webApp', region: 'asia-east1' })
     const output = await adapter.build({ root: '.', outDir: '.ruvyxa' })
 
     assert.equal(output.platform, 'firebase')
@@ -61,8 +61,8 @@ describe('firebaseAdapter', () => {
   })
 
   it('validates function and region identifiers', () => {
-    assert.doesNotThrow(() => firebaseAdapter({ region: 'europe-west10' }))
-    assert.throws(() => firebaseAdapter({ functionName: 'bad-name' }), /functionName/)
-    assert.throws(() => firebaseAdapter({ region: 'moon-1' }), /region/)
+    assert.doesNotThrow(() => firebase({ region: 'europe-west10' }))
+    assert.throws(() => firebase({ functionName: 'bad-name' }), /functionName/)
+    assert.throws(() => firebase({ region: 'moon-1' }), /region/)
   })
 })

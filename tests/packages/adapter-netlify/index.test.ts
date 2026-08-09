@@ -1,11 +1,11 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { netlifyAdapter } from '../../../packages/@ruvyxa/adapter-netlify/src/index.ts'
+import { netlify } from '../../../packages/@ruvyxa/adapter-netlify/src/index.ts'
 
-describe('netlifyAdapter', () => {
+describe('netlify', () => {
   it('returns serverless deployment output with function artifacts', async () => {
-    const output = await netlifyAdapter().build({ root: '.', outDir: '.ruvyxa' })
+    const output = await netlify().build({ root: '.', outDir: '.ruvyxa' })
 
     assert.deepEqual(
       output.artifacts?.map(({ kind, path, scope }) => ({ kind, path, scope })),
@@ -115,7 +115,7 @@ describe('netlifyAdapter', () => {
     // Opt-in project netlify.toml embeds project-relative paths only — the
     // file is committed, so an absolute build-machine path would break every
     // other machine (and Windows backslashes are TOML escapes).
-    const optIn = await netlifyAdapter({ projectConfig: true }).build({
+    const optIn = await netlify({ projectConfig: true }).build({
       root: 'D:\\work\\site',
       outDir: 'D:\\work\\site\\.ruvyxa',
     })
@@ -138,7 +138,7 @@ describe('netlifyAdapter', () => {
     // frameworksApi: false drops the .netlify/v1 artifacts
     assert.deepEqual(
       (
-        await netlifyAdapter({ frameworksApi: false }).build({ root: '.', outDir: '.ruvyxa' })
+        await netlify({ frameworksApi: false }).build({ root: '.', outDir: '.ruvyxa' })
       ).artifacts?.map(({ path }) => path),
       [
         'deploy/netlify/publish',
@@ -173,7 +173,7 @@ describe('netlifyAdapter', () => {
   })
 
   it('declares supported strategies', () => {
-    const adapter = netlifyAdapter()
+    const adapter = netlify()
     assert.deepEqual(adapter.supports, ['ssr', 'ssg', 'csr', 'isr', 'ppr', 'api'])
   })
 })

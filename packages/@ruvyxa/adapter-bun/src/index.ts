@@ -32,14 +32,14 @@ export interface BunAdapterOptions {
  * @example
  * ```ts
  * import { config } from "ruvyxa/config"
- * import { bunAdapter } from "@ruvyxa/adapter-bun"
+ * import { bun } from "@ruvyxa/adapter-bun"
  *
  * export default config({
- *   adapter: bunAdapter()
+ *   adapter: bun()
  * })
  * ```
  */
-export function bunAdapter(options: BunAdapterOptions = {}): Adapter {
+export function bun(options: BunAdapterOptions = {}): Adapter {
   if (options.entry !== undefined && typeof options.entry !== 'string') {
     throw new Error(`[RUV2001] bunAdapter: "entry" must be a string, got ${typeof options.entry}`)
   }
@@ -95,4 +95,4 @@ export function bunAdapter(options: BunAdapterOptions = {}): Adapter {
   }
 }
 
-export default bunAdapter
+export default bun

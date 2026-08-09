@@ -18,7 +18,7 @@ export interface RenderAdapterOptions {
 }
 
 /** Create a zero-config Render web-service adapter for Ruvyxa. */
-export function renderAdapter(options: RenderAdapterOptions = {}): Adapter {
+export function render(options: RenderAdapterOptions = {}): Adapter {
   const serviceName = options.serviceName ?? 'ruvyxa-app'
   if (!/^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/.test(serviceName)) {
     throw new Error(
@@ -92,4 +92,4 @@ export function renderAdapter(options: RenderAdapterOptions = {}): Adapter {
   }
 }
 
-export default renderAdapter
+export default render

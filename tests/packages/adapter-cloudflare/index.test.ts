@@ -1,11 +1,11 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { cloudflareAdapter } from '../../../packages/@ruvyxa/adapter-cloudflare/src/index.ts'
+import { cloudflare } from '../../../packages/@ruvyxa/adapter-cloudflare/src/index.ts'
 
-describe('cloudflareAdapter', () => {
+describe('cloudflare', () => {
   it('returns edge deployment output with worker function', async () => {
-    const output = await cloudflareAdapter({ compatibilityDate: '2024-12-01' }).build({
+    const output = await cloudflare({ compatibilityDate: '2024-12-01' }).build({
       root: '.',
       outDir: '.ruvyxa',
     })
@@ -64,7 +64,7 @@ describe('cloudflareAdapter', () => {
     // Opt-in project-scope wrangler.jsonc embeds project-relative paths only —
     // the file is committed, so an absolute build-machine path would break
     // every other machine.
-    const optIn = await cloudflareAdapter({
+    const optIn = await cloudflare({
       projectConfig: true,
       compatibilityDate: '2024-12-01',
     }).build({ root: 'D:\\work\\site', outDir: 'D:\\work\\site\\.ruvyxa' })
@@ -108,7 +108,7 @@ describe('cloudflareAdapter', () => {
   })
 
   it('declares supported strategies', () => {
-    const adapter = cloudflareAdapter()
+    const adapter = cloudflare()
     assert.deepEqual(adapter.supports, ['ssr', 'ssg', 'csr', 'api'])
   })
 
@@ -117,7 +117,7 @@ describe('cloudflareAdapter', () => {
   // machine's workerd emitted a compatibility date wrangler rejects.
   it('pins a fixed default compatibility date', () => {
     const compatibilityDate = () => {
-      const output = cloudflareAdapter().build({ root: '.', outDir: '.ruvyxa' })
+      const output = cloudflare().build({ root: '.', outDir: '.ruvyxa' })
       const wrangler = output.artifacts?.find((artifact) =>
         artifact.path.endsWith('wrangler.jsonc'),
       )
@@ -132,7 +132,7 @@ describe('cloudflareAdapter', () => {
   })
 
   it('forwards the runtime context and caches public assets', () => {
-    const output = cloudflareAdapter().build({ root: '.', outDir: '.ruvyxa' })
+    const output = cloudflare().build({ root: '.', outDir: '.ruvyxa' })
 
     // waitUntil lives on the Workers execution context; dropping it stranded
     // any background work the shared handler schedules.
@@ -150,7 +150,7 @@ describe('cloudflareAdapter', () => {
   })
 
   it('embeds validated edge middleware, i18n, and on-demand image wiring', () => {
-    const output = cloudflareAdapter().build({
+    const output = cloudflare().build({
       root: '.',
       outDir: '.ruvyxa',
       buildInfo: {

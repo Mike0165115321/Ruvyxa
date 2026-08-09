@@ -1,11 +1,11 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { nodeAdapter } from '../../../packages/@ruvyxa/adapter-node/src/index.ts'
+import { node } from '../../../packages/@ruvyxa/adapter-node/src/index.ts'
 
-describe('nodeAdapter', () => {
+describe('node', () => {
   it('returns node deployment output with a standalone server', async () => {
-    const adapter = nodeAdapter()
+    const adapter = node()
     const output = await adapter.build({ root: '.', outDir: '.ruvyxa' })
     const { artifacts, ...deployment } = output
 

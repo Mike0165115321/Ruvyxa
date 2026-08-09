@@ -12,10 +12,10 @@ npm install @ruvyxa/adapter-vercel
 
 ```ts
 import { config } from 'ruvyxa/config'
-import { vercelAdapter } from '@ruvyxa/adapter-vercel'
+import { vercel } from '@ruvyxa/adapter-vercel'
 
 export default config({
-  adapter: vercelAdapter(),
+  adapter: vercel(),
 })
 ```
 
@@ -44,8 +44,8 @@ by serverless functions. Function output contains a compiled `.mjs` static route
 checks file age against `revalidate` and coalesces concurrent stale refreshes within a warm function
 instance.
 
-Use `vercelAdapter({ edge: true })` to emit a Web-standard Edge Function instead. Edge mode supports
-SSR, SSG, CSR, and API routes and embeds the validated built-in middleware policy without Node.js
+Use `vercel({ edge: true })` to emit a Web-standard Edge Function instead. Edge mode supports SSR,
+SSG, CSR, and API routes and embeds the validated built-in middleware policy without Node.js
 imports. ISR and PPR are rejected in Edge mode because this adapter's ISR cache requires the
 writable Node.js temporary directory. Do not combine `edge: true` with `runtime` or `maxDuration`.
 

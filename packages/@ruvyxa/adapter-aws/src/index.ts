@@ -25,7 +25,7 @@ export interface AwsAdapterOptions {
 }
 
 /** Create an AWS Amplify Hosting static-plus-compute adapter for Ruvyxa. */
-export function awsAdapter(options: AwsAdapterOptions = {}): Adapter {
+export function aws(options: AwsAdapterOptions = {}): Adapter {
   const runtime = options.runtime ?? 'nodejs22.x'
   const frameworkVersion = packageVersion()
 
@@ -156,4 +156,4 @@ function packageVersion(): string {
   return metadata.version
 }
 
-export default awsAdapter
+export default aws

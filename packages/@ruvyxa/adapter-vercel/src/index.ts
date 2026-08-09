@@ -252,14 +252,14 @@ function vercelImagesConfig(runtimePolicy: Readonly<Record<string, unknown>>): o
  * @example
  * ```ts
  * import { config } from "ruvyxa/config"
- * import { vercelAdapter } from "@ruvyxa/adapter-vercel"
+ * import { vercel } from "@ruvyxa/adapter-vercel"
  *
  * export default config({
- *   adapter: vercelAdapter()
+ *   adapter: vercel()
  * })
  * ```
  */
-export function vercelAdapter(options: VercelAdapterOptions = {}): Adapter {
+export function vercel(options: VercelAdapterOptions = {}): Adapter {
   if (options.functionsDir !== undefined && typeof options.functionsDir !== 'string') {
     throw new Error(
       `[RUV2001] vercelAdapter: "functionsDir" must be a string, got ${typeof options.functionsDir}`,
@@ -451,4 +451,4 @@ export function vercelAdapter(options: VercelAdapterOptions = {}): Adapter {
   }
 }
 
-export default vercelAdapter
+export default vercel

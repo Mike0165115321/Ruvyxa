@@ -12,10 +12,10 @@ npm install @ruvyxa/adapter-node
 
 ```ts
 import { config } from 'ruvyxa/config'
-import { nodeAdapter } from '@ruvyxa/adapter-node'
+import { node } from '@ruvyxa/adapter-node'
 
 export default config({
-  adapter: nodeAdapter(),
+  adapter: node(),
 })
 ```
 

@@ -12,10 +12,10 @@ npm install @ruvyxa/adapter-netlify
 
 ```ts
 import { config } from 'ruvyxa/config'
-import { netlifyAdapter } from '@ruvyxa/adapter-netlify'
+import { netlify } from '@ruvyxa/adapter-netlify'
 
 export default config({
-  adapter: netlifyAdapter(),
+  adapter: netlify(),
 })
 ```
 

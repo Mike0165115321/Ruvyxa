@@ -12,10 +12,10 @@ npm install @ruvyxa/adapter-static
 
 ```ts
 import { config } from 'ruvyxa/config'
-import { staticAdapter } from '@ruvyxa/adapter-static'
+import { static as staticOutput } from '@ruvyxa/adapter-static'
 
 export default config({
-  adapter: staticAdapter(),
+  adapter: staticOutput(),
 })
 ```
 
@@ -34,7 +34,7 @@ export default config({
 ```
 
 `ruvyxa build` copies publishable files to `.ruvyxa/static/`. Configure `outputDir` to choose a
-different directory **inside** `.ruvyxa`, for example `staticAdapter({ outputDir: 'public' })`.
+different directory **inside** `.ruvyxa`, for example `staticOutput({ outputDir: 'public' })`.
 
 Only SSG and CSR page routes are supported. API routes and server-rendered, ISR, or PPR routes fail
 the build with `RUV2202`, rather than producing an incomplete deployment.
