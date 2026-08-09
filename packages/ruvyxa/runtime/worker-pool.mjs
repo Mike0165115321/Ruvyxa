@@ -76,6 +76,14 @@ const MAX_CONCURRENT_REQUESTS = positiveIntegerEnv(
   'RUVYXA_WORKER_MAX_CONCURRENCY',
   Math.max(2, Math.min(8, availableParallelism())),
 )
+// Keep overload memory finite. Each queued request retains its parsed payload,
+// including request bodies and render metadata, until a slot becomes free.
+// Four waiting requests per active slot absorbs short bursts without allowing
+// sustained overload to grow the heap without bound.
+const MAX_QUEUED_REQUESTS = positiveIntegerEnv(
+  'RUVYXA_WORKER_MAX_QUEUE',
+  MAX_CONCURRENT_REQUESTS * 4,
+)
 const runtimeDir = path.dirname(fileURLToPath(import.meta.url))
 
 // --- LRU Cache ---
@@ -165,6 +173,7 @@ const renderCoalesceMap = new Map()
 const registeredModuleUrls = new Set()
 
 let activeRequests = 0
+let rejectedRequests = 0
 let isShuttingDown = false
 let moduleImportVersion = 0
 
@@ -181,12 +190,16 @@ const admissionQueue = []
 function acquireRequestSlot() {
   if (activeRequests < MAX_CONCURRENT_REQUESTS) {
     activeRequests++
-    return undefined
+    return true
+  }
+  if (admissionQueue.length >= MAX_QUEUED_REQUESTS) {
+    rejectedRequests++
+    return false
   }
   return new Promise((resolve) => {
     admissionQueue.push(() => {
       activeRequests++
-      resolve()
+      resolve(true)
     })
   })
 }
@@ -272,7 +285,16 @@ rl.on('line', async (line) => {
   // precisely when the pool is busy.
   const needsSlot = request.type !== 'invalidate' && request.type !== 'ping'
   if (needsSlot) {
-    await acquireRequestSlot()
+    const admitted = await acquireRequestSlot()
+    if (!admitted) {
+      await writeWorkerMessage({
+        id,
+        ok: false,
+        code: 'RUV1705',
+        message: `JavaScript worker queue is full (${MAX_QUEUED_REQUESTS} waiting)`,
+      })
+      return
+    }
     // The worker may have started shutting down while this request waited.
     if (isShuttingDown) {
       releaseRequestSlot()
@@ -336,6 +358,8 @@ async function dispatchRequest(request) {
         // persistently non-zero queue means the pool is the bottleneck.
         queuedRequests: admissionQueue.length,
         maxConcurrentRequests: MAX_CONCURRENT_REQUESTS,
+        maxQueuedRequests: MAX_QUEUED_REQUESTS,
+        rejectedRequests,
         coalesceMapSize: renderCoalesceMap.size,
         workerRequestTimeoutMs: WORKER_REQUEST_TIMEOUT_MS,
         memoryPressureThresholdMb: MEMORY_PRESSURE_THRESHOLD_MB,

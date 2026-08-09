@@ -82,4 +82,22 @@ describe('createRouteMatcher route selection', () => {
       assert.equal(resolveRouteForTesting(ROUTES, pathname), null, pathname)
     }
   })
+
+  it('preserves the first manifest entry for duplicate static patterns', () => {
+    const first = { path: '/duplicate', src: '/first.js' }
+    const second = { path: '/duplicate', src: '/second.js' }
+    assert.equal(createRouteMatcher([first, second])('/duplicate')?.route, first)
+  })
+
+  it('falls back from the static index to parameterized routes', () => {
+    const parameterized = { path: '/catalog/[item]' }
+    const exact = { path: '/catalog/featured' }
+    const matchCatalog = createRouteMatcher([parameterized, exact])
+
+    assert.equal(matchCatalog('/catalog/featured')?.route, exact)
+    assert.deepEqual(matchCatalog('/catalog/widget'), {
+      route: parameterized,
+      params: { item: 'widget' },
+    })
+  })
 })

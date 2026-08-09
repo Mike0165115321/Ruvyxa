@@ -215,33 +215,62 @@ export function bindPatternParams(pattern: CompiledPattern, matched: RegExpExecA
 }
 
 /**
- * Compile a route table once and return a matcher over it.
+ * Compile a route table once and match paths already returned by
+ * `canonicalRoutePath`. Hosts with raw request paths should use
+ * `createRouteMatcher` so malformed and boundary-changing encodings are
+ * rejected before this lookup.
  *
  * Manifest order is alphabetical, where `[` sorts before letters — matching in
  * that order would shadow `/blog/new` behind `/blog/[slug]`. Sorting by
  * specificity restores the static-first behaviour of the dev server.
  */
-export function createRouteMatcher<Route extends RouteManifestEntry>(
+export function createCanonicalRouteMatcher<Route extends RouteManifestEntry>(
   routes: readonly Route[],
 ): (pathname: string) => RouteMatch<Route> | null {
-  const compiled: Array<CompiledRoute<Route>> = routes
-    .map((route) => ({
+  // Most application manifests are dominated by static routes. Index those
+  // exact paths once so a large manifest does not execute thousands of regexes
+  // for every navigation. Parameterized routes keep the proven ordered-regex
+  // path below, preserving all dynamic and catch-all semantics.
+  const staticRoutes = new Map<string, Route>()
+  const parameterizedRoutes: Array<CompiledRoute<Route>> = []
+  for (const route of routes) {
+    const specificity = routeSpecificity(route.path)
+    if (specificity.every((segment) => segment === 0)) {
+      const path = normalizeMatchPath(route.path)
+      // First-write wins preserves manifest order for exact duplicate
+      // patterns, matching the old stable sorted scan.
+      if (!staticRoutes.has(path)) staticRoutes.set(path, route)
+      continue
+    }
+    parameterizedRoutes.push({
       route,
       pattern: compilePattern(route.path),
-      specificity: routeSpecificity(route.path),
-    }))
-    .sort((left, right) => compareSpecificity(left.specificity, right.specificity))
+      specificity,
+    })
+  }
+  parameterizedRoutes.sort((left, right) => compareSpecificity(left.specificity, right.specificity))
 
   return function match(pathname: string): RouteMatch<Route> | null {
-    const normalized = canonicalRoutePath(pathname)
-    if (normalized === null) return null
+    const exact = staticRoutes.get(pathname)
+    if (exact) return { route: exact, params: {} }
 
-    for (const entry of compiled) {
-      const matched = entry.pattern.regex.exec(normalized)
+    for (const entry of parameterizedRoutes) {
+      const matched = entry.pattern.regex.exec(pathname)
       if (!matched) continue
       return { route: entry.route, params: bindPatternParams(entry.pattern, matched) }
     }
 
     return null
+  }
+}
+
+/** Compile a route table and validate/canonicalize each request before matching. */
+export function createRouteMatcher<Route extends RouteManifestEntry>(
+  routes: readonly Route[],
+): (pathname: string) => RouteMatch<Route> | null {
+  const matchCanonical = createCanonicalRouteMatcher(routes)
+  return function match(pathname: string): RouteMatch<Route> | null {
+    const normalized = canonicalRoutePath(pathname)
+    return normalized === null ? null : matchCanonical(normalized)
   }
 }

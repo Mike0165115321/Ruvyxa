@@ -98,17 +98,17 @@ generator. `plugins` is the array of `RuvyxaPlugin` objects.
 
 ## Environment variables
 
-| Variable                                                                                                         | Evidence-backed purpose                                                                     |
-| ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `RUVYXA_SITE_URL`                                                                                                | Fallback canonical origin for site discovery.                                               |
-| `RUVYXA_RUNTIME`                                                                                                 | CLI/runtime override (`node`, `bun`, or `deno`) used by dev/build paths.                    |
-| `RUVYXA_ADAPTER`                                                                                                 | Build adapter selection override.                                                           |
-| `RUVYXA_BUILD_CACHE_DIR`                                                                                         | Shared build cache directory override.                                                      |
-| `RUVYXA_RENDER_CACHE_SIZE`                                                                                       | Render-cache capacity.                                                                      |
-| `RUVYXA_WORKER_POOL_SIZE`, `RUVYXA_WORKER_TIMEOUT_MS`, `RUVYXA_WORKER_MAX_CONCURRENCY`, `RUVYXA_MEMORY_LIMIT_MB` | Worker-pool operational controls.                                                           |
-| `RUVYXA_PUBLIC_*`                                                                                                | Browser-safe values injected for client use.                                                |
-| `RUVYXA_FUN`                                                                                                     | Set to `0`/`false`/`off` to stop CLI spinners and the running mascot; colour is unaffected. |
-| `RUVYXA_ASCII`                                                                                                   | Set to `1` to draw progress and status with ASCII glyphs only.                              |
+| Variable                                                                                                                                    | Evidence-backed purpose                                                                     |
+| ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `RUVYXA_SITE_URL`                                                                                                                           | Fallback canonical origin for site discovery.                                               |
+| `RUVYXA_RUNTIME`                                                                                                                            | CLI/runtime override (`node`, `bun`, or `deno`) used by dev/build paths.                    |
+| `RUVYXA_ADAPTER`                                                                                                                            | Build adapter selection override.                                                           |
+| `RUVYXA_BUILD_CACHE_DIR`                                                                                                                    | Shared build cache directory override.                                                      |
+| `RUVYXA_RENDER_CACHE_SIZE`                                                                                                                  | Render-cache capacity.                                                                      |
+| `RUVYXA_WORKER_POOL_SIZE`, `RUVYXA_WORKER_TIMEOUT_MS`, `RUVYXA_WORKER_MAX_CONCURRENCY`, `RUVYXA_WORKER_MAX_QUEUE`, `RUVYXA_MEMORY_LIMIT_MB` | Worker-pool operational controls.                                                           |
+| `RUVYXA_PUBLIC_*`                                                                                                                           | Browser-safe values injected for client use.                                                |
+| `RUVYXA_FUN`                                                                                                                                | Set to `0`/`false`/`off` to stop CLI spinners and the running mascot; colour is unaffected. |
+| `RUVYXA_ASCII`                                                                                                                              | Set to `1` to draw progress and status with ASCII glyphs only.                              |
 
 CLI output also honours the two conventional terminal opt-outs: `NO_COLOR` removes colour, and
 `TERM=dumb` removes colour, animation, and non-ASCII glyphs. Output that is piped or redirected is

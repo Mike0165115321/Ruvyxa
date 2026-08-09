@@ -64,6 +64,7 @@ test('uses safe worker defaults when numeric environment values are invalid', as
       ...process.env,
       RUVYXA_WORKER_TIMEOUT_MS: '2147483648',
       RUVYXA_MEMORY_LIMIT_MB: 'not-a-number',
+      RUVYXA_WORKER_MAX_QUEUE: '0',
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   })
@@ -91,6 +92,7 @@ test('uses safe worker defaults when numeric environment values are invalid', as
   assert.equal(response.ok, true)
   assert.equal(response.workerRequestTimeoutMs, 30_000)
   assert.equal(response.memoryPressureThresholdMb, 512)
+  assert.equal(response.maxQueuedRequests, response.maxConcurrentRequests * 4)
 })
 
 test('rejects numeric environment values with trailing units', async (t) => {
@@ -100,6 +102,7 @@ test('rejects numeric environment values with trailing units', async (t) => {
       ...process.env,
       RUVYXA_WORKER_TIMEOUT_MS: '1234ms',
       RUVYXA_MEMORY_LIMIT_MB: '64mb',
+      RUVYXA_WORKER_MAX_QUEUE: '2requests',
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   })
@@ -127,6 +130,7 @@ test('rejects numeric environment values with trailing units', async (t) => {
   assert.equal(response.ok, true)
   assert.equal(response.workerRequestTimeoutMs, 30_000)
   assert.equal(response.memoryPressureThresholdMb, 512)
+  assert.equal(response.maxQueuedRequests, response.maxConcurrentRequests * 4)
 })
 
 test('bounds concurrent requests and keeps bookkeeping requests unqueued', async (t) => {
@@ -202,6 +206,83 @@ test('bounds concurrent requests and keeps bookkeeping requests unqueued', async
   const afterDrain = await send('after-drain', { type: 'ping' })
   assert.equal(afterDrain.activeRequests, 0, 'every slot must be released')
   assert.equal(afterDrain.queuedRequests, 0, 'the queue must drain')
+})
+
+test('rejects overload once the bounded admission queue is full', async (t) => {
+  const projectRoot = await mkdtemp(path.join(fixtureWorkspace, 'admission-test-'))
+  const appDir = path.join(projectRoot, 'app/api/slow')
+  const routeFile = path.join(appDir, 'route.ts')
+  await mkdir(appDir, { recursive: true })
+  await writeFile(
+    routeFile,
+    `export async function GET() {
+      await new Promise((resolve) => setTimeout(resolve, 250))
+      return Response.json({ ok: true })
+    }\n`,
+  )
+
+  const worker = spawn(process.execPath, [workerScript], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      RUVYXA_WORKER_MAX_CONCURRENCY: '1',
+      RUVYXA_WORKER_MAX_QUEUE: '1',
+    },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+  const lines = createInterface({ input: worker.stdout })
+  const pending = new Map()
+  lines.on('line', (line) => {
+    const message = JSON.parse(line)
+    pending.get(message.id)?.(message)
+    pending.delete(message.id)
+  })
+  const send = (id) => {
+    const settled = new Promise((resolve) => pending.set(id, resolve))
+    worker.stdin.write(
+      `${JSON.stringify({
+        id,
+        type: 'api',
+        projectRoot,
+        routeFile,
+        method: 'GET',
+        requestPath: '/api/slow',
+        headers: {},
+        params: {},
+      })}\n`,
+    )
+    return settled
+  }
+
+  t.after(async () => {
+    lines.close()
+    worker.stdin.end()
+    await Promise.race([
+      new Promise((resolve) => worker.once('exit', resolve)),
+      new Promise((resolve) => setTimeout(resolve, 2_000)),
+    ])
+    if (worker.exitCode === null) worker.kill()
+    await rm(projectRoot, { recursive: true, force: true })
+  })
+
+  const active = send('active')
+  const queued = send('queued')
+  const rejected = await send('rejected')
+
+  assert.equal(rejected.ok, false)
+  assert.equal(rejected.code, 'RUV1705')
+  assert.match(rejected.message, /queue is full/)
+  assert.equal((await active).ok, true)
+  assert.equal((await queued).ok, true)
+
+  const afterDrain = await new Promise((resolve) => {
+    pending.set('after-drain', resolve)
+    worker.stdin.write(`${JSON.stringify({ id: 'after-drain', type: 'ping' })}\n`)
+  })
+  assert.equal(afterDrain.maxQueuedRequests, 1)
+  assert.equal(afterDrain.rejectedRequests, 1)
+  assert.equal(afterDrain.activeRequests, 0)
+  assert.equal(afterDrain.queuedRequests, 0)
 })
 
 test('invalidates a cached route bundle when an imported utility changes', async (t) => {

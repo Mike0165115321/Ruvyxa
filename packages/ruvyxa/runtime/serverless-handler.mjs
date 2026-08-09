@@ -30,13 +30,7 @@ import {
   runWithRequestContext,
   usedRequestContext,
 } from './request-context.mjs'
-import {
-  bindPatternParams,
-  canonicalRoutePath,
-  compareSpecificity,
-  compilePattern,
-  routeSpecificity,
-} from './route-match.mjs'
+import { canonicalRoutePath, createCanonicalRouteMatcher } from './route-match.mjs'
 
 /**
  * @typedef {Object} RouteEntry
@@ -124,18 +118,11 @@ export function createHandler(options) {
   const forcedRevalidations = new Set()
   const fetchMiddleware = createFetchMiddleware(middleware)
 
-  // Pre-compile route patterns for matching. Sort by specificity so a
-  // static segment always wins over a dynamic one at the same position —
-  // manifest order is alphabetical, where "[" sorts before letters and
-  // would otherwise shadow /blog/new behind /blog/[slug], diverging from
-  // the dev server's static-first router.
-  const compiledRoutes = routes
-    .map((route) => ({
-      ...route,
-      pattern: compilePattern(route.path),
-      specificity: routeSpecificity(route.path),
-    }))
-    .sort((left, right) => compareSpecificity(left.specificity, right.specificity))
+  // Compile once through the shared matcher so browser navigation and
+  // serverless dispatch use the same precedence and indexed static-route path.
+  // This host canonicalizes at its request boundary, so it deliberately uses
+  // the canonical-input entry point and never decodes a segment twice.
+  const matchRoute = createCanonicalRouteMatcher(routes)
 
   return async function handle(request, runtimeContext = {}) {
     const response = await fetchMiddleware(request, () => dispatch(request, runtimeContext))
@@ -170,9 +157,9 @@ export function createHandler(options) {
       return handleDynamicImage(request, runtimeContext.optimizeImage ?? optimizeImage)
     }
 
-    const match = matchRoute(compiledRoutes, pathname)
+    const match = matchRoute(pathname)
     if (!match) {
-      const redirect = localeRedirect(request, pathname, basePath, compiledRoutes, i18n)
+      const redirect = localeRedirect(request, pathname, basePath, matchRoute, i18n)
       if (redirect) return Response.redirect(new URL(redirect, request.url), 307)
       return new Response('Not Found', { status: 404 })
     }
@@ -410,7 +397,7 @@ async function handleDynamicImage(request, optimizer) {
   return optimizer(request, { src, width, quality })
 }
 
-function localeRedirect(request, pathname, basePath, routes, config) {
+function localeRedirect(request, pathname, basePath, matchRoute, config) {
   if (
     !config ||
     config.detectLocale === false ||
@@ -426,7 +413,7 @@ function localeRedirect(request, pathname, basePath, routes, config) {
   const preferred = preferredLocale(request.headers, config)
   for (const locale of [preferred, config.defaultLocale]) {
     const candidate = pathname === '/' ? `/${locale}` : `/${locale}${pathname}`
-    const matched = matchRoute(routes, candidate)
+    const matched = matchRoute(candidate)
     if (matched?.route.kind === 'page') {
       return `${basePath === '/' ? '' : basePath}${candidate}`
     }
@@ -859,39 +846,24 @@ function canonicalRequestPath(rawPathname) {
   return canonical
 }
 
-function matchRoute(compiledRoutes, pathname) {
-  for (const route of compiledRoutes) {
-    const match = route.pattern.regex.exec(pathname)
-    if (!match) continue
-    return { route, params: bindPatternParams(route.pattern, match) }
-  }
-  return null
-}
-
 /**
  * Match a request path against a route table, exposed for cross-implementation
  * testing.
  *
- * The handler, `@ruvyxa/react`'s router, and the standalone server all compile
- * their tables with the same shared `compilePattern`/`routeSpecificity`, so a
- * link click and a page reload resolve the same URL to the same route and
- * params by construction rather than by review. This entry point exists so the
- * conformance suite can drive the handler's own dispatch path — including its
- * base-path and error reporting behaviour — against the shared case table in
+ * The handler, `@ruvyxa/react`'s router, and the standalone server all use the
+ * shared route matcher, so a link click and a page reload resolve the same URL
+ * to the same route and params by construction rather than by review. This
+ * entry point exists so the conformance suite can drive the handler's own
+ * dispatch path — including its base-path and error reporting behaviour —
+ * against the shared case table in
  * `tests/fixtures/route-match-conformance.json`, alongside the Rust router.
  * It is not part of the handler's runtime path.
  */
 export function resolveRouteForTesting(routes, pathname) {
-  const compiled = routes
-    .map((route) => ({
-      ...route,
-      pattern: compilePattern(route.path),
-      specificity: routeSpecificity(route.path),
-    }))
-    .sort((left, right) => compareSpecificity(left.specificity, right.specificity))
+  const matchRoute = createCanonicalRouteMatcher(routes)
   try {
     const canonicalPathname = canonicalRequestPath(pathname)
-    const matched = matchRoute(compiled, canonicalPathname)
+    const matched = matchRoute(canonicalPathname)
     return matched
       ? { path: matched.route.path, params: matched.params, pathname: canonicalPathname }
       : null
