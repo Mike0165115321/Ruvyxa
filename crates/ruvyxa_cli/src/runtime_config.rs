@@ -203,7 +203,10 @@ pub(crate) fn production_server_config(
 
 pub(crate) fn load_project_config(root: &Path) -> anyhow::Result<ProjectConfig> {
     let runtime_override = runtime_override()?;
-    let bootstrap_runtime = runtime_override.unwrap_or_else(default_javascript_runtime);
+    let invoker_runtime = invoker_runtime();
+    let bootstrap_runtime = runtime_override
+        .or(invoker_runtime)
+        .unwrap_or_else(default_javascript_runtime);
     let Some(renderer) = find_runtime_script(root, "config-renderer.mjs") else {
         let mut config = ProjectConfig {
             config_dependency_hash: "no-config".to_string(),
@@ -227,7 +230,13 @@ pub(crate) fn load_project_config(root: &Path) -> anyhow::Result<ProjectConfig> 
     }
 
     let mut config = result.config.take().unwrap_or_default();
-    let selected_runtime = runtime_override.unwrap_or_else(|| config.javascript_runtime());
+    let selected_runtime = runtime_override.unwrap_or_else(|| {
+        if config.runtime.is_some() {
+            config.javascript_runtime()
+        } else {
+            invoker_runtime.unwrap_or_else(|| config.javascript_runtime())
+        }
+    });
     if selected_runtime != bootstrap_runtime {
         result = run_config_renderer(root, &renderer, selected_runtime)?;
         if !result.ok {
@@ -242,7 +251,13 @@ pub(crate) fn load_project_config(root: &Path) -> anyhow::Result<ProjectConfig> 
         }
         config = result.config.take().unwrap_or_default();
     }
-    config.javascript_runtime_override = runtime_override;
+    config.javascript_runtime_override = runtime_override.or_else(|| {
+        if config.runtime.is_none() {
+            invoker_runtime
+        } else {
+            None
+        }
+    });
     let dependency_hash = required_config_dependency_hash(&result)?;
     config.config_dependency_hash = dependency_hash;
     config.validate_paths()?;
@@ -399,6 +414,7 @@ pub(crate) fn run_config_renderer(
 
     let mut command = ProcessCommand::new(runtime.executable());
     command
+        .args(runtime.script_args())
         .arg(renderer)
         .arg(root)
         .env("RUVYXA_RUNTIME", runtime.command());
@@ -452,6 +468,7 @@ pub(crate) fn run_adapter_runner(
     })?;
     let mut command = ProcessCommand::new(runtime.executable());
     command
+        .args(runtime.script_args())
         .arg(runner)
         .arg(root)
         .arg(staging_dir)
@@ -512,6 +529,7 @@ pub(crate) fn inspect_adapter(
     })?;
     let mut command = ProcessCommand::new(runtime.executable());
     command
+        .args(runtime.script_args())
         .arg(runner)
         .arg(root)
         .arg(out_dir)
@@ -573,7 +591,8 @@ pub(crate) fn command_runtime(command: &Command) -> Option<CliRuntime> {
         Command::Analyze(args) => args.runtime,
         Command::Adds(args) => args.runtime,
         Command::Doctor(args) => args.runtime,
-        Command::Trace(_) | Command::Bench(_) | Command::Plugin(_) => None,
+        Command::Bench(args) => args.runtime,
+        Command::Trace(_) | Command::Plugin(_) => None,
     }
 }
 
@@ -587,6 +606,7 @@ pub(crate) fn set_cli_runtime_override(runtime: Option<CliRuntime>) {
 pub(crate) enum CliRuntime {
     Node,
     Bun,
+    Deno,
 }
 
 impl From<CliRuntime> for JavaScriptRuntime {
@@ -594,6 +614,7 @@ impl From<CliRuntime> for JavaScriptRuntime {
         match value {
             CliRuntime::Node => Self::Node,
             CliRuntime::Bun => Self::Bun,
+            CliRuntime::Deno => Self::Deno,
         }
     }
 }
@@ -608,7 +629,25 @@ pub(crate) fn runtime_override() -> anyhow::Result<Option<JavaScriptRuntime>> {
     match value.trim().to_ascii_lowercase().as_str() {
         "node" => Ok(Some(JavaScriptRuntime::Node)),
         "bun" => Ok(Some(JavaScriptRuntime::Bun)),
-        _ => anyhow::bail!("RUVYXA_RUNTIME must be either 'node' or 'bun'"),
+        "deno" => Ok(Some(JavaScriptRuntime::Deno)),
+        _ => anyhow::bail!("RUVYXA_RUNTIME must be 'node', 'bun', or 'deno'"),
+    }
+}
+
+/// Runtime that executed the JavaScript package launcher. This is a hint below
+/// explicit CLI/environment/config choices, so `bun run dev` and
+/// `deno task dev` feel native without overriding project policy.
+pub(crate) fn invoker_runtime() -> Option<JavaScriptRuntime> {
+    match std::env::var("RUVYXA_INVOKER_RUNTIME")
+        .ok()?
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "node" => Some(JavaScriptRuntime::Node),
+        "bun" => Some(JavaScriptRuntime::Bun),
+        "deno" => Some(JavaScriptRuntime::Deno),
+        _ => None,
     }
 }
 

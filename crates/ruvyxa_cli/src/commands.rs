@@ -448,6 +448,7 @@ pub(crate) fn doctor(args: DoctorArgs) -> anyhow::Result<()> {
     print_field("rustc", tool_status(tool_version("rustc", &["--version"])));
     print_field("cargo", tool_status(tool_version("cargo", &["--version"])));
     print_field("bun", tool_status(bun_version()));
+    print_field("deno", tool_status(deno_version()));
     if let Some(package) = &package {
         // React is part of what is installed, not a section of its own — the
         // three rows only ever answered "can this project render".
@@ -590,19 +591,25 @@ pub(crate) async fn bench(args: BenchArgs) -> anyhow::Result<()> {
     let samples = args.samples.max(1);
     let root = args.root;
     let config = load_project_config(&root)?;
+    let runtime = config.javascript_runtime().command().to_string();
     let app_dir = root.join(config.app_dir());
     let mut results = Vec::new();
 
-    results.push(run_benchmark("route-discovery", samples, || {
+    results.push(run_benchmark("route-discovery", &runtime, samples, || {
         let _manifest = discover_project_routes(&root, &config)?;
         Ok(())
     })?);
-    results.push(run_benchmark("analyze-validation", samples, || {
-        let manifest = discover_project_routes(&root, &config)?;
-        let validation = validate_app(&root, &manifest)?;
-        fail_on_diagnostics(&validation.diagnostics)?;
-        Ok(())
-    })?);
+    results.push(run_benchmark(
+        "analyze-validation",
+        &runtime,
+        samples,
+        || {
+            let manifest = discover_project_routes(&root, &config)?;
+            let validation = validate_app(&root, &manifest)?;
+            fail_on_diagnostics(&validation.diagnostics)?;
+            Ok(())
+        },
+    )?);
     let mut build_timings = Vec::with_capacity(samples);
     for _ in 0..samples {
         let started = Instant::now();
@@ -619,7 +626,11 @@ pub(crate) async fn bench(args: BenchArgs) -> anyhow::Result<()> {
         .await?;
         build_timings.push(started.elapsed());
     }
-    results.push(summarize_benchmark("production-build", build_timings));
+    results.push(summarize_benchmark(
+        "production-build",
+        &runtime,
+        build_timings,
+    ));
 
     if args.json {
         println!("{}", serde_json::to_string_pretty(&results)?);
@@ -636,14 +647,19 @@ pub(crate) async fn bench(args: BenchArgs) -> anyhow::Result<()> {
 pub(crate) struct BenchmarkResult {
     pub(crate) name: String,
     pub(crate) samples: usize,
+    pub(crate) runtime: String,
+    pub(crate) sample_ms: Vec<f64>,
     pub(crate) min_ms: f64,
     pub(crate) median_ms: f64,
     pub(crate) avg_ms: f64,
     pub(crate) max_ms: f64,
+    pub(crate) p95_ms: f64,
+    pub(crate) std_dev_ms: f64,
 }
 
 pub(crate) fn run_benchmark(
     name: &str,
+    runtime: &str,
     samples: usize,
     mut run: impl FnMut() -> anyhow::Result<()>,
 ) -> anyhow::Result<BenchmarkResult> {
@@ -655,10 +671,14 @@ pub(crate) fn run_benchmark(
         timings.push(started.elapsed());
     }
 
-    Ok(summarize_benchmark(name, timings))
+    Ok(summarize_benchmark(name, runtime, timings))
 }
 
-pub(crate) fn summarize_benchmark(name: &str, mut timings: Vec<Duration>) -> BenchmarkResult {
+pub(crate) fn summarize_benchmark(
+    name: &str,
+    runtime: &str,
+    mut timings: Vec<Duration>,
+) -> BenchmarkResult {
     timings.sort();
     let samples = timings.len();
     let min_ms = duration_ms(timings[0]);
@@ -669,14 +689,31 @@ pub(crate) fn summarize_benchmark(name: &str, mut timings: Vec<Duration>) -> Ben
         .map(|duration| duration_ms(*duration))
         .sum::<f64>()
         / samples as f64;
+    let sample_ms = timings
+        .iter()
+        .map(|duration| duration_ms(*duration))
+        .collect::<Vec<_>>();
+    let p95_index = ((samples as f64 * 0.95).ceil() as usize)
+        .saturating_sub(1)
+        .min(samples - 1);
+    let p95_ms = sample_ms[p95_index];
+    let variance = sample_ms
+        .iter()
+        .map(|sample| (sample - avg_ms).powi(2))
+        .sum::<f64>()
+        / samples as f64;
 
     BenchmarkResult {
         name: name.to_string(),
         samples,
+        runtime: runtime.to_string(),
+        sample_ms,
         min_ms,
         median_ms,
         avg_ms,
         max_ms,
+        p95_ms,
+        std_dev_ms: variance.sqrt(),
     }
 }
 

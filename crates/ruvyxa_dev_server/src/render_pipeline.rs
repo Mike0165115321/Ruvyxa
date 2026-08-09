@@ -1472,6 +1472,7 @@ fn run_renderer(
 
 fn javascript_command(config: &ServerConfig) -> Result<Command> {
     let mut command = Command::new(config.runtime.executable());
+    command.args(config.runtime.script_args());
     command.envs(runtime_env(config)?);
     Ok(command)
 }

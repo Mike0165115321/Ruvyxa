@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
 
 /** Supported package managers. */
-export type PackageManager = 'pnpm' | 'yarn' | 'npm' | 'bun'
+export type PackageManager = 'pnpm' | 'yarn' | 'npm' | 'bun' | 'deno'
 
 /** Commands and lockfile associated with a package manager. */
 export interface PackageManagerInfo {
@@ -18,6 +18,12 @@ const PM_INFO: Record<PackageManager, Omit<PackageManagerInfo, 'name'>> = {
   pnpm: { install: 'pnpm install', dev: 'pnpm dev', exec: 'pnpm dlx', lockfile: 'pnpm-lock.yaml' },
   yarn: { install: 'yarn', dev: 'yarn dev', exec: 'yarn dlx', lockfile: 'yarn.lock' },
   bun: { install: 'bun install', dev: 'bun dev', exec: 'bunx', lockfile: 'bun.lock' },
+  deno: {
+    install: 'deno install',
+    dev: 'deno task dev',
+    exec: 'deno x -A npm:',
+    lockfile: 'deno.lock',
+  },
   npm: { install: 'npm install', dev: 'npm run dev', exec: 'npx', lockfile: 'package-lock.json' },
 }
 
@@ -26,6 +32,7 @@ const LOCKFILES: ReadonlyArray<readonly [PackageManager, string]> = [
   ['yarn', 'yarn.lock'],
   ['bun', 'bun.lock'],
   ['bun', 'bun.lockb'],
+  ['deno', 'deno.lock'],
   ['npm', 'package-lock.json'],
 ]
 
@@ -33,9 +40,11 @@ const CONVENTION_FILES: ReadonlyArray<readonly [PackageManager, string]> = [
   ['pnpm', 'pnpm-workspace.yaml'],
   ['yarn', '.yarnrc.yml'],
   ['bun', 'bunfig.toml'],
+  ['deno', 'deno.json'],
+  ['deno', 'deno.jsonc'],
 ]
 
-const TIE_BREAK_ORDER: ReadonlyArray<PackageManager> = ['pnpm', 'yarn', 'bun', 'npm']
+const TIE_BREAK_ORDER: ReadonlyArray<PackageManager> = ['pnpm', 'yarn', 'bun', 'deno', 'npm']
 
 /**
  * Detect the package manager most likely intended for the project containing `cwd`.
@@ -118,7 +127,7 @@ function packageManagerFromLockfiles(directory: string): PackageManager | undefi
 
 function packageManagerFromIdentifier(value: string): PackageManager | undefined {
   const normalized = value.trim().toLowerCase()
-  return (['pnpm', 'yarn', 'bun', 'npm'] as const).find(
+  return (['pnpm', 'yarn', 'bun', 'deno', 'npm'] as const).find(
     (manager) =>
       normalized === manager ||
       normalized.startsWith(`${manager}@`) ||

@@ -594,6 +594,7 @@ impl Worker {
         runtime: JavaScriptRuntime,
     ) -> std::result::Result<Self, RuvyxaError> {
         let mut child = Command::new(runtime.executable())
+            .args(runtime.script_args())
             .arg(worker_script)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

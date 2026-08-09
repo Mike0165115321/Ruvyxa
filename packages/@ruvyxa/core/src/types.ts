@@ -2,7 +2,7 @@ export interface RuvyxaConfig {
   appDir?: string
   outDir?: string
   /** Runtime used for config, rendering, and plugins. @default 'node' */
-  runtime?: 'node' | 'bun' | 'edge' | 'static'
+  runtime?: 'node' | 'bun' | 'deno' | 'edge' | 'static'
   react?: boolean
   typescript?: {
     strict?: boolean
@@ -697,13 +697,14 @@ export interface AdapterOutput {
     | 'cloudflare'
     | 'netlify'
     | 'bun'
+    | 'deno'
     | 'static'
     | 'railway'
     | 'render'
     | 'firebase'
     | 'aws'
   /** Runtime expected by the deployment entrypoint. */
-  runtime?: 'node' | 'bun'
+  runtime?: 'node' | 'bun' | 'deno'
   configFiles?: string[]
   functionsDir?: string
   /**
@@ -717,7 +718,7 @@ export interface AdapterOutput {
 export interface AdapterInspection {
   name: string
   target: Adapter['target'] | 'unknown'
-  runtime: 'node' | 'bun' | 'edge' | 'static' | 'unknown'
+  runtime: 'node' | 'bun' | 'deno' | 'edge' | 'static' | 'unknown'
   platform?: AdapterOutput['platform'] | null
   supports: Array<RenderStrategy | 'api'>
 }

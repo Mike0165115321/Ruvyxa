@@ -33,7 +33,7 @@ pub(crate) async fn build(args: BuildArgs) -> anyhow::Result<()> {
 /// own function payload from the full output; neither has been given a minimal
 /// contract yet, so both are rejected rather than silently producing an
 /// artifact that cannot be deployed.
-pub(crate) const SERVER_ONLY_TARGETS: [&str; 2] = ["node", "bun"];
+pub(crate) const SERVER_ONLY_TARGETS: [&str; 3] = ["node", "bun", "deno"];
 
 /// Reject a `--server-only` build whose target has no server-only contract.
 ///
@@ -50,12 +50,12 @@ pub(crate) fn server_only_target_diagnostic(target: BuildTarget) -> Option<Diagn
             format!("--server-only does not support the `{name}` target"),
         )
         .explain(
-            "A server-only artifact is a running Node or Bun server. The static and edge targets \
+            "A server-only artifact is a running Node, Bun, or Deno server. The static and edge targets \
              have no server-only output contract yet, so the build would emit an artifact that \
              cannot be deployed.",
         )
         .suggest(format!(
-            "Build with `--target node` or `--target bun`, or drop --server-only to produce the \
+            "Build with `--target node`, `--target bun`, or `--target deno`, or drop --server-only to produce the \
              full {name} output."
         )),
     )

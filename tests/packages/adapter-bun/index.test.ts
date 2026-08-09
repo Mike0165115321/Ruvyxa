@@ -26,6 +26,8 @@ describe('bunAdapter', () => {
     assert.match(source, /node:http/)
     assert.match(source, /isAssetPath\(url\.pathname\)/)
     assert.match(source, /public, max-age=3600, must-revalidate/)
+    assert.match(source, /Readable\.fromWeb\(response\.body\)\.pipe\(res\)/)
+    assert.doesNotMatch(source, /response\.arrayBuffer\(\)/)
     assert.doesNotMatch(source, /npx/)
 
     // An API-only app has no prerendered pages; the publish directory must be

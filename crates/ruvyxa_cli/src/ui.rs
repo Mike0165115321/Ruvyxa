@@ -37,6 +37,9 @@ pub(crate) fn print_benchmark_table(
     print_field("root", path_text(root));
     print_field("app dir", path_text(app_dir));
     print_field("scenarios", number(results.len().to_string()));
+    if let Some(result) = results.first() {
+        print_field("runtime", info(&result.runtime));
+    }
     print_field("duration", accent(format_duration(elapsed)));
     println!();
 

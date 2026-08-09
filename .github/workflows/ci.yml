@@ -107,3 +107,24 @@ jobs:
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'windows-latest'
         shell: bash
         run: cargo run -p ruvyxa_cli -- check --root examples/demo --runtime bun
+      - name: Build and launch Bun deployment artifact
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          cargo run -p ruvyxa_cli -- build --root examples/demo --runtime bun --adapter bun
+          node scripts/smoke-runtime-adapter.mjs bun examples/demo/.ruvyxa/deploy/bun 4391
+      - name: Set up Deno runtime parity
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'windows-latest'
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: '2.9.5'
+      - name: Verify Deno JavaScript runtime parity
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'windows-latest'
+        shell: bash
+        run: cargo run -p ruvyxa_cli -- check --root examples/demo --runtime deno
+      - name: Build and launch Deno deployment artifact
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          cargo run -p ruvyxa_cli -- build --root examples/demo --runtime deno --adapter deno
+          node scripts/smoke-runtime-adapter.mjs deno examples/demo/.ruvyxa/deploy/deno 4392

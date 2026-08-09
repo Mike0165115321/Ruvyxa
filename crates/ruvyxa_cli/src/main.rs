@@ -139,7 +139,7 @@ struct ProjectArgs {
     #[arg(long, default_value = ".")]
     root: PathBuf,
 
-    /// JavaScript runtime to use (node or bun); overrides RUVYXA_RUNTIME
+    /// JavaScript runtime to use (node, bun, or deno); overrides RUVYXA_RUNTIME
     /// and config.runtime.
     #[arg(long, value_enum, ignore_case = true)]
     runtime: Option<CliRuntime>,
@@ -248,7 +248,7 @@ struct ServerArgs {
     #[arg(long)]
     port: Option<u16>,
 
-    /// JavaScript runtime to use (node or bun); overrides RUVYXA_RUNTIME
+    /// JavaScript runtime to use (node, bun, or deno); overrides RUVYXA_RUNTIME
     /// and config.runtime.
     #[arg(long, value_enum, ignore_case = true)]
     runtime: Option<CliRuntime>,
@@ -281,9 +281,10 @@ struct BuildArgs {
     server_only: bool,
 }
 
-const KNOWN_ADAPTER_NAMES: [&str; 10] = [
+const KNOWN_ADAPTER_NAMES: [&str; 11] = [
     "node",
     "bun",
+    "deno",
     "static",
     "vercel",
     "netlify",
@@ -364,6 +365,7 @@ fn detect_platform_adapter(env: impl Fn(&str) -> Option<String>) -> Option<(Stri
 enum BuildTarget {
     Node,
     Bun,
+    Deno,
     Edge,
     Static,
 }
@@ -383,6 +385,10 @@ struct BenchArgs {
 
     #[arg(long, default_value_t = 3)]
     samples: usize,
+
+    /// JavaScript runtime used by build samples (node, bun, or deno).
+    #[arg(long, value_enum, ignore_case = true)]
+    runtime: Option<CliRuntime>,
 
     #[arg(long)]
     json: bool,

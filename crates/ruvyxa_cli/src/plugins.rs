@@ -278,6 +278,7 @@ impl TypeScriptPluginWorker {
         runtime: JavaScriptRuntime,
     ) -> ruvyxa_bundler::Result<Self> {
         let mut child = ProcessCommand::new(runtime.executable())
+            .args(runtime.script_args())
             .arg(runner)
             .arg(project_root)
             .arg("--persistent")

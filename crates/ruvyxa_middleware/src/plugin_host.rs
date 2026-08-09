@@ -174,6 +174,7 @@ struct PluginSpawnConfig {
     project_root: std::path::PathBuf,
     runtime_script: std::path::PathBuf,
     executable: std::path::PathBuf,
+    executable_args: Vec<String>,
 }
 
 /// Persistent TypeScript plugin host shared by the request and response phases.
@@ -224,10 +225,34 @@ impl PluginHost {
         pool_size: usize,
         call_timeout: Duration,
     ) -> Result<Self> {
+        Self::start_pool_with_timeout_and_args(
+            project_root,
+            runtime_script,
+            executable,
+            &[],
+            pool_size,
+            call_timeout,
+        )
+        .await
+    }
+
+    /// Start a pool while passing runtime-specific arguments before the script.
+    pub async fn start_pool_with_timeout_and_args(
+        project_root: &Path,
+        runtime_script: &Path,
+        executable: &Path,
+        executable_args: &[&str],
+        pool_size: usize,
+        call_timeout: Duration,
+    ) -> Result<Self> {
         let spawn = PluginSpawnConfig {
             project_root: project_root.to_path_buf(),
             runtime_script: runtime_script.to_path_buf(),
             executable: executable.to_path_buf(),
+            executable_args: executable_args
+                .iter()
+                .map(|arg| (*arg).to_string())
+                .collect(),
         };
         let mut worker = spawn_worker(&spawn)?;
         let descriptor =
@@ -430,6 +455,7 @@ fn replace_worker(worker: &mut PluginWorker, spawn: &PluginSpawnConfig) -> Resul
 
 fn spawn_worker(spawn: &PluginSpawnConfig) -> Result<PluginWorker> {
     let mut child = Command::new(&spawn.executable)
+        .args(&spawn.executable_args)
         .arg(&spawn.runtime_script)
         .arg(&spawn.project_root)
         .arg("--persistent")

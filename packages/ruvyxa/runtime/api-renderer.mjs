@@ -21,7 +21,7 @@ const [
 ] = process.argv.slice(2)
 
 if (!projectRootArg || !routeFileArg) {
-  fail('RUV1201', 'API renderer requires projectRoot and routeFile arguments.')
+  await fail('RUV1201', 'API renderer requires projectRoot and routeFile arguments.')
 }
 
 const projectRoot = path.resolve(projectRootArg)
@@ -33,14 +33,12 @@ try {
   const handler = mod[method.toUpperCase()]
 
   if (typeof handler !== 'function') {
-    process.stdout.write(
-      JSON.stringify({
-        ok: true,
-        status: 405,
-        headers: { 'content-type': 'text/plain; charset=utf-8' },
-        body: `Method ${method.toUpperCase()} is not allowed`,
-      }),
-    )
+    await writeResponse({
+      ok: true,
+      status: 405,
+      headers: { 'content-type': 'text/plain; charset=utf-8' },
+      body: `Method ${method.toUpperCase()} is not allowed`,
+    })
     process.exit(0)
   }
 
@@ -59,17 +57,16 @@ try {
   const headerPairs = responseHeaderPairs(response)
   const headers = Object.fromEntries(headerPairs)
 
-  process.stdout.write(
-    JSON.stringify({
-      ok: true,
-      status: response.status,
-      headers,
-      headerPairs,
-      body,
-    }),
-  )
+  await writeResponse({
+    ok: true,
+    status: response.status,
+    headers,
+    headerPairs,
+    body,
+  })
+  process.exit(0)
 } catch (error) {
-  fail('RUV1200', error instanceof Error ? error.message : String(error), error?.stack)
+  await fail('RUV1200', error instanceof Error ? error.message : String(error), error?.stack)
 }
 
 async function bundleApiModule(projectRoot, routeFile) {
@@ -108,7 +105,16 @@ function responseHeaderPairs(response) {
   return headerPairs
 }
 
-function fail(code, message, stack) {
-  process.stdout.write(JSON.stringify({ ok: false, code, message, stack }))
-  process.exit(1)
+async function fail(code, message, stack) {
+  try {
+    await writeResponse({ ok: false, code, message, stack })
+  } finally {
+    process.exit(1)
+  }
+}
+
+function writeResponse(payload) {
+  return new Promise((resolve, reject) => {
+    process.stdout.write(JSON.stringify(payload), (error) => (error ? reject(error) : resolve()))
+  })
 }

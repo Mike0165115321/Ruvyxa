@@ -33,6 +33,7 @@ const packages = [
   '@ruvyxa/adapter-railway',
   '@ruvyxa/adapter-render',
   '@ruvyxa/adapter-bun',
+  '@ruvyxa/adapter-deno',
   '@ruvyxa/adapter-static',
   currentPlatformPackage,
   'ruvyxa',
@@ -291,6 +292,7 @@ for (const starter of starters) {
 const adapterOverrides = [
   '@ruvyxa/adapter-aws',
   '@ruvyxa/adapter-bun',
+  '@ruvyxa/adapter-deno',
   '@ruvyxa/adapter-cloudflare',
   '@ruvyxa/adapter-firebase',
   '@ruvyxa/adapter-netlify',

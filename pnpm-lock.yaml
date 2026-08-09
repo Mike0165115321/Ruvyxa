@@ -86,6 +86,12 @@ importers:
         specifier: workspace:^
         version: link:../core
 
+  packages/@ruvyxa/adapter-deno:
+    dependencies:
+      '@ruvyxa/core':
+        specifier: workspace:^
+        version: link:../core
+
   packages/@ruvyxa/adapter-firebase:
     dependencies:
       '@ruvyxa/core':
@@ -212,6 +218,9 @@ importers:
       '@ruvyxa/adapter-cloudflare':
         specifier: workspace:^
         version: link:../@ruvyxa/adapter-cloudflare
+      '@ruvyxa/adapter-deno':
+        specifier: workspace:^
+        version: link:../@ruvyxa/adapter-deno
       '@ruvyxa/adapter-firebase':
         specifier: workspace:^
         version: link:../@ruvyxa/adapter-firebase

@@ -23,6 +23,11 @@ pub(crate) fn detect_package_manager(root: &Path) -> String {
     } else if find_upwards(root, "bun.lock").is_some() || find_upwards(root, "bun.lockb").is_some()
     {
         "bun".to_string()
+    } else if find_upwards(root, "deno.lock").is_some()
+        || find_upwards(root, "deno.json").is_some()
+        || find_upwards(root, "deno.jsonc").is_some()
+    {
+        "deno".to_string()
     } else {
         "unknown".to_string()
     }
@@ -73,6 +78,26 @@ pub(crate) fn bun_version() -> String {
         Ok(output) if output.status.success() => {
             String::from_utf8_lossy(&output.stdout).trim().to_string()
         }
+        _ => "missing".to_string(),
+    }
+}
+
+/// Reports Deno's version using the runtime resolver, including npm/nvm shims
+/// on Windows. Only the first line is shown because `deno --version` reports
+/// its V8 and TypeScript versions on following lines.
+pub(crate) fn deno_version() -> String {
+    let mut probe = ProcessCommand::new(JavaScriptRuntime::Deno.executable());
+    probe.arg("--version");
+    match ruvyxa_dev_server::process::output_with_timeout(
+        &mut probe,
+        ruvyxa_dev_server::process::PROBE_TIMEOUT,
+    ) {
+        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
         _ => "missing".to_string(),
     }
 }

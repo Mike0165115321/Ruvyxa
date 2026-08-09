@@ -17,6 +17,7 @@ const executable = process.platform === 'win32' ? 'ruvyxa.exe' : 'ruvyxa'
 const platformKey = currentPlatformKey()
 
 const binary = findBinary()
+const invokerRuntime = globalThis.Bun ? 'bun' : globalThis.Deno ? 'deno' : 'node'
 
 if (!binary) {
   console.error(`Ruvyxa CLI binary was not found for ${platformKey}.`)
@@ -34,6 +35,7 @@ if (!binary) {
 const result = spawnSync(binary, process.argv.slice(2), {
   cwd: process.cwd(),
   stdio: 'inherit',
+  env: { ...process.env, RUVYXA_INVOKER_RUNTIME: invokerRuntime },
 })
 
 if (result.error) {

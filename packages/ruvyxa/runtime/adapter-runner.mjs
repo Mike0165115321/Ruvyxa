@@ -39,6 +39,7 @@ const runtimeDir = path.dirname(fileURLToPath(import.meta.url))
 const KNOWN_ADAPTER_NAMES = [
   'node',
   'bun',
+  'deno',
   'static',
   'vercel',
   'netlify',
@@ -496,6 +497,7 @@ ${records.join(',\n')}
 })
 
 export async function loadRouteModule(routeId) {
+  await __ruvyxaInstrumentationReady
   const routeModule = routeModules[routeId]
   if (!routeModule) throw new Error(\`Route \${routeId} is not present in the compiled registry\`)
   return routeModule
@@ -518,9 +520,9 @@ export async function loadRouteModule(routeId) {
  * Emitted into the route registry rather than into each platform's handler
  * entry point, because the registry is the one module every adapter wrapper
  * imports and reaching it does not mean editing ten handler templates.
- * Top-level `await` runs it exactly once per runtime instance, before the first
- * route module is used — the same guarantee `ensureInstrumentation` gives in
- * the Node worker.
+ * A shared promise runs it exactly once per runtime instance. The route loader
+ * awaits it before returning the first module. Avoid top-level await here: the
+ * compiler wraps the registry in an IIFE, where `await` is invalid syntax.
  *
  * A failure is logged and swallowed. A misconfigured telemetry SDK must not
  * make every route in the deployment fail to import.
@@ -529,17 +531,17 @@ function instrumentationPrelude() {
   const entry = INSTRUMENTATION_FILES.map((name) => path.join(projectRoot, name)).find(
     (candidate) => existsSync(candidate),
   )
-  if (!entry) return ''
+  if (!entry) return 'const __ruvyxaInstrumentationReady = Promise.resolve()'
 
   return [
     `import * as __ruvyxaInstrumentation from ${JSON.stringify(toImportPath(entry))}`,
-    'try {',
-    "  if (typeof __ruvyxaInstrumentation.register === 'function') {",
-    '    await __ruvyxaInstrumentation.register()',
-    '  }',
-    '} catch (error) {',
-    "  console.error('[ruvyxa] instrumentation failed:', error)",
-    '}',
+    'const __ruvyxaInstrumentationReady = Promise.resolve()',
+    "  .then(() => typeof __ruvyxaInstrumentation.register === 'function'",
+    '    ? __ruvyxaInstrumentation.register()',
+    '    : undefined)',
+    '  .catch((error) => {',
+    "    console.error('[ruvyxa] instrumentation failed:', error)",
+    '  })',
   ].join('\n')
 }
 

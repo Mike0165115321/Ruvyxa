@@ -44,6 +44,7 @@ import { loadRouteModule } from './route-modules.mjs';
 // puts in front of it, matching the serverless adapters.
 import manifest from './manifest.mjs';
 import { createReadStream, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
+import { Readable } from 'node:stream';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -228,8 +229,14 @@ const server = createServer(async (req, res) => {
       res.end();
       return;
     }
-    const body = Buffer.from(await response.arrayBuffer());
-    res.end(body);
+    if (response.body === null) {
+      res.end();
+      return;
+    }
+    // Preserve streaming responses instead of buffering the complete body.
+    // This lowers peak memory and lets the first chunk reach the client while
+    // an SSR or API stream is still being produced.
+    Readable.fromWeb(response.body).pipe(res);
   } catch (error) {
     console.error('[ruvyxa] request failed:', error instanceof Error ? error.message : error);
     if (!res.headersSent) {

@@ -19,7 +19,7 @@ const [projectRootArg, appDirArg, pageFileArg, requestPath = '/', paramsJson = '
   process.argv.slice(2)
 
 if (!projectRootArg || !appDirArg || !pageFileArg) {
-  fail('RUV1101', 'SSR renderer requires projectRoot, appDir, and pageFile arguments.')
+  await fail('RUV1101', 'SSR renderer requires projectRoot, appDir, and pageFile arguments.')
 }
 
 const projectRoot = path.resolve(projectRootArg)
@@ -49,9 +49,10 @@ try {
     () => mod.render({ path: requestPath, params: JSON.parse(paramsJson) }),
   )
 
-  process.stdout.write(JSON.stringify({ ok: true, html }))
+  await writeResponse({ ok: true, html })
+  process.exit(0)
 } catch (error) {
-  fail('RUV1100', error instanceof Error ? error.message : String(error), error?.stack)
+  await fail('RUV1100', error instanceof Error ? error.message : String(error), error?.stack)
 }
 
 async function bundleSsrModule(projectRoot, pageFile, layouts, routePath, specials = null) {
@@ -107,7 +108,16 @@ async function bundleSsrModule(projectRoot, pageFile, layouts, routePath, specia
   return outfile
 }
 
-function fail(code, message, stack) {
-  process.stdout.write(JSON.stringify({ ok: false, code, message, stack }))
-  process.exit(1)
+async function fail(code, message, stack) {
+  try {
+    await writeResponse({ ok: false, code, message, stack })
+  } finally {
+    process.exit(1)
+  }
+}
+
+function writeResponse(payload) {
+  return new Promise((resolve, reject) => {
+    process.stdout.write(JSON.stringify(payload), (error) => (error ? reject(error) : resolve()))
+  })
 }

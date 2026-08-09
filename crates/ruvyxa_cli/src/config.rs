@@ -277,6 +277,7 @@ impl ProjectConfig {
         self.javascript_runtime_override
             .unwrap_or_else(|| match self.runtime {
                 Some(BuildTarget::Bun) => JavaScriptRuntime::Bun,
+                Some(BuildTarget::Deno) => JavaScriptRuntime::Deno,
                 Some(BuildTarget::Node | BuildTarget::Edge | BuildTarget::Static) => {
                     JavaScriptRuntime::Node
                 }

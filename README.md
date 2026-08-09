@@ -298,9 +298,11 @@ npm create ruvyxa@latest my-api -- --template api-backend
 
 Open [http://localhost:3000](http://localhost:3000).
 
-`pnpm`, `yarn`, and `bun` work too. When no runtime is configured, Ruvyxa uses Node when it is
-available and falls back to Bun automatically. Set `runtime: 'bun'` and run with
-`RUVYXA_RUNTIME=bun` when Bun should execute SSR, API routes, actions, and build plugins. The
+`pnpm`, `yarn`, `bun`, and Deno tasks work too. When no runtime is configured, Ruvyxa prefers Node,
+then falls back to Bun and Deno. Set `runtime: 'bun'` or `runtime: 'deno'`, or pass
+`--runtime bun|deno`, when that runtime should execute config, SSR, API routes, actions, adapters,
+and build plugins. Deno local tooling runs with the permissions required by trusted project config
+and plugins (`-A --no-prompt`). A scaffold can be run with `deno install && deno task dev`. The
 generated app keeps the first screen focused:
 
 ```text
@@ -659,24 +661,25 @@ examples.
 
 ## CLI
 
-Fourteen commands. Every one accepts `--root <dir>` (default `.`) and `--runtime node|bun`.
+Fourteen commands. Project commands accept `--root <dir>` (default `.`) and
+`--runtime node|bun|deno`.
 
-| Command                       | Purpose                                                                         | Additional flags                                                 |
-| ----------------------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `ruvyxa dev`                  | Development server with HMR and file watching                                   | `--host`, `--port`                                               |
-| `ruvyxa build`                | Build production output to `.ruvyxa/`                                           | `--target node\|bun\|edge\|static`, `--adapter`, `--server-only` |
-| `ruvyxa check`                | Production readiness gate: typecheck, build, dev/prod parity, page smoke render | —                                                                |
-| `ruvyxa start`                | Serve production output with the same runtime semantics as dev                  | `--host`, `--port`                                               |
-| `ruvyxa preview`              | Preview an existing production build locally (same server as `start`)           | `--host`, `--port`                                               |
-| `ruvyxa routes`               | Print the discovered route table                                                | `--json`                                                         |
-| `ruvyxa analyze`              | Validate routes, imports, and server/client boundaries                          | `--format auto\|human\|json\|sarif\|html`, `--output`, `--html`  |
-| `ruvyxa adds <flow…>`         | Scaffold a `form`, `data-table`, or `auth` flow                                 | `--force`                                                        |
-| `ruvyxa doctor`               | Project health plus deploy-target inspection                                    | `--target`, `--adapter`, `--json`                                |
-| `ruvyxa trace <route>`        | Inspect one route manifest entry                                                | —                                                                |
-| `ruvyxa bench`                | Benchmark route discovery, analysis, validation, and production builds          | `--samples <n>` (default 3), `--json`                            |
-| `ruvyxa test:parity`          | Compare dev/prod routes and smoke-render page routes                            | —                                                                |
-| `ruvyxa plugin create <name>` | Scaffold a publishable plugin package                                           | `--dir`                                                          |
-| `ruvyxa clean`                | Remove `.ruvyxa/` build output                                                  | —                                                                |
+| Command                       | Purpose                                                                         | Additional flags                                                       |
+| ----------------------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `ruvyxa dev`                  | Development server with HMR and file watching                                   | `--host`, `--port`                                                     |
+| `ruvyxa build`                | Build production output to `.ruvyxa/`                                           | `--target node\|bun\|deno\|edge\|static`, `--adapter`, `--server-only` |
+| `ruvyxa check`                | Production readiness gate: typecheck, build, dev/prod parity, page smoke render | —                                                                      |
+| `ruvyxa start`                | Serve production output with the same runtime semantics as dev                  | `--host`, `--port`                                                     |
+| `ruvyxa preview`              | Preview an existing production build locally (same server as `start`)           | `--host`, `--port`                                                     |
+| `ruvyxa routes`               | Print the discovered route table                                                | `--json`                                                               |
+| `ruvyxa analyze`              | Validate routes, imports, and server/client boundaries                          | `--format auto\|human\|json\|sarif\|html`, `--output`, `--html`        |
+| `ruvyxa adds <flow…>`         | Scaffold a `form`, `data-table`, or `auth` flow                                 | `--force`                                                              |
+| `ruvyxa doctor`               | Project health plus deploy-target inspection                                    | `--target`, `--adapter`, `--json`                                      |
+| `ruvyxa trace <route>`        | Inspect one route manifest entry                                                | —                                                                      |
+| `ruvyxa bench`                | Benchmark route discovery, analysis, validation, and production builds          | `--runtime`, `--samples <n>` (default 3), `--json`                     |
+| `ruvyxa test:parity`          | Compare dev/prod routes and smoke-render page routes                            | —                                                                      |
+| `ruvyxa plugin create <name>` | Scaffold a publishable plugin package                                           | `--dir`                                                                |
+| `ruvyxa clean`                | Remove `.ruvyxa/` build output                                                  | —                                                                      |
 
 `trace` takes a **route manifest path, not a request URL**: use `ruvyxa trace "/blog/[slug]"`, not
 `ruvyxa trace /blog/hello`. It prints the route id, file, layout chain, server/client modules,
@@ -787,6 +790,7 @@ as a deployment entrypoint.
 | [`@ruvyxa/adapter-cloudflare`](packages/@ruvyxa/adapter-cloudflare) | Cloudflare edge adapter                                                    |
 | [`@ruvyxa/adapter-netlify`](packages/@ruvyxa/adapter-netlify)       | Netlify functions adapter                                                  |
 | [`@ruvyxa/adapter-bun`](packages/@ruvyxa/adapter-bun)               | Bun runtime adapter                                                        |
+| [`@ruvyxa/adapter-deno`](packages/@ruvyxa/adapter-deno)             | Deno self-hosted runtime adapter                                           |
 | [`@ruvyxa/adapter-static`](packages/@ruvyxa/adapter-static)         | Static output adapter                                                      |
 | [`@ruvyxa/adapter-railway`](packages/@ruvyxa/adapter-railway)       | Railway standalone service adapter                                         |
 | [`@ruvyxa/adapter-render`](packages/@ruvyxa/adapter-render)         | Render Web Service and Blueprint adapter                                   |

@@ -33,5 +33,10 @@ export default config({
 }
 ```
 
-`ruvyxa build` creates `.ruvyxa/deploy/bun/start.mjs`. Start it from the project root with
-`bun .ruvyxa/deploy/bun/start.mjs`; it launches `ruvyxa start` through Bun.
+`ruvyxa build` creates a self-contained server. Run it without the Ruvyxa CLI:
+
+```bash
+bun .ruvyxa/deploy/bun/server/index.mjs
+```
+
+The generated server streams SSR/API response bodies and honors `PORT` and `HOST`.

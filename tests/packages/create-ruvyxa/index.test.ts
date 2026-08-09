@@ -35,6 +35,22 @@ const starterScripts = {
 }
 
 describe('detectPackageManager', () => {
+  it("recognizes Deno's project convention", async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ruvyxa-deno-config-'))
+    try {
+      await writeFile(join(root, 'deno.json'), '{}')
+      assert.deepEqual(detectPackageManager(root, {}), {
+        name: 'deno',
+        install: 'deno install',
+        dev: 'deno task dev',
+        exec: 'deno x -A npm:',
+        lockfile: 'deno.lock',
+      })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it("recognizes Bun's text lockfile", async () => {
     const root = await mkdtemp(join(tmpdir(), 'ruvyxa-bun-lock-'))
     try {

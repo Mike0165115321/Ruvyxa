@@ -164,6 +164,7 @@ pub enum JavaScriptRuntime {
     #[default]
     Node,
     Bun,
+    Deno,
 }
 
 impl JavaScriptRuntime {
@@ -172,6 +173,21 @@ impl JavaScriptRuntime {
         match self {
             Self::Node => "node",
             Self::Bun => "bun",
+            Self::Deno => "deno",
+        }
+    }
+
+    /// Arguments that must precede a JavaScript entry point for this runtime.
+    ///
+    /// Deno is permission-secure by default while Node and Bun are not. Ruvyxa's
+    /// local tool processes execute trusted project config and plugins and need
+    /// filesystem, environment, process, network, and native-addon access, so
+    /// local development deliberately uses the equivalent unrestricted mode.
+    #[must_use]
+    pub const fn script_args(self) -> &'static [&'static str] {
+        match self {
+            Self::Node | Self::Bun => &[],
+            Self::Deno => &["run", "-A", "--no-prompt", "--node-modules-dir=manual"],
         }
     }
 
@@ -187,6 +203,13 @@ impl JavaScriptRuntime {
             Self::Bun => {
                 #[cfg(windows)]
                 if let Some(executable) = bun_executable_from_path() {
+                    return executable;
+                }
+                std::path::PathBuf::from(self.command())
+            }
+            Self::Deno => {
+                #[cfg(windows)]
+                if let Some(executable) = deno_executable_from_path() {
                     return executable;
                 }
                 std::path::PathBuf::from(self.command())
@@ -213,15 +236,25 @@ impl JavaScriptRuntime {
     /// resulting process error names the conventional runtime.
     #[must_use]
     pub fn detect() -> Self {
-        Self::from_availability(Self::Node.is_available(), Self::Bun.is_available())
+        Self::from_availability(
+            Self::Node.is_available(),
+            Self::Bun.is_available(),
+            Self::Deno.is_available(),
+        )
     }
 
     #[must_use]
-    pub const fn from_availability(node_available: bool, bun_available: bool) -> Self {
+    pub const fn from_availability(
+        node_available: bool,
+        bun_available: bool,
+        deno_available: bool,
+    ) -> Self {
         if node_available {
             Self::Node
         } else if bun_available {
             Self::Bun
+        } else if deno_available {
+            Self::Deno
         } else {
             Self::Node
         }
@@ -240,6 +273,28 @@ fn bun_executable_from_path() -> Option<std::path::PathBuf> {
             let package_executable = directory.join("node_modules/bun/bin/bun.exe");
             if package_executable.is_file() {
                 return Some(package_executable);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn deno_executable_from_path() -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for directory in std::env::split_paths(&path) {
+        let direct = directory.join("deno.exe");
+        if direct.is_file() {
+            return Some(direct);
+        }
+        if directory.join("deno.cmd").is_file() {
+            for candidate in [
+                directory.join("node_modules/deno/deno.exe"),
+                directory.join("node_modules/deno/node_modules/@deno/win32-x64/deno.exe"),
+            ] {
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
             }
         }
     }
@@ -750,10 +805,11 @@ pub async fn serve(config: ServerConfig) -> Result<()> {
             .middleware
             .plugin_timeout()
             .map_err(RuvyxaError::Message)?;
-        let host = PluginHost::start_pool_with_timeout(
+        let host = PluginHost::start_pool_with_timeout_and_args(
             &config.root,
             &runtime_script,
             &executable,
+            config.runtime.script_args(),
             plugin_workers,
             plugin_timeout,
         )
@@ -2741,21 +2797,25 @@ mod tests {
     }
 
     #[test]
-    fn runtime_detection_prefers_node_then_falls_back_to_bun() {
+    fn runtime_detection_prefers_node_then_bun_then_deno() {
         assert_eq!(
-            JavaScriptRuntime::from_availability(true, true),
+            JavaScriptRuntime::from_availability(true, true, true),
             JavaScriptRuntime::Node
         );
         assert_eq!(
-            JavaScriptRuntime::from_availability(true, false),
+            JavaScriptRuntime::from_availability(true, false, true),
             JavaScriptRuntime::Node
         );
         assert_eq!(
-            JavaScriptRuntime::from_availability(false, true),
+            JavaScriptRuntime::from_availability(false, true, true),
             JavaScriptRuntime::Bun
         );
         assert_eq!(
-            JavaScriptRuntime::from_availability(false, false),
+            JavaScriptRuntime::from_availability(false, false, true),
+            JavaScriptRuntime::Deno
+        );
+        assert_eq!(
+            JavaScriptRuntime::from_availability(false, false, false),
             JavaScriptRuntime::Node
         );
     }

@@ -494,6 +494,7 @@ fn detects_duplicate_dependency_versions() {
 fn summarizes_benchmark_samples() {
     let result = summarize_benchmark(
         "sample",
+        "deno",
         vec![
             Duration::from_millis(30),
             Duration::from_millis(10),
@@ -503,9 +504,12 @@ fn summarizes_benchmark_samples() {
 
     assert_eq!(result.name, "sample");
     assert_eq!(result.samples, 3);
+    assert_eq!(result.runtime, "deno");
+    assert_eq!(result.sample_ms, vec![10.0, 20.0, 30.0]);
     assert_eq!(result.min_ms, 10.0);
     assert_eq!(result.median_ms, 20.0);
     assert_eq!(result.max_ms, 30.0);
+    assert_eq!(result.p95_ms, 30.0);
 }
 
 #[test]
@@ -1770,6 +1774,22 @@ fn parses_value_enums_case_insensitively() {
 }
 
 #[test]
+fn parses_deno_as_a_javascript_runtime() {
+    let cli = Cli::try_parse_from(normalized_cli_args(os_args([
+        "Ruvyxa",
+        "build",
+        "--runtime",
+        "DENO",
+    ])))
+    .unwrap();
+
+    let Command::Build(args) = cli.command else {
+        panic!("expected build command");
+    };
+    assert!(matches!(args.runtime, Some(CliRuntime::Deno)));
+}
+
+#[test]
 fn parses_analyze_sarif_output_options() {
     let cli = Cli::try_parse_from(normalized_cli_args(os_args([
         "Ruvyxa",
@@ -1888,6 +1908,17 @@ fn parses_bun_runtime_as_build_and_javascript_runtime() {
 
     assert_eq!(config.build_target(None), BuildTarget::Bun);
     assert_eq!(config.javascript_runtime(), JavaScriptRuntime::Bun);
+}
+
+#[test]
+fn parses_deno_runtime_as_build_and_javascript_runtime() {
+    let config: ProjectConfig = serde_json::from_value(serde_json::json!({
+        "runtime": "deno"
+    }))
+    .unwrap();
+
+    assert_eq!(config.build_target(None), BuildTarget::Deno);
+    assert_eq!(config.javascript_runtime(), JavaScriptRuntime::Deno);
 }
 
 #[test]
@@ -2097,8 +2128,8 @@ fn parses_the_server_only_flag_in_every_accepted_spelling() {
 }
 
 #[test]
-fn server_only_accepts_node_and_bun_targets_only() {
-    for target in [BuildTarget::Node, BuildTarget::Bun] {
+fn server_only_accepts_long_lived_server_targets_only() {
+    for target in [BuildTarget::Node, BuildTarget::Bun, BuildTarget::Deno] {
         assert!(
             server_only_target_diagnostic(target).is_none(),
             "{target:?} should be supported"

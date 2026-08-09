@@ -116,7 +116,8 @@ export async function compileBundle(options) {
 
 /** Return the active server runtime without changing browser bundle semantics. */
 export function serverPlatform() {
-  return process.env.RUVYXA_RUNTIME === 'bun' ? 'bun' : 'node'
+  const runtime = process.env.RUVYXA_RUNTIME
+  return runtime === 'bun' || runtime === 'deno' ? runtime : 'node'
 }
 
 /** Compile a bundle and return a stable fingerprint of its project-local inputs. */

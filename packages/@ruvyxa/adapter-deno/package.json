@@ -1,0 +1,31 @@
+{
+  "name": "@ruvyxa/adapter-deno",
+  "version": "1.0.28",
+  "description": "Self-host Ruvyxa applications on the Deno runtime.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "src", "README.md"],
+  "keywords": ["ruvyxa", "adapter", "deno", "deployment"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thirawat27/ruvyxa.git",
+    "directory": "packages/@ruvyxa/adapter-deno"
+  },
+  "bugs": { "url": "https://github.com/thirawat27/ruvyxa/issues" },
+  "homepage": "https://github.com/thirawat27/ruvyxa#readme",
+  "engines": { "node": ">=22.12.0" },
+  "publishConfig": { "access": "public" },
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }
+  },
+  "dependencies": { "@ruvyxa/core": "workspace:^" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.check.json",
+    "test": "node --test \"../../../tests/packages/adapter-deno/**/*.test.ts\"",
+    "format": "tsc -p tsconfig.check.json",
+    "prepack": "pnpm run build"
+  }
+}
