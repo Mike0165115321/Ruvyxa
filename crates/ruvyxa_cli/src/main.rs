@@ -269,7 +269,7 @@ struct BuildArgs {
     #[arg(long, value_parser = parse_adapter_name)]
     adapter: Option<String>,
 
-    /// JavaScript runtime to use (node or bun); overrides RUVYXA_RUNTIME
+    /// JavaScript runtime to use (node, bun, or deno); overrides RUVYXA_RUNTIME
     /// and config.runtime.
     #[arg(long, value_enum, ignore_case = true)]
     runtime: Option<CliRuntime>,

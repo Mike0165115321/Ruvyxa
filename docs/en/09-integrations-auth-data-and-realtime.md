@@ -68,13 +68,13 @@ application/infrastructure responsibilities.
 ## Realtime and adapters
 
 `@ruvyxa/realtime/plugin` exports `realtime()`, which claims native realtime capability. It rejects
-builds that are not long-lived Node/Bun output and explicitly rejects aws, cloudflare, firebase,
-netlify, static, and vercel adapters with `RUV3201`. `@ruvyxa/realtime/client` exports
+builds that are not long-lived Node/Bun output and explicitly rejects deno, aws, cloudflare,
+firebase, netlify, static, and vercel adapters with `RUV3201`. `@ruvyxa/realtime/client` exports
 `createRealtimeClient`; it caps active channels at 16 and reconnects with bounded exponential
 backoff.
 
-First-party adapter packages exist for Node, Bun, static, Vercel, Netlify, Cloudflare, Railway,
-Render, Firebase, and AWS. Build selection is `npm run build -- --adapter <name>` or config
+First-party adapter packages exist for Node, Bun, Deno, static, Vercel, Netlify, Cloudflare,
+Railway, Render, Firebase, and AWS. Build selection is `npm run build -- --adapter <name>` or config
 `adapter`; see [Deploy, run, and operate](15-deploy-run-and-operate.md). `@ruvyxa/testing` exports
 `mockLoader`, `mockAction`, and `mockCache` for unit tests.
 

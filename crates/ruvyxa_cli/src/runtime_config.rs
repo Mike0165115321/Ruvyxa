@@ -7,7 +7,7 @@
 //! here the omission is visible.
 //!
 //! This module also owns adapter inspection and the JavaScript runtime choice
-//! (Node or Bun), including the process-wide override a `--runtime` flag sets
+//! (Node, Bun, or Deno), including the process-wide override a `--runtime` flag sets
 //! before any command runs.
 
 use std::collections::BTreeMap;

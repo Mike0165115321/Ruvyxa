@@ -13,6 +13,7 @@ health-check, and rollback controls remain owned by your chosen host.
 | Delivery model               | Build command                                                                           | Before you choose it                                                                                                                                                                                                  |
 | ---------------------------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Long-lived Node/Bun process  | `npm run build -- --adapter node` or `npm run build -- --adapter bun`                   | Use for SSR and native realtime. The process is started from the built application with `npm run start`.                                                                                                              |
+| Self-hosted Deno process     | `npm run build -- --adapter deno`                                                       | Supports SSR, SSG, CSR, ISR, PPR, and API routes. Copy `deploy/deno/` and start its standalone server; native realtime is unavailable.                                                                                |
 | Static host                  | `npm run build -- --target static`                                                      | Every route required at runtime must be prerenderable. Static output cannot satisfy arbitrary SSR requests.                                                                                                           |
 | First-party platform adapter | `npm run build -- --adapter vercel` (or netlify/cloudflare/railway/render/firebase/aws) | Inspect that adapter's output contract and configure the provider outside Ruvyxa. Native realtime is rejected for the serverless/static adapters listed in [Integrations](09-integrations-auth-data-and-realtime.md). |
 
@@ -56,6 +57,17 @@ For a self-hosted long-lived process, run the same configured project with:
 ```bash
 npm run start
 ```
+
+For the Deno adapter, deploy the copied `<outDir>/deploy/deno/` directory and start the standalone
+server from that directory instead:
+
+```bash
+deno run -A --no-prompt server/index.mjs
+```
+
+See the
+[Platform adapter guide](20-platform-adapter-guide.md#node-bun-and-deno-copy-a-standalone-app) for
+the artifact layout and environment settings.
 
 Then make explicit probes that your app implements: request `/`, one dynamic page, one protected
 route, a write action/API route using safe test data, and a health API route if you created one.

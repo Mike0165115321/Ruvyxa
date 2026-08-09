@@ -34,8 +34,10 @@ flowchart LR
 - A project needs a `package.json`, `ruvyxa.config.ts`, and an application directory (normally
   `app/`).
 
-> **Scope note:** the framework supports a `bun` runtime option in its CLI/config. This repository
-> does not declare Bun as an installation prerequisite; install it only when selecting that runtime.
+> **Scope note:** the framework supports `node`, `bun`, and `deno` runtime options in its
+> CLI/config. Node remains the declared package prerequisite; install Bun or Deno only when
+> selecting that runtime. Deno local tooling runs trusted project configuration and plugins with the
+> required permissions (`-A --no-prompt`).
 
 ## Minimal outcome
 

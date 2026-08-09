@@ -14,10 +14,10 @@ npm run build -- --target static
 npm run build -- --adapter node
 ```
 
-target ที่ยืนยันแล้วคือ `node`, `bun`, `edge` และ `static` adapter selection รับ Node, Bun, static,
-Vercel, Netlify, Cloudflare, Railway, Render, Firebase, AWS หรือชื่อ adapter package adapter เป็น
-build-output contract; ตรวจ package ของ adapter ที่เลือกก่อนสมมติ platform configuration, health
-check หรือ scaling semantics
+target ที่ยืนยันแล้วคือ `node`, `bun`, `deno`, `edge` และ `static` adapter selection รับ Node, Bun,
+Deno, static, Vercel, Netlify, Cloudflare, Railway, Render, Firebase, AWS หรือชื่อ adapter package
+adapter เป็น build-output contract; ตรวจ package ของ adapter ที่เลือกก่อนสมมติ platform
+configuration, health check หรือ scaling semantics
 
 ## ลำดับ operations
 
@@ -38,7 +38,7 @@ manifest/output และเรียก health route ที่ application ข�
 
 - ตั้ง `site.url` หรือ `RUVYXA_SITE_URL` แบบ private เป็น canonical origin จริงก่อนพึ่ง generated
   sitemap URL preview-only Vercel/Netlify URL จะไม่ถูกเลือกเป็น canonical origin โดยตั้งใจ
-- ตั้ง server host/port ชัดเจนเมื่อคุณรัน Node/Bun process เองเท่านั้น ให้ managed adapter
+- ตั้ง server host/port ชัดเจนเมื่อคุณรัน Node/Bun/Deno process เองเท่านั้น ให้ managed adapter
   เป็นเจ้าของ generated entrypoint
 - เก็บ application state นอก process memory core cache และ auth memory store เป็น local ต่อ
   instance; ให้ shared database/cache/session infrastructure เมื่อจำเป็น
@@ -51,10 +51,10 @@ manifest/output และเรียก health route ที่ application ข�
 
 ## Platform limit
 
-native realtime ต้องเป็น long-lived Node/Bun build และถูกปฏิเสธสำหรับ serverless/static adapter
-ที่ระบุ static adapter ต้องมี prerendered page และ render SSR โดยพลการตอน runtime ไม่ได้ container,
-Kubernetes, load balancer, backup/recovery, high availability และ provider-specific configuration
-ไม่ได้กำหนดโดย repository นี้; เลือกและบันทึกไว้ใน deployment environment ของคุณ
+native realtime ต้องเป็น long-lived Node/Bun build; Deno รองรับ server route ครบชุดแต่ host native
+realtime ไม่ได้ static adapter ต้องมี prerendered page และ render SSR โดยพลการตอน runtime ไม่ได้
+container, Kubernetes, load balancer, backup/recovery, high availability และ provider-specific
+configuration ไม่ได้กำหนดโดย repository นี้; เลือกและบันทึกไว้ใน deployment environment ของคุณ
 
 สำหรับ artifact ที่แน่นอนและ handoff command ที่ยืนยันแล้วของ first-party adapter ทุกตัว ให้ไปต่อที่
 [คู่มือ platform adapter](20-platform-adapter-guide.md) หน้านี้แยก generated provider file ออกจาก

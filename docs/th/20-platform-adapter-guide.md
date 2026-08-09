@@ -35,6 +35,7 @@ CLI ตรวจ Vercel, Netlify, Cloudflare, Railway, Render และ AWS จ�
 | ---------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------- |
 | Node             | Node; SSR, SSG, CSR, ISR, PPR, API                   | standalone server และ static directory แบบ optional                                   |
 | Bun              | Bun/Node-compatible; SSR, SSG, CSR, ISR, PPR, API    | standalone Bun server และ static directory แบบ optional                               |
+| Deno             | Deno; SSR, SSG, CSR, ISR, PPR, API                   | standalone Deno server และ static directory แบบ optional                              |
 | Static           | Static; SSG และ CSR เท่านั้น                         | static publish directory และ `_headers` SSR, ISR, PPR, API route จะไม่ผ่าน validation |
 | Vercel           | Serverless หรือ edge; route strategy และ API ทั้งหมด | Vercel Build Output API static/function artifact                                      |
 | Netlify          | Serverless; route strategy และ API ทั้งหมด           | publish directory, handler function, deploy config, Frameworks API artifact           |
@@ -43,14 +44,14 @@ CLI ตรวจ Vercel, Netlify, Cloudflare, Railway, Render และ AWS จ�
 | Firebase / AWS   | Serverless; route strategy และ API ทั้งหมด           | Hosting/static พร้อม generated function/compute bundle และ provider config            |
 
 native realtime ต้องใช้ long-lived Node/Bun output มันใช้ได้กับ Node, Bun, Railway และ Render
-แต่ปฏิเสธ AWS, Cloudflare, Firebase, Netlify, static และ Vercel ดู
+แต่ปฏิเสธ Deno, AWS, Cloudflare, Firebase, Netlify, static และ Vercel ดู
 [การเชื่อมต่อ](09-integrations-auth-data-and-realtime.md)
 
-## Node และ Bun: copy standalone app
+## Node, Bun, and Deno: copy a standalone app
 
-build ด้วย adapter แล้ว copy ทั้ง `deploy/node/` หรือ `deploy/bun/` ไป runtime image หรือ host อย่า
-copy เฉพาะ server file: public asset เป็น sibling artifact standalone server ทั้งคู่ไม่ต้องใช้
-Ruvyxa CLI หรือ native binary ตอน runtime
+build ด้วย adapter แล้ว copy ทั้ง `deploy/node/`, `deploy/bun/` หรือ `deploy/deno/` ไป runtime image
+หรือ host อย่า copy เฉพาะ server file: public asset เป็น sibling artifact standalone server
+ทั้งสามไม่ต้องใช้ Ruvyxa CLI หรือ native binary ตอน runtime
 
 ```bash
 npm run build -- --adapter node
@@ -58,6 +59,9 @@ PORT=3000 HOST=0.0.0.0 node .ruvyxa/deploy/node/server/index.mjs
 
 npm run build -- --adapter bun
 PORT=3000 HOST=0.0.0.0 bun .ruvyxa/deploy/bun/server/index.mjs
+
+npm run build -- --adapter deno
+PORT=3000 HOST=0.0.0.0 deno run -A --no-prompt .ruvyxa/deploy/deno/server/index.mjs
 ```
 
 สองบรรทัด start ด้านบนใช้ syntax ตั้ง environment variable ของ POSIX หากใช้ PowerShell ให้ตั้งค่า
@@ -70,11 +74,15 @@ node .ruvyxa/deploy/node/server/index.mjs
 
 # หรือใช้ Bun output
 bun .ruvyxa/deploy/bun/server/index.mjs
+
+# หรือใช้ Deno output
+deno run -A --no-prompt .ruvyxa/deploy/deno/server/index.mjs
 ```
 
-generated server ทั้งคู่ใช้ `PORT=3000` และ `HOST=0.0.0.0` เป็น default adapter แต่ละตัวสร้าง
+generated server ทั้งสามใช้ `PORT=3000` และ `HOST=0.0.0.0` เป็น default adapter แต่ละตัวสร้าง
 `start.mjs` ที่เริ่มผ่าน Ruvyxa CLI ที่ติดตั้งด้วย; เลือก standalone command เมื่อ runtime image
-ไม่ควรมี CLI
+ไม่ควรมี CLI Deno standalone command ตั้ง permission ที่ server ต้องใช้โดยตั้งใจ จึงรันเฉพาะ
+artifact ที่ build จาก project ที่คุณเชื่อถือ
 
 ## Static hosting: publish เฉพาะ static output
 

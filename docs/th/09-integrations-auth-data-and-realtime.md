@@ -66,11 +66,11 @@ framework ไม่มี database server, migration engine หรือ backup 
 ## Realtime และ adapter
 
 `@ruvyxa/realtime/plugin` export `realtime()` ซึ่ง claim native realtime capability มันปฏิเสธ build
-ที่ไม่ใช่ long-lived Node/Bun output และปฏิเสธ adapter aws, cloudflare, firebase, netlify, static
-และ vercel ด้วย `RUV3201` `@ruvyxa/realtime/client` export `createRealtimeClient`; จำกัด active
-channel ที่ 16 และ reconnect ด้วย bounded exponential backoff
+ที่ไม่ใช่ long-lived Node/Bun output และปฏิเสธ adapter deno, aws, cloudflare, firebase, netlify,
+static และ vercel ด้วย `RUV3201` `@ruvyxa/realtime/client` export `createRealtimeClient`; จำกัด
+active channel ที่ 16 และ reconnect ด้วย bounded exponential backoff
 
-มี first-party adapter package สำหรับ Node, Bun, static, Vercel, Netlify, Cloudflare, Railway,
+มี first-party adapter package สำหรับ Node, Bun, Deno, static, Vercel, Netlify, Cloudflare, Railway,
 Render, Firebase และ AWS เลือก build ด้วย `npm run build -- --adapter <name>` หรือ config `adapter`;
 ดู [Deploy, run และ operate](15-deploy-run-and-operate.md) `@ruvyxa/testing` export `mockLoader`,
 `mockAction` และ `mockCache` สำหรับ unit test

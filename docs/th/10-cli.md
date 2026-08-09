@@ -23,6 +23,13 @@ script ขึ้นเอง
 | `npm run adds -- form`                                                                                                                | `ruvyxa adds form`                      | scaffold application flow ที่รองรับ                                      |
 | `npm run doctor`, `npm run clean`, `npm run trace -- /`, `npm run bench`, `npm run test:parity`, `npm run plugin -- create my-plugin` | `ruvyxa` command ที่ตรงกัน              | diagnose, ลบ output, ตรวจ route, benchmark, ตรวจ parity หรือสร้าง plugin |
 
+## เลือก JavaScript runtime
+
+project command ที่รัน JavaScript รับ `--runtime node|bun|deno`; ตัวอย่างเช่น
+`npm run build -- --runtime deno` flag นี้ override `RUVYXA_RUNTIME` และ `runtime` ใน
+`ruvyxa.config.ts` ดูลำดับ fallback และ Deno permission model ที่
+[Configuration](07-configuration.md#runtime-selection)
+
 ## Scaffold starter feature ด้วย `adds`
 
 `adds` รับได้หนึ่งตัวหรือหลายตัวจาก `form`, `data-table` และ `auth` เท่านั้น มันเขียนไฟล์ใต้

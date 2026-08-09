@@ -1,5 +1,58 @@
 # Changelog
 
+## v1.0.29 (2026-08-09)
+
+### Breaking: shortened adapter factory exports
+
+The named factory export from every first-party deployment adapter no longer ends in `Adapter`.
+Update imports and calls as follows; the default export changed to the same new factory name. Option
+types and generated deployment artifacts are otherwise unchanged.
+
+| Package                      | Before 1.0.29       | In 1.0.29                       |
+| ---------------------------- | ------------------- | ------------------------------- |
+| `@ruvyxa/adapter-aws`        | `awsAdapter`        | `aws`                           |
+| `@ruvyxa/adapter-bun`        | `bunAdapter`        | `bun`                           |
+| `@ruvyxa/adapter-cloudflare` | `cloudflareAdapter` | `cloudflare`                    |
+| `@ruvyxa/adapter-deno`       | New package         | `deno`                          |
+| `@ruvyxa/adapter-firebase`   | `firebaseAdapter`   | `firebase`                      |
+| `@ruvyxa/adapter-netlify`    | `netlifyAdapter`    | `netlify`                       |
+| `@ruvyxa/adapter-node`       | `nodeAdapter`       | `node`                          |
+| `@ruvyxa/adapter-railway`    | `railwayAdapter`    | `railway`                       |
+| `@ruvyxa/adapter-render`     | `renderAdapter`     | `render`                        |
+| `@ruvyxa/adapter-static`     | `staticAdapter`     | `static` (import with an alias) |
+| `@ruvyxa/adapter-vercel`     | `vercelAdapter`     | `vercel`                        |
+
+For example, replace `import { nodeAdapter } from '@ruvyxa/adapter-node'` with
+`import { node } from '@ruvyxa/adapter-node'`, then use `adapter: node()`. Because `static` is
+reserved in direct function declarations, import it as an alias such as `staticOutput`.
+
+### Deno runtime and deployment
+
+- Added Deno as a JavaScript runtime for configuration, rendering, API routes, actions, adapters,
+  and build plugins. Select it with `runtime: 'deno'`, `RUVYXA_RUNTIME=deno`, or `--runtime deno`.
+  With no explicit selection, runtime detection falls back from Node to Bun to Deno.
+- Added `@ruvyxa/adapter-deno` for a self-contained Deno deployment. It emits `deploy/deno/server`,
+  optional static output, and a standalone command: `deno run -A --no-prompt server/index.mjs` from
+  the copied deploy directory.
+- Added Deno package-manager detection for `deno.lock`, `deno.json`, and `deno.jsonc`, including
+  Deno task guidance in created projects. Deno is run with the permissions trusted local project
+  configuration and plugins require; do not use it to execute untrusted project code.
+
+### Worker admission and route matching
+
+- Added `RUVYXA_WORKER_MAX_QUEUE`, which bounds waiting render work to four requests per configured
+  active worker slot by default. A full queue returns `RUV1705` instead of retaining request
+  payloads without limit; `ping` and invalidation requests stay outside the render queue.
+- Static routes are now indexed for direct lookup while parameterized routes preserve their existing
+  specificity order. The serverless handler shares the canonical-input matcher, so this performance
+  improvement keeps the existing validation and route-precedence semantics.
+
+### Documentation
+
+- Updated the English and Thai tutorial trees with learning goals and checkpoints, clarified that
+  Ruvyxa is a web framework rather than a React-only framework description, and documented the new
+  runtime, adapter, and queue-control behavior.
+
 ## v1.0.28 (2026-08-07)
 
 ### Breaking

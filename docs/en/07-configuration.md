@@ -37,6 +37,16 @@ nested source types.
 | Middleware    | `builtin.cors`, `builtin.timing`, `builtin.log`, `builtin.rate`, `builtin.headers`, `workers`, `timeoutMs`                       | CORS has origins/methods/headers/credentials/maxAge. Built-in rate needs `max`, `window`, optional `key`. Plugin workers are 1–8; timeout is 30,000 ms by default and at most 300,000.                                                               |
 | Integration   | `adapter`, `adapterOptions`, `plugins`                                                                                           | Use an adapter for build output and an array of `RuvyxaPlugin` values for extensions.                                                                                                                                                                |
 
+## Runtime selection
+
+For JavaScript processes, use `node`, `bun`, or `deno`. `--runtime` has the highest precedence, then
+`RUVYXA_RUNTIME`, then `runtime` in `ruvyxa.config.ts`. If the project has no explicit runtime,
+launching through `bun run` or `deno task` is a hint; otherwise detection prefers Node, then Bun,
+then Deno. `edge` and `static` are build targets, not JavaScript worker hosts.
+
+Deno executes trusted local project configuration and plugins with the permissions they require
+(`deno run -A --no-prompt --node-modules-dir=manual`). Do not select it for untrusted project code.
+
 ## Production configuration example
 
 Start from this narrow configuration, then add only the features your application has tested. The
@@ -117,6 +127,10 @@ never animated.
 Internal variables beginning or ending in double underscores are runtime transport details, not
 application configuration. Never set them manually. Values such as `RUVYXA_AUTH_SECRET` occur in the
 auth scaffolder; use a private environment source and never expose one with the public prefix.
+
+`RUVYXA_WORKER_MAX_QUEUE` defaults to four times `RUVYXA_WORKER_MAX_CONCURRENCY`. It bounds waiting
+render work and returns `RUV1705` when full; use load-test evidence before increasing it because a
+larger queue retains more request data and increases wait time.
 
 ### Type public variables and keep private ones server-only
 

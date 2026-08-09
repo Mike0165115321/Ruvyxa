@@ -13,6 +13,7 @@ rollback ของ platform ยังเป็นของ host ที่คุ�
 | Delivery model               | Build command                                                                             | สิ่งที่ต้องรู้ก่อนเลือก                                                                                                                                                                    |
 | ---------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Long-lived Node/Bun process  | `npm run build -- --adapter node` หรือ `npm run build -- --adapter bun`                   | ใช้สำหรับ SSR และ native realtime process เริ่มจาก built application ด้วย `npm run start`                                                                                                  |
+| Self-hosted Deno process     | `npm run build -- --adapter deno`                                                         | รองรับ SSR, SSG, CSR, ISR, PPR และ API route copy `deploy/deno/` แล้วเริ่ม standalone server; native realtime ใช้ไม่ได้                                                                    |
 | Static host                  | `npm run build -- --target static`                                                        | ทุก route ที่ต้องใช้ตอน runtime ต้อง prerender ได้ static output ไม่ตอบ arbitrary SSR request                                                                                              |
 | First-party platform adapter | `npm run build -- --adapter vercel` (หรือ netlify/cloudflare/railway/render/firebase/aws) | ตรวจ output contract ของ adapter และตั้ง provider นอก Ruvyxa native realtime ถูกปฏิเสธสำหรับ serverless/static adapter ที่ระบุใน [การเชื่อมต่อ](09-integrations-auth-data-and-realtime.md) |
 
@@ -53,6 +54,16 @@ process ให้รัน project ที่ตั้งค่าเดียว
 ```bash
 npm run start
 ```
+
+สำหรับ Deno adapter ให้ deploy directory `<outDir>/deploy/deno/` ที่ copy แล้ว และเริ่ม standalone
+server จาก directory นั้นแทน:
+
+```bash
+deno run -A --no-prompt server/index.mjs
+```
+
+ดู artifact layout และ environment setting ที่
+[คู่มือ platform adapter](20-platform-adapter-guide.md#node-bun-and-deno-copy-a-standalone-app)
 
 จากนั้น probe แบบ explicit ที่ app ของคุณ implement: request `/`, dynamic page หนึ่งหน้า, protected
 route หนึ่ง route, write action/API route ด้วย test data ที่ปลอดภัย และ health API route

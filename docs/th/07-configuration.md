@@ -37,6 +37,16 @@ source type ของมัน
 | Middleware    | `builtin.cors`, `builtin.timing`, `builtin.log`, `builtin.rate`, `builtin.headers`, `workers`, `timeoutMs`                       | CORS มี origins/methods/headers/credentials/maxAge built-in rate ต้องมี `max`, `window`, `key` แบบเลือกได้ plugin worker 1–8; timeout ปริยาย 30,000 ms และสูงสุด 300,000                                                          |
 | Integration   | `adapter`, `adapterOptions`, `plugins`                                                                                           | ใช้ adapter สำหรับ build output และ array ของ `RuvyxaPlugin` สำหรับ extension                                                                                                                                                     |
 
+## Runtime selection
+
+สำหรับ JavaScript process ให้ใช้ `node`, `bun` หรือ `deno` โดย `--runtime` มีลำดับสูงสุด ตามด้วย
+`RUVYXA_RUNTIME` และ `runtime` ใน `ruvyxa.config.ts` หาก project ไม่ระบุ runtime การเรียกผ่าน
+`bun run` หรือ `deno task` เป็นเพียง hint; หากไม่มีให้ตรวจ Node, Bun แล้ว Deno ตามลำดับ `edge` และ
+`static` เป็น build target ไม่ใช่ JavaScript worker host
+
+Deno รัน trusted local project configuration และ plugin พร้อม permission ที่ต้องใช้
+(`deno run -A --no-prompt --node-modules-dir=manual`) อย่าเลือกใช้กับ project code ที่ไม่น่าเชื่อถือ
+
 ## Production configuration example
 
 เริ่มจาก configuration ที่แคบนี้ แล้วเพิ่มเฉพาะ feature ที่ application ทดสอบแล้ว value ทั้งหมดเป็น
@@ -116,6 +126,10 @@ output ของ CLI ยังเคารพ opt-out มาตรฐานข�
 variable ภายในที่ขึ้นต้นหรือลงท้ายด้วย double underscore เป็น runtime transport detail ไม่ใช่
 application configuration ห้ามตั้งเอง ค่าเช่น `RUVYXA_AUTH_SECRET` ปรากฏใน auth scaffolder; ให้ใช้
 private environment source และอย่าเปิดเผยด้วย public prefix
+
+`RUVYXA_WORKER_MAX_QUEUE` มีค่าเริ่มต้นสี่เท่าของ `RUVYXA_WORKER_MAX_CONCURRENCY` มันจำกัด render
+work ที่รออยู่ และคืน `RUV1705` เมื่อเต็ม ให้ใช้หลักฐานจาก load test ก่อนเพิ่มค่า เพราะ queue
+ที่ใหญ่ขึ้นเก็บ request data มากขึ้นและเพิ่มเวลารอ
 
 ### กำหนด type ให้ public variable และเก็บ private variable ไว้ฝั่ง server
 

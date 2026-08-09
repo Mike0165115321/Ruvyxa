@@ -33,9 +33,10 @@ flowchart LR
 - template ใช้ React และ React DOM `19.2.8`
 - project ต้องมี `package.json`, `ruvyxa.config.ts` และ application directory (โดยทั่วไปคือ `app/`)
 
-> **ขอบเขต:** framework รองรับ runtime option `node`, `bun` และ `deno` ใน CLI/config โดย CI ตรวจ
-> parity และ launch deployment artifact ของ Bun/Deno บน Linux และ Windows โดย Bun/Deno เป็น
-> requirement การติดตั้งเฉพาะเมื่อเลือก runtime นั้น
+> **ขอบเขต:** framework รองรับ runtime option `node`, `bun` และ `deno` ใน CLI/config Node ยังคงเป็น
+> package prerequisite ที่ประกาศไว้; ติดตั้ง Bun หรือ Deno เฉพาะเมื่อเลือก runtime นั้น Deno local
+> tooling จะรัน trusted project configuration และ plugin พร้อม permission ที่ต้องใช้
+> (`-A --no-prompt`)
 
 ## ผลลัพธ์ขั้นต่ำ
 

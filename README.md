@@ -86,7 +86,7 @@ documents: [ARCHITECTURE.md](ARCHITECTURE.md), [CHANGELOG.md](CHANGELOG.md),
   evaluated config dependency hash; build hooks bypass edge reuse so plugin resolution stays
   correct. Compiled output remains content-addressed under the configured build cache.
 - **plugin pipeline** — one `definePlugin({ name, register })` registry provides grouped HTTP,
-  build, dev, diagnostic, and native sockets through a versioned Node/Bun subprocess. AST-based
+  build, dev, diagnostic, and native sockets through a versioned Node/Bun/Deno subprocess. AST-based
   import/export extraction and CommonJS detection for npm dependencies.
 - **Gzip + Brotli compression** — all responses compressed automatically via tower-http middleware.
 - **ETag / 304 support** — static assets include BLAKE3-256-based ETags for efficient browser
@@ -254,14 +254,14 @@ documents: [ARCHITECTURE.md](ARCHITECTURE.md), [CHANGELOG.md](CHANGELOG.md),
   raised; see [Troubleshooting](docs/en/16-troubleshooting-upgrades.md) for the common symptoms and
   their evidence-backed fixes.
 
-### Deploy Anywhere (10 Adapters)
+### Deploy Anywhere (11 Adapters)
 
 - **Four starters** — `npm create ruvyxa@latest` defaults to the focused `minimal` app, with `blog`,
   `crud`, and `api-backend` available through `--template`. Run it with no arguments on a real
   terminal and it prompts for a project name and offers an arrow-key template menu (`j`/`k` also
   work); the scaffold summary prints the actual generated file tree, colored by role.
-- **10 Deployment Adapters** — Zero-config native output for Vercel, Netlify, Cloudflare, Node.js,
-  Bun, Static, AWS Amplify, Firebase, Railway, and Render. See the
+- **11 Deployment Adapters** — Zero-config native output for Vercel, Netlify, Cloudflare, Node.js,
+  Bun, Deno, Static, AWS Amplify, Firebase, Railway, and Render. See the
   [Deployment Guide](docs/en/15-deploy-run-and-operate.md) for platform-specific configurations.
 
 ---
@@ -721,7 +721,7 @@ pages, 2 API routes) on Windows 11 / Node 22.23.1 with the 1.0.27 workspace bina
 ┌───────────────────────────────────────────────────────────────┐
 │                      ruvyxa (npm package)                     │
 │   CLI launcher → Ruvyxa CLI Rust binary (ruvyxa_cli)          │
-│   Runtime: worker-pool.mjs (persistent Node/Bun IPC)          │
+│   Runtime: worker-pool.mjs (persistent Node/Bun/Deno IPC)     │
 └─────────────────────┬─────────────────────────────────────────┘
                       │
 ┌─────────────────────┴─────────────────────────────────────────┐

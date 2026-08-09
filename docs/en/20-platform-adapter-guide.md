@@ -37,6 +37,7 @@ during release testing.
 | ---------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | Node             | Node; SSR, SSG, CSR, ISR, PPR, API                | Standalone server and optional static directory.                                    |
 | Bun              | Bun/Node-compatible; SSR, SSG, CSR, ISR, PPR, API | Standalone Bun server and optional static directory.                                |
+| Deno             | Deno; SSR, SSG, CSR, ISR, PPR, API                | Standalone Deno server and optional static directory.                               |
 | Static           | Static; SSG and CSR only                          | Static publish directory and `_headers`. SSR, ISR, PPR, API routes fail validation. |
 | Vercel           | Serverless or edge; all route strategies and API  | Vercel Build Output API static/function artifacts.                                  |
 | Netlify          | Serverless; all route strategies and API          | Publish directory, handler function, deploy config, Frameworks API artifacts.       |
@@ -45,14 +46,14 @@ during release testing.
 | Firebase / AWS   | Serverless; all route strategies and API          | Hosting/static plus generated function/compute bundle and provider config.          |
 
 Native realtime requires long-lived Node/Bun output. It permits Node, Bun, Railway, and Render but
-rejects AWS, Cloudflare, Firebase, Netlify, static, and Vercel. See
+rejects Deno, AWS, Cloudflare, Firebase, Netlify, static, and Vercel. See
 [Integrations](09-integrations-auth-data-and-realtime.md).
 
-## Node and Bun: copy a standalone app
+## Node, Bun, and Deno: copy a standalone app
 
-Build with the adapter, then copy the complete `deploy/node/` or `deploy/bun/` directory to the
-runtime image or host. Do not copy only the server file: public assets are a sibling artifact.
-Neither standalone server needs the Ruvyxa CLI or native binary at runtime.
+Build with the adapter, then copy the complete `deploy/node/`, `deploy/bun/`, or `deploy/deno/`
+directory to the runtime image or host. Do not copy only the server file: public assets are a
+sibling artifact. None of the standalone servers need the Ruvyxa CLI or native binary at runtime.
 
 ```bash
 npm run build -- --adapter node
@@ -60,6 +61,9 @@ PORT=3000 HOST=0.0.0.0 node .ruvyxa/deploy/node/server/index.mjs
 
 npm run build -- --adapter bun
 PORT=3000 HOST=0.0.0.0 bun .ruvyxa/deploy/bun/server/index.mjs
+
+npm run build -- --adapter deno
+PORT=3000 HOST=0.0.0.0 deno run -A --no-prompt .ruvyxa/deploy/deno/server/index.mjs
 ```
 
 The two start lines above use POSIX environment-variable syntax. In PowerShell, set the variables
@@ -72,11 +76,15 @@ node .ruvyxa/deploy/node/server/index.mjs
 
 # Or use Bun output.
 bun .ruvyxa/deploy/bun/server/index.mjs
+
+# Or use Deno output.
+deno run -A --no-prompt .ruvyxa/deploy/deno/server/index.mjs
 ```
 
-Both generated servers default to `PORT=3000` and `HOST=0.0.0.0`. Each adapter also emits
+All three generated servers default to `PORT=3000` and `HOST=0.0.0.0`. Each adapter also emits
 `start.mjs`, which starts through an installed Ruvyxa CLI; choose the standalone command when the
-runtime image should not carry the CLI.
+runtime image should not carry the CLI. The Deno standalone command deliberately grants the server
+its required permissions, so run only the artifact built from a project you trust.
 
 ## Static hosting: publish only static output
 

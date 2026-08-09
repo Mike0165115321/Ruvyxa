@@ -23,6 +23,13 @@ reconstruct the flags behind those scripts.
 | `npm run adds -- form`                                                                                                                | `ruvyxa adds form`                    | Scaffold a supported application flow.                                                 |
 | `npm run doctor`, `npm run clean`, `npm run trace -- /`, `npm run bench`, `npm run test:parity`, `npm run plugin -- create my-plugin` | Matching `ruvyxa` command             | Diagnose, clean output, inspect a route, benchmark, verify parity, or create a plugin. |
 
+## Select a JavaScript runtime
+
+Project commands that execute JavaScript accept `--runtime node|bun|deno`; for example,
+`npm run build -- --runtime deno`. The flag overrides `RUVYXA_RUNTIME` and `runtime` in
+`ruvyxa.config.ts`. See [Configuration](07-configuration.md#runtime-selection) for the fallback
+order and Deno permission model.
+
 ## Scaffold a starter feature with `adds`
 
 `adds` accepts one or more of exactly `form`, `data-table`, and `auth`. It writes below the
