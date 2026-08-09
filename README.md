@@ -355,14 +355,14 @@ Measured on 2026-08-05 with the repository harness against minimal starters. The
 only for the exact versions, machine, and run conditions shown below; re-run the harness when
 comparing newer releases.
 
-| Metric (lower is better)             | **Ruvyxa 1.0.27** | Next.js 16.3.0 | Astro 7.1.6 |
+| Metric (lower is better)             | **Ruvyxa 1.0.28** | Next.js 16.3.0 | Astro 7.1.6 |
 | ------------------------------------ | ----------------: | -------------: | ----------: |
 | Production build (cold-cache median) |       **1.851 s** |        8.768 s |     2.671 s |
 | Dev server → first rendered response |       **1.622 s** |        4.368 s |     5.323 s |
 | Prod server start → first response   |           1.544 s |    **1.496 s** |     2.673 s |
 | Client JS shipped (minimal page)     |          210 KB ¹ |         566 KB |      0 KB ² |
 
-| Throughput (higher is better)        | **Ruvyxa 1.0.27** | Next.js 16.3.0 | Astro 7.1.6 |
+| Throughput (higher is better)        | **Ruvyxa 1.0.28** | Next.js 16.3.0 | Astro 7.1.6 |
 | ------------------------------------ | ----------------: | -------------: | ----------: |
 | Requests/second (`/`, prod server) ³ |        **43,299** |          2,433 |       2,757 |
 | Latency p50 / p99                    |      **0 / 1 ms** |      9 / 21 ms |   8 / 13 ms |
