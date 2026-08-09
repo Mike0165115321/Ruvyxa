@@ -6,25 +6,31 @@
 ## Table of Contents
 
 - [Ruvyxa System Overview](#ruvyxa-system-overview)
+- [System Boundaries and Lifecycles](#system-boundaries-and-lifecycles)
+- [Repository Topology and Ownership](#repository-topology-and-ownership)
+- [State, Failure, and Compatibility Boundaries](#state-failure-and-compatibility-boundaries)
+- [Verification, Packaging, and Release Topology](#verification-packaging-and-release-topology)
 - [CLI Architecture](#cli-architecture)
-- [Route Discovery & Validation · การค้นหาและตรวจสอบเส้นทาง](#route-discovery-validation-)
-- [Bundler · การรวมโค้ด](#bundler-)
+- [Route Discovery and Validation](#route-discovery-and-validation)
+- [Bundler](#bundler)
 - [Dev Server](#dev-server)
 - [Middleware](#middleware)
-- [Worker Pool · กลุ่มผู้ทำงาน](#worker-pool-)
-- [Concurrency Model · โมเดลการทำงานพร้อมกัน](#concurrency-model-)
-- [Protocols · โพรโทคอล](#protocols-)
+- [Worker Pool](#worker-pool)
+- [Concurrency Model](#concurrency-model)
+- [Protocols](#protocols)
 - [Site Discovery & Image Optimization](#site-discovery-image-optimization)
-- [Diagnostics · การวินิจฉัย](#diagnostics-)
-- [Security · ความปลอดภัย](#security-)
-- [Deployment Adapters · อาดาปเตอร์สำหรับการปรับใช้](#deployment-adapters-)
+- [Diagnostics](#diagnostics)
+- [Security](#security)
+- [Deployment Adapters](#deployment-adapters)
 
 ---
 
 ## Ruvyxa System Overview
 
-**Philosophy**: Rust before render (route discovery, bundling, minification, serving). JS runtime
-(Node/Bun) during render (SSR, SSG, API, config). This gives Rust speed + JS ecosystem.
+**Philosophy**: Rust owns discovery, validation, compilation orchestration, caching, and HTTP
+serving; a JavaScript runtime owns project configuration, React rendering, API routes, and plugins.
+The supported local runtimes are Node, Bun, and Deno. This keeps framework-critical work in Rust
+while preserving the JavaScript ecosystem at the application boundary.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -40,7 +46,8 @@
      └───────────┴────────────┴────────────┴──────────────┘
                                │
                     ┌──────────▼──────────┐
-                    │  Node / Bun Workers  │
+                    │ Node / Bun / Deno     │
+                    │ workers               │
                     │  (SSR, SSG, API,     │
                     │   Action, Config)    │
                     └─────────────────────┘
@@ -51,30 +58,32 @@
 ### Crate Dependency Graph
 
 ```
-ruvyxa_diagnostics          (serde + thiserror — nothing else)
+ruvyxa_diagnostics          (diagnostic types, codes, SARIF — no workspace dependencies)
     ↑
     ├── ruvyxa_graph        (route discovery, validation, manifest)
     ├── ruvyxa_bundler      (Oxc compiler, resolver, linker, minifier, CSS modules)
     ├── ruvyxa_middleware   (Tower middleware, plugin bridge)
-    └── ruvyxa_dev_server   (Axum serving, HMR, cache, worker pool, router)
+    └── ruvyxa_dev_server   (Axum serving, HMR, cache, worker pool, router, TUI data)
          │
-         └── ruvyxa_cli     (depends ALL crates — binary entry via clap)
+         └── ruvyxa_tui     (terminal presentation primitives)
+              │
+              └── ruvyxa_cli (command orchestration and build pipeline — binary entry via clap)
 ```
 
 ---
 
 ### Key Design Decisions
 
-| Decision                               | Why                                                                                                                   |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| **Rust core, Node/Bun render**         | Rust owns discovery/build orchestration; persistent workers handle JS rendering without per-request process creation. |
-| **Oxc for TS/JSX**                     | Oxc provides the repository's parser/compiler/minifier pipeline. Performance must be measured for the target project. |
-| **Persistent worker pool**             | Server workers are bounded to available parallelism (2–8 by default). NDJSON over stdin/stdout.                       |
-| **Radix trie router**                  | O(path_depth) vs O(n) linear scan. Recompiled on manifest change.                                                     |
-| **Blake3 content hashing**             | Immutable caching (max-age=31536000).                                                                                 |
-| **Staging + atomic commit**            | Build writes to staging and restores the previous output if the commit fails.                                         |
-| **fnv1a_64 deterministic CSS scoping** | Reproducible builds: `fnv1a_64(project_relative_path + class_name)`.                                                  |
-| **`deny_unknown_fields` config**       | Typos fail fast, not silently ignored.                                                                                |
+| Decision                               | Why                                                                                                                                                        |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Rust core, JavaScript render**       | Rust owns discovery/build orchestration; persistent Node, Bun, or Deno workers render without per-request process creation.                                |
+| **Oxc for TS/JSX**                     | Oxc provides the repository's parser/compiler/minifier pipeline. Performance must be measured for the target project.                                      |
+| **Persistent worker pool**             | Workers are bounded to available parallelism (2–8 by default); each worker has bounded execution and FIFO queue admission. NDJSON is the process boundary. |
+| **Radix trie router**                  | O(path_depth) vs O(n) linear scan. Recompiled on manifest change.                                                                                          |
+| **Blake3 content hashing**             | Immutable caching (max-age=31536000).                                                                                                                      |
+| **Staging + atomic commit**            | Build writes to staging and restores the previous output if the commit fails.                                                                              |
+| **fnv1a_64 deterministic CSS scoping** | Reproducible builds: `fnv1a_64(project_relative_path + class_name)`.                                                                                       |
+| **`deny_unknown_fields` config**       | Typos fail fast, not silently ignored.                                                                                                                     |
 
 ---
 
@@ -122,7 +131,7 @@ ruvyxa (CLI + re-exports)
 ├── @ruvyxa/auth          — sessions, OAuth, magic-link, WebAuthn
 ├── @ruvyxa/database      — typed CRUD with adapter pattern
 ├── @ruvyxa/realtime      — WebSocket action transport
-├── @ruvyxa/adapter-*     — 10 platform adapters
+├── @ruvyxa/adapter-*     — 11 platform adapters
 ├── @ruvyxa/cli-*         — 5 platform binaries
 └── create-ruvyxa         — project scaffold
 ```
@@ -194,6 +203,179 @@ my-app/
 
 ---
 
+### System Boundaries and Lifecycles
+
+The repository has four boundaries that should remain explicit when adding features. They constrain
+where state may live, how information crosses processes, and which code needs to change together.
+
+| Boundary          | Producer → consumer                       | Contract                                                      | Ownership rule                                                                                                                 |
+| ----------------- | ----------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Project source    | Application → graph/bundler               | Filesystem conventions, imports, config                       | `ruvyxa_graph` discovers intent; `ruvyxa_bundler` compiles and checks module boundaries.                                       |
+| Rust ↔ JavaScript | CLI/dev server → worker or runtime script | JSON/NDJSON requests, environment, generated files            | Do not pass Rust internals across the boundary; evolve explicit serialized messages instead.                                   |
+| Runtime ↔ browser | Dev server/build output → client          | HTTP, WebSocket HMR, client manifest, hydration assets        | Client code must remain browser-safe; server-only imports and private environment variables are rejected before this boundary. |
+| Build ↔ host      | CLI → adapter artifact                    | `Adapter`, `AdapterOutput`, and declarative `AdapterArtifact` | Adapters describe artifacts; the CLI materializes them inside staging and commits them atomically.                             |
+
+#### Development request lifecycle
+
+```text
+browser request
+  -> Axum router and middleware
+  -> route manifest + RadixRouter match
+  -> render cache / strategy decision
+  -> least-loaded JavaScript worker
+  -> NDJSON response (or streamed API frames)
+  -> cached/compressed HTTP response
+
+file change
+  -> notify watcher
+  -> manifest/HMR dependency update + cache invalidation
+  -> invalidate every worker's process-local bundle cache
+  -> HMR message or browser full reload
+```
+
+#### Production build lifecycle
+
+```text
+CLI args + config + environment runtime selection
+  -> route discovery and validation
+  -> server/client compilation, link, asset hashing, manifest generation
+  -> prerender work through a bounded short-lived worker pool
+  -> adapter inspection and artifact plan
+  -> staging directory materialization
+  -> atomic output commit (or previous output remains intact on failure)
+```
+
+The runtime selection order for JavaScript work is: explicit `--runtime`, then `RUVYXA_RUNTIME`,
+then project configuration; an invoker hint is considered only when those do not set policy. When no
+policy is present, automatic detection prefers Node, then Bun, then Deno. `edge` and `static` are
+build targets, not worker runtimes; they use Node for local framework work unless a JavaScript
+runtime is explicitly selected.
+
+### Repository Topology and Ownership
+
+The workspace has a deliberate split between internal Rust implementation, published TypeScript
+contracts, distribution glue, and fixtures. A change that crosses one of these boundaries should be
+reviewed as a contract change rather than a local refactor.
+
+| Area                              | Primary paths                                            | Owns                                                                                           | Change obligations                                                                                                      |
+| --------------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Native CLI                        | `crates/ruvyxa_cli`                                      | Clap surface, config translation, build orchestration, staging commit, diagnostics commands    | Keep argument/config/runtime precedence stable; add Rust tests for observable behavior.                                 |
+| Runtime server                    | `crates/ruvyxa_dev_server`                               | Axum routes, HMR, router, caching, worker lifecycle, actions, static assets, style collection  | Preserve HTTP and worker protocol behavior; keep production and development paths aligned.                              |
+| Source understanding              | `crates/ruvyxa_graph`                                    | Route discovery, conventions, render-strategy inference, manifest validation                   | Add fixtures/tests before changing route semantics; no server should invent a second discovery rule.                    |
+| Compilation                       | `crates/ruvyxa_bundler`                                  | Oxc parsing/transforms, resolution, linking, minification, source maps, boundary checks        | Maintain client/server safety checks and the Oxc Rust/JS lockstep.                                                      |
+| HTTP extension layer              | `crates/ruvyxa_middleware`                               | Tower composition, built-in middleware config, TypeScript plugin bridge                        | Keep hooks bounded and failure-isolated; do not let plugin behavior bypass core security policy.                        |
+| Diagnostics and terminal UI       | `crates/ruvyxa_diagnostics`, `crates/ruvyxa_tui`         | RUV#### diagnostic records/SARIF and terminal presentation primitives                          | Treat diagnostic codes and machine-readable fields as compatibility surface.                                            |
+| Public application API            | `packages/@ruvyxa/core`, `@ruvyxa/react`                 | Typed config, server helpers, adapters, plugin API, route helpers, React integration           | Export only deliberate stable contracts; preserve types and runtime behavior together.                                  |
+| Optional product features         | `packages/@ruvyxa/{auth,database,realtime,testing}`      | Auth, data contracts, native realtime, test doubles                                            | Keep browser/server entry points explicit; enforce deployment capabilities at build time.                               |
+| Distribution runtime              | `packages/ruvyxa`                                        | npm CLI launcher, bundled runtime scripts, default adapter packages, platform binary selection | Any shared route-matching behavior must be synced to the committed runtime copy; package contents are release-critical. |
+| Scaffolding and fixtures          | `packages/create-ruvyxa`, `templates/*`, `examples/demo` | New-project output and broad integration coverage                                              | Template and demo mirrors must remain byte-identical where the repository declares them as mirrors.                     |
+| Documentation and release records | `docs/`, `README.md`, `CHANGELOG.md`, this file          | Supported user behavior and architectural truth                                                | Describe current, verified behavior; release notes summarize commits rather than inventing future capability.           |
+
+#### Published TypeScript package boundaries
+
+`@ruvyxa/core` is the lowest public TypeScript layer. It owns config, server utilities, plugin
+contracts, adapters, and route matching. `@ruvyxa/react` depends on it and supplies React-facing
+integration without becoming a second server runtime. `@ruvyxa/auth`, `database`, and `realtime`
+also build on core; `testing` provides framework-aware doubles for code using those contracts.
+
+The `ruvyxa` package is different: it is a distribution package, not the source of framework policy.
+It packages the launcher, native-binary selection, runtime scripts such as the compiler, worker
+pool, config renderer, serverless handler, and default adapter dependencies. Runtime files copied
+into deployment functions cannot safely rely on arbitrary bare package specifiers, so shared route
+matching has one TypeScript source at `packages/@ruvyxa/core/src/route-match.ts` and a committed
+runtime copy at `packages/ruvyxa/runtime/route-match.mjs`. Change the source, run
+`pnpm --filter ruvyxa sync:route-match`, and commit both outputs.
+
+#### Artifact and generated-file ownership
+
+| Artifact                                  | Produced by               | Consumed by                  | Must not be hand-edited or committed                                    |
+| ----------------------------------------- | ------------------------- | ---------------------------- | ----------------------------------------------------------------------- |
+| `.ruvyxa/`                                | CLI build staging/commit  | `start`, `preview`, adapters | Yes — generated application output                                      |
+| `dist/` and `types/`                      | TypeScript package builds | npm package consumers        | Yes — regenerate through package scripts                                |
+| `target/`                                 | Cargo                     | native CLI build             | Yes — Rust compiler output                                              |
+| `.npm-pack/`, `.npm-smoke/`               | Packaging smoke checks    | Packaging validation         | Yes — temporary release artifacts                                       |
+| `packages/ruvyxa/runtime/route-match.mjs` | Explicit sync script      | Serverless/function bundles  | No — committed generated runtime copy, updated only via its sync script |
+
+### State, Failure, and Compatibility Boundaries
+
+The architecture favors small, replaceable state domains. This prevents a local failure from
+silently corrupting a larger process and makes operational limits explicit.
+
+| State domain                          | Owner and lifetime                                      | Invalidated/released by                          | Failure behavior                                                                                     |
+| ------------------------------------- | ------------------------------------------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| Route manifest and router             | Dev server process; refreshed on relevant source change | Watcher full/selective invalidation              | Rediscovery/validation error is reported before an invalid manifest is served.                       |
+| Render cache and compressed documents | Dev/prod server process; bounded LRU/TTL                | Route/file invalidation or TTL/eviction          | Cache miss falls through to render; cache is an optimization, not source of truth.                   |
+| Worker bundle/module caches           | One JavaScript worker process                           | Explicit invalidate or memory-pressure eviction  | Process-local; every worker must receive invalidation.                                               |
+| Worker admission queue                | One worker; active request plus bounded FIFO waiters    | Request completion or shutdown                   | Overflow is `RUV1705`; shutdown rejects parked work rather than preserving it indefinitely.          |
+| Isolated SSG module graphs            | Build worker process                                    | Worker replacement after configured render count | Prevents retained ESM graphs from accumulating across a large prerender.                             |
+| HMR reverse dependency map            | Dev server process                                      | Recomputed/refreshed on source changes           | Unknown/untracked changes choose a full reload, favoring correctness over a narrow update.           |
+| Plugin process and hook state         | Plugin host/build session                               | Hook timeout, lifecycle stop, or process exit    | A plugin fault becomes a framework error; it must not hang the Rust host forever.                    |
+| Build output                          | Temporary staging directory until commit                | Atomic replacement or cleanup guard              | Failed materialization preserves the last completed output rather than leaving a partial deployment. |
+
+#### Compatibility rules that require coordinated changes
+
+1. **Route semantics span languages.** Rust discovery/router behavior and JavaScript route matching
+   do not share an executable implementation. Their shared cases live in
+   `tests/fixtures/route-match-conformance.json`; add a case before changing matching rules.
+2. **Runtime protocol changes span a process boundary.** Evolve `WorkerRequest`/`WorkerResponse` and
+   `runtime/worker-pool.mjs` together. Preserve request IDs, terminal streaming frames, repeated
+   headers, idempotency, and overload/error codes.
+3. **Configuration spans parsing and execution.** A new setting needs a TypeScript config type,
+   config renderer support, Rust deserialization/validation, runtime translation, user docs, and
+   tests. `deny_unknown_fields` intentionally turns misspellings into errors.
+4. **A public package export spans source and distribution.** Update implementation, declarations,
+   export maps, package tests, and packed-file expectations together. Never leave `workspace:`
+   references in the tarball consumed by end users.
+5. **Templates are a compatibility surface.** A template must be package-manager neutral and match
+   the package metadata and documented runtime behavior. Required demo/template mirrors must be
+   synchronized through the repository script, not by drift-prone manual copying.
+
+#### Operational failure posture
+
+The server uses a “fail closed when correctness or safety is uncertain” rule. Invalid routes,
+server/client boundary violations, private environment access in browser code, malformed plugin
+configuration, incompatible adapter capabilities, and invalid security limits stop the relevant
+command. At runtime, a bounded operation may fail a single request—such as a worker timeout,
+`RUV1705` overload rejection, an action payload limit, or a streaming API worker failure—without
+bringing down the process. Idempotent worker requests may retry once after replacement; actions and
+API requests do not retry automatically because re-execution could duplicate a side effect.
+
+### Verification, Packaging, and Release Topology
+
+Validation is layered so a contributor can start narrow and a release gate can prove the contracts
+that ordinary unit tests do not cover.
+
+| Layer                      | Primary command                                                                                                        | Proves                                                                                       | Run when                                             |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| Rust formatting            | `cargo fmt --all -- --check`                                                                                           | Rust source formatting                                                                       | Any Rust edit                                        |
+| Rust behavior/lints        | `cargo test --workspace --locked`; `cargo clippy --workspace --locked -- -D warnings`                                  | Crate behavior and lint cleanliness                                                          | Shared runtime/build changes                         |
+| Package compilation/checks | `pnpm -r build`; `pnpm -r check`; `pnpm -r test`                                                                       | TypeScript output, declarations, and package contracts                                       | Public package/runtime changes                       |
+| Format validation          | `pnpm format:check`                                                                                                    | Rust and Markdown/TypeScript formatting                                                      | Before handoff when the worktree baseline permits it |
+| Release contract           | `pnpm release:validate`                                                                                                | Package metadata, Oxc lockstep, Markdown links, required template mirrors                    | Documentation, package, template, or release changes |
+| Packaging smoke            | `pnpm pack:smoke`                                                                                                      | Packed tarballs install and expose required runtime files without workspace protocol leakage | Packaging/export/runtime-file changes                |
+| Application integration    | `cargo run -p ruvyxa_cli -- check --root examples/demo`; `cargo run -p ruvyxa_cli -- test:parity --root examples/demo` | Dev/build route parity and broad fixture behavior                                            | Framework behavior, templates, or routing changes    |
+
+The root `release:validate` command is intentionally not a substitute for tests: it checks the
+cross-cutting release invariants that are easy to miss in code review—package metadata, Rust/JS Oxc
+version lockstep, all Markdown links, and mirror drift. The `ruvyxa` package build also fails when
+the committed route-match runtime copy is stale. Package scripts compile before `prepack`, making a
+tarball a testable distribution boundary rather than a collection of source files.
+
+#### Contributor decision guide
+
+| If you are changing…         | Start here                                                                     | Then inspect/update                                                          |
+| ---------------------------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| Route convention or matching | `ruvyxa_graph` + conformance fixture                                           | Rust router, JS route match sync, manifests, user docs, parity fixture       |
+| Worker scheduling or limits  | `ruvyxa_dev_server/src/worker_pool.rs` + `runtime/worker-{pool,admission}.mjs` | Protocol tests, diagnostics, configuration docs, operational architecture    |
+| Compiler/boundary behavior   | `ruvyxa_bundler`                                                               | Graph validation, runtime compiler lockstep, source maps, package tests      |
+| Config option                | Core TypeScript type and config renderer                                       | Rust config validation, server/build translation, docs, templates if exposed |
+| Adapter capability/artifact  | `@ruvyxa/core` contracts + one adapter                                         | Adapter inspection, CLI/doctor behavior, output smoke tests, deployment docs |
+| Template/demo behavior       | Template and mirrored demo path                                                | `check-template-mirrors`, scaffold package, release validation               |
+| Public API/export            | Package source + `package.json` export map                                     | Declarations, package tests, packaging smoke, changelog if user-visible      |
+
+This discipline lets new contributors make a narrow edit without accidentally creating a second
+source of truth in another language, runtime, or shipped package.
+
 ### Next: Architecture Deep Dives
 
 ### Implementation Entry Points and Reading Order
@@ -203,9 +385,9 @@ alphabetically. The table below maps each user-visible concern to its primary so
 
 | Concern                           | Primary implementation                                                           | What it owns                                                           | Read next                                           |
 | --------------------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | --------------------------------------------------- |
-| Command parsing and orchestration | `crates/ruvyxa_cli/src/main.rs`                                                  | CLI surface, argument precedence, dispatch                             | [CLI & Build Pipeline](#cli)                        |
-| Configuration translation         | `crates/ruvyxa_cli/src/config.rs`, `packages/ruvyxa/runtime/config-renderer.mjs` | Config files, validation, runtime config hand-off                      | [CLI & Build Pipeline](#cli)                        |
-| Route discovery and validation    | `crates/ruvyxa_graph/src/lib.rs`                                                 | File conventions, manifests, rendering detection, boundary diagnostics | [Route Discovery](#graph)                           |
+| Command parsing and orchestration | `crates/ruvyxa_cli/src/main.rs`                                                  | CLI surface, argument precedence, dispatch                             | [CLI & Build Pipeline](#cli-architecture)           |
+| Configuration translation         | `crates/ruvyxa_cli/src/config.rs`, `packages/ruvyxa/runtime/config-renderer.mjs` | Config files, validation, runtime config hand-off                      | [CLI & Build Pipeline](#cli-architecture)           |
+| Route discovery and validation    | `crates/ruvyxa_graph/src/lib.rs`                                                 | File conventions, manifests, rendering detection, boundary diagnostics | [Route Discovery](#route-discovery-and-validation)  |
 | Client compilation and linking    | `crates/ruvyxa_bundler/src`                                                      | AST scanning, resolution, boundary checks, output                      | [Bundler](#bundler)                                 |
 | HTTP serving and rendering        | `crates/ruvyxa_dev_server/src/lib.rs`                                            | Axum routes, request dispatch, HMR, render cache, security application | [Dev Server](#dev-server)                           |
 | Middleware and plugin bridge      | `crates/ruvyxa_middleware/src` and `packages/ruvyxa/runtime/plugin-runtime.mjs`  | Middleware stacking and JavaScript-plugin communication                | [Middleware](#middleware)                           |
@@ -228,18 +410,19 @@ CLI command -> config -> route manifest -> module/boundary validation -> dev ser
 This order prevents a common debugging mistake: changing the server or adapter when the route was
 never discovered, or changing a page when the failure is a module boundary violation.
 
-- [Route Discovery & Validation](#graph) — how `app/` becomes a route manifest
+- [Route Discovery and Validation](#route-discovery-and-validation) — how `app/` becomes a route
+  manifest
 - [Compilation Pipeline](#bundler) — resolver → compiler → linker → minifier
 - [Dev Server](#dev-server) — Axum serving, HMR protocol, render cache
-- [CLI & Build Pipeline](#cli) — command structure, config loading, staging
+- [CLI & Build Pipeline](#cli-architecture) — command structure, config loading, staging
 - [Middleware](#middleware) — Tower stack, plugin bridge
-- [Worker Pool](#worker-pool) — Node/Bun workers, protocol, recovery
+- [Worker Pool](#worker-pool) — Node/Bun/Deno workers, protocol, recovery
 - [Diagnostics](#diagnostics) — RUV#### error catalog
 - [Protocols](#protocols) — NDJSON, WebSocket HMR, Fetch
 - [Security](#security) — env isolation, rate limiting, boundaries
 - [Deployment Adapters](#deployment-adapters) — adapter system overview
-- [Concurrency](#concurrency) — parallelism model, locks
-- [Site Discovery](#site-discovery) — sitemap/robots generation
+- [Concurrency](#concurrency-model) — parallelism model, locks
+- [Site Discovery](#site-discovery-image-optimization) — sitemap/robots generation
 
 ---
 
@@ -321,22 +504,23 @@ struct PluginArgs           { command: PluginCommand }
 ### Key Enums
 
 ```
-BuildTarget  → Node | Bun | Edge | Static
-CliRuntime   → Node | Bun
+BuildTarget   → Node | Bun | Deno | Edge | Static
+CliRuntime    → Node | Bun | Deno
 AnalyzeFormat → Auto | Human | Json | Sarif | Html
 ```
 
 `BuildTarget` is also `serde::Deserialize` and stored as `config.runtime`. The CLI `--runtime` flag
-uses `CliRuntime` (Node | Bun only) and maps to `JavaScriptRuntime` (from `ruvyxa_dev_server`).
+uses `CliRuntime` (Node | Bun | Deno) and maps to `JavaScriptRuntime` (from `ruvyxa_dev_server`).
 
 ### Config Loading
 
 `load_project_config(root)` flow:
 
-1. Detect `RUVYXA_RUNTIME` env var or `--runtime` CLI override
+1. Resolve an explicit `--runtime` or `RUVYXA_RUNTIME` override; otherwise use an invoker hint or
+   runtime detection
 2. Find `config-renderer.mjs` in npm runtime scripts
 3. If absent → return default `ProjectConfig` with `dependency_hash = "no-config"`
-4. Spawn Node/Bun subprocess to evaluate `ruvyxa.config.ts`
+4. Spawn the selected Node, Bun, or Deno subprocess to evaluate `ruvyxa.config.ts`
 5. If runtime mismatch → re-render with correct runtime
 6. Parse JSON output → `ConfigRendererOutput { ok, config, code, message, stack, dependency_hash }`
 7. Validate paths (appDir, outDir, CSS entries, security limits, proxy IPs)
@@ -358,10 +542,12 @@ BuildPluginConfig    { name, head: Vec<PluginHeadEntry> }
 
 ### Config Override Priority
 
-`RUVYXA_RUNTIME` env → `--runtime` CLI flag → `config.runtime` → default detection. The `--adapter`
-CLI flag parses through `parse_adapter_name()` which accepts 10 known names (node, bun, static,
-vercel, netlify, cloudflare, railway, render, firebase, aws) or any npm package name. Platform
-auto-detection reads 6 env vars (VERCEL, NETLIFY, CF_PAGES, RAILWAY_PROJECT_ID, RENDER, AWS_APP_ID).
+`--runtime` CLI flag → `RUVYXA_RUNTIME` → `config.runtime` → invoker hint → automatic detection. The
+CLI flag persists process-wide so all config, plugin, and render processes agree. The `--adapter`
+CLI flag parses the 11 built-in names (node, bun, deno, static, vercel, netlify, cloudflare,
+railway, render, firebase, aws) or a valid npm package name. Platform auto-detection reads six
+environment variables (`VERCEL`, `NETLIFY`, `CF_PAGES`, `RAILWAY_PROJECT_ID`, `RENDER`,
+`AWS_APP_ID`).
 
 ### Build Pipeline
 
@@ -370,8 +556,8 @@ auto-detection reads 6 env vars (VERCEL, NETLIFY, CF_PAGES, RAILWAY_PROJECT_ID, 
 1. **Config load** — `load_project_config()`
 2. **Route discovery** — `discover_project_routes()` → `RouteManifest`
 3. **Validation** — `validate_app()` → fails on any diagnostic
-4. **Plugin start** — `TypeScriptPluginBuildSession::run_start(out_dir)` — spawns persistent Node
-   worker running `plugin-runtime.mjs`
+4. **Plugin start** — `TypeScriptPluginBuildSession::run_start(out_dir)` — spawns a persistent
+   selected-runtime worker running `plugin-runtime.mjs`
 5. **Staging dir** — atomic temp directory under `out_dir`; cleanup guard on drop
 6. **Asset preparation** (parallel thread scope):
    - Style collection → `collect_styles()`
@@ -387,7 +573,7 @@ auto-detection reads 6 env vars (VERCEL, NETLIFY, CF_PAGES, RAILWAY_PROJECT_ID, 
    - Emits `route-manifest.json` (lean, browser-safe)
    - Emits `chunk-manifest.json` (if `build.manifest` enabled)
 8. **Pre-rendering** — `prerender_static_routes()` — SSG/ISR/PPR/CSR:
-   - Parallel worker pool (Node subprocesses, bounded by `parallelism`)
+   - Parallel selected-runtime worker pool (bounded by `parallelism`)
    - Artifact cache by dependency hash + render context hash + file fingerprints
    - CSR routes → minimal shell HTML
    - SSG/ISR → full render via worker pool
@@ -408,8 +594,8 @@ auto-detection reads 6 env vars (VERCEL, NETLIFY, CF_PAGES, RAILWAY_PROJECT_ID, 
 
 - Creates `CompileCache` and `ResolveGraphCache` at `cache/bundler/`
 - When plugins present → attaches `BuildHookPipeline` with `TypeScriptPluginBridge` hooks
-- Plugin hooks: `resolve_id`, `load`, `transform` — each communicates with persistent Node worker
-  via NDJSON over stdin/stdout
+- Plugin hooks: `resolve_id`, `load`, `transform` — each communicates with a persistent selected-
+  runtime worker via NDJSON over stdin/stdout
 - Supports `SplitStrategy::Route` (default) and `SplitStrategy::Single`
 - Client bundling respects minify, sourcemap, tree-shaking, JSX runtime (classic/automatic), ES
   target (es2018–esnext)
@@ -417,7 +603,8 @@ auto-detection reads 6 env vars (VERCEL, NETLIFY, CF_PAGES, RAILWAY_PROJECT_ID, 
 
 ### Plugin Host
 
-`TypeScriptPluginBuildSession` manages a persistent Node process running `plugin-runtime.mjs`:
+`TypeScriptPluginBuildSession` manages a persistent selected-runtime process running
+`plugin-runtime.mjs`:
 
 - `run_start(out_dir)` → calls `build.start` hook
 - `run_complete(out_dir, manifest)` → calls `build.complete` hook
@@ -454,15 +641,15 @@ matching to canonical forms). This makes `ruvyxa BUILD --Target node` equivalent
 
 ---
 
-## Route Discovery & Validation · การค้นหาและตรวจสอบเส้นทาง
+## Route Discovery and Validation
 
 **Crate**: `ruvyxa_graph` **Module**: `crates/ruvyxa_graph/src/lib.rs`
 
-### สรุป (Thai Summary)
+### Summary
 
-`ruvyxa_graph` สแกนไดเรกทอรี `app/` เพื่อค้นหาไฟล์ page, layout, route, action, server, client
-modules สร้าง RouteManifest ที่มีโครงสร้าง JSON พร้อมตรวจสอบความถูกต้อง (duplicate routes, boundary
-violations, missing exports)
+`ruvyxa_graph` scans `app/` for page, layout, route, action, server, and client modules. It produces
+a structured JSON `RouteManifest` and validates duplicate routes, boundary violations, and required
+exports before the server or build pipeline consumes the route set.
 
 ---
 
@@ -797,16 +984,17 @@ reads this manifest downstream during bundling, middleware setup, and sitemap ge
 
 ---
 
-## Bundler · การรวมโค้ด
+## Bundler
 
 **Crate**: `ruvyxa_bundler` **Modules**:
 `crates/ruvyxa_bundler/src/{lib,types,resolver,compiler,boundary,linker}.rs`
 
-### สรุป
+### Summary
 
-`ruvyxa_bundler` รับ RouteManifest + source files → สร้างชุด bundles ที่พร้อม deploy (IIFE สำหรับ
-client, ESM/CJS สำหรับ server) ใช้ Oxc เป็น parser/minifier, path resolution แบบกำหนดเอง, circular
-dep detection
+`ruvyxa_bundler` turns a route manifest and source files into deployable bundles: IIFE output for
+the browser and server-oriented output for runtime execution. It uses Oxc for parsing,
+transformation, and minification; its resolver, source scanner, and cycle detection establish the
+module graph before emitting assets.
 
 ---
 
@@ -1291,7 +1479,7 @@ The bundler returns a `BundleOutput`; writing it is the CLI's job (`client_bundl
 `crates/ruvyxa_dev_server/src/{lib,router,render_cache,response,hmr_tracker,worker_pool,style,action_security,port_binding,render_pipeline,plugin_bridge,plugin_head,html_document,env_file,static_assets,cli_output}.rs`
 
 Axum HTTP server with HMR (WebSocket), radix-trie route matching, LRU render cache with lazily-built
-compressed copies, persistent Node/Bun worker pool, style collection pipeline, action security
+compressed copies, persistent Node/Bun/Deno worker pool, style collection pipeline, action security
 middleware, TypeScript plugin host, and realtime event broadcasting.
 
 ---
@@ -1343,16 +1531,22 @@ Validation rejects zero/over-limit values (absolute bounds: `MAX_ACTION_BODY_LIM
 ### JavaScriptRuntime
 
 ```rust
-pub enum JavaScriptRuntime { Node, Bun }
+pub enum JavaScriptRuntime { Node, Bun, Deno }
 ```
 
-| Method                         | Returns   | Description                                      |
-| ------------------------------ | --------- | ------------------------------------------------ |
-| `command()`                    | `&str`    | `"node"` or `"bun"`                              |
-| `executable()`                 | `PathBuf` | Resolves `bun.exe` behind `.cmd` shim on Windows |
-| `is_available()`               | `bool`    | Checks `--version` exit code                     |
-| `detect()`                     | `Self`    | Node preferred, Bun fallback                     |
-| `from_availability(node, bun)` | `Self`    | Explicit selection                               |
+| Method                   | Returns   | Description                                                                  |
+| ------------------------ | --------- | ---------------------------------------------------------------------------- |
+| `command()`              | `&str`    | `"node"`, `"bun"`, or `"deno"`                                               |
+| `script_args()`          | `&[&str]` | Empty for Node/Bun; Deno adds `run -A --no-prompt --node-modules-dir=manual` |
+| `executable()`           | `PathBuf` | Resolves Bun/Deno package executables behind Windows shims when possible     |
+| `is_available()`         | `bool`    | Checks `--version` exit code                                                 |
+| `detect()`               | `Self`    | Node preferred, then Bun, then Deno                                          |
+| `from_availability(...)` | `Self`    | Deterministic selection for Node, Bun, and Deno                              |
+
+`JavaScriptRuntime::Deno` is used for trusted local project configuration, plugin, and worker
+processes with Deno's explicit unrestricted invocation. This is necessary because those processes
+need filesystem, environment, process, network, and native-addon access. It is a trust decision: do
+not run unreviewed project configuration or plugins with the Deno runtime.
 
 ---
 
@@ -1493,9 +1687,10 @@ impl NodeWorkerPool {
 }
 ```
 
-Persistent Node/Bun processes communicating via NDJSON over stdin/stdout. Pool size: 2-8 (default
-CPU count clamped). Least-loaded worker selection with rotating start offset. Failed workers
-replaced automatically; idempotent requests retried once.
+Persistent Node/Bun/Deno processes communicate via NDJSON over stdin/stdout. Pool size is 2–8
+(available parallelism clamped) for dev/prod and 1–8 for an explicitly sized build pool. Workers are
+selected by least in-flight work with a rotating tie-break offset. Failed workers are replaced
+automatically; only idempotent requests are retried once.
 
 **Worker recycling during builds.** Production prerendering asks for an isolated module import per
 path (`render_ssg_isolated`) so page-module state cannot leak between paths. That isolation works by
@@ -1509,25 +1704,27 @@ idle, because `shutdown` clears pending requests and would otherwise fail siblin
 progressing normally. The dev server passes `None` — it never requests isolated imports, so it
 retains nothing to reclaim and pays nothing for the bound.
 
-**Per-worker concurrency.** Inside each worker, `worker-pool.mjs` admits at most
-`RUVYXA_WORKER_MAX_CONCURRENCY` requests at a time (default: core count clamped to 2–8). Renders are
-CPU-bound and each one holds a React tree, a compiled bundle, and its response buffer, so admitting
-a whole burst at once exhausts the heap or thrashes the CPU into timeouts that look like hangs.
-Excess requests queue and run as slots free up; `invalidate` and `ping` bypass the queue, since
-delaying a cache invalidation would leave the worker serving stale bundles exactly when it is
-busiest. `ping` reports `activeRequests`, `queuedRequests`, and `maxConcurrentRequests`.
+**Per-worker admission.** Inside each worker, `worker-pool.mjs` admits at most
+`RUVYXA_WORKER_MAX_CONCURRENCY` requests at a time (default: core count clamped to 2–8). The
+remaining requests wait in a bounded FIFO queue controlled by `RUVYXA_WORKER_MAX_QUEUE` (default:
+four queued requests per execution slot). When that queue is full, the worker rejects the request
+with `RUV1705` rather than retaining an unbounded number of payloads in memory. `invalidate` and
+`ping` bypass admission: delaying invalidation would serve stale bundles, and a health check behind
+renders cannot diagnose pressure. `ping` reports active, queued, maximum concurrent, and maximum
+queued request counts.
 
 #### Worker environment variables
 
-| Variable                         | Default              | Effect                                                     |
-| -------------------------------- | -------------------- | ---------------------------------------------------------- |
-| `RUVYXA_WORKER_POOL_SIZE`        | CPU count (2–8)      | Worker processes in the dev/prod pool                      |
-| `RUVYXA_WORKER_MAX_CONCURRENCY`  | CPU count (2–8)      | Requests one worker executes at once                       |
-| `RUVYXA_WORKER_TIMEOUT_MS`       | 30000 / 300000 build | Per-request deadline, shared by Rust and the Node watchdog |
-| `RUVYXA_PRERENDER_RECYCLE_AFTER` | 32 (`0` disables)    | Isolated prerenders before a build worker is retired       |
-| `RUVYXA_CACHE_MAX_ENTRIES`       | 256                  | Bundle and module cache entries per worker                 |
-| `RUVYXA_MEMORY_LIMIT_MB`         | 512                  | Heap threshold that triggers in-worker cache eviction      |
-| `RUVYXA_RENDER_CACHE_SIZE`       | 1024 dev / 512 prod  | Render cache entries (capped at 16384)                     |
+| Variable                         | Default              | Effect                                                                |
+| -------------------------------- | -------------------- | --------------------------------------------------------------------- |
+| `RUVYXA_WORKER_POOL_SIZE`        | CPU count (2–8)      | Worker processes in the dev/prod pool                                 |
+| `RUVYXA_WORKER_MAX_CONCURRENCY`  | CPU count (2–8)      | Requests one worker executes at once                                  |
+| `RUVYXA_WORKER_MAX_QUEUE`        | concurrency × 4      | FIFO requests waiting for a worker slot; full queue returns `RUV1705` |
+| `RUVYXA_WORKER_TIMEOUT_MS`       | 30000 / 300000 build | Per-request deadline, shared by Rust and the Node watchdog            |
+| `RUVYXA_PRERENDER_RECYCLE_AFTER` | 32 (`0` disables)    | Isolated prerenders before a build worker is retired                  |
+| `RUVYXA_CACHE_MAX_ENTRIES`       | 256                  | Bundle and module cache entries per worker                            |
+| `RUVYXA_MEMORY_LIMIT_MB`         | 512                  | Heap threshold that triggers in-worker cache eviction                 |
+| `RUVYXA_RENDER_CACHE_SIZE`       | 1024 dev / 512 prod  | Render cache entries (capped at 16384)                                |
 
 #### StyleCollection (`style.rs`)
 
@@ -1630,14 +1827,19 @@ Realtime WebSocket handler:
 - Sends heartbeat pings at configured interval
 - Sends `{"version":1,"type":"resync","reason":"lagged"}` on channel lag
 
+The `@ruvyxa/realtime` deployment plugin enforces a separate production constraint: native WebSocket
+realtime requires a long-lived Node/Bun deployment. Serverless and static adapters, including Deno,
+are rejected with `RUV3201`; choose a Node or Bun self-hosted adapter when native realtime is
+required.
+
 ---
 
 ### Under the Hood
 
 - **Router**: Radix trie, O(path depth) lookup. Static segments prioritized over params, params over
   catch-alls. No regex.
-- **Worker pool**: Persistent Node/Bun processes. Each communicates via NDJSON over stdin/stdout.
-  Pool size clamped 2-8. Least-loaded selection, auto-replacement on failure.
+- **Worker pool**: Persistent Node/Bun/Deno processes. Each communicates via NDJSON over
+  stdin/stdout. Pool size clamped 2-8. Least-loaded selection, auto-replacement on failure.
 - **Render cache**: LRU with hash-indexed doubly-linked list. Keys prefixed by render type (`ssr:`,
   `client:`) and optionally strategy namespace (`ssg:`, `isr:`, `ppr:`). TTL-based expiry.
 - **HMR**: Reverse dependency map from `HmrTracker`. Only evicts affected routes. CSS-only edits
@@ -1875,16 +2077,17 @@ connections.
 
 ---
 
-## Worker Pool · กลุ่มผู้ทำงาน
+## Worker Pool
 
 **Modules**: `crates/ruvyxa_dev_server/src/worker_pool.rs`,
 `packages/ruvyxa/runtime/worker-pool.mjs` **Crate**: `ruvyxa_dev_server`
 
-### สรุป
+### Summary
 
-Worker pool คือกลุ่ม process ของ Node/Bun ที่อยู่ยาว ทำหน้าที่รัน JavaScript ทั้งหมดของแอป — SSR,
-SSG, API routes, server actions, client bundle — โดยคุยกับฝั่ง Rust ผ่าน NDJSON บน stdin/stdout ฝั่ง
-Rust เป็นผู้เลือก worker และจัดการ lifecycle ส่วนฝั่ง Node เป็นผู้จำกัด concurrency ภายในตัวเอง
+The worker pool consists of long-lived Node, Bun, or Deno processes that execute application
+JavaScript: SSR, SSG, API routes, server actions, client bundles, and static-parameter work. Rust
+selects workers and manages their lifecycle over NDJSON on stdin/stdout; each worker independently
+enforces bounded request admission.
 
 ---
 
@@ -1901,7 +2104,8 @@ JavaScript runs.
   renders in parallel across processes, and contains a crash to one worker.
 
 Each worker is an OS process, so a segfault, an OOM kill, or a runaway render is isolated and its
-slot can be replaced without touching the others.
+slot can be replaced without touching the others. The same protocol is used by Node, Bun, and Deno;
+the runtime choice changes process launch semantics, not the host-worker contract.
 
 ---
 
@@ -1990,12 +2194,19 @@ const MAX_CONCURRENT_REQUESTS = positiveIntegerEnv(
   'RUVYXA_WORKER_MAX_CONCURRENCY',
   Math.max(2, Math.min(8, availableParallelism())),
 )
+const MAX_QUEUED_REQUESTS = positiveIntegerEnv(
+  'RUVYXA_WORKER_MAX_QUEUE',
+  MAX_CONCURRENT_REQUESTS * 4,
+)
 ```
 
 A request awaits `acquireRequestSlot()` before dispatch and calls `releaseRequestSlot()` when it
-finishes, which starts the longest-waiting queued request. Below the limit the acquire resolves
-synchronously, so the common case does not wait in the request-slot queue. This is a control-flow
-property, not a measured guarantee about wall-clock latency.
+finishes, which starts the longest-waiting queued request. The FIFO queue is bounded: once it holds
+`MAX_QUEUED_REQUESTS` requests, admission fails immediately with `RUV1705`. This bounds retained
+request bodies and render metadata under sustained overload rather than turning a latency incident
+into unbounded heap growth. Below the execution limit the acquire resolves synchronously, so the
+common case does not wait in the request-slot queue. These are control-flow properties, not measured
+guarantees about wall-clock latency.
 
 Renders are CPU-bound and each one holds a React tree, a compiled bundle, and its response buffer.
 Admitting a whole burst at once exhausts the heap or thrashes the CPU into timeouts that present as
@@ -2095,6 +2306,7 @@ wedged worker cannot hold up server shutdown.
 | -------------------------------- | -------------------- | ---------------------------------------------------------- |
 | `RUVYXA_WORKER_POOL_SIZE`        | CPU count (2–8)      | Worker processes in the dev/prod pool                      |
 | `RUVYXA_WORKER_MAX_CONCURRENCY`  | CPU count (2–8)      | Requests one worker executes at once                       |
+| `RUVYXA_WORKER_MAX_QUEUE`        | concurrency × 4      | Maximum FIFO waiters; excess work fails with `RUV1705`     |
 | `RUVYXA_WORKER_TIMEOUT_MS`       | 30000 / 300000 build | Per-request deadline, shared by Rust and the Node watchdog |
 | `RUVYXA_PRERENDER_RECYCLE_AFTER` | 32 (`0` disables)    | Isolated prerenders before a build worker is retired       |
 | `RUVYXA_CACHE_MAX_ENTRIES`       | 256                  | Bundle and module cache entries per worker                 |
@@ -2111,6 +2323,7 @@ wedged worker cannot hold up server shutdown.
 | `activeRequests`        | Requests currently executing                                                       |
 | `queuedRequests`        | Requests parked on a slot — persistently non-zero means the pool is the bottleneck |
 | `maxConcurrentRequests` | The admission limit in effect                                                      |
+| `maxQueuedRequests`     | The bounded FIFO capacity before requests receive `RUV1705`                        |
 | `cacheSize`             | Bundle cache entries                                                               |
 | `moduleCacheSize`       | Module cache entries                                                               |
 | `retainedModuleUrls`    | Module graphs the ESM registry cannot free                                         |
@@ -2123,25 +2336,28 @@ wedged worker cannot hold up server shutdown.
 1. **Processes, not threads** — JavaScript needs a runtime; a process is the only unit that isolates
    one crashing render from the rest of the pool.
 2. **NDJSON over stdin/stdout** — No port to bind, no socket to secure, no serialization format to
-   version beyond JSON. Works identically for Node and Bun.
+   version beyond JSON. The contract is shared by Node, Bun, and Deno workers.
 3. **Request IDs, not request/response lockstep** — Several requests occupy one worker concurrently,
    which is what makes a data-fetching render's I/O wait useful instead of idle.
 4. **Least-loaded selection** — A single slow render cannot serialize unrelated requests behind it.
 5. **Retry gated on idempotency** — Recovery never turns one action into two.
 6. **Recycling gated on isolation and idleness** — The only unbounded resource is bounded, without
    dropping work in progress or charging the dev server for a cost it does not incur.
+7. **Bounded FIFO admission** — Short bursts are absorbed predictably; sustained overload fails
+   explicitly instead of consuming unbounded worker memory.
 
 ---
 
-## Concurrency Model · โมเดลการทำงานพร้อมกัน
+## Concurrency Model
 
 **Scope**: Cross-crate (dev server, bundler, diagnostics)
 
-### สรุป
+### Summary
 
-Ruvyxa uses three distinct concurrency domains: (1) async Tokio for I/O, (2) dedicated OS threads
-for SSR rendering, (3) parallel compilation via rayon for bundling. Each domain is designed for its
-workload — no one-size-fits-all runtime.
+Ruvyxa uses three distinct concurrency domains: (1) async Tokio for HTTP and process I/O, (2) a pool
+of long-lived JavaScript worker **processes** for rendering and runtime work, and (3) rayon for
+parallel compilation. Each domain is designed for its workload—there is no one-size-fits-all
+runtime.
 
 ---
 
@@ -2174,11 +2390,11 @@ async fn main() {
 
 Multiple Tokio runtimes exist:
 
-| Runtime            | Scope                | Thread count                                  |
-| ------------------ | -------------------- | --------------------------------------------- |
-| Main runtime       | Dev server, CLI      | Multi-thread (default: available_parallelism) |
-| Per-worker runtime | SSR rendering thread | Current-thread (1 worker = 1 runtime)         |
-| Build runtime      | CLI build pipeline   | Current-thread (sequential)                   |
+| Runtime                   | Scope                           | Concurrency responsibility                                                                                   |
+| ------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Host Tokio runtime        | Dev server and CLI async paths  | Axum I/O, watcher handoff, worker stdio, timers, graceful shutdown, and asynchronous coordination            |
+| JavaScript worker process | SSR/SSG/API/action/client work  | Its runtime event loop plus bounded request admission; the Rust host does not execute React rendering itself |
+| Rayon pool                | Compiler and image optimization | CPU-parallel source transforms and image variants, bounded by the relevant build configuration               |
 
 #### Why Tokio (not smol, monoio)
 
@@ -2190,11 +2406,13 @@ Multiple Tokio runtimes exist:
 
 ---
 
-### Domain 2: Dedicated Thread Pool (SSR Rendering)
+### Domain 2: JavaScript Worker-Process Pool (Rendering and Runtime Work)
 
 #### Where
 
-- React `renderToString` / `renderToPipeableStream`
+- React rendering and streaming
+- API routes and server actions
+- Client bundle compilation and static parameter resolution
 - Build-time static page generation (`ruvyxa build` for SSG routes)
 
 #### Mechanism
@@ -2213,19 +2431,24 @@ pub struct NodeWorkerPool {
 
 #### Why Not Tokio `spawn_blocking`
 
-Rendering does not happen in this process at all. Each worker is a long-lived Node or Bun
+Rendering does not happen in this process at all. Each worker is a long-lived Node, Bun, or Deno
 **subprocess** speaking JSON lines over stdin/stdout, so the work is neither a blocking Rust call
 nor something `spawn_blocking` could host. Keeping the processes alive is the point: spawning a
 runtime per render dominated the render itself.
 
 #### Dispatch
 
-- `next_worker.fetch_add(1, Relaxed) % workers.len()` — round-robin, no lock on the hot path.
+- The host snapshots worker handles from a read lock, then scans from a rotating atomic offset for
+  the least-loaded worker. It short-circuits on the first idle worker, which balances slow renders
+  without making equally idle workers permanently first-choice.
 - `REQUEST_COUNTER` stamps each request with a monotonic id; `pending` maps that id to the caller
   awaiting it, so one worker can have several renders in flight over a single pipe.
 - Every wait is a `tokio::time::timeout(response_timeout, …)`. A worker that stops answering fails
   its own request instead of stalling the server; the dev server and the build use different
   timeouts.
+- Each worker admits only `RUVYXA_WORKER_MAX_CONCURRENCY` active requests and a bounded FIFO of
+  `RUVYXA_WORKER_MAX_QUEUE` waiters. Queue overflow is `RUV1705`; `ping` and `invalidate` bypass the
+  queue so pressure does not mask health or freshness signals.
 - `isolated_renders_per_worker` retires a worker after N isolated prerenders so per-render module
   graphs cannot accumulate. It is `None` for the dev server, which never requests isolated imports.
 
@@ -2368,7 +2591,7 @@ released without acquiring another.
 
 ---
 
-## Protocols · โพรโทคอล
+## Protocols
 
 **Scope**: Cross-crate (dev server HMR, server actions, client module protocol) **Source**:
 `crates/ruvyxa_dev_server/src/lib.rs`
@@ -2377,10 +2600,11 @@ released without acquiring another.
 > endpoints live under `/__ruvyxa/` (double underscore) — see the Framework Endpoints table in the
 > Dev Server section, which this section cross-checks against rather than restates.
 
-### สรุป
+### Summary
 
-สาม wire protocols: (1) HMR WebSocket สำหรับ hot reload, (2) Server Action HTTP สำหรับ form/action
-submissions, (3) Client Module HTTP สำหรับ on-demand compiled bundles
+The public runtime uses three principal wire protocols: HMR WebSocket messages for hot reload,
+Server Action HTTP requests for form and action submissions, and Client Module HTTP requests for
+on-demand development bundles. The internal worker protocol is NDJSON over process stdio.
 
 ---
 
@@ -2876,11 +3100,11 @@ assets/
 
 ---
 
-## Diagnostics · การวินิจฉัย
+## Diagnostics
 
 **Crate**: `ruvyxa_diagnostics` **Module**: `crates/ruvyxa_diagnostics/src/lib.rs`
 
-### สรุป
+### Summary
 
 Central diagnostic types for the Ruvyxa framework. `Diagnostic` carries a structured error with
 source span, import chain, suggested fix, and affected routes. `RuvyxaError` is the unified error
@@ -3150,11 +3374,11 @@ conventional strings.
 
 ---
 
-## Security · ความปลอดภัย
+## Security
 
 **Scope**: Cross-crate (middleware, CLI, dev server, graph validation)
 
-### สรุป
+### Summary
 
 Ruvyxa employs defense in depth: configurable CORS, rate limiting, CSRF protection for actions,
 server/client boundary enforcement, private env var isolation, and origin validation.
@@ -3326,10 +3550,10 @@ confusing runtime `undefined`, while a build error names the file and the variab
 
 ### 6. Plugin Security
 
-Plugins run as a **separate Node/Bun subprocess** (see PluginHost in the Middleware section) — not
-inside the server process. That subprocess is a normal JavaScript runtime with full `fs`/`process`
-access; there is no sandbox around plugin code, and this document makes no unverified sandboxing
-claim.
+Plugins run as a **separate Node/Bun/Deno subprocess** (see PluginHost in the Middleware section) —
+not inside the server process. That subprocess is a normal JavaScript runtime with full
+`fs`/`process` access; there is no sandbox around plugin code, and this document makes no unverified
+sandboxing claim.
 
 What is actually bounded:
 
@@ -3418,11 +3642,11 @@ prerender root.
 
 ---
 
-## Deployment Adapters · อาดาปเตอร์สำหรับการปรับใช้
+## Deployment Adapters
 
 **Scope**: Platform adapter packages (`@ruvyxa/adapter-*`)
 
-### สรุป
+### Summary
 
 Adapters transform Ruvyxa build output into platform-specific formats. Each adapter implements a
 common interface: receive compiled bundles + route manifest → produce deployable artifact.
@@ -3432,7 +3656,7 @@ common interface: receive compiled bundles + route manifest → produce deployab
 ### Adapter Interface
 
 ```typescript
-// packages/ruvyxa/src/adapters/types.ts
+// packages/@ruvyxa/core/src/types.ts
 
 export interface Adapter {
   name: string
@@ -3453,20 +3677,24 @@ ruvyxa build --adapter node
 
 ### Built-in Adapters
 
-| Package      | Platform                     | Output |
-| ------------ | ---------------------------- | ------ |
-| Name         | Package                      |
-| ---          | ---                          |
-| `node`       | `@ruvyxa/adapter-node`       |
-| `bun`        | `@ruvyxa/adapter-bun`        |
-| `static`     | `@ruvyxa/adapter-static`     |
-| `vercel`     | `@ruvyxa/adapter-vercel`     |
-| `netlify`    | `@ruvyxa/adapter-netlify`    |
-| `cloudflare` | `@ruvyxa/adapter-cloudflare` |
-| `railway`    | `@ruvyxa/adapter-railway`    |
-| `render`     | `@ruvyxa/adapter-render`     |
-| `firebase`   | `@ruvyxa/adapter-firebase`   |
-| `aws`        | `@ruvyxa/adapter-aws`        |
+| Adapter name | Package                      | Runtime/platform artifact |
+| ------------ | ---------------------------- | ------------------------- |
+| `node`       | `@ruvyxa/adapter-node`       | Self-hosted Node server   |
+| `bun`        | `@ruvyxa/adapter-bun`        | Self-hosted Bun server    |
+| `deno`       | `@ruvyxa/adapter-deno`       | Self-hosted Deno server   |
+| `static`     | `@ruvyxa/adapter-static`     | Static publish directory  |
+| `vercel`     | `@ruvyxa/adapter-vercel`     | Vercel Build Output API   |
+| `netlify`    | `@ruvyxa/adapter-netlify`    | Netlify functions/static  |
+| `cloudflare` | `@ruvyxa/adapter-cloudflare` | Cloudflare Worker/assets  |
+| `railway`    | `@ruvyxa/adapter-railway`    | Railway deployment        |
+| `render`     | `@ruvyxa/adapter-render`     | Render deployment         |
+| `firebase`   | `@ruvyxa/adapter-firebase`   | Firebase deployment       |
+| `aws`        | `@ruvyxa/adapter-aws`        | AWS deployment            |
+
+Adapter factories use short names (`node`, `bun`, `deno`, `static`, and so on). `static` may be
+aliased in an import when it would shadow a local identifier. The adapter runner validates declared
+route capabilities before materializing output, so an adapter can reject an unsupported render
+strategy per route rather than producing an artifact that fails only after deployment.
 
 ---
 
@@ -3502,6 +3730,34 @@ Copies prerendered HTML and hashed client assets into a single publish directory
 `_headers` file (Netlify/Cloudflare Pages header-rules format) — there is no separate `build.json`
 artifact in this adapter's own output; build metadata lives in the shared `.ruvyxa/build.json` from
 the base build, not something the static adapter writes itself.
+
+---
+
+### Adapter: Deno
+
+**Source**: `packages/@ruvyxa/adapter-deno/src/index.ts`
+
+The Deno adapter supports SSR, SSG, CSR, ISR, PPR, and API routes. It emits a standalone server, an
+optional static-site artifact, a launcher, and deployment notes under `.ruvyxa/deploy/deno/`:
+
+```text
+.ruvyxa/deploy/deno/
+  ├── server/                 # Self-contained server artifact
+  ├── public/                 # Optional prerendered pages and assets
+  ├── start.mjs
+  └── README.md
+```
+
+Copy that directory to the host and run the standalone server from inside it:
+
+```bash
+deno run -A --no-prompt server/index.mjs
+```
+
+`PORT` defaults to `3000` and `HOST` to `0.0.0.0`. The unrestricted Deno flag is intentional for a
+trusted deployed application that needs normal server capabilities; production operators should
+apply their own process, container, and network isolation and avoid treating `-A` as a sandbox
+boundary.
 
 ---
 
@@ -3629,5 +3885,5 @@ serve an existing build and do not invoke an adapter.
    platform detection is only a fallback.
 3. **No deployment control plane** — Adapters build artifacts. They do not implement blue-green
    swaps, health-gated promotion, or production rollback.
-4. **Docker is a hosting form** — Use the Node or Bun artifact in a container rather than treating
-   Docker as a separate built-in adapter.
+4. **Docker is a hosting form** — Use the Node, Bun, or Deno artifact in a container rather than
+   treating Docker as a separate built-in adapter.

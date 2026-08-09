@@ -1,7 +1,7 @@
 //! Persistent JavaScript worker pool for eliminating subprocess spawn overhead.
 //!
 //! Instead of spawning a new JavaScript process for every SSR/API/action/client render,
-//! this module maintains a pool of long-lived Node or Bun processes that communicate
+//! this module maintains a pool of long-lived Node, Bun, or Deno processes that communicate
 //! via newline-delimited JSON over stdin/stdout.
 //!
 //! Performance impact: eliminates ~100-500ms of per-request overhead from process
