@@ -76,7 +76,16 @@ worker จะเป็นการ instrument ผิด process
 - build control มี `minify`, `treeShake`, `map`, `workers`, `warm` และ `prerenderCache` image
   control มี quality, lossless mode, variant, worker count และ on-demand transform
 - worker runtime มี request coalescing และ operational environment control เริ่มจาก default แล้วใช้
-  load test และข้อมูล memory/latency ก่อนเปลี่ยน pool size, concurrency, timeout หรือ memory limit
+  load test และข้อมูล memory/latency ก่อนเปลี่ยน pool size, concurrency, queue capacity, timeout
+  หรือ memory limit `RUVYXA_WORKER_MAX_CONCURRENCY` จำกัดงาน active ต่อ process และ
+  `RUVYXA_WORKER_MAX_QUEUE` จำกัดงานที่รอ เมื่อ overload ระบบจะคืน `RUV1705` แทนการเก็บ request
+  เพิ่มโดยไม่มีขอบเขต
+
+สำหรับ framework diagnostic ค่า snapshot จาก `ping` ภายใน worker รายงานจำนวน request ที่ active และ
+queued, limit ที่ตั้งไว้, rejection สะสม, retained module URL และขนาด cache หาก queue
+ไม่กลับเป็นศูนย์หรือ rejection เพิ่มต่อเนื่อง แสดงว่าเกิด saturation ก่อนเพิ่ม limit ให้วัด CPU,
+heap, tail latency และ rejection rate ร่วมกัน เพราะ queue ที่ใหญ่ขึ้นรับ burst ได้นานขึ้น แต่จะเก็บ
+request body มากขึ้นและเพิ่มเวลารอด้วย
 
 ## ข้อควรระวังเรื่อง cache และ concurrency
 

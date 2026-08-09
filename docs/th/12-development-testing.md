@@ -54,6 +54,21 @@ repository ปัจจุบันมี CI workflow ที่ `.github/workflo
 อย่ากล่าวอ้าง command ของ job รายตัวโดยไม่อ่าน workflow ใน revision ที่กำลังแก้ เพราะ workflow
 เปลี่ยนแยกจาก package script ได้
 
+## Worker-pool change matrix
+
+| สิ่งที่เปลี่ยน                            | เจ้าของหลัก                                      | การพิสูจน์แบบเจาะจง                                                                            |
+| ----------------------------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| Admission, fairness, queue bound, close   | `runtime/worker-admission.mjs`                   | `node --test tests/packages/ruvyxa/worker-admission.test.mjs`                                  |
+| Node dispatch, rendering, cache, protocol | `runtime/worker-pool.mjs`                        | `node --test tests/packages/ruvyxa/worker-pool.test.mjs`                                       |
+| Process selection, replacement, transport | `crates/ruvyxa_dev_server/src/worker_pool.rs`    | `cargo test -p ruvyxa_dev_server worker_pool --locked`                                         |
+| Runtime file หรือ import                  | package manifest, pack smoke, CLI artifact cache | `node --test tests/packages/ruvyxa/worker-runtime-contract.test.mjs` แล้วรัน `pnpm pack:smoke` |
+
+เริ่มจากแถวที่เป็นเจ้าของ behavior ที่เปลี่ยน จากนั้นรัน `pnpm --filter ruvyxa test` และ Rust crate
+test ที่เกี่ยวข้อง local import ใหม่จาก `worker-pool.mjs` ต้องถูก publish โดย
+`packages/ruvyxa/package.json` และ fingerprint โดย `crates/ruvyxa_cli/src/artifact_cache.rs`
+เพื่อให้ CLI ที่ติดตั้งแล้ว load ได้ และ prerender ไม่ reuse output เก่า หากเป็นไปได้ให้เปลี่ยน
+protocol แบบ additive และ update ทั้ง Rust serde type กับ Node test เมื่อ field เปลี่ยน
+
 ## Definition of done
 
 สำหรับ public framework change ให้ update Rust/TypeScript contract, test, template เมื่อเกี่ยวข้อง

@@ -46,6 +46,7 @@ import {
   toImportPath,
 } from './compiler.mjs'
 import { clientEntrySource, metaSourceImports, nodeSsrEntrySource } from './entry-templates.mjs'
+import { WorkerAdmissionController } from './worker-admission.mjs'
 
 // --- Configuration ---
 const MAX_BUNDLE_CACHE_ENTRIES = positiveIntegerEnv('RUVYXA_CACHE_MAX_ENTRIES', 256)
@@ -172,44 +173,12 @@ const renderCoalesceMap = new Map()
 // measurable rather than inferred from heap growth.
 const registeredModuleUrls = new Set()
 
-let activeRequests = 0
-let rejectedRequests = 0
 let isShuttingDown = false
 let moduleImportVersion = 0
-
-// Requests admitted but waiting for a concurrency slot. Each entry is the
-// `resolve` of the promise its handler is parked on.
-const admissionQueue = []
-
-/**
- * Wait for a concurrency slot, then mark this request active.
- *
- * Resolves immediately while the worker is below its limit, so the common case
- * adds no latency and no extra microtask hop beyond the `await`.
- */
-function acquireRequestSlot() {
-  if (activeRequests < MAX_CONCURRENT_REQUESTS) {
-    activeRequests++
-    return true
-  }
-  if (admissionQueue.length >= MAX_QUEUED_REQUESTS) {
-    rejectedRequests++
-    return false
-  }
-  return new Promise((resolve) => {
-    admissionQueue.push(() => {
-      activeRequests++
-      resolve(true)
-    })
-  })
-}
-
-/** Release this request's slot and start the longest-waiting queued one. */
-function releaseRequestSlot() {
-  activeRequests--
-  const next = admissionQueue.shift()
-  if (next) next()
-}
+const admission = new WorkerAdmissionController({
+  maxConcurrentRequests: MAX_CONCURRENT_REQUESTS,
+  maxQueuedRequests: MAX_QUEUED_REQUESTS,
+})
 
 /**
  * Write a stderr line tagged with the severity this worker intends.
@@ -237,10 +206,10 @@ function shutdown(reason = 'unknown') {
   // normal end of a worker's life: the host closes stdin once a build or dev
   // session is done.
   note('debug', `worker shutting down (${reason})`)
-  // Queued requests will never run: nothing new is admitted once shutting down,
-  // and their callers are already accounted for by the Rust side's timeout.
-  admissionQueue.length = 0
-  if (activeRequests === 0) process.exit(0)
+  // Settle parked handlers so shutdown has no dangling admission promises.
+  // Rust also observes the process exit and closes their pending responses.
+  admission.close()
+  if (admission.activeRequests === 0) process.exit(0)
   setTimeout(() => process.exit(0), 5000).unref()
 }
 
@@ -285,8 +254,11 @@ rl.on('line', async (line) => {
   // precisely when the pool is busy.
   const needsSlot = request.type !== 'invalidate' && request.type !== 'ping'
   if (needsSlot) {
-    const admitted = await acquireRequestSlot()
+    const admitted = await admission.acquire()
     if (!admitted) {
+      // `close()` settles parked handlers as false during shutdown. That is a
+      // lifecycle event, not overload, and stdout may already be unavailable.
+      if (isShuttingDown) return
       await writeWorkerMessage({
         id,
         ok: false,
@@ -297,7 +269,7 @@ rl.on('line', async (line) => {
     }
     // The worker may have started shutting down while this request waited.
     if (isShuttingDown) {
-      releaseRequestSlot()
+      admission.release()
       return
     }
   }
@@ -320,8 +292,8 @@ rl.on('line', async (line) => {
       shutdown('stdout-write-failed')
     }
   } finally {
-    if (needsSlot) releaseRequestSlot()
-    if (isShuttingDown && activeRequests === 0) process.exit(0)
+    if (needsSlot) admission.release()
+    if (isShuttingDown && admission.activeRequests === 0) process.exit(0)
   }
 })
 
@@ -353,13 +325,9 @@ async function dispatchRequest(request) {
         moduleCacheSize: moduleCache.size,
         // Module graphs retained by Node's ESM registry for this process.
         retainedModuleUrls: registeredModuleUrls.size,
-        activeRequests,
-        // Requests admitted but parked waiting for a concurrency slot. A
-        // persistently non-zero queue means the pool is the bottleneck.
-        queuedRequests: admissionQueue.length,
-        maxConcurrentRequests: MAX_CONCURRENT_REQUESTS,
-        maxQueuedRequests: MAX_QUEUED_REQUESTS,
-        rejectedRequests,
+        // A persistently non-zero queue or rising rejection count means this
+        // worker is the bottleneck.
+        ...admission.snapshot(),
         coalesceMapSize: renderCoalesceMap.size,
         workerRequestTimeoutMs: WORKER_REQUEST_TIMEOUT_MS,
         memoryPressureThresholdMb: MEMORY_PRESSURE_THRESHOLD_MB,

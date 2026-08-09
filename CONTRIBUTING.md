@@ -106,6 +106,15 @@ ruvyxa/
 - Update `templates/minimal/` when a feature affects new projects.
 - Update `examples/demo/` when a feature needs demonstration.
 
+### Worker pool changes
+
+The worker boundary crosses Rust and Node. Before editing it, read the ownership map and invariants
+in [Architecture](docs/en/11-architecture.md#worker-pool-boundary), then use the focused
+verification matrix in
+[Development and testing](docs/en/12-development-testing.md#worker-pool-change-matrix). If
+`worker-pool.mjs` imports a new local runtime module, include it in the `ruvyxa` package and in the
+prerender runtime fingerprint; the runtime contract test and `pnpm pack:smoke` enforce both.
+
 ---
 
 ## Making Changes

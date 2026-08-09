@@ -54,6 +54,25 @@ response ภายใต้ `security.pluginLimit` จึงต้องกำ�
 worker setting เป็น process control ไม่ใช่ dependency-injection container; ไม่พบหลักฐานของ public DI
 API ทั่วไป, queue system, scheduler หรือ framework-managed event bus
 
+## ขอบเขตของ worker pool
+
+pool แยกเจ้าของความรับผิดชอบไว้สามส่วนอย่างตั้งใจ:
+
+- `crates/ruvyxa_dev_server/src/worker_pool.rs` เป็นเจ้าของการสร้าง process, การเลือก worker
+  ที่มีงานค้างน้อยที่สุด, การจับคู่ request/response, timeout, replacement, streaming backpressure
+  และการปิด process
+- `packages/ruvyxa/runtime/worker-pool.mjs` เป็นเจ้าของ NDJSON dispatcher, compilation/render cache,
+  การรัน request, invalidation และ worker health snapshot
+- `packages/ruvyxa/runtime/worker-admission.mjs` เป็นเจ้าของเฉพาะ bounded FIFO admission state:
+  active slot, queued waiter, overload count, release และ close
+
+เมื่อแก้ boundary นี้ต้องรักษา invariant ต่อไปนี้: `ping` และ `invalidate` ไม่เข้าคิว render; ทุก
+acquire ที่สำเร็จต้องมี release เพียงหนึ่งครั้ง; งานที่รอต้องเป็น FIFO; queue overflow คืน
+`RUV1705`; การปิด admission ต้อง settle งานในคิว; และ stdout มีเฉพาะ NDJSON response เท่านั้น local
+module ที่ worker import เป็นทั้งเนื้อหาใน package และ input ของ prerender cache ดู
+[ตารางการเปลี่ยน worker pool](12-development-testing.md#worker-pool-change-matrix)
+ก่อนแก้ไฟล์เหล่านี้
+
 ## Build lifecycle
 
 build validate config และ graph, compile route/client code, รัน build plugin hook, prerender

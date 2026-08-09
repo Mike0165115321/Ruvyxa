@@ -25,6 +25,7 @@
     "runtime/route-match.mjs",
     "runtime/serverless-handler.mjs",
     "runtime/ssr-renderer.mjs",
+    "runtime/worker-admission.mjs",
     "runtime/worker-pool.mjs",
     "scripts/native-platform.mjs",
     "README.md"

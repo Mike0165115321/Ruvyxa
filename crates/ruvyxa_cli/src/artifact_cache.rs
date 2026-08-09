@@ -23,6 +23,17 @@ use ruvyxa_dev_server::find_runtime_script;
 
 use crate::*;
 
+// Every local module imported by the persistent render worker can change
+// prerendered output or worker lifecycle. Keep names visible here so the npm
+// runtime contract test can prove package inclusion and cache coverage together.
+const WORKER_RUNTIME_FILES: &[&str] = &[
+    "worker-pool.mjs",
+    "worker-admission.mjs",
+    "request-context.mjs",
+    "compiler.mjs",
+    "entry-templates.mjs",
+];
+
 pub(crate) fn content_hash(input: &str) -> String {
     content_hash_bytes(input.as_bytes())
 }
@@ -105,8 +116,7 @@ pub(crate) fn prerender_context_hash(
         "clientAssets": client_assets,
         "jsx": build.jsx_runtime.as_deref().unwrap_or("automatic"),
         "target": build.es_target.as_deref().unwrap_or("es2022"),
-        "workerRuntime": runtime_script_hash(root, "worker-pool.mjs"),
-        "compilerRuntime": runtime_script_hash(root, "compiler.mjs"),
+        "workerRuntime": runtime_script_hashes(root, WORKER_RUNTIME_FILES),
         "projectEnv": project_env,
         "processEnv": process_env,
     });
@@ -136,6 +146,13 @@ pub(crate) fn runtime_script_hash(root: &Path, name: &str) -> String {
         .and_then(|path| fs::read(path).ok())
         .map(|source| content_hash_bytes(&source))
         .unwrap_or_default()
+}
+
+fn runtime_script_hashes(root: &Path, names: &[&str]) -> BTreeMap<String, String> {
+    names
+        .iter()
+        .map(|name| ((*name).to_owned(), runtime_script_hash(root, name)))
+        .collect()
 }
 
 pub(crate) fn load_prerender_artifact(

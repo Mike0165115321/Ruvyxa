@@ -9,7 +9,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs'
-import { resolve } from 'node:path'
+import { dirname, relative, resolve, sep } from 'node:path'
 import { rm } from 'node:fs/promises'
 import { arch, platform } from 'node:process'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -39,6 +39,49 @@ const packages = [
   'ruvyxa',
   'create-ruvyxa',
 ]
+
+const ruvyxaRuntimeSource = resolve('packages/ruvyxa/runtime')
+
+/**
+ * Follow local ESM dependencies from the runtime entrypoints that the native
+ * CLI launches. Keeping this derived from imports means a new sibling module
+ * cannot work in the monorepo and then disappear from the published tarball.
+ */
+function packagedRuntimeGraph(entryFiles) {
+  const pending = [...entryFiles]
+  const visited = new Set()
+
+  while (pending.length > 0) {
+    const runtimeFile = pending.pop()
+    if (visited.has(runtimeFile)) continue
+    visited.add(runtimeFile)
+
+    const sourcePath = resolve(ruvyxaRuntimeSource, runtimeFile)
+    const sourceRelative = relative(ruvyxaRuntimeSource, sourcePath)
+    assert(
+      sourceRelative && !sourceRelative.startsWith(`..${sep}`) && sourceRelative !== '..',
+      `runtime import escapes package/runtime: ${runtimeFile}`,
+    )
+    const source = readFileSync(sourcePath, 'utf8')
+    const specifiers = [
+      ...source.matchAll(/\b(?:import|export)\s+(?:[^'\"]*?\s+from\s+)?['\"](\.[^'\"]+)['\"]/g),
+      ...source.matchAll(/\bimport\s*\(\s*['\"](\.[^'\"]+)['\"]\s*\)/g),
+    ]
+    for (const match of specifiers) {
+      const dependencyPath = resolve(dirname(sourcePath), match[1])
+      const dependencyRelative = relative(ruvyxaRuntimeSource, dependencyPath)
+      assert(
+        dependencyRelative &&
+          !dependencyRelative.startsWith(`..${sep}`) &&
+          dependencyRelative !== '..',
+        `runtime import escapes package/runtime: ${runtimeFile} -> ${match[1]}`,
+      )
+      pending.push(dependencyRelative.replaceAll(sep, '/'))
+    }
+  }
+
+  return [...visited].sort()
+}
 
 rmSync(destination, { recursive: true, force: true })
 mkdirSync(destination, { recursive: true })
@@ -101,7 +144,7 @@ for (const file of readdirSync(destination).filter((name) => name.endsWith('.tgz
       listing.includes(`package/native-bin/${platform}-${arch}/${executable}`),
       'ruvyxa package missing native binary',
     )
-    for (const runtimeFile of ['compiler.mjs', 'worker-pool.mjs']) {
+    for (const runtimeFile of packagedRuntimeGraph(['compiler.mjs', 'worker-pool.mjs'])) {
       assert(
         listing.includes(`package/runtime/${runtimeFile}`),
         `ruvyxa package missing runtime/${runtimeFile}`,

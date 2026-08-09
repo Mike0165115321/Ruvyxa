@@ -77,7 +77,15 @@ anywhere else corrupts the response a request is waiting on.
   Image controls include quality, lossless mode, variants, worker count, and on-demand transforms.
 - The worker runtime has request coalescing and operational environment controls. Start with
   defaults, then use load tests and memory/latency data before changing pool size, concurrency,
-  timeout, or memory limit.
+  queue capacity, timeout, or memory limit. `RUVYXA_WORKER_MAX_CONCURRENCY` bounds active work per
+  process and `RUVYXA_WORKER_MAX_QUEUE` bounds waiting work; overload is rejected as `RUV1705`
+  instead of retaining requests without limit.
+
+For framework diagnostics, the internal worker `ping` snapshot reports active and queued requests,
+their configured limits, cumulative rejections, retained module URLs, and cache sizes. A queue that
+stays non-zero or a rising rejection count indicates saturation. Measure CPU, heap, tail latency,
+and rejection rate together before raising a bound: a larger queue absorbs a longer burst but also
+retains request bodies and increases wait time.
 
 ## Cache and concurrency cautions
 

@@ -53,6 +53,21 @@ The current repository has CI workflows at `.github/workflows/ci.yml` and
 `.github/workflows/release.yml`. Do not claim an individual job's exact command without reading the
 workflow at the revision you are changing; workflows can evolve independently of package scripts.
 
+## Worker-pool change matrix
+
+| Change                                    | Primary owner                                    | Focused proof                                                                               |
+| ----------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| Admission, fairness, queue bounds, close  | `runtime/worker-admission.mjs`                   | `node --test tests/packages/ruvyxa/worker-admission.test.mjs`                               |
+| Node dispatch, rendering, cache, protocol | `runtime/worker-pool.mjs`                        | `node --test tests/packages/ruvyxa/worker-pool.test.mjs`                                    |
+| Process selection, replacement, transport | `crates/ruvyxa_dev_server/src/worker_pool.rs`    | `cargo test -p ruvyxa_dev_server worker_pool --locked`                                      |
+| Runtime files or imports                  | package manifest, pack smoke, CLI artifact cache | `node --test tests/packages/ruvyxa/worker-runtime-contract.test.mjs` then `pnpm pack:smoke` |
+
+Run the row that owns the changed behavior first, then `pnpm --filter ruvyxa test` and the relevant
+Rust crate tests. A new local import from `worker-pool.mjs` must be published by
+`packages/ruvyxa/package.json` and fingerprinted by `crates/ruvyxa_cli/src/artifact_cache.rs` so an
+installed CLI can load it and prerendering cannot reuse stale output. Keep protocol changes additive
+when possible and update both Rust serde types and Node tests when a field changes.
+
 ## Definition of done
 
 For a public framework change, update the Rust/TypeScript contract, tests, templates where

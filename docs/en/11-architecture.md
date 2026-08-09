@@ -55,6 +55,24 @@ sizing and testing. Worker settings are process controls, not a dependency-injec
 codebase evidence exposes a general public DI API, queue system, scheduler, or framework-managed
 event bus.
 
+## Worker-pool boundary
+
+The pool has three deliberately separate owners:
+
+- `crates/ruvyxa_dev_server/src/worker_pool.rs` owns process creation, least-loaded worker
+  selection, request/response correlation, timeouts, replacement, streaming backpressure, and
+  process shutdown.
+- `packages/ruvyxa/runtime/worker-pool.mjs` owns the NDJSON dispatcher, compilation/render caches,
+  request execution, invalidation, and worker health snapshots.
+- `packages/ruvyxa/runtime/worker-admission.mjs` owns only bounded FIFO admission state: active
+  slots, queued waiters, overload counts, release, and close.
+
+Preserve these invariants when changing the boundary: `ping` and `invalidate` bypass render
+admission; every successful acquire has exactly one release; waiting work remains FIFO; overflow
+returns `RUV1705`; closing admission settles queued work; and stdout contains NDJSON responses only.
+Local modules imported by the worker are both package contents and prerender cache inputs. See the
+[worker-pool change matrix](12-development-testing.md#worker-pool-change-matrix) before editing one.
+
 ## Build lifecycle
 
 Build validates config and graph, compiles route/client code, runs build plugin hooks, prerenders
