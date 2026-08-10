@@ -9,6 +9,7 @@ import {
 } from '../../../packages/ruvyxa/scripts/native-platform.mjs'
 
 const ruvyxaPackage = readJson('../../../packages/ruvyxa/package.json')
+const workspacePackage = readJson('../../../package.json')
 const windowsArmPackage = readJson('../../../packages/@ruvyxa/cli-win32-arm64/package.json')
 
 describe('Ruvyxa CLI platforms', () => {
@@ -78,6 +79,8 @@ describe('Ruvyxa CLI platforms', () => {
     )
 
     assert.match(workspaceManifest, /rust-version = "1\.96"/)
+    assert.equal(workspacePackage.engines.node, '>=22.12.0')
+    assert.equal(workspacePackage.packageManager, 'pnpm@10.34.5')
     assert.equal(ruvyxaPackage.engines.node, '>=22.12.0')
     assert.match(ciWorkflow, /toolchain: 1\.96\.0/)
     assert.match(ciWorkflow, /node: '22\.12\.0'/)

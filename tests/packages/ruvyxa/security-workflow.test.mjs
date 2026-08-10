@@ -7,6 +7,9 @@ const workflow = readFileSync(
   new URL('../../../.github/workflows/security.yml', import.meta.url),
   'utf8',
 )
+const workspacePackage = JSON.parse(
+  readFileSync(new URL('../../../package.json', import.meta.url), 'utf8'),
+)
 
 describe('dependency security workflow', () => {
   it('audits both production lockfiles with read-only repository access', () => {
@@ -16,6 +19,13 @@ describe('dependency security workflow', () => {
     assert.match(workflow, /permissions:\s+contents: read/)
     assert.doesNotMatch(workflow, /(?:checks|issues|pull-requests): write/)
     assert.match(workflow, /persist-credentials: false/)
+  })
+
+  it('uses a package manager compatible with the exact minimum Node runtime', () => {
+    assert.equal(workspacePackage.engines.node, '>=22.12.0')
+    assert.equal(workspacePackage.packageManager, 'pnpm@10.34.5')
+    assert.match(workflow, /node-version: 22\.12\.0/)
+    assert.match(workflow, /uses: pnpm\/action-setup@v6/)
   })
 
   it('runs on a schedule and dependency changes', () => {
