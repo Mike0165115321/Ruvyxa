@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.0.29 (2026-08-09)
+## v1.0.29 (2026-08-10)
 
 ### Breaking: shortened adapter factory exports
 
@@ -25,6 +25,45 @@ types and generated deployment artifacts are otherwise unchanged.
 For example, replace `import { nodeAdapter } from '@ruvyxa/adapter-node'` with
 `import { node } from '@ruvyxa/adapter-node'`, then use `adapter: node()`. Because `static` is
 reserved in direct function declarations, import it as an alias such as `staticOutput`.
+
+### Breaking: image optimization is opt-in
+
+- **Responsive variants are no longer generated automatically.** `variantWidths` is unset by
+  default, so a build publishes one WebP per source instead of a full responsive set; applications
+  that want the previous behavior set `variantWidths` (or use on-demand image optimization). The
+  `defaultVariantWidths` presets are gone.
+- **`keepOriginal` now defaults to `false`.** Original images are no longer published unless
+  explicitly re-enabled, shrinking build output and deployment size. Build warnings now say what
+  each setting causes: a raw `<img>` referencing a missing original when `keepOriginal` is off, and
+  suboptimal WebP usage when it is on.
+
+### MDX and Markdown compilation
+
+- **Markdown and MDX compile through the configured `@mdx-js/mdx` pipeline instead of the native
+  fallback.** A persistent JavaScript content host compiles each document once per unique source,
+  and the compiled content is reused by dependency scanning and code generation. Raw HTML is escaped
+  in `.md` documents, heading exports are collected, and each document is wrapped in a stable
+  `ruvyxa-content` article container.
+- **Added the `compile_content` build-plugin hook.** A plugin can compile (or rewrite) `.md`/`.mdx`
+  sources itself; `config.markdown` — `gfm` (on by default), remark/rehype plugin arrays, and
+  `remarkRehypeOptions` — flows into the host. Content-cache keys include the markdown configuration
+  fingerprint, so changed plugins or options cannot serve stale compiled output.
+- **MDX component providers are discovered automatically.** `mdx-components` files are located by
+  walking ancestor directories (bounded by the project root), covering `.tsx`, `.ts`, `.mts`,
+  `.mjs`, and the classic `.js`/`.jsx` forms, and the discovered provider is imported into each MDX
+  document that can reach it. Provider paths participate in the content cache key, and the
+  `providerImport` option can inject a provider explicitly.
+
+### Tooling and CI
+
+- **Raised the minimum Node.js version to 22.13.0** across the CLI, packages, templates, examples,
+  documentation, and the CI matrix (12.22 → 13.22 in one step; prior releases required 22.12.0).
+- Pinned pnpm to 10.34.5 after a brief 11.21.0 excursion that the minimum-runtime test matrix
+  rejected, and added workspace assertions that verify the Node and pnpm versions running tests
+  match the documented minimums.
+- Added a scheduled security audit workflow: a RustSec pass over `Cargo.lock` production
+  dependencies and an `pnpm audit` pass over production packages, both also triggered whenever a
+  dependency manifest changes. The CI test matrix now spells out per-platform Node versions.
 
 ### Deno runtime and deployment
 
@@ -51,7 +90,9 @@ reserved in direct function declarations, import it as an alias such as `staticO
 
 - Updated the English and Thai tutorial trees with learning goals and checkpoints, clarified that
   Ruvyxa is a web framework rather than a React-only framework description, and documented the new
-  runtime, adapter, and queue-control behavior.
+  runtime, adapter, queue-control, image, and MDX behavior. ARCHITECTURE.md gained system-boundary,
+  repository-topology, and state/failure/compatibility sections plus a Deno-aware system diagram,
+  and the README benchmark tables were refreshed for 1.0.28.
 
 ## v1.0.28 (2026-08-07)
 
