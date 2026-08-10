@@ -49,18 +49,24 @@ describe('Ruvyxa CLI platforms', () => {
       new URL('../../../.github/workflows/release.yml', import.meta.url),
       'utf8',
     )
+    const releasePlan = readFileSync(
+      new URL('../../../scripts/validate-release-publish-plan.mjs', import.meta.url),
+      'utf8',
+    )
     const adapterDependencies = Object.keys(ruvyxaPackage.dependencies).filter((name) =>
       name.startsWith('@ruvyxa/adapter-'),
     )
 
+    assert.equal(
+      releaseWorkflow.match(/node scripts\/validate-release-publish-plan\.mjs/g)?.length,
+      2,
+      'release and verification steps must both validate the shared publish plan',
+    )
     for (const adapterName of adapterDependencies) {
-      const occurrences = releaseWorkflow.match(
-        new RegExp(`^\\s{12}${adapterName.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')} \\\\?$`, 'gm'),
-      )
-      assert.equal(
-        occurrences?.length,
-        2,
-        `${adapterName} must appear in the publish and registry-verification lists`,
+      assert.match(
+        releasePlan,
+        new RegExp(`['"]${escapeRegExp(adapterName)}['"]`),
+        `${adapterName} must appear in the shared release publish plan`,
       )
     }
   })
@@ -120,6 +126,10 @@ describe('Ruvyxa CLI platforms', () => {
     assert.equal(ruvyxaPackage.optionalDependencies[removedPackageName], undefined)
   })
 })
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
 
 function readJson(relativePath) {
   return JSON.parse(readFileSync(new URL(relativePath, import.meta.url), 'utf8'))

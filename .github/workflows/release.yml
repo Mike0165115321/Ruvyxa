@@ -188,7 +188,6 @@ jobs:
       - name: Publish JavaScript packages in dependency order
         run: |
           VERSION="${{ needs.resolve-version.outputs.version }}"
-          node scripts/validate-release-publish-plan.mjs
           PACKAGE_LIST="$(node scripts/validate-release-publish-plan.mjs --list)"
           for PACKAGE in $PACKAGE_LIST; do
             if npm view "$PACKAGE@$VERSION" version >/dev/null 2>&1; then
@@ -216,7 +215,6 @@ jobs:
       - name: Verify published packages install from npm
         run: |
           VERSION="${{ needs.resolve-version.outputs.version }}"
-          node scripts/validate-release-publish-plan.mjs
           PACKAGE_LIST="$(node scripts/validate-release-publish-plan.mjs --list)"
           for PACKAGE in $PACKAGE_LIST; do
             npm view "$PACKAGE@$VERSION" version
