@@ -29,6 +29,7 @@ describe('render', () => {
       blueprintArtifact && 'contents' in blueprintArtifact ? String(blueprintArtifact.contents) : ''
     assert.match(blueprint, /name: "shop-web"/)
     assert.match(blueprint, /runtime: node/)
+    assert.match(blueprint, /key: NODE_VERSION\s+value: 22\.13\.0/)
     assert.match(blueprint, /plan: free/)
     assert.match(blueprint, /buildCommand: npm run build/)
     assert.match(blueprint, /startCommand: node \.ruvyxa\/deploy\/render\/server\/index\.mjs/)

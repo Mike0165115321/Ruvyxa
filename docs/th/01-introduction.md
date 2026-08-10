@@ -27,9 +27,9 @@ flowchart LR
 
 ## ข้อกำหนดเบื้องต้น
 
-- root และ JavaScript package ที่เผยแพร่ระบุ Node.js `>=22.12.0`
-- project ที่ generator สร้างระบุ Node `>=22.12.0` และติดตั้ง/รันด้วย npm ได้ ส่วน monorepo ใช้ pnpm
-  `11.18.0`; เรื่องนี้เกี่ยวกับผู้พัฒนา framework เท่านั้น
+- root และ JavaScript package ที่เผยแพร่ระบุ Node.js `>=22.13.0`
+- project ที่ generator สร้างระบุ Node `>=22.13.0` และติดตั้ง/รันด้วย npm ได้ ส่วน monorepo ใช้ pnpm
+  `11.21.0`; เรื่องนี้เกี่ยวกับผู้พัฒนา framework เท่านั้น
 - template ใช้ React และ React DOM `19.2.8`
 - project ต้องมี `package.json`, `ruvyxa.config.ts` และ application directory (โดยทั่วไปคือ `app/`)
 

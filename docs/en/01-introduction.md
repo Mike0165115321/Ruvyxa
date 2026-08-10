@@ -27,9 +27,9 @@ flowchart LR
 
 ## Requirements
 
-- Node.js `>=22.12.0` is declared by the root and published JavaScript packages.
-- Generated projects declare Node `>=22.12.0` and can be installed and run with npm. The framework
-  monorepo itself uses pnpm `11.18.0`; that is relevant only to framework contributors.
+- Node.js `>=22.13.0` is declared by the root and published JavaScript packages.
+- Generated projects declare Node `>=22.13.0` and can be installed and run with npm. The framework
+  monorepo itself uses pnpm `11.21.0`; that is relevant only to framework contributors.
 - React and React DOM `19.2.8` are the template dependencies.
 - A project needs a `package.json`, `ruvyxa.config.ts`, and an application directory (normally
   `app/`).

@@ -121,7 +121,7 @@ node .ruvyxa/deploy/render/server/index.mjs
 ```
 
 Railway config ที่สร้างใช้ Railpack และ `ON_FAILURE` ที่มี 10 retry Render Blueprint สร้าง Node
-`22.12.0` web service handler ทั้งคู่ bind `0.0.0.0` และอ่าน `PORT` หากคุณดูแล provider file เอง
+`22.13.0` web service handler ทั้งคู่ bind `0.0.0.0` และอ่าน `PORT` หากคุณดูแล provider file เอง
 ให้ใช้ `projectConfig: false` และคง build/start relationship เดียวกัน
 
 ## Firebase และ AWS Amplify Hosting

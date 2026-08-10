@@ -124,7 +124,7 @@ node .ruvyxa/deploy/render/server/index.mjs
 ```
 
 Railway's generated config uses Railpack and `ON_FAILURE` with 10 retries. Render's Blueprint
-creates a Node `22.12.0` web service. Both generated handlers bind `0.0.0.0` and read `PORT`. If you
+creates a Node `22.13.0` web service. Both generated handlers bind `0.0.0.0` and read `PORT`. If you
 own the provider file, set `projectConfig: false` and preserve the same build/start relationship.
 
 ## Firebase and AWS Amplify Hosting
