@@ -89,6 +89,12 @@ export interface RuvyxaConfig {
     dir?: string
   }
   site?: SiteConfig
+  /**
+   * Content-derived application artifacts. Markdown and MDX page routes do not
+   * require this setting; enable it only when the application also needs a
+   * content manifest, search index, RSS feed, sitemap, or llms.txt.
+   */
+  content?: boolean | ContentConfig
   middleware?: MiddlewareConfig
   adapter?: Adapter
   adapterOptions?: Record<string, unknown>
@@ -111,10 +117,45 @@ export interface SiteConfig {
    * canonical origin. A bare hostname is normalized to `https`.
    */
   url?: string
+  /** Shared site title used by content-derived artifacts. */
+  title?: string
+  /** Shared site description used by content-derived artifacts. */
+  description?: string
+  /** BCP 47 language used by feeds and content tokenization. */
+  language?: string
   /** Emit the route-derived sitemap or customize its path set. @default true */
   sitemap?: boolean | SiteSitemapConfig
   /** Emit `robots.txt` or provide a crawler policy. @default true */
   robots?: boolean | SiteRobotsConfig
+}
+
+/** Options for the content artifacts generated from native Markdown/MDX routes. */
+export interface ContentConfig {
+  /** Enable the standard content engine or customize its generated artifacts. */
+  engine?: boolean | ContentEngineConfig
+}
+
+/** Content-engine options whose site identity comes from the shared `site` block. */
+export interface ContentEngineConfig {
+  /** Exact route paths or trailing-`*` patterns omitted from every artifact. */
+  exclude?: string[]
+  /** BCP 47 locale used for search tokenization. Defaults to `site.language`. */
+  locale?: string
+  stopWords?: string[]
+  /** Ignore shorter search terms. @default 2 */
+  minTermLength?: number
+  /** @default "/content.json" */
+  manifestPath?: string
+  /** @default "/search-index.json" */
+  searchPath?: string
+  /** @default "/rss.xml" */
+  feedPath?: string
+  /** @default "/sitemap.xml" */
+  sitemapPath?: string
+  /** Experimental agent discovery index. Set false to disable. @default "/llms.txt" */
+  llmsPath?: string | false
+  /** Feed language. Defaults to `site.language`. */
+  language?: string
 }
 
 /** Production controls for Ruvyxa's route-derived sitemap. */

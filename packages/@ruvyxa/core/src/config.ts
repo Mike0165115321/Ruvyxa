@@ -3,6 +3,8 @@ import type { RuvyxaConfig } from './types.js'
 export type {
   BuiltinMiddlewareConfig,
   CachedStaticParams,
+  ContentConfig,
+  ContentEngineConfig,
   CorsConfig,
   GetStaticParams,
   ImageConfig,

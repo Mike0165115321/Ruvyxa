@@ -178,28 +178,31 @@ edge, and serverless targets fail during build instead of deploying a dead socke
 
 ```ts
 import { config } from 'ruvyxa/config'
-import { cacheRules, contentEngine, observability, securityHeaders } from 'ruvyxa/plugins'
+import { cacheRules, observability, securityHeaders } from 'ruvyxa/plugins'
 
 export default config({
+  site: {
+    url: 'https://example.com',
+    title: 'Example',
+    description: 'Latest articles',
+    language: 'en',
+  },
+  content: true,
   plugins: [
     observability({ routes: ['/api/*'] }),
     securityHeaders({ contentSecurityPolicy: { 'default-src': ["'self'"] } }),
     cacheRules([{ source: '/api/*', browser: 'no-store' }]),
-    contentEngine({
-      siteUrl: 'https://example.com',
-      title: 'Example',
-      description: 'Latest articles',
-      locale: 'en',
-    }),
   ],
 })
 ```
 
-Content Engine also publishes explicit answer metadata and an experimental `/llms.txt` index from
-the same Markdown/MDX graph. Build-generated files are written before adapters materialize
-deployment artifacts, so PWA, RSS, search-index, OpenAPI, sitemap, robots, and `llms.txt` outputs
-ship with static and hybrid adapters. See the English and Thai plugin guides for complete options,
-including independent OpenAI search/training crawler policy.
+`content: true` automatically enables Content Engine without duplicate plugin wiring. The explicit
+`contentEngine(options)` plugin remains available for programmatic composition. Content Engine also
+publishes explicit answer metadata and an experimental `/llms.txt` index from the same Markdown/MDX
+graph. Build-generated files are written before adapters materialize deployment artifacts, so PWA,
+RSS, search-index, OpenAPI, sitemap, robots, and `llms.txt` outputs ship with static and hybrid
+adapters. See the English and Thai plugin guides for complete options, including independent OpenAI
+search/training crawler policy.
 
 ## Runtime Architecture
 

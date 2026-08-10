@@ -6,6 +6,7 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const JS_EXTENSIONS = ['', '.ts', '.tsx', '.js', '.jsx', '.mts', '.mjs', '.md', '.mdx']
+export const MDX_COMPONENT_EXTENSIONS = ['.tsx', '.ts', '.jsx', '.js', '.mts', '.mjs']
 const ASSET_EXTENSIONS = new Set(['.css', '.scss', '.sass', '.less'])
 const COMPILER_CACHE_MAX_ENTRIES = 512
 const compilerCache = (globalThis.__RUVYXA_COMPILER_CACHE__ ??= {
@@ -354,7 +355,7 @@ async function visitModule(context) {
   const styleModule = isCssModuleFile(filePath)
     ? await compileStyleModuleSource(source, filePath, root)
     : null
-  const compiledSource = styleModule?.source ?? (await compileContentSource(source, filePath))
+  const compiledSource = styleModule?.source ?? (await compileContentSource(source, filePath, root))
   const id = `__m${modules.length}`
   const module = {
     id,
@@ -1221,11 +1222,21 @@ async function readSourceFile(file) {
   return source
 }
 
-async function compileContentSource(source, filePath) {
+async function compileContentSource(source, filePath, projectRoot) {
   const extension = filePath ? path.extname(filePath).toLowerCase() : ''
   if (extension !== '.md' && extension !== '.mdx') return source
 
-  const cacheKey = createHash('sha256').update(extension).update('\0').update(source).digest('hex')
+  const providerFile = extension === '.mdx' ? findMdxComponentsFile(filePath, projectRoot) : null
+  const providerImportSource = providerFile
+    ? relativeImportSpecifier(path.dirname(filePath), providerFile)
+    : undefined
+  const cacheKey = createHash('sha256')
+    .update(extension)
+    .update('\0')
+    .update(source)
+    .update('\0')
+    .update(providerImportSource ?? '')
+    .digest('hex')
   const cached = compilerCache.content.get(cacheKey)
   if (cached) return cached
 
@@ -1244,6 +1255,7 @@ async function compileContentSource(source, filePath) {
         jsx: false,
         outputFormat: 'program',
         development: false,
+        providerImportSource,
         remarkPlugins: [remarkGfm, createContentMetadataPlugin(headings)],
       }),
     )
@@ -1263,6 +1275,28 @@ async function compileContentSource(source, filePath) {
   const output = `${compiled}\n${prefix}\n`
   setBoundedCacheEntry(compilerCache.content, cacheKey, output)
   return output
+}
+
+function findMdxComponentsFile(filePath, projectRoot) {
+  const root = path.resolve(projectRoot)
+  let directory = path.dirname(path.resolve(filePath))
+
+  while (isWithinProject(root, directory)) {
+    for (const extension of MDX_COMPONENT_EXTENSIONS) {
+      const candidate = path.join(directory, `mdx-components${extension}`)
+      if (existsSync(candidate)) return candidate
+    }
+    if (directory === root) break
+    const parent = path.dirname(directory)
+    if (parent === directory) break
+    directory = parent
+  }
+  return null
+}
+
+function relativeImportSpecifier(fromDirectory, file) {
+  const relative = path.relative(fromDirectory, file).replaceAll('\\', '/')
+  return relative.startsWith('.') ? relative : `./${relative}`
 }
 
 function setBoundedCacheEntry(cache, key, value) {

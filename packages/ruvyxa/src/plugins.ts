@@ -1178,6 +1178,22 @@ export interface ContentEngineOptions {
   language?: string
 }
 
+interface ContentEngineProjectConfig {
+  appDir?: string
+  site?: {
+    url?: string
+    title?: string
+    description?: string
+    language?: string
+  }
+  content?:
+    | boolean
+    | {
+        engine?:
+          boolean | Omit<ContentEngineOptions, 'siteUrl' | 'title' | 'description' | 'appDir'>
+      }
+}
+
 interface ContentEngineDocument extends ContentEngineEntry {
   text: string
 }
@@ -1261,6 +1277,49 @@ export function contentEngine(options: ContentEngineOptions): RuvyxaPlugin {
       })
     },
   })
+}
+
+/**
+ * Materialize the built-in content engine declared by the top-level content
+ * configuration. Kept as one normal first-party plugin so explicit
+ * `contentEngine()` users and the shorthand share every runtime behavior.
+ *
+ * @internal
+ */
+export function contentEngineFromConfig(
+  config: ContentEngineProjectConfig,
+): RuvyxaPlugin | undefined {
+  const content = config?.content
+  const engine =
+    content === true
+      ? {}
+      : content && typeof content === 'object' && !Array.isArray(content)
+        ? content.engine
+        : undefined
+  if (engine !== true && (typeof engine !== 'object' || engine === null || Array.isArray(engine))) {
+    return undefined
+  }
+
+  const options = engine === true ? {} : engine
+  const site = config.site ?? {}
+  return contentEngine({
+    ...options,
+    siteUrl: requiredConfiguredSiteValue(site.url, 'url'),
+    title: requiredConfiguredSiteValue(site.title, 'title'),
+    description: requiredConfiguredSiteValue(site.description, 'description'),
+    appDir: config.appDir,
+    locale: options.locale ?? site.language,
+    language: options.language ?? site.language,
+  })
+}
+
+function requiredConfiguredSiteValue(value: unknown, field: string): string {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new TypeError(
+      `content engine: site.${field} must be a non-empty string when content is enabled`,
+    )
+  }
+  return value
 }
 
 function normalizeContentEngineOptions(

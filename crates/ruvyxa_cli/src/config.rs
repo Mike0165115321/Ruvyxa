@@ -56,6 +56,8 @@ pub(crate) struct ProjectConfig {
     pub(crate) cache: CacheConfigOptions,
     #[serde(default)]
     pub(crate) site: SiteConfigOptions,
+    #[serde(rename = "content")]
+    pub(crate) _content: Option<serde_json::Value>,
     #[serde(default)]
     pub(crate) middleware: ruvyxa_middleware::MiddlewareConfig,
     #[serde(default)]

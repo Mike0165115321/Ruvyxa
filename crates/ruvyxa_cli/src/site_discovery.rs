@@ -30,6 +30,15 @@ const SITEMAP_FOOTER: &str = "</urlset>\n";
 pub struct SiteConfigOptions {
     /// Absolute origin of the deployed site, e.g. `https://ruvyxa.dev`.
     pub url: Option<String>,
+    /// Shared title consumed by content-derived artifacts.
+    #[serde(rename = "title")]
+    pub _title: Option<String>,
+    /// Shared description consumed by content-derived artifacts.
+    #[serde(rename = "description")]
+    pub _description: Option<String>,
+    /// BCP 47 language consumed by feeds and content tokenization.
+    #[serde(rename = "language")]
+    pub _language: Option<String>,
     /// Sitemap generation switch or production options. @default true
     #[serde(default)]
     pub sitemap: SitemapSetting,
@@ -1592,6 +1601,7 @@ mod tests {
                 url: None,
                 sitemap: SitemapSetting::Enabled(false),
                 robots: RobotsSetting::Enabled(false),
+                ..SiteConfigOptions::default()
             },
         )
         .unwrap();

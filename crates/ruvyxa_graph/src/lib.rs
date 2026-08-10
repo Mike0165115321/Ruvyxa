@@ -204,7 +204,7 @@ pub fn discover_routes(options: DiscoverOptions) -> Result<RouteManifest> {
     let mut routes = Vec::new();
     // Shared across every route: layouts and shared components are reachable
     // from many pages, and rendering-strategy detection walks that graph.
-    let mut cache = ModuleCache::default();
+    let mut cache = ModuleCache::in_root(app_dir.parent().unwrap_or(&app_dir));
 
     for entry in WalkDir::new(&app_dir)
         .into_iter()
@@ -317,7 +317,7 @@ pub fn validate_app(root: &Path, manifest: &RouteManifest) -> Result<ValidationR
     let mut validated_server: BTreeSet<PathBuf> = BTreeSet::new();
     // Shared across every route so a layout or component reached from many
     // routes is read and scanned once, not once per route.
-    let mut cache = ModuleCache::default();
+    let mut cache = ModuleCache::in_root(root);
 
     for route in &manifest.routes {
         match route.kind {
@@ -594,6 +594,7 @@ struct ParsedModule {
 /// can skip it.
 #[derive(Default)]
 struct ModuleCache {
+    project_root: Option<PathBuf>,
     /// Memoized `normalized_canonical_path`, so the same route file reached
     /// through a walk path and through a resolved import is one entry, and the
     /// canonicalize syscall runs once per distinct spelling.
@@ -606,6 +607,13 @@ struct ModuleCache {
 }
 
 impl ModuleCache {
+    fn in_root(root: &Path) -> Self {
+        Self {
+            project_root: Some(normalized_canonical_path(root)),
+            ..Self::default()
+        }
+    }
+
     fn canonical(&mut self, file: &Path) -> PathBuf {
         if let Some(canonical) = self.canonical.get(file) {
             return canonical.clone();
@@ -674,13 +682,22 @@ impl ModuleCache {
         }
 
         let resolved: Arc<[PathBuf]> = match self.module(&key) {
-            Some(module) => module
-                .ast
-                .import_specifiers()
-                .into_iter()
-                .filter(|specifier| specifier.starts_with('.'))
-                .filter_map(|specifier| resolve_relative_import(&key, &specifier))
-                .collect(),
+            Some(module) => {
+                let mut edges: Vec<PathBuf> = module
+                    .ast
+                    .import_specifiers()
+                    .into_iter()
+                    .filter(|specifier| specifier.starts_with('.'))
+                    .filter_map(|specifier| resolve_relative_import(&key, &specifier))
+                    .collect();
+                let provider = self.project_root.as_deref().and_then(|root| {
+                    ruvyxa_bundler::content::resolve_mdx_components_file_in_root(&key, root)
+                });
+                if let Some(provider) = provider {
+                    edges.push(normalized_canonical_path(&provider));
+                }
+                edges.into()
+            }
             None => Arc::from([] as [PathBuf; 0]),
         };
         self.edges.insert(key, resolved.clone());
@@ -1737,6 +1754,35 @@ mod tests {
         assert!(codes.contains(&"RUV1007"));
         assert!(codes.contains(&"RUV1008"));
         assert!(codes.contains(&"RUV1010"));
+    }
+
+    #[test]
+    fn validates_implicit_mdx_component_providers_in_the_client_graph() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = temp.path().join("app");
+        fs::create_dir_all(app.join("docs")).unwrap();
+        fs::write(app.join("docs/page.mdx"), "# Documentation").unwrap();
+        fs::write(
+            app.join("mdx-components.tsx"),
+            r#"
+                import "server-only";
+                export function useMDXComponents(components) {
+                    return { ...components, secret: process.env.DATABASE_URL };
+                }
+            "#,
+        )
+        .unwrap();
+
+        let manifest = discover_routes(DiscoverOptions::new(&app)).unwrap();
+        let report = validate_app(temp.path(), &manifest).unwrap();
+        let codes = report
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect::<Vec<_>>();
+
+        assert!(codes.contains(&"RUV1007"), "{codes:?}");
+        assert!(codes.contains(&"RUV1008"), "{codes:?}");
     }
 
     /// Route validation used to test for the literal text `export default`, so

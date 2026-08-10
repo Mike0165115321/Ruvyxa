@@ -1336,8 +1336,12 @@ pub(crate) fn resolve_graph_with_incremental(
                         Some("md" | "mdx")
                     ) {
                         Some(
-                            crate::content::compile_content_module_shared(&source, dep_path)
-                                .map_err(BundleError::Compiler)?,
+                            crate::content::compile_content_module_shared_in_root(
+                                &source,
+                                dep_path,
+                                &project_root,
+                            )
+                            .map_err(BundleError::Compiler)?,
                         )
                     } else {
                         None

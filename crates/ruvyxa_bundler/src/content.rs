@@ -5,7 +5,7 @@
 //! linking, source hashing, and compile caching identical for every page type.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use markdown::mdast::{AlignKind, AttributeContent, AttributeValue, Node};
@@ -16,6 +16,7 @@ use oxc::span::SourceType;
 use serde_json::{Value, json};
 
 const CONTENT_CACHE_LIMIT: usize = 512;
+pub const MDX_COMPONENT_EXTENSIONS: &[&str] = &["tsx", "ts", "jsx", "js", "mts", "mjs"];
 
 #[derive(Default)]
 struct ContentModuleCache {
@@ -31,12 +32,35 @@ static CONTENT_MODULE_CACHE: OnceLock<Mutex<ContentModuleCache>> = OnceLock::new
 /// whole compiled module on every cache hit, which is the common case for a
 /// content-heavy site during a build.
 pub fn compile_content_module_shared(source: &str, path: &Path) -> Result<Arc<str>, String> {
+    compile_content_module_shared_with_root(source, path, None)
+}
+
+/// Compile content while limiting conventional provider discovery to a project root.
+pub fn compile_content_module_shared_in_root(
+    source: &str,
+    path: &Path,
+    project_root: &Path,
+) -> Result<Arc<str>, String> {
+    compile_content_module_shared_with_root(source, path, Some(project_root))
+}
+
+fn compile_content_module_shared_with_root(
+    source: &str,
+    path: &Path,
+    project_root: Option<&Path>,
+) -> Result<Arc<str>, String> {
     let extension = path
         .extension()
         .and_then(|extension| extension.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    let cache_key = content_cache_key(&extension, source);
+    let provider = (extension == "mdx")
+        .then(|| resolve_mdx_components_file_with_root(path, project_root))
+        .flatten();
+    let provider_import = provider
+        .as_deref()
+        .and_then(|provider| mdx_components_import_specifier(path, provider));
+    let cache_key = content_cache_key(&extension, source, provider_import.as_deref());
     if let Some(cached) = CONTENT_MODULE_CACHE
         .get_or_init(|| Mutex::new(ContentModuleCache::default()))
         .lock()
@@ -51,7 +75,7 @@ pub fn compile_content_module_shared(source: &str, path: &Path) -> Result<Arc<st
 
     let compiled = match extension.as_str() {
         "md" => compile_markdown(&body, &frontmatter_json),
-        "mdx" => compile_mdx(&body, &frontmatter_json),
+        "mdx" => compile_mdx(&body, &frontmatter_json, provider_import.as_deref()),
         _ => Err(format!(
             "RUV1310: unsupported content extension for {}",
             path.display()
@@ -68,12 +92,73 @@ pub fn compile_content_module(source: &str, path: &Path) -> Result<String, Strin
     compile_content_module_shared(source, path).map(|module| module.to_string())
 }
 
-fn content_cache_key(extension: &str, source: &str) -> String {
+fn content_cache_key(extension: &str, source: &str, provider_import: Option<&str>) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(extension.as_bytes());
     hasher.update(b"\0");
     hasher.update(source.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(provider_import.unwrap_or_default().as_bytes());
     hasher.finalize().to_hex().to_string()
+}
+
+/// Find the nearest conventional MDX component provider for a content route.
+///
+/// Walking ancestors lets one provider cover a section while a closer file can
+/// override it. The same helper is used by route validation so this implicit
+/// compiler import remains visible to client/server boundary checks.
+pub fn resolve_mdx_components_file(path: &Path) -> Option<PathBuf> {
+    resolve_mdx_components_file_with_root(path, None)
+}
+
+/// Find the nearest provider without walking above `project_root`.
+pub fn resolve_mdx_components_file_in_root(path: &Path, project_root: &Path) -> Option<PathBuf> {
+    resolve_mdx_components_file_with_root(path, Some(project_root))
+}
+
+fn resolve_mdx_components_file_with_root(
+    path: &Path,
+    project_root: Option<&Path>,
+) -> Option<PathBuf> {
+    if path.extension().and_then(|extension| extension.to_str()) != Some("mdx") {
+        return None;
+    }
+
+    let mut directory = path.parent()?;
+    loop {
+        if project_root.is_some_and(|root| !directory.starts_with(root)) {
+            return None;
+        }
+        for extension in MDX_COMPONENT_EXTENSIONS {
+            let candidate = directory.join(format!("mdx-components.{extension}"));
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+        if project_root.is_some_and(|root| directory == root) {
+            return None;
+        }
+        directory = directory.parent()?;
+    }
+}
+
+fn mdx_components_import_specifier(page: &Path, provider: &Path) -> Option<String> {
+    let page_directory = page.parent()?;
+    let provider_directory = provider.parent()?;
+    let mut directory = page_directory;
+    let mut segments = Vec::new();
+
+    while directory != provider_directory {
+        segments.push("..");
+        directory = directory.parent()?;
+    }
+    segments.push(provider.file_name()?.to_str()?);
+    let specifier = segments.join("/");
+    Some(if specifier.starts_with('.') {
+        specifier
+    } else {
+        format!("./{specifier}")
+    })
 }
 
 /// Store the compiled module and hand back the shared allocation.
@@ -121,10 +206,15 @@ fn compile_markdown(body: &str, frontmatter: &Value) -> Result<String, String> {
         &format!(
             "React.createElement(\"article\", {{ className: \"ruvyxa-content\", \"data-content-format\": \"md\" }}, {children})"
         ),
+        None,
     ))
 }
 
-fn compile_mdx(body: &str, frontmatter: &Value) -> Result<String, String> {
+fn compile_mdx(
+    body: &str,
+    frontmatter: &Value,
+    provider_import: Option<&str>,
+) -> Result<String, String> {
     let tree = markdown::to_mdast(body, &mdx_parse_options())
         .map_err(|error| format!("RUV1311: MDX parse error: {error}"))?;
     let esm = collect_mdx_esm(&tree);
@@ -138,7 +228,14 @@ fn compile_mdx(body: &str, frontmatter: &Value) -> Result<String, String> {
     let render = format!(
         "React.createElement(\"article\", {{ className: \"ruvyxa-content\", \"data-content-format\": \"mdx\" }}, {children})"
     );
-    Ok(module_source(frontmatter, &headings, "mdx", &esm, &render))
+    Ok(module_source(
+        frontmatter,
+        &headings,
+        "mdx",
+        &esm,
+        &render,
+        provider_import,
+    ))
 }
 
 fn mdx_parse_options() -> ParseOptions {
@@ -195,6 +292,7 @@ fn module_source(
     format: &str,
     esm: &str,
     render_expression: &str,
+    provider_import: Option<&str>,
 ) -> String {
     let frontmatter_export = content_export(esm, "frontmatter", &frontmatter.to_string());
     let meta_export = content_export(esm, "meta", "frontmatter");
@@ -204,13 +302,23 @@ fn module_source(
         &Value::Array(headings.to_vec()).to_string(),
     );
     let format_export = content_export(esm, "contentFormat", &js_string(format));
-    let page_parameters = if format == "mdx" {
-        "({ components = {} } = {})"
-    } else {
-        "()"
-    };
+    let (provider_source, page_parameters, component_setup) =
+        if let Some(provider_import) = provider_import {
+            (
+                format!(
+                    "import {{ useMDXComponents as __ruvyxaUseMDXComponents }} from {};\n",
+                    js_string(provider_import)
+                ),
+                "({ components: providedComponents = {} } = {})",
+                " const components = __ruvyxaUseMDXComponents(providedComponents);",
+            )
+        } else if format == "mdx" {
+            (String::new(), "({ components = {} } = {})", "")
+        } else {
+            (String::new(), "()", "")
+        };
     format!(
-        "import React from \"react\";\n{esm}\n{frontmatter_export}{meta_export}{headings_export}{format_export}export default function RuvyxaContentPage{page_parameters} {{ return {render_expression}; }}\n",
+        "import React from \"react\";\n{provider_source}{esm}\n{frontmatter_export}{meta_export}{headings_export}{format_export}export default function RuvyxaContentPage{page_parameters} {{{component_setup} return {render_expression}; }}\n",
     )
 }
 
@@ -970,6 +1078,7 @@ fn js_string(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn compiles_markdown_with_frontmatter_and_safe_image_defaults() {
@@ -1001,8 +1110,8 @@ mod tests {
         let source = "# Bundler content cache 019f7516";
         let first = compile_content_module(source, Path::new("first.md")).unwrap();
         let second = compile_content_module(source, Path::new("second.md")).unwrap();
-        let markdown_key = content_cache_key("md", source);
-        let mdx_key = content_cache_key("mdx", source);
+        let markdown_key = content_cache_key("md", source, None);
+        let mdx_key = content_cache_key("mdx", source, None);
 
         assert_eq!(second, first);
         assert_ne!(markdown_key, mdx_key);
@@ -1027,6 +1136,48 @@ mod tests {
         assert!(module.contains("(name)"));
         assert!(module.contains("components[\"strong\"] || \"strong\""));
         assert!(module.contains("RuvyxaContentPage({ components = {} } = {})"));
+    }
+
+    #[test]
+    fn discovers_the_nearest_conventional_mdx_component_provider() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = temp.path().join("app");
+        let docs = app.join("docs/guides");
+        fs::create_dir_all(&docs).unwrap();
+        fs::write(
+            app.join("mdx-components.tsx"),
+            "export function useMDXComponents() {}",
+        )
+        .unwrap();
+        fs::write(
+            app.join("docs/mdx-components.js"),
+            "export function useMDXComponents() {}",
+        )
+        .unwrap();
+        let page = docs.join("page.mdx");
+        fs::write(&page, "# Hello").unwrap();
+
+        let provider = resolve_mdx_components_file(&page).unwrap();
+        assert_eq!(provider, app.join("docs/mdx-components.js"));
+        let module = compile_content_module("# Hello", &page).unwrap();
+        assert!(module.contains(
+            "import { useMDXComponents as __ruvyxaUseMDXComponents } from \"../mdx-components.js\""
+        ));
+        assert!(module.contains("const components = __ruvyxaUseMDXComponents(providedComponents)"));
+    }
+
+    #[test]
+    fn keeps_mdx_component_extension_priority_in_cross_runtime_conformance() {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/mdx-components-conformance.json");
+        let value: Value = serde_json::from_str(&fs::read_to_string(fixture).unwrap()).unwrap();
+        let expected = value["extensions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|extension| extension.as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(expected, MDX_COMPONENT_EXTENSIONS);
     }
 
     #[test]

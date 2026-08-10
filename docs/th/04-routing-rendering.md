@@ -16,6 +16,28 @@ export ของหน้าและ configuration `render`
 | CSR      | หน้า `'use client'`                        | browser หลัง minimal shell                              |
 | PPR      | `export const ppr = true` พร้อม `Suspense` | static shell ตอน build; dynamic slot stream ตอน request |
 
+## Markdown, MDX และ component ที่ใช้ร่วมกัน
+
+สร้าง `page.md` สำหรับ Markdown หรือ `page.mdx` เมื่อต้องใช้ JSX, expression และ import ทั้งสองแบบ
+ไม่ต้องตั้ง compiler เพิ่ม หากต้องการตกแต่ง element มาตรฐานของ MDX หรือให้ component ร่วมกัน
+ให้เพิ่ม `mdx-components.tsx` ที่ใกล้ page ที่สุด (รองรับ `.ts`, `.jsx`, `.js`, `.mts` และ `.mjs`
+ด้วย) ไว้ใน directory ของ page หรือ ancestor:
+
+```tsx
+// app/mdx-components.tsx
+export function useMDXComponents(components = {}) {
+  return {
+    ...components,
+    h1: (props) => <h1 className="docs-title" {...props} />,
+  }
+}
+```
+
+provider ที่ใกล้ที่สุดจะชนะ ดังนั้น `app/docs/mdx-components.tsx` จะปรับเฉพาะ route ใต้ `app/docs/`
+ก็ได้ `components` ที่ส่งให้ page โดยตรงจะถูกส่งต่อเข้า `useMDXComponents`; ให้ merge มันใน object
+ที่คืนมาหากยังต้องการใช้ provider เป็น module ใน client graph ปกติ ดังนั้น `ruvyxa check` จะปฏิเสธ
+server-only import และ private environment variable
+
 ## Dynamic SSG
 
 สำหรับ dynamic SSG/ISR page ให้ export `getStaticParams` มันรับ route ทั้งหมดที่ค้นพบและรายละเอียด

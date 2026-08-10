@@ -8,6 +8,8 @@ export type {
   BuildContext,
   BuiltinMiddlewareConfig,
   CachedStaticParams,
+  ContentConfig,
+  ContentEngineConfig,
   CorsConfig,
   GetStaticParams,
   ImageConfig,

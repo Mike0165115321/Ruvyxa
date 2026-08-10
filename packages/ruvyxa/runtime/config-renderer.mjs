@@ -95,6 +95,7 @@ async function sanitizeConfig(config) {
     'security',
     'cache',
     'site',
+    'content',
     'middleware',
     'adapter',
     'adapterOptions',
@@ -148,7 +149,29 @@ async function sanitizeConfig(config) {
     'window',
   ])
   assertKnownKeys(config.cache, 'config.cache', ['routes', 'css', 'dir'])
-  assertKnownKeys(config.site, 'config.site', ['url', 'sitemap', 'robots'])
+  assertKnownKeys(config.site, 'config.site', [
+    'url',
+    'title',
+    'description',
+    'language',
+    'sitemap',
+    'robots',
+  ])
+  assertKnownKeys(config.content, 'config.content', ['engine'])
+  if (isObject(config.content?.engine)) {
+    assertKnownKeys(config.content.engine, 'config.content.engine', [
+      'exclude',
+      'locale',
+      'stopWords',
+      'minTermLength',
+      'manifestPath',
+      'searchPath',
+      'feedPath',
+      'sitemapPath',
+      'llmsPath',
+      'language',
+    ])
+  }
   assertKnownKeys(config.site?.sitemap, 'config.site.sitemap', [
     'exclude',
     'additionalPaths',
@@ -229,6 +252,7 @@ async function sanitizeConfig(config) {
     'key',
   ])
   assertConfigValueShape(config)
+  assertContentShape(config.content, config.site)
 
   return {
     appDir: stringValue(config.appDir),
@@ -299,10 +323,11 @@ async function sanitizeConfig(config) {
       dir: stringValue(config.cache?.dir),
     }),
     site: siteValue(config.site),
+    content: contentValue(config.content),
     middleware: safeJsonValue(config.middleware),
     adapter: await adapterOutput(config.adapter, projectRoot, config.outDir),
     adapterOptions: safeJsonValue(config.adapterOptions),
-    plugins: pluginDescriptors(config.plugins),
+    plugins: pluginDescriptors(config.plugins, config.content),
   }
 }
 
@@ -377,6 +402,11 @@ function assertSiteShape(site) {
   if (site.url !== undefined && typeof site.url !== 'string') {
     throw new Error('RUV1602 config.site.url must be string.')
   }
+  for (const field of ['title', 'description', 'language']) {
+    if (site[field] !== undefined && typeof site[field] !== 'string') {
+      throw new Error(`RUV1602 config.site.${field} must be string.`)
+    }
+  }
   if (site.sitemap !== undefined) {
     if (typeof site.sitemap !== 'boolean' && !isObject(site.sitemap)) {
       throw new Error('RUV1602 config.site.sitemap must be boolean or object.')
@@ -432,6 +462,67 @@ function assertSiteShape(site) {
         }
       }
     }
+  }
+}
+
+function assertContentShape(content, site) {
+  if (content === undefined || content === false) return
+  if (content !== true && !isObject(content)) {
+    throw new Error('RUV1602 config.content must be boolean or object.')
+  }
+  const engine = content === true ? true : content.engine
+  if (engine !== undefined && typeof engine !== 'boolean' && !isObject(engine)) {
+    throw new Error('RUV1602 config.content.engine must be boolean or object.')
+  }
+  if (!contentEngineEnabled(content)) return
+
+  for (const field of ['url', 'title', 'description']) {
+    if (typeof site?.[field] !== 'string' || site[field].trim() === '') {
+      throw new Error(
+        `RUV1602 config.site.${field} must be a non-empty string when content engine is enabled.`,
+      )
+    }
+  }
+  if (site.language !== undefined) assertLocale(site.language, 'config.site.language')
+  if (!isObject(engine)) return
+  assertStringArray(engine.exclude, 'config.content.engine.exclude')
+  assertStringArray(engine.stopWords, 'config.content.engine.stopWords')
+  for (const field of [
+    'locale',
+    'manifestPath',
+    'searchPath',
+    'feedPath',
+    'sitemapPath',
+    'language',
+  ]) {
+    if (engine[field] !== undefined && typeof engine[field] !== 'string') {
+      throw new Error(`RUV1602 config.content.engine.${field} must be string.`)
+    }
+  }
+  if (engine.locale !== undefined) assertLocale(engine.locale, 'config.content.engine.locale')
+  if (engine.language !== undefined) assertLocale(engine.language, 'config.content.engine.language')
+  if (
+    engine.minTermLength !== undefined &&
+    (!Number.isSafeInteger(engine.minTermLength) ||
+      engine.minTermLength < 1 ||
+      engine.minTermLength > 64)
+  ) {
+    throw new Error('RUV1602 config.content.engine.minTermLength must be an integer from 1 to 64.')
+  }
+  if (
+    engine.llmsPath !== undefined &&
+    engine.llmsPath !== false &&
+    typeof engine.llmsPath !== 'string'
+  ) {
+    throw new Error('RUV1602 config.content.engine.llmsPath must be string or false.')
+  }
+}
+
+function assertLocale(value, field) {
+  try {
+    new Intl.Segmenter(value)
+  } catch {
+    throw new Error(`RUV1602 ${field} must be a valid BCP 47 locale.`)
   }
 }
 
@@ -573,9 +664,17 @@ function siteValue(site) {
   if (!isObject(site)) return undefined
   return objectValue(site, {
     url: stringValue(site.url),
+    title: stringValue(site.title),
+    description: stringValue(site.description),
+    language: stringValue(site.language),
     sitemap: siteSettingValue(site.sitemap),
     robots: siteSettingValue(site.robots),
   })
+}
+
+function contentValue(content) {
+  if (typeof content === 'boolean') return content
+  return isObject(content) ? safeJsonValue(content) : undefined
 }
 
 function siteSettingValue(value) {
@@ -700,10 +799,9 @@ function safeJsonValue(value) {
   }
 }
 
-function pluginDescriptors(value) {
-  if (!Array.isArray(value)) return undefined
+function pluginDescriptors(value, content) {
   const names = new Set()
-  const plugins = value.map((plugin, index) => {
+  const plugins = (Array.isArray(value) ? value : []).map((plugin, index) => {
     if (!isObject(plugin)) {
       throw new Error(`RUV1602 config.plugins[${index}] must be an object.`)
     }
@@ -725,7 +823,22 @@ function pluginDescriptors(value) {
     return head.length > 0 ? { name, head } : { name }
   })
 
+  if (contentEngineEnabled(content)) {
+    const name = 'ruvyxa:content-engine'
+    if (names.has(name)) {
+      throw new Error(
+        'RUV1602 content engine is configured twice; use either config.content or contentEngine().',
+      )
+    }
+    plugins.push({ name })
+  }
+
   return plugins.length > 0 ? plugins : undefined
+}
+
+function contentEngineEnabled(content) {
+  if (content === true) return true
+  return isObject(content) && (content.engine === true || isObject(content.engine))
 }
 
 /**

@@ -57,7 +57,15 @@ import { config } from 'ruvyxa/config'
 import { requireEnv, securityHeaders } from 'ruvyxa/plugins'
 
 export default config({
-  site: { url: 'https://app.example.com', sitemap: true, robots: true },
+  site: {
+    url: 'https://app.example.com',
+    title: 'Example',
+    description: 'Product notes and guides',
+    language: 'en',
+    sitemap: true,
+    robots: true,
+  },
+  content: true,
   build: { minify: true, map: false, treeShake: true, split: 'route', prerenderCache: true },
   security: { actionLimit: 1_048_576, apiLimit: 10_485_760, sameOrigin: true, fetchMeta: true },
   plugins: [
@@ -105,6 +113,34 @@ copied from another project cannot make a memory-limited CI container ask for mo
 `workers` (1–8) and `timeoutMs` (default 30,000, maximum 300,000). `site` configures build-time
 `sitemap.xml` and `robots.txt`; an exact app route or same-named `public/` file suppresses the core
 generator. `plugins` is the array of `RuvyxaPlugin` objects.
+
+## Content artifacts without plugin wiring
+
+Markdown and MDX routes work without `content`. Enable `content: true` only when the site also needs
+`/content.json`, `/search-index.json`, `/rss.xml`, `/sitemap.xml`, and `/llms.txt`. The content
+engine reuses `site.url`, `site.title`, `site.description`, and `site.language`, so it does not
+require a second plugin import or duplicate site identity.
+
+```ts
+export default config({
+  site: {
+    url: 'https://example.com',
+    title: 'Example Docs',
+    description: 'Guides for Example',
+    language: 'en',
+  },
+  content: {
+    engine: {
+      exclude: ['/drafts/*'],
+      minTermLength: 3,
+      llmsPath: false,
+    },
+  },
+})
+```
+
+The existing `contentEngine(options)` plugin remains supported for advanced or programmatic plugin
+composition. Do not configure both forms in the same application.
 
 ## Environment variables
 

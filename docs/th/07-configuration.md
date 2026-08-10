@@ -57,7 +57,15 @@ import { config } from 'ruvyxa/config'
 import { requireEnv, securityHeaders } from 'ruvyxa/plugins'
 
 export default config({
-  site: { url: 'https://app.example.com', sitemap: true, robots: true },
+  site: {
+    url: 'https://app.example.com',
+    title: 'Example',
+    description: 'Product notes and guides',
+    language: 'th',
+    sitemap: true,
+    robots: true,
+  },
+  content: true,
   build: { minify: true, map: false, treeShake: true, split: 'route', prerenderCache: true },
   security: { actionLimit: 1_048_576, apiLimit: 10_485_760, sameOrigin: true, fetchMeta: true },
   plugins: [
@@ -104,6 +112,34 @@ non-loopback proxy ที่ตั้งค่าเท่านั้นที�
 `workers` (1–8) กับ `timeoutMs` (ปริยาย 30,000, สูงสุด 300,000) `site` ตั้งค่า `sitemap.xml` และ
 `robots.txt` ตอน build; exact app route หรือไฟล์ชื่อเดียวกันใน `public/` จะระงับ core generator
 `plugins` คือ array ของ `RuvyxaPlugin`
+
+## สร้าง content artifact โดยไม่ต้องต่อ plugin เอง
+
+route Markdown และ MDX ใช้งานได้โดยไม่ต้องตั้ง `content` ให้เปิด `content: true` เฉพาะเมื่อ site
+ต้องการ `/content.json`, `/search-index.json`, `/rss.xml`, `/sitemap.xml` และ `/llms.txt` เพิ่มด้วย
+content engine จะใช้ `site.url`, `site.title`, `site.description` และ `site.language` ร่วมกัน
+จึงไม่ต้อง import plugin หรือกรอกข้อมูล site ซ้ำ
+
+```ts
+export default config({
+  site: {
+    url: 'https://example.com',
+    title: 'Example Docs',
+    description: 'คู่มือสำหรับ Example',
+    language: 'th',
+  },
+  content: {
+    engine: {
+      exclude: ['/drafts/*'],
+      minTermLength: 3,
+      llmsPath: false,
+    },
+  },
+})
+```
+
+plugin `contentEngine(options)` แบบเดิมยังรองรับสำหรับ advanced/programmatic composition แต่ห้าม
+ตั้งทั้งสองรูปแบบใน application เดียวกัน
 
 ## Environment variable
 

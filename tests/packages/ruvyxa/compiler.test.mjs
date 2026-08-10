@@ -22,6 +22,7 @@ import {
   compileBundle,
   compileBundleWithMetadata,
   invalidateCompilerCache,
+  MDX_COMPONENT_EXTENSIONS,
   toImportPath,
 } from '../../../packages/ruvyxa/runtime/compiler.mjs'
 import { createFixtureWorkspace } from './fixture-workspace.mjs'
@@ -94,6 +95,49 @@ import Card from './Card.js'
       assert.match(output, /frontmatter/)
       assert.match(output, /2 \+ 2/)
     })
+  })
+
+  it('loads the nearest conventional MDX component provider', async () => {
+    await withFixture(async ({ root, outDir }) => {
+      const docs = path.join(root, 'app', 'docs')
+      const pageFile = path.join(docs, 'page.mdx')
+      const outfile = path.join(outDir, 'mdx-provider.mjs')
+      await mkdir(docs, { recursive: true })
+      await writeFile(
+        path.join(root, 'app', 'mdx-components.tsx'),
+        `export function useMDXComponents(components) {
+          function BrandedHeading(props) { return props.children }
+          return { ...components, h1: BrandedHeading }
+        }\n`,
+      )
+      await writeFile(pageFile, '# Provider heading\n')
+
+      const result = await compileBundleWithMetadata({
+        projectRoot: root,
+        entrySource: `export { default } from ${JSON.stringify(toImportPath(pageFile))}`,
+        sourcefile: 'ruvyxa:mdx-provider-entry.ts',
+        outfile,
+        platform: 'node',
+        external: ['react', 'react/js-runtime', 'react/jsx-runtime'],
+      })
+
+      const output = await readFile(outfile, 'utf8')
+      assert.match(output, /BrandedHeading/)
+      assert.ok(result.inputs.includes('app/mdx-components.tsx'), result.inputs)
+    })
+  })
+
+  it('keeps MDX component extension priority aligned with the shared fixture', async () => {
+    const fixture = JSON.parse(
+      await readFile(
+        path.join(workspaceRoot, 'tests/fixtures/mdx-components-conformance.json'),
+        'utf8',
+      ),
+    )
+    assert.deepEqual(
+      MDX_COMPONENT_EXTENSIONS.map((extension) => extension.slice(1)),
+      fixture.extensions,
+    )
   })
 
   it('keeps nested YAML, GFM, footnotes, and heading slugs aligned in the Node compiler', async () => {
@@ -1481,6 +1525,77 @@ export const marker = 'reached'
         JSON.parse(Buffer.from(specResult.result.response.bodyBase64, 'base64')).info.title,
         'Fixture API',
       )
+    })
+  })
+
+  it('turns top-level content configuration into the built-in content engine', async () => {
+    await withFixture(async ({ root }) => {
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `export default {
+          site: {
+            url: "https://example.com",
+            title: "Example content",
+            description: "News from Example.",
+            language: "en",
+          },
+          content: true,
+        }`,
+      )
+
+      const rendered = await runJson(configRenderer, [root], {})
+      assert.deepEqual(rendered.config.site, {
+        url: 'https://example.com',
+        title: 'Example content',
+        description: 'News from Example.',
+        language: 'en',
+      })
+      assert.equal(rendered.config.content, true)
+      assert.deepEqual(rendered.config.plugins, [{ name: 'ruvyxa:content-engine' }])
+
+      const described = await runJson(pluginRuntime, [root, 'describe'], {})
+      assert.deepEqual(described.result.plugins, ['ruvyxa:content-engine'])
+      assert.deepEqual(described.result.http.requestMatch, [
+        '/content.json',
+        '/search-index.json',
+        '/rss.xml',
+        '/sitemap.xml',
+        '/llms.txt',
+      ])
+      assert.equal(described.result.build.complete, 1)
+    })
+  })
+
+  it('rejects incomplete or duplicate top-level content configuration', async () => {
+    await withFixture(async ({ root }) => {
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `export default { site: { url: "https://example.com" }, content: true }`,
+      )
+      const incomplete = await runJsonResult(configRenderer, [root], {})
+      assert.equal(incomplete.exitCode, 1)
+      assert.match(incomplete.parsed.message, /site\.title must be a non-empty string/)
+
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `import { contentEngine } from "ruvyxa/plugins"
+         export default {
+           site: {
+             url: "https://example.com",
+             title: "Example",
+             description: "Example content",
+           },
+           content: true,
+           plugins: [contentEngine({
+             siteUrl: "https://example.com",
+             title: "Example",
+             description: "Example content",
+           })],
+         }`,
+      )
+      const duplicate = await runJsonResult(configRenderer, [root], {})
+      assert.equal(duplicate.exitCode, 1)
+      assert.match(duplicate.parsed.message, /content engine is configured twice/)
     })
   })
 

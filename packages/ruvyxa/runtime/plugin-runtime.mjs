@@ -62,7 +62,45 @@ async function loadRegistry(root) {
   })
 
   const mod = await import(pathToFileURL(outfile).href + `?t=${Date.now()}`)
-  return createRegistry(root, (mod.default ?? {}).plugins)
+  const config = mod.default ?? {}
+  const configuredPlugins = Array.isArray(config.plugins) ? config.plugins : []
+  const contentPlugin = await configuredContentPlugin(root, configFile, config)
+  return createRegistry(
+    root,
+    contentPlugin ? [...configuredPlugins, contentPlugin] : configuredPlugins,
+  )
+}
+
+async function configuredContentPlugin(root, configFile, config) {
+  const content = config?.content
+  const enabled =
+    content === true ||
+    (content &&
+      typeof content === 'object' &&
+      !Array.isArray(content) &&
+      (content.engine === true ||
+        (content.engine && typeof content.engine === 'object' && !Array.isArray(content.engine))))
+  if (!enabled) return undefined
+
+  const moduleCode = 'export { contentEngineFromConfig as default } from "ruvyxa/plugins"'
+  const outfile = path.join(
+    root,
+    '.ruvyxa',
+    'cache',
+    'config',
+    cacheFileName([moduleCode, configFile, 'content-engine-runtime'], 'mjs'),
+  )
+  await compileBundle({
+    projectRoot: root,
+    entrySource: moduleCode,
+    sourcefile: 'ruvyxa:content-engine-config-entry.ts',
+    outfile,
+    platform: serverPlatform(),
+    bundleAliasDependencies: true,
+    aliases: runtimeAliases(runtimeDir),
+  })
+  const mod = await import(pathToFileURL(outfile).href + `?t=${Date.now()}`)
+  return mod.default(config)
 }
 
 function findConfig(root) {

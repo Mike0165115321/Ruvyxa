@@ -16,6 +16,28 @@ is selected from its exports and the `render` configuration.
 | CSR      | `'use client'` page                       | browser after a minimal shell                               |
 | PPR      | `export const ppr = true` with `Suspense` | static shell at build; dynamic slot streams at request time |
 
+## Markdown, MDX, and shared components
+
+Create `page.md` for Markdown or `page.mdx` for JSX, expressions, and imports; neither format needs
+compiler configuration. To style native MDX elements or provide shared components, add the nearest
+`mdx-components.tsx` (also `.ts`, `.jsx`, `.js`, `.mts`, or `.mjs`) in the page's directory or an
+ancestor:
+
+```tsx
+// app/mdx-components.tsx
+export function useMDXComponents(components = {}) {
+  return {
+    ...components,
+    h1: (props) => <h1 className="docs-title" {...props} />,
+  }
+}
+```
+
+The closest provider wins, so `app/docs/mdx-components.tsx` can specialize only the routes below
+`app/docs/`. Explicit `components` passed to the page are given to `useMDXComponents`; merge them in
+the returned object when they should remain available. Providers are normal client-graph modules, so
+server-only imports and private environment variables are rejected by `ruvyxa check`.
+
 ## Dynamic SSG
 
 For a dynamic SSG/ISR page, export `getStaticParams`. It receives all discovered routes and the
