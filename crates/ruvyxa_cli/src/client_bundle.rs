@@ -144,6 +144,7 @@ pub(crate) fn emit_client_bundles(
         root,
         plugins,
         ruvyxa_dev_server::JavaScriptRuntime::Node,
+        false,
     )?;
     emit_client_bundles_with_session(
         root,

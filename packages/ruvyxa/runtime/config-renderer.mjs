@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -31,6 +32,7 @@ const SITEMAP_CHANGE_FREQUENCIES = new Set([
 try {
   const configFile = findConfig(projectRoot)
   if (!configFile) {
+    await removeRuntimeConfigPointer(projectRoot)
     await ok({}, 'no-config', { inputs: [], env: {} })
   }
 
@@ -51,12 +53,15 @@ try {
     platform: serverPlatform(),
     bundleAliasDependencies: true,
     aliases: runtimeAliases(runtimeDir),
+    markdownConfig: false,
   })
 
   const readEnv = recordEnvironmentReads()
   const mod = await import(pathToFileURL(outfile).href + `?t=${Date.now()}`)
   const config = mod.default ?? {}
-  await ok(await sanitizeConfig(config), bundle.dependencyHash, {
+  const sanitized = await sanitizeConfig(config)
+  await writeRuntimeConfigPointer(projectRoot, bundle.outfile, bundle.dependencyHash)
+  await ok(sanitized, bundle.dependencyHash, {
     inputs: bundle.fingerprintInputs,
     env: readEnv(),
   })
@@ -86,6 +91,7 @@ async function sanitizeConfig(config) {
     'typescript',
     'typedRoutes',
     'css',
+    'markdown',
     'server',
     'build',
     'render',
@@ -102,6 +108,13 @@ async function sanitizeConfig(config) {
     'plugins',
   ])
   assertKnownKeys(config.css, 'config.css', ['entries'])
+  assertKnownKeys(config.markdown, 'config.markdown', [
+    'gfm',
+    'remarkPlugins',
+    'rehypePlugins',
+    'recmaPlugins',
+    'remarkRehypeOptions',
+  ])
   assertKnownKeys(config.server, 'config.server', ['host', 'port'])
   assertKnownKeys(config.build, 'config.build', [
     'minify',
@@ -252,6 +265,7 @@ async function sanitizeConfig(config) {
     'key',
   ])
   assertConfigValueShape(config)
+  assertMarkdownShape(config.markdown)
   assertContentShape(config.content, config.site)
 
   return {
@@ -263,6 +277,9 @@ async function sanitizeConfig(config) {
     css: objectValue(config.css, {
       entries: stringArrayValue(config.css?.entries),
     }),
+    // Executable unified plugins remain in the compiled config module. Rust
+    // only needs to know whether to activate the persistent content bridge.
+    markdown: config.markdown === undefined ? undefined : true,
     server: objectValue(config.server, {
       host: stringValue(config.server?.host),
       port: numberValue(config.server?.port),
@@ -329,6 +346,42 @@ async function sanitizeConfig(config) {
     adapterOptions: safeJsonValue(config.adapterOptions),
     plugins: pluginDescriptors(config.plugins, config.content),
   }
+}
+
+function assertMarkdownShape(markdown) {
+  if (markdown === undefined) return
+  if (!isObject(markdown)) throw new Error('RUV1602 config.markdown must be an object.')
+  if (markdown.gfm !== undefined && typeof markdown.gfm !== 'boolean') {
+    throw new Error('RUV1602 config.markdown.gfm must be boolean.')
+  }
+  for (const field of ['remarkPlugins', 'rehypePlugins', 'recmaPlugins']) {
+    if (markdown[field] !== undefined && !Array.isArray(markdown[field])) {
+      throw new Error(`RUV1602 config.markdown.${field} must be an array.`)
+    }
+  }
+  if (markdown.remarkRehypeOptions !== undefined && !isObject(markdown.remarkRehypeOptions)) {
+    throw new Error('RUV1602 config.markdown.remarkRehypeOptions must be an object.')
+  }
+}
+
+async function writeRuntimeConfigPointer(root, bundleFile, dependencyHash) {
+  const directory = path.join(root, '.ruvyxa', 'cache', 'config')
+  const pointer = path.join(directory, 'runtime-config.mjs')
+  let specifier = path.relative(directory, bundleFile).replaceAll('\\', '/')
+  if (!specifier.startsWith('.')) specifier = `./${specifier}`
+  const versioned = JSON.stringify(`${specifier}?v=${dependencyHash}`)
+  const source = `import config from ${versioned}\nexport default config?.markdown\n`
+  await mkdir(directory, { recursive: true })
+  try {
+    if ((await readFile(pointer, 'utf8')) === source) return
+  } catch {
+    // The pointer is generated on the first successful config render.
+  }
+  await writeFile(pointer, source)
+}
+
+async function removeRuntimeConfigPointer(root) {
+  await rm(path.join(root, '.ruvyxa', 'cache', 'config', 'runtime-config.mjs'), { force: true })
 }
 
 function assertConfigValueShape(config) {

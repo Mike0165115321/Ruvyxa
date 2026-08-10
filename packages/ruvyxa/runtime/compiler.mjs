@@ -14,8 +14,10 @@ const compilerCache = (globalThis.__RUVYXA_COMPILER_CACHE__ ??= {
   transforms: new Map(),
   rewrites: new Map(),
   content: new Map(),
+  markdownConfigurations: new Map(),
 })
 compilerCache.transforms ??= new Map()
+compilerCache.markdownConfigurations ??= new Map()
 
 /**
  * Drop compiler entries associated with changed files, or every entry when the
@@ -42,6 +44,7 @@ export function clearCompilerCache() {
   compilerCache.transforms.clear()
   compilerCache.rewrites.clear()
   compilerCache.content.clear()
+  compilerCache.markdownConfigurations.clear()
 }
 
 export function compilerCacheStats() {
@@ -50,6 +53,7 @@ export function compilerCacheStats() {
     transforms: compilerCache.transforms.size,
     rewrites: compilerCache.rewrites.size,
     content: compilerCache.content.size,
+    markdownConfigurations: compilerCache.markdownConfigurations.size,
     maxEntries: COMPILER_CACHE_MAX_ENTRIES,
   }
 }
@@ -135,6 +139,7 @@ export async function compileBundleWithMetadata({
   minify = false,
   sourceMap = true,
   jsxRuntime = process.env.RUVYXA_JSX_RUNTIME ?? 'automatic',
+  markdownConfig,
 }) {
   const normalizedJsxRuntime = normalizeJsxRuntime(jsxRuntime)
   const root = path.resolve(projectRoot)
@@ -161,6 +166,7 @@ export async function compileBundleWithMetadata({
     bundleAliasDependencies,
     bundleDependencies: false,
     jsxRuntime: normalizedJsxRuntime,
+    markdownConfig,
   })
 
   const linked = linkModules(modules, externals, { minify, outfile, sourceMap })
@@ -348,6 +354,7 @@ async function visitModule(context) {
     bundleAliasDependencies,
     bundleDependencies,
     jsxRuntime,
+    markdownConfig,
   } = context
 
   if (byKey.has(key)) return byKey.get(key)
@@ -355,7 +362,10 @@ async function visitModule(context) {
   const styleModule = isCssModuleFile(filePath)
     ? await compileStyleModuleSource(source, filePath, root)
     : null
-  const compiledSource = styleModule?.source ?? (await compileContentSource(source, filePath, root))
+  const contentModule = styleModule
+    ? null
+    : await compileContentSource(source, filePath, root, markdownConfig)
+  const compiledSource = styleModule?.source ?? contentModule.source
   const id = `__m${modules.length}`
   const module = {
     id,
@@ -364,7 +374,7 @@ async function visitModule(context) {
     source: compiledSource,
     baseDir,
     deps: new Map(),
-    assetInputs: styleModule?.inputs ?? [],
+    assetInputs: styleModule?.inputs ?? contentModule.inputs,
     jsxRuntime,
   }
   byKey.set(key, module)
@@ -418,6 +428,7 @@ async function visitModule(context) {
         bundleDependencies:
           bundleDependencies || (bundleAliasDependencies && Boolean(resolvedAlias)),
         jsxRuntime,
+        markdownConfig,
       })
       module.deps.set(specifier, dep)
       continue
@@ -1222,9 +1233,19 @@ async function readSourceFile(file) {
   return source
 }
 
-async function compileContentSource(source, filePath, projectRoot) {
+/**
+ * Compile a Markdown or MDX module through the shared `@mdx-js/mdx` pipeline.
+ *
+ * `markdownConfig` is normally discovered from the stable config pointer the
+ * CLI writes. Passing an object keeps executable plugin functions live inside
+ * the persistent plugin host; passing `false` disables project config loading
+ * while the config module itself is being compiled.
+ */
+export async function compileContentSource(source, filePath, projectRoot, markdownConfig) {
   const extension = filePath ? path.extname(filePath).toLowerCase() : ''
-  if (extension !== '.md' && extension !== '.mdx') return source
+  if (extension !== '.md' && extension !== '.mdx') return { source, inputs: [] }
+
+  const configured = await resolveMarkdownConfiguration(projectRoot, markdownConfig)
 
   const providerFile = extension === '.mdx' ? findMdxComponentsFile(filePath, projectRoot) : null
   const providerImportSource = providerFile
@@ -1236,6 +1257,8 @@ async function compileContentSource(source, filePath, projectRoot) {
     .update(source)
     .update('\0')
     .update(providerImportSource ?? '')
+    .update('\0')
+    .update(configured.fingerprint)
     .digest('hex')
   const cached = compilerCache.content.get(cacheKey)
   if (cached) return cached
@@ -1247,34 +1270,143 @@ async function compileContentSource(source, filePath, projectRoot) {
     import('remark-gfm'),
   ])
   const headings = []
-  let compiled
+  let compiledFile
   try {
-    compiled = String(
-      await compile(body, {
+    compiledFile = await compile(
+      {
+        value: body,
+        path: filePath,
+        data: { ruvyxa: { frontmatter } },
+      },
+      {
         format: extension === '.md' ? 'md' : 'mdx',
         jsx: false,
         outputFormat: 'program',
         development: false,
         providerImportSource,
-        remarkPlugins: [remarkGfm, createContentMetadataPlugin(headings)],
-      }),
+        remarkPlugins: [
+          ...(configured.options?.gfm === false ? [] : [remarkGfm]),
+          ...(configured.options?.remarkPlugins ?? []),
+          ...(extension === '.md' ? [escapeRawMarkdownHtmlPlugin] : []),
+        ],
+        rehypePlugins: [
+          ...(configured.options?.rehypePlugins ?? []),
+          createContentMetadataPlugin(headings),
+          [wrapContentRootPlugin, { format: extension.slice(1) }],
+        ],
+        recmaPlugins: configured.options?.recmaPlugins ?? [],
+        remarkRehypeOptions: configured.options?.remarkRehypeOptions,
+      },
     )
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
     throw new Error(`RUV1311 ${filePath}: ${detail}`)
   }
 
+  const compiled = String(compiledFile)
+  const pluginFrontmatter = compiledFile.data?.ruvyxa?.frontmatter ?? frontmatter
+  let serializedFrontmatter
+  try {
+    assertJsonCompatibleFrontmatter(pluginFrontmatter, new WeakSet())
+    serializedFrontmatter = JSON.stringify(pluginFrontmatter)
+    if (serializedFrontmatter === undefined) throw new TypeError('value is not JSON-compatible')
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    throw new Error(`RUV1312 ${filePath}: plugin frontmatter must be JSON-compatible: ${detail}`)
+  }
+
   const prefix = [
-    contentExport(compiled, 'frontmatter', JSON.stringify(frontmatter)),
+    contentExport(compiled, 'frontmatter', serializedFrontmatter),
     contentExport(compiled, 'meta', 'frontmatter'),
     contentExport(compiled, 'headings', JSON.stringify(headings)),
     contentExport(compiled, 'contentFormat', JSON.stringify(extension.slice(1))),
   ]
     .filter(Boolean)
     .join('\n')
-  const output = `${compiled}\n${prefix}\n`
+  const output = { source: `${compiled}\n${prefix}\n`, inputs: configured.inputs }
   setBoundedCacheEntry(compilerCache.content, cacheKey, output)
   return output
+}
+
+async function resolveMarkdownConfiguration(projectRoot, configured) {
+  if (configured === false || configured === null) {
+    return { options: undefined, fingerprint: 'defaults', inputs: [] }
+  }
+  if (configured !== undefined) {
+    return {
+      options: normalizeMarkdownConfiguration(configured),
+      fingerprint: markdownConfigurationIdentity(configured),
+      inputs: [],
+    }
+  }
+
+  const root = path.resolve(projectRoot)
+  const pointer = path.join(root, '.ruvyxa', 'cache', 'config', 'runtime-config.mjs')
+  let pointerSource
+  try {
+    pointerSource = await readFile(pointer, 'utf8')
+  } catch {
+    return { options: undefined, fingerprint: 'defaults', inputs: [] }
+  }
+
+  const fingerprint = createHash('sha256').update(pointerSource).digest('hex')
+  const cached = compilerCache.markdownConfigurations.get(root)
+  if (cached?.fingerprint === fingerprint) return cached
+
+  let projectMarkdown
+  try {
+    const url = `${pathToFileURL(pointer).href}?v=${fingerprint}`
+    projectMarkdown = (await import(url)).default
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    throw new Error(`RUV1313 failed to load Markdown configuration: ${detail}`)
+  }
+
+  const result = {
+    options: normalizeMarkdownConfiguration(projectMarkdown),
+    fingerprint,
+    inputs: projectMarkdown === undefined ? [] : [pointer],
+  }
+  setBoundedCacheEntry(compilerCache.markdownConfigurations, root, result)
+  return result
+}
+
+const markdownConfigurationIds = new WeakMap()
+let nextMarkdownConfigurationId = 1
+
+function markdownConfigurationIdentity(configured) {
+  if (!configured || typeof configured !== 'object') return String(configured)
+  let identity = markdownConfigurationIds.get(configured)
+  if (!identity) {
+    identity = `explicit-${nextMarkdownConfigurationId}`
+    nextMarkdownConfigurationId += 1
+    markdownConfigurationIds.set(configured, identity)
+  }
+  return identity
+}
+
+function normalizeMarkdownConfiguration(value) {
+  if (value === undefined) return undefined
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('RUV1602 config.markdown must be an object.')
+  }
+  for (const field of ['remarkPlugins', 'rehypePlugins', 'recmaPlugins']) {
+    if (value[field] !== undefined && !Array.isArray(value[field])) {
+      throw new TypeError(`RUV1602 config.markdown.${field} must be an array.`)
+    }
+  }
+  if (value.gfm !== undefined && typeof value.gfm !== 'boolean') {
+    throw new TypeError('RUV1602 config.markdown.gfm must be boolean.')
+  }
+  if (
+    value.remarkRehypeOptions !== undefined &&
+    (!value.remarkRehypeOptions ||
+      typeof value.remarkRehypeOptions !== 'object' ||
+      Array.isArray(value.remarkRehypeOptions))
+  ) {
+    throw new TypeError('RUV1602 config.markdown.remarkRehypeOptions must be an object.')
+  }
+  return value
 }
 
 function findMdxComponentsFile(filePath, projectRoot) {
@@ -1476,45 +1608,78 @@ function assertJsonCompatibleFrontmatter(value, ancestors) {
   ancestors.delete(value)
 }
 
+function escapeRawMarkdownHtmlPlugin() {
+  return (tree) => replaceRawMarkdownHtml(tree)
+}
+
+function replaceRawMarkdownHtml(node) {
+  if (!Array.isArray(node?.children)) return
+  node.children = node.children.map((child) => {
+    if (child?.type === 'html') return { type: 'text', value: String(child.value ?? '') }
+    replaceRawMarkdownHtml(child)
+    return child
+  })
+}
+
 function createContentMetadataPlugin(headings) {
   return function contentMetadataPlugin() {
     return (tree) => {
       const slugCounts = new Map()
-      collectContentHeadingNodes(tree, headings, slugCounts)
+      collectContentHeadingElements(tree, headings, slugCounts)
     }
   }
 }
 
-function collectContentHeadingNodes(node, headings, slugCounts) {
-  if (node?.type === 'heading') {
+function collectContentHeadingElements(node, headings, slugCounts) {
+  const heading = node?.type === 'element' && /^h[1-6]$/.test(node.tagName ?? '')
+  if (heading) {
     const text = contentPlainText(node.children ?? [])
-    const baseSlug =
-      text
-        .toLocaleLowerCase()
-        .replace(/[^\p{Letter}\p{Number}]+/gu, '-')
-        .replace(/^-|-$/g, '') || 'section'
-    const occurrence = slugCounts.get(baseSlug) ?? 0
-    const slug = occurrence === 0 ? baseSlug : `${baseSlug}-${occurrence}`
-    slugCounts.set(baseSlug, occurrence + 1)
-    headings.push({ depth: node.depth, slug, text })
-    node.data = {
-      ...node.data,
-      hProperties: { ...node.data?.hProperties, id: slug },
+    const properties = (node.properties ??= {})
+    // `remark-gfm` synthesizes this accessibility label for footnotes. It is
+    // document chrome rather than an authored content heading and the native
+    // compiler has never exposed it through `headings`.
+    if (properties.id === 'footnote-label') return
+    let slug = typeof properties.id === 'string' && properties.id ? properties.id : undefined
+    if (!slug) {
+      const baseSlug =
+        text
+          .toLocaleLowerCase()
+          .replace(/[^\p{Letter}\p{Number}]+/gu, '-')
+          .replace(/^-|-$/g, '') || 'section'
+      const occurrence = slugCounts.get(baseSlug) ?? 0
+      slug = occurrence === 0 ? baseSlug : `${baseSlug}-${occurrence}`
+      slugCounts.set(baseSlug, occurrence + 1)
+      properties.id = slug
     }
+    headings.push({ depth: Number(node.tagName.slice(1)), slug, text })
   }
 
   for (const child of node?.children ?? []) {
-    collectContentHeadingNodes(child, headings, slugCounts)
+    collectContentHeadingElements(child, headings, slugCounts)
   }
 }
 
 function contentPlainText(nodes) {
   return nodes
-    .map((node) => {
-      if (node.type === 'text' || node.type === 'inlineCode') return node.value
-      return contentPlainText(node.children ?? [])
-    })
+    .map((node) => (node.type === 'text' ? node.value : contentPlainText(node.children ?? [])))
     .join('')
+}
+
+function wrapContentRootPlugin(options = {}) {
+  return (tree) => {
+    const children = tree.children ?? []
+    tree.children = [
+      {
+        type: 'element',
+        tagName: 'article',
+        properties: {
+          className: ['ruvyxa-content'],
+          dataContentFormat: String(options.format ?? 'mdx'),
+        },
+        children,
+      },
+    ]
+  }
 }
 
 async function writeIfChanged(file, contents) {

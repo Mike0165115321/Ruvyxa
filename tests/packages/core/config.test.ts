@@ -31,6 +31,7 @@ function registrationApi(
 
 describe('config and plugin APIs', () => {
   it('accepts grouped plugin sockets in application config', async () => {
+    const markdownPlugin = () => () => undefined
     const authPlugin = definePlugin({
       name: 'auth',
       register({ http, build }) {
@@ -73,6 +74,13 @@ describe('config and plugin APIs', () => {
         },
       },
       plugins: [authPlugin],
+      markdown: {
+        gfm: true,
+        remarkPlugins: [[markdownPlugin, { enabled: true }]],
+        rehypePlugins: [markdownPlugin],
+        recmaPlugins: [markdownPlugin],
+        remarkRehypeOptions: { footnoteLabel: 'Notes' },
+      },
       adapterOptions: { region: 'iad1' },
       build: { treeShake: false, manifest: true },
     }
@@ -80,6 +88,7 @@ describe('config and plugin APIs', () => {
     const defined = config(settings)
     assert.equal(defined.middleware?.builtin?.timing, true)
     assert.equal(defined.plugins?.[0]?.name, 'auth')
+    assert.equal(defined.markdown?.remarkPlugins?.length, 1)
 
     let registered: PluginHttpRequestRegistration | PluginHttpRequestHandler | undefined
     await authPlugin.register(registrationApi((value) => (registered = value)))

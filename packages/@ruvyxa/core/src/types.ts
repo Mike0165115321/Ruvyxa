@@ -24,6 +24,14 @@ export interface RuvyxaConfig {
     /** Additional project-relative global stylesheet files or directories. */
     entries?: string[]
   }
+  /**
+   * Markdown and MDX compilation powered by `@mdx-js/mdx`.
+   *
+   * Plugins run for both `.md` and `.mdx` routes in the configured order.
+   * Ruvyxa's metadata and safety transforms run after application plugins so
+   * exported headings match rendered IDs and raw HTML in `.md` stays inert.
+   */
+  markdown?: MarkdownConfig
   server?: {
     port?: number
     host?: string
@@ -99,6 +107,36 @@ export interface RuvyxaConfig {
   adapter?: Adapter
   adapterOptions?: Record<string, unknown>
   plugins?: RuvyxaPlugin[]
+}
+
+/** A unified-compatible plugin or preset accepted by the MDX compiler. */
+export type MarkdownPlugin = ((...parameters: never[]) => unknown) | MarkdownPluginPreset
+
+/** A unified preset groups plugins and optional shared settings. */
+export interface MarkdownPluginPreset {
+  plugins: MarkdownPluginList
+  settings?: Record<string, unknown>
+}
+
+/** A plugin alone or a plugin followed by its configuration arguments. */
+export type MarkdownPluginEntry =
+  MarkdownPlugin | readonly [MarkdownPlugin, ...configuration: unknown[]]
+
+/** Ordered unified plugins for one compiler stage. */
+export type MarkdownPluginList = readonly MarkdownPluginEntry[]
+
+/** Extensible Markdown/MDX compiler options shared by dev and production. */
+export interface MarkdownConfig {
+  /** Enable GitHub Flavored Markdown tables, task lists, autolinks, and footnotes. @default true */
+  gfm?: boolean
+  /** Transform the Markdown AST before it becomes HTML. */
+  remarkPlugins?: MarkdownPluginList
+  /** Transform the HTML AST before React code is emitted. */
+  rehypePlugins?: MarkdownPluginList
+  /** Transform the generated JavaScript ESTree. */
+  recmaPlugins?: MarkdownPluginList
+  /** Options forwarded from remark to rehype, such as localized footnote labels. */
+  remarkRehypeOptions?: Record<string, unknown>
 }
 
 /**
@@ -250,17 +288,15 @@ export interface ImageConfig {
   lossless?: boolean
   /**
    * Publish the original PNG/JPEG next to its WebP output so a plain
-   * `<img src="/logo.png">` keeps working on static hosts, which have no
-   * server-side format fallback. Turn off only when every image reference goes
-   * through `<Image>` and the smaller publish directory matters. @default true
+   * `<img src="/logo.png">` keeps working on static hosts. By default only the
+   * converted WebP is published; use `<Image>` or a `.webp` URL. @default false
    */
   keepOriginal?: boolean
   /**
-   * Responsive breakpoint widths, in pixels. For each public PNG/JPEG the build
-   * emits a downscaled `name-<w>w.webp` at every width narrower than the source,
-   * and `<Image sizes=...>` builds its `srcset` from the same list. Override to
-   * tune the breakpoints; an empty array disables variant generation.
-   * @default [640, 750, 828, 1080, 1200, 1920, 2048, 3840]
+   * Opt-in responsive breakpoint widths, in pixels. For each public PNG/JPEG
+   * the build emits a downscaled `name-<w>w.webp` at every width narrower than
+   * the source. Reference opt-in variants with an explicit `srcSet`; static
+   * `<Image>` otherwise uses the single full-size WebP. @default []
    */
   variantWidths?: number[]
   /** Image conversion workers. Zero selects the available CPU count. @default 0 */

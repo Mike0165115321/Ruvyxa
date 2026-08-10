@@ -38,6 +38,30 @@ The closest provider wins, so `app/docs/mdx-components.tsx` can specialize only 
 the returned object when they should remain available. Providers are normal client-graph modules, so
 server-only imports and private environment variables are rejected by `ruvyxa check`.
 
+Ruvyxa includes `@mdx-js/mdx` and GFM. Add unified-compatible remark, rehype, or recma plugins to
+the application's dependencies, import them in `ruvyxa.config.ts`, and register them once for both
+`.md` and `.mdx`:
+
+```ts
+import rehypeAutolinkHeadings from 'rehype-autolink-headings'
+import rehypeSlug from 'rehype-slug'
+import remarkToc from 'remark-toc'
+import { config } from 'ruvyxa/config'
+
+export default config({
+  markdown: {
+    remarkPlugins: [[remarkToc, { heading: 'contents', maxDepth: 3 }]],
+    rehypePlugins: [rehypeSlug, [rehypeAutolinkHeadings, { behavior: 'append' }]],
+  },
+})
+```
+
+Plugin order is preserved. Ruvyxa collects `headings` after application rehype plugins, so a custom
+heading `id` is also the exported slug. A remark or rehype plugin can update
+`file.data.ruvyxa.frontmatter`; the final value must remain a JSON-compatible object. GFM is on by
+default and can be disabled with `markdown.gfm: false`. Raw HTML written in `.md` remains escaped;
+use `.mdx` when executable JSX is intentional.
+
 ## Dynamic SSG
 
 For a dynamic SSG/ISR page, export `getStaticParams`. It receives all discovered routes and the

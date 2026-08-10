@@ -1220,6 +1220,28 @@ comments and strings, and walks template literals so `${…}` interpolations are
 Every helper it delegates to is bounded to the range being scanned, so an interpolation's scan
 cannot read into the surrounding literal text.
 
+#### Markdown and MDX compilation
+
+Content routes are lowered to ordinary React ESM before dependency scanning and TypeScript/JSX
+transforms. `packages/ruvyxa/runtime/compiler.mjs` owns the extensible path: it calls `@mdx-js/mdx`,
+enables `remark-gfm` by default, then runs configured remark, rehype, and recma plugins. Framework
+transforms run last to escape raw HTML in `.md`, collect heading exports from the final rehype IDs,
+validate plugin-mutated `file.data.ruvyxa.frontmatter`, and wrap the document in the stable
+`ruvyxa-content` article.
+
+The Rust bundler cannot execute unified plugins. When the sanitized config reports a `markdown`
+block, `TypeScriptPluginBuildSession` starts the existing persistent JavaScript plugin worker and
+the resolver calls its `content.compile` protocol once per unique document. The compiled module is
+stored on `ResolvedModule` and reused for dependency scanning and code generation; no process is
+started per file. Direct `ruvyxa_bundler` consumers without that host retain
+`crates/ruvyxa_bundler/src/content.rs` as the native fallback.
+
+`config-renderer.mjs` writes `.ruvyxa/cache/config/runtime-config.mjs`, a generated stable pointer
+to the versioned compiled config. Node SSR/SSG/dev compilers import only its `markdown` export.
+Pointer contents participate in the content cache key and configured content inputs, so changing a
+plugin or an imported config dependency cannot reuse output from the old pipeline. The pointer is
+generated output and is never packaged or committed.
+
 #### Incremental graph cache
 
 `IncrementalGraphCache` persists resolved dependency edges to `graph-manifest.json` so an unchanged
@@ -2767,7 +2789,7 @@ over an internal HTTP hop.
 **Source**: `crates/ruvyxa_cli/src/{site_discovery,image_optimizer,image_usage}.rs`
 
 Two build-time subsystems: crawler-discovery file generation (robots.txt, sitemap.xml) and public
-image optimization (PNG/JPEG → WebP + responsive variants).
+image optimization (PNG/JPEG → one WebP by default, with opt-in responsive variants).
 
 ---
 
@@ -2949,8 +2971,8 @@ pub struct ImageOptimizationOptions {
     pub optimize: bool,                    // enable optimization, default true
     pub quality: u8,                       // 1–100, default 82
     pub lossless: bool,                    // lossless WebP encoding, default false
-    pub keep_original: bool,               // keep original beside WebP, default true
-    pub variant_widths: Vec<u32>,          // responsive breakpoints
+    pub keep_original: bool,               // keep original beside WebP, default false
+    pub variant_widths: Vec<u32>,          // opt-in responsive breakpoints, default []
     pub parallelism: usize,                // 0 = Rayon global pool
     pub on_demand: OnDemandImageOptions,   // optional runtime resize policy
 }
@@ -2960,14 +2982,10 @@ pub struct ImageOptimizationOptions {
 enabled, the dev/server runtime accepts only bounded same-origin public-image requests and emits
 WebP. `maxWidth` defaults to 3840 and config validation restricts it to 16–8192.
 
-#### Default variant widths
-
-```rust
-pub const DEFAULT_VARIANT_WIDTHS: [u32; 8] = [640, 750, 828, 1080, 1200, 1920, 2048, 3840];
-```
-
-Must stay identical to `DEFAULT_DEVICE_WIDTHS` in `packages/@ruvyxa/react/src/image.tsx`. Test
-`packages/@ruvyxa/react/test/image-variants.test.mjs` asserts agreement.
+Static production builds publish one full-size WebP per source by default. `variant_widths` is an
+explicit opt-in for author-managed `srcSet` files. `DEFAULT_DEVICE_WIDTHS` in
+`packages/@ruvyxa/react/src/image.tsx` belongs only to runtime on-demand transforms, whose outputs
+are generated per request rather than prebuilt into `assets/`.
 
 ---
 
@@ -2994,7 +3012,7 @@ pub fn optimize_public_images(
    - Materialize to `assets_dir` via hard link (fallback to copy)
    - If `keep_original`: copy source unchanged
    - If decode fails: copy source unchanged (never drop unoptimizable assets)
-4. **Responsive variants** — For each configured width strictly smaller than intrinsic width:
+4. **Opt-in responsive variants** — For each configured width strictly smaller than intrinsic width:
    - Resize with Lanczos3, preserve aspect ratio
    - Write as `<stem>-<width>w.webp`
    - Content-addressed per source + options + target width

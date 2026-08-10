@@ -45,8 +45,12 @@ pub(crate) fn analyze_client_bundle(
         prebundle_dependencies: config.build.prebundle_dependencies,
         prerender_cache: config.build.prerender_cache,
     };
-    let plugin_session =
-        TypeScriptPluginBuildSession::new(root, &config.plugins, config.javascript_runtime())?;
+    let plugin_session = TypeScriptPluginBuildSession::new(
+        root,
+        &config.plugins,
+        config.javascript_runtime(),
+        config.markdown_enabled(),
+    )?;
     let client_manifest = emit_client_bundles_with_session(
         root,
         &root.join(config.app_dir()),

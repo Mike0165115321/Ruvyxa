@@ -172,7 +172,9 @@ fn compile_module(
         });
     }
 
-    let content_source = if matches!(ext, "md" | "mdx") {
+    let content_source = if let Some(compiled) = &module.compiled_content {
+        compiled.to_string()
+    } else if matches!(ext, "md" | "mdx") {
         crate::content::compile_content_module(&module.source, &module.path)
             .map_err(BundleError::Compiler)?
     } else {

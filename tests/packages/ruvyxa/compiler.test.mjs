@@ -21,6 +21,7 @@ import {
   compilerCacheStats,
   compileBundle,
   compileBundleWithMetadata,
+  compileContentSource,
   invalidateCompilerCache,
   MDX_COMPONENT_EXTENSIONS,
   toImportPath,
@@ -204,6 +205,154 @@ A note[^1]
       assert.match(output, /task-list-item/)
       assert.match(output, /data-footnotes/)
       assert.match(output, /textAlign/)
+    })
+  })
+
+  it('runs remark, rehype, and recma plugins while preserving safe Markdown contracts', async () => {
+    await withFixture(async ({ root }) => {
+      let recmaRuns = 0
+      const visit = (node, callback) => {
+        callback(node)
+        for (const child of node?.children ?? []) visit(child, callback)
+      }
+      const remarkPlugin = () => (tree, file) => {
+        visit(tree, (node) => {
+          if (node.type === 'text') node.value = node.value.replace('Original', 'Remarked')
+        })
+        file.data.ruvyxa.frontmatter.generated = true
+      }
+      const rehypePlugin = () => (tree) => {
+        visit(tree, (node) => {
+          if (node.type === 'element' && node.tagName === 'h1') {
+            node.properties = { ...node.properties, id: 'plugin-heading', dataEnhanced: 'yes' }
+          }
+        })
+      }
+      const recmaPlugin = () => () => {
+        recmaRuns += 1
+      }
+
+      const mdx = await compileContentSource(
+        '---\ntitle: Plugins\n---\n# Original',
+        path.join(root, 'page.mdx'),
+        root,
+        {
+          remarkPlugins: [remarkPlugin],
+          rehypePlugins: [rehypePlugin],
+          recmaPlugins: [recmaPlugin],
+        },
+      )
+      assert.equal(recmaRuns, 1)
+      assert.match(mdx.source, /Remarked/)
+      assert.match(mdx.source, /plugin-heading/)
+      assert.match(mdx.source, /"data-enhanced":\s*"yes"/)
+      assert.match(mdx.source, /"generated":true/)
+      assert.match(mdx.source, /className:\s*"ruvyxa-content"/)
+      assert.match(mdx.source, /data-content-format/)
+
+      const markdown = await compileContentSource(
+        '<script>globalThis.compromised = true</script>',
+        path.join(root, 'page.md'),
+        root,
+        false,
+      )
+      assert.match(markdown.source, /<script>globalThis\.compromised = true<\/script>/)
+      assert.doesNotMatch(markdown.source, /_jsx\("script"/)
+      assert.doesNotMatch(markdown.source, /dangerouslySetInnerHTML/)
+    })
+  })
+
+  it('shares configured Markdown plugins between runtime bundles and the native bridge', async () => {
+    await withFixture(async ({ root, outDir }) => {
+      const pageFile = path.join(root, 'page.mdx')
+      await writeFile(pageFile, '# Original heading\n')
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `
+          import { config } from "ruvyxa/config"
+
+          function remarkConfigured() {
+            return (tree) => {
+              for (const node of tree.children ?? []) {
+                for (const child of node.children ?? []) {
+                  if (child.type === "text") child.value = child.value.replace("Original", "Configured")
+                }
+              }
+            }
+          }
+
+          function rehypeConfigured() {
+            return (tree) => {
+              for (const node of tree.children ?? []) {
+                if (node.type === "element" && node.tagName === "h1") {
+                  node.properties = { ...node.properties, id: "configured-id" }
+                }
+              }
+            }
+          }
+
+          export default config({
+            markdown: {
+              remarkPlugins: [remarkConfigured],
+              rehypePlugins: [rehypeConfigured],
+            },
+          })
+        `,
+      )
+
+      const renderedConfig = await runJson(configRenderer, [root], {})
+      assert.equal(renderedConfig.config.markdown, true)
+      assert.equal(
+        await readFile(
+          path.join(root, '.ruvyxa', 'cache', 'config', 'runtime-config.mjs'),
+          'utf8',
+        ).then((source) => source.includes('export default config?.markdown')),
+        true,
+      )
+
+      const bridged = await runJson(pluginRuntime, [root, 'content.compile'], {
+        code: await readFile(pageFile, 'utf8'),
+        id: pageFile,
+        environment: 'client',
+      })
+      assert.match(bridged.result.code, /Configured heading/)
+      assert.match(bridged.result.code, /configured-id/)
+
+      const outfile = path.join(outDir, 'configured-markdown.mjs')
+      clearCompilerCache()
+      await compileBundle({
+        projectRoot: root,
+        entrySource: `export { default, headings } from ${JSON.stringify(toImportPath(pageFile))}`,
+        sourcefile: 'ruvyxa:configured-markdown-entry.ts',
+        outfile,
+        platform: 'node',
+        external: ['react', 'react/jsx-runtime'],
+      })
+      const runtimeOutput = await readFile(outfile, 'utf8')
+      assert.match(runtimeOutput, /Configured heading/)
+      const mod = await import(pathToFileURL(outfile).href + `?t=${Date.now()}`)
+      assert.deepEqual(mod.headings, [
+        { depth: 1, slug: 'configured-id', text: 'Configured heading' },
+      ])
+
+      const configFile = path.join(root, 'ruvyxa.config.ts')
+      await writeFile(
+        configFile,
+        (await readFile(configFile, 'utf8')).replaceAll('Configured', 'Updated'),
+      )
+      await runJson(configRenderer, [root], {})
+      const updatedOutfile = path.join(outDir, 'updated-markdown.mjs')
+      await compileBundle({
+        projectRoot: root,
+        entrySource: `export { default, headings } from ${JSON.stringify(toImportPath(pageFile))}`,
+        sourcefile: 'ruvyxa:updated-markdown-entry.ts',
+        outfile: updatedOutfile,
+        platform: 'node',
+        external: ['react', 'react/jsx-runtime'],
+      })
+      const updatedOutput = await readFile(updatedOutfile, 'utf8')
+      assert.match(updatedOutput, /Updated heading/)
+      assert.doesNotMatch(updatedOutput, /Configured heading/)
     })
   })
 
@@ -2142,6 +2291,17 @@ export const marker = 'reached'
         legacyMiddlewareKey.parsed.message,
         /RUV1602 unknown config\.middleware\.builtin field: logging/,
       )
+
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `export default { markdown: { html: true } }`,
+      )
+      const unknownMarkdownKey = await runJsonResult(configRenderer, [root], {})
+      assert.equal(unknownMarkdownKey.exitCode, 1)
+      assert.match(
+        unknownMarkdownKey.parsed.message,
+        /RUV1602 unknown config\.markdown field: html/,
+      )
     })
   })
 
@@ -2165,6 +2325,17 @@ export const marker = 'reached'
       assert.match(
         invalidArray.parsed.message,
         /RUV1602 config\.security\.trustedProxyIps must be string\[\]/,
+      )
+
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `export default { markdown: { remarkPlugins: 'remark-gfm' } }`,
+      )
+      const invalidMarkdownPlugins = await runJsonResult(configRenderer, [root], {})
+      assert.equal(invalidMarkdownPlugins.exitCode, 1)
+      assert.match(
+        invalidMarkdownPlugins.parsed.message,
+        /RUV1602 config\.markdown\.remarkPlugins must be an array/,
       )
     })
   })

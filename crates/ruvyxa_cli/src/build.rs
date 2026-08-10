@@ -277,6 +277,7 @@ pub(crate) async fn build_with_output(args: BuildArgs, show_summary: bool) -> an
         &args.root,
         &config.plugins,
         config.javascript_runtime(),
+        config.markdown_enabled(),
     )?;
     plugin_session.run_start(&out_dir)?;
     let staging_dir = create_build_staging_dir(&out_dir).with_context(|| {

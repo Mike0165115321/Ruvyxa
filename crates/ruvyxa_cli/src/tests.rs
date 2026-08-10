@@ -663,6 +663,15 @@ fn dev_config_respects_overlay_and_trace_flags() {
 }
 
 #[test]
+fn sanitized_markdown_config_enables_the_native_content_bridge() {
+    let enabled: ProjectConfig = serde_json::from_value(json!({ "markdown": true })).unwrap();
+    let disabled: ProjectConfig = serde_json::from_value(json!({})).unwrap();
+
+    assert!(enabled.markdown_enabled());
+    assert!(!disabled.markdown_enabled());
+}
+
+#[test]
 fn server_configs_apply_action_security_options() {
     let args = ServerArgs {
         root: PathBuf::from("."),
@@ -1425,6 +1434,67 @@ return {{ code: code.replace("Before", "{replacement}") }}
 }
 
 #[test]
+fn native_client_build_compiles_mdx_with_configured_unified_plugins() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let app = root.join("app");
+    let client_dir = root.join(".ruvyxa").join("client");
+    std::fs::create_dir_all(&app).unwrap();
+    std::fs::create_dir_all(&client_dir).unwrap();
+    std::fs::write(app.join("page.mdx"), "# Original heading").unwrap();
+    std::fs::write(
+        root.join("ruvyxa.config.ts"),
+        r#"
+import { config } from "ruvyxa/config"
+function remarkConfigured() {
+  return (tree) => {
+    for (const node of tree.children ?? []) {
+      for (const child of node.children ?? []) {
+        if (child.type === "text") child.value = child.value.replace("Original", "Configured")
+      }
+    }
+  }
+}
+export default config({
+  build: { minify: false, map: true, manifest: true },
+  markdown: { remarkPlugins: [remarkConfigured] },
+})
+"#,
+    )
+    .unwrap();
+
+    let config = load_project_config(root).unwrap();
+    let manifest = discover_routes(DiscoverOptions::new(&app)).unwrap();
+    let session = TypeScriptPluginBuildSession::new(
+        root,
+        &config.plugins,
+        config.javascript_runtime(),
+        config.markdown_enabled(),
+    )
+    .unwrap();
+    let client_manifest = emit_client_bundles_with_session(
+        root,
+        &app,
+        &manifest,
+        &client_dir,
+        &config.build,
+        &config.plugins,
+        RuvyxaBuildCache {
+            dependency_hash: &config.config_dependency_hash,
+            directory: &build_cache_dir(root, &config.cache),
+        },
+        &session,
+    )
+    .unwrap();
+    let route_file = client_manifest["routes"][0]["file"].as_str().unwrap();
+    let output = std::fs::read_to_string(client_dir.join(route_file)).unwrap();
+
+    assert!(output.contains("Configured heading"), "{output}");
+    assert!(!output.contains("Original heading"), "{output}");
+    assert!(output.contains("ruvyxa-content"), "{output}");
+}
+
+#[test]
 fn typescript_plugin_bridge_reuses_worker_state() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
@@ -1464,6 +1534,7 @@ register({ build }) {
             TypeScriptPluginWorker::spawn(&runner, root, JavaScriptRuntime::Node).unwrap(),
         )]),
         next_worker: Arc::new(AtomicUsize::new(0)),
+        content_compiler_enabled: false,
     };
     let context = ruvyxa_bundler::hooks::BuildHookContext {
         project_root: root.to_path_buf(),
@@ -1491,6 +1562,55 @@ register({ build }) {
     assert!(first.code.contains("pluginCall = 1"));
     assert!(second.code.contains("pluginCall = 2"));
     assert!(second.map.unwrap().contains("counter-input.ts"));
+}
+
+#[test]
+fn native_content_bridge_runs_configured_mdx_plugins() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    std::fs::write(
+        root.join("ruvyxa.config.mjs"),
+        r#"
+function remarkConfigured() {
+  return (tree) => {
+    for (const node of tree.children ?? []) {
+      for (const child of node.children ?? []) {
+        if (child.type === "text") child.value = child.value.replace("Original", "Configured")
+      }
+    }
+  }
+}
+export default { markdown: { remarkPlugins: [remarkConfigured] } }
+"#,
+    )
+    .unwrap();
+
+    let runner = find_runtime_script(root, "plugin-runtime.mjs").unwrap();
+    let bridge = TypeScriptPluginBridge {
+        project_root: root.to_path_buf(),
+        workers: Arc::new(vec![Mutex::new(
+            TypeScriptPluginWorker::spawn(&runner, root, JavaScriptRuntime::Node).unwrap(),
+        )]),
+        next_worker: Arc::new(AtomicUsize::new(0)),
+        content_compiler_enabled: true,
+    };
+    let context = ruvyxa_bundler::hooks::BuildHookContext {
+        project_root: root.to_path_buf(),
+        importer: None,
+        target: ruvyxa_bundler::BundleTarget::Client,
+    };
+
+    let compiled = ruvyxa_bundler::hooks::BuildHooks::compile_content(
+        &bridge,
+        "# Original heading",
+        &root.join("page.mdx"),
+        &context,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert!(compiled.code.contains("Configured heading"));
+    assert!(compiled.code.contains("ruvyxa-content"));
 }
 
 #[test]
@@ -1523,7 +1643,7 @@ register({ build }) {
     }];
 
     let session =
-        TypeScriptPluginBuildSession::new(root, &plugins, JavaScriptRuntime::Node).unwrap();
+        TypeScriptPluginBuildSession::new(root, &plugins, JavaScriptRuntime::Node, false).unwrap();
     session
         .run_complete(&out_dir, &serde_json::json!({ "routes": 1 }))
         .unwrap();
@@ -1568,7 +1688,7 @@ register({ build }) {
         head: Vec::new(),
     }];
     let session =
-        TypeScriptPluginBuildSession::new(root, &plugins, JavaScriptRuntime::Node).unwrap();
+        TypeScriptPluginBuildSession::new(root, &plugins, JavaScriptRuntime::Node, false).unwrap();
 
     session.run_start(&out_dir).unwrap();
     let context = ruvyxa_bundler::hooks::BuildHookContext {

@@ -43,6 +43,10 @@ pub(crate) struct ProjectConfig {
     pub(crate) server: ServerConfigOptions,
     #[serde(default)]
     pub(crate) css: CssConfigOptions,
+    /// Executable unified plugins stay in the JavaScript config module. This
+    /// marker tells native bundling to activate the persistent MDX bridge.
+    #[serde(rename = "markdown")]
+    pub(crate) markdown_enabled: Option<bool>,
     #[serde(default)]
     pub(crate) build: BuildConfigOptions,
     #[serde(default)]
@@ -298,6 +302,10 @@ impl ProjectConfig {
     /// Whether to emit `.ruvyxa/types/routes.d.ts` for this project.
     pub(crate) fn typed_routes(&self) -> bool {
         self.typed_routes.unwrap_or(false)
+    }
+
+    pub(crate) fn markdown_enabled(&self) -> bool {
+        self.markdown_enabled.unwrap_or(false)
     }
 
     pub(crate) fn validate_paths(&self) -> anyhow::Result<()> {

@@ -266,7 +266,7 @@ pub(crate) fn load_project_config(root: &Path) -> anyhow::Result<ProjectConfig> 
 
 /// Format of [`ConfigLoadCache`]. Bump to discard every existing entry when the
 /// meaning of a field changes; a stale entry is silently ignored, not migrated.
-pub(crate) const CONFIG_CACHE_VERSION: u32 = 1;
+pub(crate) const CONFIG_CACHE_VERSION: u32 = 2;
 
 /// A previous config render, with everything needed to decide if it still holds.
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -343,7 +343,21 @@ fn read_config_cache(
     }
     // Re-parsed rather than stored structurally so the cached result travels
     // through exactly the same validation a fresh render does.
-    parse_config_renderer_output(root, cache.stdout.as_bytes(), b"", "cached").ok()
+    let result = parse_config_renderer_output(root, cache.stdout.as_bytes(), b"", "cached").ok()?;
+    if result
+        .config
+        .as_ref()
+        .is_some_and(ProjectConfig::markdown_enabled)
+        && !root
+            .join(".ruvyxa")
+            .join("cache")
+            .join("config")
+            .join("runtime-config.mjs")
+            .is_file()
+    {
+        return None;
+    }
+    Some(result)
 }
 
 /// Persist a successful render. A cache that cannot be written is not an error:

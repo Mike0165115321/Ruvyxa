@@ -59,6 +59,17 @@ pub trait BuildHooks: Send + Sync {
     ) -> Result<Option<TransformOutput>> {
         Ok(None)
     }
+
+    /// Compile raw `.md`/`.mdx` through the configured JavaScript MDX host.
+    /// Returning `None` keeps the native Rust content compiler as the fallback.
+    fn compile_content(
+        &self,
+        _code: &str,
+        _id: &Path,
+        _context: &BuildHookContext,
+    ) -> Result<Option<TransformOutput>> {
+        Ok(None)
+    }
 }
 
 /// Ordered build-hook hosts. Ruvyxa currently installs at most one TypeScript host.
@@ -149,6 +160,25 @@ impl BuildHookPipeline {
             }
         }
         Ok(TransformOutput { code: current, map })
+    }
+
+    pub fn compile_content(
+        &self,
+        code: &str,
+        id: &Path,
+        context: &BuildHookContext,
+    ) -> Result<Option<TransformOutput>> {
+        for host in self.hosts.iter() {
+            if let Some(result) = host.compile_content(code, id, context).map_err(|error| {
+                BundleError::Compiler(format!(
+                    "build hook host `{}` content compilation failed: {error}",
+                    host.host_name()
+                ))
+            })? {
+                return Ok(Some(result));
+            }
+        }
+        Ok(None)
     }
 }
 

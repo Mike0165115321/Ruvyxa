@@ -26,6 +26,7 @@ pub(crate) struct TypeScriptPluginBridge {
     pub(crate) project_root: PathBuf,
     pub(crate) workers: Arc<Vec<Mutex<TypeScriptPluginWorker>>>,
     pub(crate) next_worker: Arc<AtomicUsize>,
+    pub(crate) content_compiler_enabled: bool,
 }
 
 /// Longest one build-plugin hook may run before its worker is stopped.
@@ -152,6 +153,29 @@ impl ruvyxa_bundler::hooks::BuildHooks for TypeScriptPluginBridge {
             map,
         }))
     }
+
+    fn compile_content(
+        &self,
+        code: &str,
+        id: &Path,
+        ctx: &ruvyxa_bundler::hooks::BuildHookContext,
+    ) -> ruvyxa_bundler::Result<Option<ruvyxa_bundler::hooks::TransformOutput>> {
+        if !self.content_compiler_enabled {
+            return Ok(None);
+        }
+        let payload = serde_json::json!({
+            "code": code,
+            "id": id.display().to_string(),
+            "environment": plugin_environment(ctx.target)
+        });
+        let Some(value) = self.call_runner("content.compile", payload)? else {
+            return Ok(None);
+        };
+        let Some(code) = value.get("code").and_then(serde_json::Value::as_str) else {
+            return Ok(None);
+        };
+        Ok(Some(ruvyxa_bundler::hooks::TransformOutput::code(code)))
+    }
 }
 
 impl TypeScriptPluginBridge {
@@ -196,8 +220,9 @@ impl TypeScriptPluginBuildSession {
         root: &Path,
         plugins: &[BuildPluginConfig],
         runtime: JavaScriptRuntime,
+        content_compiler_enabled: bool,
     ) -> anyhow::Result<Self> {
-        if plugins.is_empty() {
+        if plugins.is_empty() && !content_compiler_enabled {
             return Ok(Self { bridge: None });
         }
 
@@ -213,6 +238,7 @@ impl TypeScriptPluginBuildSession {
                 project_root,
                 workers: Arc::new(vec![Mutex::new(worker)]),
                 next_worker: Arc::new(AtomicUsize::new(0)),
+                content_compiler_enabled,
             }),
         })
     }

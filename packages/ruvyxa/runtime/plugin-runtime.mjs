@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   cacheFileName,
   compileBundle,
+  compileContentSource,
   runtimeAliases,
   serverPlatform,
   toImportPath,
@@ -41,7 +42,7 @@ try {
 
 async function loadRegistry(root) {
   const configFile = findConfig(root)
-  if (!configFile) return createRegistry(root, [])
+  if (!configFile) return createRegistry(root, [], undefined)
 
   const moduleCode = `export { default } from ${JSON.stringify(toImportPath(configFile))}`
   const outfile = path.join(
@@ -59,6 +60,7 @@ async function loadRegistry(root) {
     platform: serverPlatform(),
     bundleAliasDependencies: true,
     aliases: runtimeAliases(runtimeDir),
+    markdownConfig: false,
   })
 
   const mod = await import(pathToFileURL(outfile).href + `?t=${Date.now()}`)
@@ -68,6 +70,7 @@ async function loadRegistry(root) {
   return createRegistry(
     root,
     contentPlugin ? [...configuredPlugins, contentPlugin] : configuredPlugins,
+    config.markdown,
   )
 }
 
@@ -116,12 +119,13 @@ function findConfig(root) {
   return null
 }
 
-async function createRegistry(root, pluginsValue) {
+async function createRegistry(root, pluginsValue, markdown) {
   const plugins = Array.isArray(pluginsValue) ? pluginsValue : []
   const names = new Set()
   const routeOwners = new Map()
   const registry = {
     root,
+    markdown,
     plugins: [],
     httpRequest: [],
     httpResponse: [],
@@ -417,6 +421,8 @@ async function handleHook(registry, hook, payload) {
       return success(await runBuildLoad(registry, payload))
     case 'build.transform':
       return success(await runBuildTransform(registry, payload))
+    case 'content.compile':
+      return success(await runContentCompile(registry, payload))
     case 'build.complete':
       await runBuildComplete(registry, payload)
       return success(null)
@@ -494,6 +500,19 @@ async function runBuildTransform(registry, payload) {
     changed = true
   }
   return changed ? { code, ...(map === undefined ? {} : { map }) } : null
+}
+
+async function runContentCompile(registry, payload) {
+  const id = path.resolve(String(payload.id ?? ''))
+  const extension = path.extname(id).toLowerCase()
+  if (extension !== '.md' && extension !== '.mdx') return null
+  const compiled = await compileContentSource(
+    String(payload.code ?? ''),
+    id,
+    registry.root,
+    registry.markdown ?? null,
+  )
+  return { code: compiled.source }
 }
 
 function normalizeCodeResult(plugin, socket, result) {

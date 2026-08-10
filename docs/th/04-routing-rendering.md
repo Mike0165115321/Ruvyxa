@@ -38,6 +38,30 @@ provider ที่ใกล้ที่สุดจะชนะ ดังนั�
 ที่คืนมาหากยังต้องการใช้ provider เป็น module ใน client graph ปกติ ดังนั้น `ruvyxa check` จะปฏิเสธ
 server-only import และ private environment variable
 
+Ruvyxa รวม `@mdx-js/mdx` และ GFM มาให้แล้ว หากต้องการใช้ plugin ของ unified ให้ติดตั้ง remark,
+rehype หรือ recma plugin เป็น dependency ของ application จากนั้น import ใน `ruvyxa.config.ts`
+และตั้งครั้งเดียวเพื่อใช้กับทั้ง `.md` และ `.mdx`:
+
+```ts
+import rehypeAutolinkHeadings from 'rehype-autolink-headings'
+import rehypeSlug from 'rehype-slug'
+import remarkToc from 'remark-toc'
+import { config } from 'ruvyxa/config'
+
+export default config({
+  markdown: {
+    remarkPlugins: [[remarkToc, { heading: 'contents', maxDepth: 3 }]],
+    rehypePlugins: [rehypeSlug, [rehypeAutolinkHeadings, { behavior: 'append' }]],
+  },
+})
+```
+
+ระบบรักษาลำดับ plugin ตาม config และเก็บ `headings` หลัง application rehype plugin ทำงานแล้ว ดังนั้น
+`id` ที่ plugin กำหนดให้ heading จะเป็น slug ที่ export ด้วย remark หรือ rehype plugin แก้
+frontmatter ผ่าน `file.data.ruvyxa.frontmatter` ได้ แต่ค่าหลังแก้ต้องยังเป็น object ที่แปลงเป็น JSON
+ได้ GFM เปิดเป็นค่าเริ่มต้นและปิดได้ด้วย `markdown.gfm: false` ส่วน raw HTML ใน `.md` จะยัง ถูก
+escape; ให้ใช้ `.mdx` เฉพาะเมื่อเจตนาให้ JSX ทำงานจริง
+
 ## Dynamic SSG
 
 สำหรับ dynamic SSG/ISR page ให้ export `getStaticParams` มันรับ route ทั้งหมดที่ค้นพบและรายละเอียด

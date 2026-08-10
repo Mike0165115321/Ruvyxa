@@ -61,6 +61,9 @@ pub struct ResolvedModule {
     pub path: PathBuf,
     /// Raw UTF-8 source (TypeScript/TSX/JS/JSX).
     pub source: String,
+    /// Content already lowered by the configured persistent MDX host. Direct
+    /// crate consumers without a host leave this empty and use the Rust fallback.
+    pub compiled_content: Option<Arc<str>>,
     /// Optional source map supplied by a build load hook.
     pub load_source_map: Option<String>,
     /// Specifiers that this module imports (absolute paths after resolution).
@@ -1243,6 +1246,7 @@ pub(crate) fn resolve_graph_with_incremental(
         ResolvedModule {
             path: entry_key.clone(),
             source: entry_source.to_string(),
+            compiled_content: None,
             load_source_map: None,
             deps: entry_deps.paths.clone(),
             dependency_aliases: entry_deps.aliases,
@@ -1292,6 +1296,35 @@ pub(crate) fn resolve_graph_with_incremental(
                     raw_source.to_string()
                 };
 
+                // Configured applications compile content once in the
+                // persistent MDX host and reuse the result for dependency
+                // scanning and code generation. Direct bundler consumers keep
+                // the native compiler fallback.
+                let is_content = matches!(
+                    dep_path
+                        .extension()
+                        .and_then(|extension| extension.to_str()),
+                    Some("md" | "mdx")
+                );
+                let compiled_content = if is_content {
+                    if let Some(output) =
+                        build_hooks.compile_content(&source, dep_path, &hook_context)?
+                    {
+                        Some(Arc::from(output.code))
+                    } else {
+                        Some(
+                            crate::content::compile_content_module_shared_in_root(
+                                &source,
+                                dep_path,
+                                &project_root,
+                            )
+                            .map_err(BundleError::Compiler)?,
+                        )
+                    }
+                } else {
+                    None
+                };
+
                 // Reuse a persisted resolution only when it is complete. Paths
                 // and aliases are one answer: the linker consults the alias map
                 // first and only then matches by path suffix, and an alias like
@@ -1329,23 +1362,6 @@ pub(crate) fn resolve_graph_with_incremental(
                     // branch that only has to borrow. The content arm keeps the
                     // shared `Arc<str>` the content cache already holds instead
                     // of copying out of it.
-                    let compiled_content = if matches!(
-                        dep_path
-                            .extension()
-                            .and_then(|extension| extension.to_str()),
-                        Some("md" | "mdx")
-                    ) {
-                        Some(
-                            crate::content::compile_content_module_shared_in_root(
-                                &source,
-                                dep_path,
-                                &project_root,
-                            )
-                            .map_err(BundleError::Compiler)?,
-                        )
-                    } else {
-                        None
-                    };
                     let dependency_source: &str =
                         compiled_content.as_deref().unwrap_or(source.as_str());
                     collect_deps_cached(
@@ -1377,6 +1393,7 @@ pub(crate) fn resolve_graph_with_incremental(
                     ResolvedModule {
                         path: dep_path.clone(),
                         source,
+                        compiled_content,
                         load_source_map,
                         deps: dependencies.paths,
                         dependency_aliases: dependencies.aliases,
