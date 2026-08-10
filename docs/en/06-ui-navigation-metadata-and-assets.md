@@ -111,12 +111,15 @@ export default function Product() {
 
 ## Images, CSS, and static files
 
-`Image` accepts React image props plus Ruvyxa options. Local public PNG/JPEG assets are optimized to
-WebP during a production build by default. `image.variantWidths` controls responsive variants;
-`Image` uses those widths for local images when `sizes` is supplied. `image.onDemand` enables
-same-origin runtime transformations at `/__ruvyxa/image` and has a default maximum width of 3840
-when configured as an object.
+`Image` accepts React image props plus Ruvyxa options. By default, a production build replaces each
+local public PNG/JPEG with exactly one WebP and publishes neither the original nor responsive
+variants. Use `<Image>` or reference the generated `.webp` URL directly. `image.keepOriginal: true`
+retains source files for raw `<img>` compatibility, while `image.variantWidths` explicitly opts into
+prebuilt variants that an author-provided `srcSet` can reference. `image.onDemand` enables automatic
+responsive URLs through same-origin runtime transformations at `/__ruvyxa/image` and has a default
+maximum width of 3840 when configured as an object.
 
+<!-- prettier-ignore -->
 ```tsx
 import { Image } from '@ruvyxa/react'
 export function Hero() {
@@ -126,7 +129,6 @@ export function Hero() {
       alt="Team at work"
       width={1200}
       height={630}
-      sizes="(max-width: 768px) 100vw, 1200px"
       priority
     />
   )

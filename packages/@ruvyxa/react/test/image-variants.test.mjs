@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
 import { describe, it } from 'node:test'
 
-import { DEFAULT_DEVICE_WIDTHS, Image } from '../dist/image.js'
+import { Image } from '../dist/image.js'
 
 // Render the component to a plain element tree. The compiled JSX targets the
 // automatic runtime, so calling the function directly returns the <img>
@@ -13,7 +12,7 @@ function renderImage(props) {
 }
 
 describe('Image responsive srcset', () => {
-  it('builds a srcset from device widths below the intrinsic width', () => {
+  it('uses one static WebP even when sizes is present', () => {
     const { srcSet } = renderImage({
       src: '/hero.jpg',
       alt: '',
@@ -22,12 +21,7 @@ describe('Image responsive srcset', () => {
       sizes: '100vw',
     })
 
-    // Breakpoints under 1000 (640, 750, 828) as variants, then the full-size
-    // WebP at the intrinsic width. Nothing at or above 1000 (would upscale).
-    assert.equal(
-      srcSet,
-      '/hero-640w.webp 640w, /hero-750w.webp 750w, /hero-828w.webp 828w, /hero.webp 1000w',
-    )
+    assert.equal(srcSet, undefined)
   })
 
   it('emits no auto srcset without a sizes hint', () => {
@@ -47,7 +41,7 @@ describe('Image responsive srcset', () => {
     assert.equal(srcSet, '/a.webp 1x, /b.webp 2x')
   })
 
-  it('does not fabricate variants for a remote or already-optimized source', () => {
+  it('does not fabricate static variants for a remote or already-optimized source', () => {
     assert.equal(
       renderImage({
         src: 'https://cdn.example/x.jpg',
@@ -108,21 +102,5 @@ describe('Image responsive srcset', () => {
       dynamic: true,
     })
     assert.match(snapped.src, /w=1920/)
-  })
-})
-
-describe('device width list parity with the Rust optimizer', () => {
-  it('matches DEFAULT_VARIANT_WIDTHS in image_optimizer.rs', async () => {
-    const rustSource = await readFile(
-      new URL('../../../../crates/ruvyxa_cli/src/image_optimizer.rs', import.meta.url),
-      'utf8',
-    )
-    const match = rustSource.match(/DEFAULT_VARIANT_WIDTHS: \[u32; \d+\] = \[([^\]]+)\]/)
-    assert.ok(match, 'could not find DEFAULT_VARIANT_WIDTHS in image_optimizer.rs')
-    const rustWidths = match[1]
-      .split(',')
-      .map((value) => Number(value.trim()))
-      .filter((value) => Number.isFinite(value))
-    assert.deepEqual(rustWidths, [...DEFAULT_DEVICE_WIDTHS])
   })
 })

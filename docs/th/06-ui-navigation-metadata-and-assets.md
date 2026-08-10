@@ -109,11 +109,14 @@ export default function Product() {
 
 ## Image, CSS และ static file
 
-`Image` รับ React image prop พร้อม Ruvyxa option asset PNG/JPEG ใน public แบบ local จะถูก optimize
-เป็น WebP ระหว่าง production build โดยปริยาย `image.variantWidths` ควบคุม responsive variant;
-`Image` ใช้ width เหล่านั้นกับ local image เมื่อระบุ `sizes` `image.onDemand` เปิด same-origin
-runtime transformation ที่ `/__ruvyxa/image` และมี maximum width ปริยาย 3840 เมื่อกำหนดเป็น object
+`Image` รับ React image prop พร้อม Ruvyxa option โดย production build จะแทน PNG/JPEG แบบ local แต่ละ
+ไฟล์ด้วย WebP เพียงไฟล์เดียวเป็นค่าเริ่มต้น และจะไม่ publish ทั้งไฟล์ต้นฉบับหรือ responsive variant
+ให้ใช้ `<Image>` หรืออ้าง URL `.webp` ที่สร้างแล้วโดยตรง ตั้ง `image.keepOriginal: true`
+เมื่อต้องรองรับ raw `<img>` และใช้ `image.variantWidths` เมื่อต้องการสร้าง variant แบบ opt-in สำหรับ
+`srcSet` ที่กำหนดเอง ส่วน `image.onDemand` สร้าง responsive URL อัตโนมัติผ่าน same-origin runtime
+transformation ที่ `/__ruvyxa/image` และมี maximum width ปริยาย 3840 เมื่อกำหนดเป็น object
 
+<!-- prettier-ignore -->
 ```tsx
 import { Image } from '@ruvyxa/react'
 export function Hero() {
@@ -123,7 +126,6 @@ export function Hero() {
       alt="Team at work"
       width={1200}
       height={630}
-      sizes="(max-width: 768px) 100vw, 1200px"
       priority
     />
   )

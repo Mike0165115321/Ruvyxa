@@ -294,8 +294,7 @@ pub(crate) async fn build_with_output(args: BuildArgs, show_summary: bool) -> an
     let style_entries = (!args.server_only).then(|| config.style_entries(&args.root));
     // `public/` is a URL contract for an API-only service too, so its files are
     // still staged. What is skipped is the browser-facing part: WebP conversion
-    // and responsive variants exist for `<Image>`, which a server-only artifact
-    // never renders.
+    // output exists for `<Image>`, which a server-only artifact never renders.
     let image_options = if args.server_only {
         ImageOptimizationOptions {
             optimize: false,
@@ -364,24 +363,33 @@ pub(crate) async fn build_with_output(args: BuildArgs, show_summary: bool) -> an
         duration: preparation_duration,
     } = prepared_assets;
 
-    // The optimizer converted these images; a raw `<img>` still ships the
-    // original bytes, so the build's work is silently unused. A server-only
-    // build converts nothing and renders no markup, so there is nothing to warn
-    // about.
+    // The optimizer converted these images; a raw `<img>` still references the
+    // source extension. Depending on `keepOriginal`, that either 404s on a
+    // static host or bypasses the smaller WebP. A server-only build converts
+    // nothing and renders no markup, so there is nothing to warn about.
     let bypassed_images = if args.server_only {
         Vec::new()
     } else {
         scan_raw_image_usage(&app_dir, &image_report.entries)
     };
     for usage in bypassed_images.iter().take(5) {
-        warn!(
-            "{}:{} <img src=\"{}\"> ships {} instead of the generated WebP ({}). Use <Image> from @ruvyxa/react to serve the optimized file.",
-            usage.file.display(),
-            usage.line,
-            usage.url,
-            format_bytes(usage.source_bytes as usize),
-            format_bytes(usage.webp_bytes as usize),
-        );
+        if image_options.keep_original {
+            warn!(
+                "{}:{} <img src=\"{}\"> ships {} instead of the generated WebP ({}). Use <Image> from @ruvyxa/react to serve the optimized file.",
+                usage.file.display(),
+                usage.line,
+                usage.url,
+                format_bytes(usage.source_bytes as usize),
+                format_bytes(usage.webp_bytes as usize),
+            );
+        } else {
+            warn!(
+                "{}:{} <img src=\"{}\"> references an original image that is not published. Use <Image> from @ruvyxa/react or reference the generated WebP.",
+                usage.file.display(),
+                usage.line,
+                usage.url,
+            );
+        }
     }
     if bypassed_images.len() > 5 {
         warn!(

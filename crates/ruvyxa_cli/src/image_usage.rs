@@ -1,11 +1,9 @@
 //! Detects images that bypass the build's image pipeline.
 //!
-//! The optimizer converts every public PNG/JPEG to WebP and emits responsive
-//! variants, but a plain `<img src="/logo.png">` keeps pointing at the original
-//! bytes: `keepOriginal` publishes them precisely so that markup does not break.
-//! The result is a silent regression — the build did the work and the page does
-//! not use it — and it is invisible in the build summary, which reports the
-//! optimization as a success.
+//! The optimizer converts every public PNG/JPEG to one WebP by default, but a
+//! plain `<img src="/logo.png">` keeps pointing at the source extension. Without
+//! `keepOriginal`, that URL is absent on static hosts; with it, the page ships
+//! the larger original instead of using the converted output.
 //!
 //! This scanner names those references so the author can switch them to
 //! `<Image>`. It reports, never fails: a raw `<img>` is legal, and some are

@@ -39,21 +39,17 @@ pub struct ImageOptimizationOptions {
     pub lossless: bool,
     /// Keep the original PNG/JPEG next to its WebP output.
     ///
-    /// `public/` is a URL contract: whatever the developer puts there is
-    /// served at the matching path. Replacing `logo.png` with `logo.webp`
-    /// broke that contract everywhere except the Rust server, which quietly
-    /// resolves the old URL to the new file (`resolve_public_asset`). A CDN
-    /// has no such fallback, so every plain `<img src="/logo.png">` 404s once
-    /// the app is deployed — a failure that only ever appears in production.
+    /// The default publishes only `logo.webp`; applications should use
+    /// `<Image>` or the converted URL. Enable this compatibility option when
+    /// raw `<img src="/logo.png">` references must keep working on a static CDN.
     pub keep_original: bool,
-    /// Target widths for responsive `srcset` variants, in pixels.
+    /// Opt-in target widths for responsive `srcset` variants, in pixels.
     ///
     /// For each source the optimizer emits `<name>-<w>w.webp` at every width in
     /// this list that is strictly smaller than the image's intrinsic width. The
-    /// `<Image>` component in `@ruvyxa/react` builds its `srcset` from the same
-    /// list ([`DEFAULT_VARIANT_WIDTHS`]) and the same naming convention, so
-    /// every URL it emits maps to a file produced here — the browser never
-    /// requests a variant that was not built.
+    /// Static `<Image>` does not fabricate these URLs. Applications opting in
+    /// reference the generated files through an explicit `srcSet`; on-demand
+    /// images use runtime-generated URLs instead.
     pub variant_widths: Vec<u32>,
     /// Zero uses Rayon's global worker count.
     #[serde(rename = "workers")]
@@ -119,20 +115,14 @@ impl OnDemandImageOptions {
     }
 }
 
-/// Default responsive breakpoints, matching `DEFAULT_DEVICE_WIDTHS` in
-/// `packages/@ruvyxa/react/src/image.tsx`. The two MUST stay identical: the
-/// build emits these widths and the component references them at render time.
-/// `packages/@ruvyxa/react/test/image-variants.test.mjs` asserts the lists agree.
-pub const DEFAULT_VARIANT_WIDTHS: [u32; 8] = [640, 750, 828, 1080, 1200, 1920, 2048, 3840];
-
 impl Default for ImageOptimizationOptions {
     fn default() -> Self {
         Self {
             optimize: true,
             quality: 82,
             lossless: false,
-            keep_original: true,
-            variant_widths: DEFAULT_VARIANT_WIDTHS.to_vec(),
+            keep_original: false,
+            variant_widths: Vec::new(),
             parallelism: 0,
             effort: 4,
             on_demand: OnDemandImageOptions::default(),
@@ -619,7 +609,7 @@ mod tests {
     use image::{ImageBuffer, Rgb, Rgba};
 
     #[test]
-    fn publishes_one_webp_beside_the_original_and_reuses_cache() {
+    fn publishes_exactly_one_webp_by_default_and_reuses_cache() {
         let temp = tempfile::tempdir().unwrap();
         let public = temp.path().join("public");
         let assets = temp.path().join("assets");
@@ -639,10 +629,8 @@ mod tests {
         .unwrap();
         assert!(source.exists());
         assert!(assets.join("hero.webp").is_file());
-        // The original stays published: a static host has no server-side
-        // format fallback, so dropping it 404s every plain
-        // `<img src="/hero.png">` the moment the app is deployed.
-        assert!(assets.join("hero.png").is_file());
+        assert!(!assets.join("hero.png").exists());
+        assert!(first.entries[0].variants.is_empty());
         assert_eq!(fs::read(assets.join("robots.txt")).unwrap(), b"hello");
         assert_eq!(first.optimized_images, 1);
         assert_eq!(first.cache_hits, 0);
@@ -658,21 +646,21 @@ mod tests {
         .unwrap();
         assert_eq!(second.cache_hits, 1);
 
-        // Opting out trades that compatibility for the smaller publish
-        // directory, and must then actually drop the source.
+        // Retaining the source is still available as an explicit compatibility
+        // choice for raw `<img src="/hero.png">` references.
         fs::remove_dir_all(&assets).unwrap();
         optimize_public_images(
             &public,
             &assets,
             &cache,
             &ImageOptimizationOptions {
-                keep_original: false,
+                keep_original: true,
                 ..ImageOptimizationOptions::default()
             },
         )
         .unwrap();
         assert!(assets.join("hero.webp").is_file());
-        assert!(!assets.join("hero.png").exists());
+        assert!(assets.join("hero.png").is_file());
     }
 
     #[test]
@@ -691,7 +679,10 @@ mod tests {
             &public,
             &assets,
             &cache,
-            &ImageOptimizationOptions::default(),
+            &ImageOptimizationOptions {
+                variant_widths: vec![640, 750, 828, 1080],
+                ..ImageOptimizationOptions::default()
+            },
         )
         .unwrap();
 
@@ -818,7 +809,10 @@ mod tests {
         ImageBuffer::from_pixel(1000, 500, Rgb([10u8, 20, 30]))
             .save(&source)
             .unwrap();
-        let options = ImageOptimizationOptions::default();
+        let options = ImageOptimizationOptions {
+            variant_widths: vec![640, 750, 828],
+            ..ImageOptimizationOptions::default()
+        };
 
         let cold = optimize_public_images(&public, &assets, &cache, &options).unwrap();
         assert_eq!(cold.cache_hits, 0);

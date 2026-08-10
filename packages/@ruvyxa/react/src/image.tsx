@@ -1,13 +1,8 @@
 import type { CSSProperties, ImgHTMLAttributes, ReactElement, SourceHTMLAttributes } from 'react'
 
 /**
- * Responsive breakpoints, in pixels, used to build an automatic `srcset`.
- *
- * MUST equal `DEFAULT_VARIANT_WIDTHS` in
- * `crates/ruvyxa_cli/src/image_optimizer.rs`: the build emits a WebP at each of
- * these widths and this component references them by URL. A mismatch would make
- * the browser request a variant the build never produced.
- * `packages/@ruvyxa/react/test/image-variants.test.mjs` asserts the two lists agree.
+ * Responsive breakpoints, in pixels, used by opt-in on-demand image transforms.
+ * Static builds publish one WebP per source by default and do not use this list.
  */
 export const DEFAULT_DEVICE_WIDTHS = [640, 750, 828, 1080, 1200, 1920, 2048, 3840] as const
 
@@ -184,12 +179,10 @@ function runtimeImageWidth(width: number): number {
 /**
  * Resolve the `srcset` for an `<img>`.
  *
- * An explicit `srcSet` always wins — the author has taken control. Otherwise,
- * when `sizes` signals a responsive layout and the intrinsic `width` is known,
- * build a `srcset` from the build's responsive variants. It is capped at the
- * intrinsic width because that is the largest file the optimizer produced: a
- * variant is only emitted for a breakpoint *narrower* than the source, and the
- * full-size WebP covers the top of the set.
+ * An explicit `srcSet` always wins — the author has taken control. Static
+ * images use the build's single WebP output. Only opt-in on-demand images build
+ * an automatic responsive `srcset`, because those URLs are materialized by the
+ * runtime instead of requiring prebuilt files.
  *
  * A custom loader or `unoptimized` opts out of Ruvyxa's build output, so the
  * author's `srcSet` (rewritten for a loader, verbatim for unoptimized) stands.
@@ -230,20 +223,7 @@ function resolveSrcSet({
       .join(', ')
   }
 
-  if (!width) return srcSet
-
-  const base = webpUrl(src)
-  // `webpUrl` only rewrites a local PNG/JPEG to `.webp`; it returns everything
-  // else (remote URLs, protocol-relative, SVG, already-WebP) unchanged. A URL
-  // it did not rewrite has no build-generated variants, so leave it alone
-  // rather than fabricate `-640w.webp` links that would 404.
-  if (base === src) return srcSet
-
-  const entries = DEFAULT_DEVICE_WIDTHS.filter((deviceWidth) => deviceWidth < width).map(
-    (deviceWidth) => `${variantUrl(base, deviceWidth)} ${deviceWidth}w`,
-  )
-  entries.push(`${base} ${width}w`)
-  return entries.join(', ')
+  return srcSet
 }
 
 function isLocalRuntimeImage(src: string): boolean {
@@ -255,19 +235,6 @@ function runtimeImageUrl(src: string, width: number, quality?: number): string {
   const path = src.split(/[?#]/, 1)[0]
   const query = `src=${encodeURIComponent(path)}&w=${Math.max(1, Math.round(width))}`
   return `/__ruvyxa/image?${query}${quality !== undefined ? `&q=${Math.round(quality)}` : ''}`
-}
-
-/**
- * URL of a responsive variant: `/hero.webp` at width 640 → `/hero-640w.webp`.
- *
- * Mirrors `variant_path()` in `crates/ruvyxa_cli/src/image_optimizer.rs`.
- */
-function variantUrl(webpSrc: string, width: number): string {
-  const marker = webpSrc.search(/[?#]/)
-  const path = marker === -1 ? webpSrc : webpSrc.slice(0, marker)
-  const suffix = marker === -1 ? '' : webpSrc.slice(marker)
-  const variant = path.replace(/\.webp$/i, `-${width}w.webp`)
-  return `${variant}${suffix}`
 }
 
 function fillStyle(style: CSSProperties | undefined): CSSProperties {
