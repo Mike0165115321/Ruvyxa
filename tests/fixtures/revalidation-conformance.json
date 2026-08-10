@@ -1,0 +1,5 @@
+{
+  "maxPathsPerRequest": 64,
+  "maxPathLength": 2048,
+  "maxPendingExactPaths": 1024
+}

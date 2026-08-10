@@ -283,11 +283,15 @@ rl.on('line', async (line) => {
     if (result?.streamResponse instanceof Response) {
       await emitApiStream(id, result)
     } else {
-      await writeWorkerMessage({ id, ...result })
+      await writeWorkerMessage({ id, ...result, retainedModuleUrls: registeredModuleUrls.size })
     }
   } catch (error) {
     try {
-      await writeWorkerMessage({ id, ...workerError(error) })
+      await writeWorkerMessage({
+        id,
+        ...workerError(error),
+        retainedModuleUrls: registeredModuleUrls.size,
+      })
     } catch {
       shutdown('stdout-write-failed')
     }
@@ -375,11 +379,21 @@ async function writeWorkerMessage(message) {
 
 async function emitApiStream(id, result) {
   const { streamResponse, ...head } = result
-  await writeWorkerMessage({ id, frame: 'api-start', ...head })
+  await writeWorkerMessage({
+    id,
+    frame: 'api-start',
+    ...head,
+    retainedModuleUrls: registeredModuleUrls.size,
+  })
 
   const reader = streamResponse.body?.getReader()
   if (!reader) {
-    await writeWorkerMessage({ id, frame: 'api-end', ok: true })
+    await writeWorkerMessage({
+      id,
+      frame: 'api-end',
+      ok: true,
+      retainedModuleUrls: registeredModuleUrls.size,
+    })
     return
   }
 
@@ -402,14 +416,24 @@ async function emitApiStream(id, result) {
         })
       }
     }
-    await writeWorkerMessage({ id, frame: 'api-end', ok: true })
+    await writeWorkerMessage({
+      id,
+      frame: 'api-end',
+      ok: true,
+      retainedModuleUrls: registeredModuleUrls.size,
+    })
   } catch (error) {
     try {
       await reader.cancel(error)
     } catch {
       // The source may already be closed; the protocol error below is authoritative.
     }
-    await writeWorkerMessage({ id, frame: 'api-error', ...workerError(error) })
+    await writeWorkerMessage({
+      id,
+      frame: 'api-error',
+      ...workerError(error),
+      retainedModuleUrls: registeredModuleUrls.size,
+    })
   } finally {
     reader.releaseLock()
   }
@@ -556,15 +580,12 @@ function ensureReactDeps(resolvedRoot) {
 // the duplicate awaits the same promise. This eliminates redundant work
 // during rapid navigation or concurrent crawler hits.
 async function handleSsrCoalesced(request) {
-  const { pageFile, requestPath, params } = request
-  // Identity-bearing headers are part of the key. A page may read `cookies()`,
-  // and two concurrent requests for the same URL from different users must not
-  // share one render — that would serve one user's page to the other. Whether
-  // the page actually reads them is not known until it has rendered, so the key
-  // has to be conservative. Only `cookie` and `authorization` are included:
-  // hashing every header would split the key on `accept-encoding` and defeat
-  // coalescing for the ordinary anonymous traffic it exists to help.
-  const coalesceKey = `ssr:${pageFile}:${requestPath}:${JSON.stringify(params || {})}:${identityKey(request.headerPairs)}`
+  // A page can observe every request header through `headers()`, not only
+  // cookies and authorization. Coalescing requests with different observable
+  // context would therefore return the first request's HTML to the second.
+  // Hash the complete context to keep the map key bounded while preserving the
+  // ordered duplicate values carried by the worker protocol.
+  const coalesceKey = `ssr:${requestContextKey(request)}`
 
   // Check if an identical render is already in-flight.
   if (renderCoalesceMap.has(coalesceKey)) {
@@ -626,24 +647,34 @@ async function handleWarmup(request) {
 }
 
 /**
- * The part of a request that decides *whose* page this is.
- *
- * Empty for an anonymous request, so anonymous traffic coalesces exactly as it
- * did before request context existed.
+ * Stable digest of everything an SSR render can observe from its request.
+ * Header names are case-insensitive, but pair order and repeated values remain
+ * intact because `Headers` can expose their combined ordering.
  */
-function identityKey(headerPairs) {
-  if (!Array.isArray(headerPairs)) return ''
-  const parts = []
-  for (const [name, value] of headerPairs) {
-    const lowered = String(name).toLowerCase()
-    if (lowered === 'cookie' || lowered === 'authorization') parts.push(`${lowered}=${value}`)
-  }
-  return parts.join('&')
+function requestContextKey(request) {
+  const headerPairs = Array.isArray(request.headerPairs)
+    ? request.headerPairs.map(([name, value]) => [String(name).toLowerCase(), String(value)])
+    : []
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        projectRoot: String(request.projectRoot || ''),
+        appDir: String(request.appDir || ''),
+        pageFile: String(request.pageFile || ''),
+        requestPath: String(request.requestPath || ''),
+        requestTarget: String(request.requestTarget || request.requestPath || ''),
+        routePath: String(request.routePath || request.requestPath || ''),
+        params: request.params || {},
+        method: String(request.method || 'GET').toUpperCase(),
+        headerPairs,
+      }),
+    )
+    .digest('hex')
 }
 
 // --- SSR Handler ---
 async function handleSsr(request) {
-  const { projectRoot, appDir, pageFile, requestPath, params, routePath } = request
+  const { projectRoot, appDir, pageFile, requestPath, requestTarget, params, routePath } = request
 
   const resolvedRoot = path.resolve(projectRoot || process.cwd())
   ensureReactDeps(resolvedRoot)
@@ -664,7 +695,7 @@ async function handleSsr(request) {
   const context = requestContext({
     headerPairs: request.headerPairs,
     method: request.method,
-    url: requestPath,
+    url: requestTarget || requestPath,
   })
   const html = await runWithRequestContext(context, () =>
     mod.render({ path: requestPath, params: params || {} }),

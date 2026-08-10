@@ -48,6 +48,7 @@ describe('firebase', () => {
     assert.match(source, /export const webApp = onRequest/)
     assert.match(source, /os\.tmpdir\(\)/)
     assert.match(source, /prerenderRelativePath/)
+    assert.doesNotMatch(source, /ISR cache write failures/)
     assert.match(source, /getSetCookie/)
 
     const packageArtifact = output.artifacts?.find((artifact) =>

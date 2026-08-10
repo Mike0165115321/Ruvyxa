@@ -260,14 +260,19 @@ pub(crate) async fn render_request_pooled(
     match route_match.route.kind {
         RouteKind::Page => {
             let styles = state.runtime_cache.styles(&state.config).await?;
+            let page_headers = worker_request_headers(request_headers);
+            let page_request = PageRequestContext {
+                path: request_path,
+                target: request_target,
+                headers: &page_headers,
+                method,
+            };
             let html = render_page_by_strategy(
                 state,
                 route_match.route,
-                request_path,
+                &page_request,
                 &route_match.params,
                 &styles,
-                &worker_request_headers(request_headers),
-                method,
             )
             .await?;
             Ok(cached_html_response(
@@ -297,35 +302,39 @@ pub(crate) async fn render_request_pooled(
 /// Returns the document as an `Arc<str>` so a cache hit — the common case in
 /// production — shares the stored allocation instead of copying the whole page
 /// on its way into the response body.
+struct PageRequestContext<'a> {
+    path: &'a str,
+    target: &'a str,
+    headers: &'a [(String, String)],
+    method: &'a str,
+}
+
 async fn render_page_by_strategy(
     state: &AppState,
     route: &RouteEntry,
-    request_path: &str,
+    request: &PageRequestContext<'_>,
     params: &RouteParams,
     styles: &str,
-    request_headers: &[(String, String)],
-    method: &str,
 ) -> Result<CachedDocument> {
     match route.render.strategy {
         RenderStrategy::Ssr => {
-            render_page_pooled(
-                state,
-                route,
-                request_path,
-                params,
-                styles,
-                request_headers,
-                method,
-            )
-            .await
+            let forced = state.render_cache.forced_claim(request.path).await;
+            let document = render_page_pooled(state, route, request, params, styles).await?;
+            if let Some(claim) = forced {
+                state
+                    .render_cache
+                    .acknowledge_forced(request.path, claim)
+                    .await;
+            }
+            Ok(document)
         }
         RenderStrategy::Ssg => {
             // In dev mode, SSG pages are rendered on-demand like SSR but cached indefinitely.
-            render_page_ssg(state, route, request_path, params, styles).await
+            render_page_ssg(state, route, request.path, params, styles).await
         }
-        RenderStrategy::Isr => render_page_isr(state, route, request_path, params, styles).await,
-        RenderStrategy::Csr => render_page_csr(state, route, request_path, params, styles).await,
-        RenderStrategy::Ppr => render_page_ppr(state, route, request_path, params, styles).await,
+        RenderStrategy::Isr => render_page_isr(state, route, request.path, params, styles).await,
+        RenderStrategy::Csr => render_page_csr(state, route, request.path, params, styles).await,
+        RenderStrategy::Ppr => render_page_ppr(state, route, request.path, params, styles).await,
     }
 }
 
@@ -345,12 +354,12 @@ async fn render_page_ssg(
 
     // `revalidatePath()` named this URL. The build's HTML on disk is exactly
     // what it asked to replace, so this one request skips it and renders fresh.
-    let forced = state.render_cache.take_forced(request_path).await;
+    let forced = state.render_cache.forced_claim(request_path).await;
 
     // In production, serve the pre-rendered HTML file. Read it from disk once
     // and serve subsequent requests from the in-memory render cache — a
     // synchronous file open per request otherwise dominates the hot path.
-    if !forced
+    if forced.is_none()
         && !state.config.watch
         && let Some(html) = store_prerendered_html(
             &state.render_cache,
@@ -412,6 +421,9 @@ async fn render_page_ssg(
         params,
     );
 
+    // The build artifact remains stale and may be read again after LRU/TTL
+    // eviction, so the forced marker intentionally remains. Only a durable
+    // prerender write could make acknowledging it safe.
     Ok(state.render_cache.put(cache_key, html).await)
 }
 
@@ -442,7 +454,8 @@ async fn render_page_isr(
     // background revalidation waits until the route's declared interval instead
     // of firing once per request. A path `revalidatePath()` named skips it: the
     // build's document is the stale one the caller is replacing.
-    if !state.render_cache.take_forced(request_path).await
+    let forced = state.render_cache.forced_claim(request_path).await;
+    if forced.is_none()
         && !state.config.watch
         && let Some(html) = store_prerendered_html(
             &state.render_cache,
@@ -457,6 +470,8 @@ async fn render_page_isr(
 
     // No cached version — render synchronously (blocking fallback)
     let html = render_isr_background(state, route, request_path, params, styles).await?;
+    // Keep `forced` pending: the fresh document is only in bounded memory and
+    // the build artifact on disk is still stale.
     Ok(state.render_cache.put(cache_key, html).await)
 }
 
@@ -665,24 +680,26 @@ async fn render_page_csr(
     params: &RouteParams,
     styles: &str,
 ) -> Result<CachedDocument> {
+    let cache_key = render_cache::page_cache_key("csr:", request_path, params);
+    if let Some(cached) = state.render_cache.get_document(&cache_key).await {
+        return Ok(cached);
+    }
+    let forced = state.render_cache.forced_claim(request_path).await;
+
     // In production, serve the pre-rendered CSR shell. The disk read is cached
     // like every other prerendered strategy: without it each request re-opens
     // and re-reads the same shell file for the life of the process.
-    if !state.config.watch {
-        let cache_key = render_cache::page_cache_key("csr:", request_path, params);
-        if let Some(cached) = state.render_cache.get_document(&cache_key).await {
-            return Ok(cached);
-        }
-        if let Some(html) = store_prerendered_html(
+    if forced.is_none()
+        && !state.config.watch
+        && let Some(html) = store_prerendered_html(
             &state.render_cache,
             &state.config.prerender_dir,
             request_path,
             &cache_key,
         )
         .await
-        {
-            return Ok(html);
-        }
+    {
+        return Ok(html);
     }
 
     let asset_links = state.runtime_cache.asset_links(&state.config).await;
@@ -720,9 +737,16 @@ async fn render_page_csr(
 </html>"#
     );
 
-    // Not cache-backed: the shell is built for this request only, so there is
-    // nowhere to keep an encoded copy and the layer compresses it as before.
-    Ok(CachedDocument::uncached(Arc::from(shell)))
+    if forced.is_some() {
+        // The build shell is still stale, so retain the marker and keep the
+        // fresh shell in bounded memory. After eviction the marker forces
+        // another fresh shell instead of resurrecting the build artifact.
+        Ok(state.render_cache.put(cache_key, shell).await)
+    } else {
+        // Not cache-backed: the shell is built for this request only, so there
+        // is nowhere to keep an encoded copy and the layer compresses it as before.
+        Ok(CachedDocument::uncached(Arc::from(shell)))
+    }
 }
 
 /// PPR: render the static shell (Suspense fallbacks) and stream dynamic slots.
@@ -741,10 +765,13 @@ async fn render_page_ppr(
         return Ok(cached);
     }
 
+    let forced = state.render_cache.forced_claim(request_path).await;
+
     // In production, serve the pre-rendered PPR shell. The cache lookup above
     // must come first: reading the shell from disk before consulting the cache
     // made the cache unreachable and re-read the same file on every request.
-    if !state.config.watch
+    if forced.is_none()
+        && !state.config.watch
         && let Some(html) = store_prerendered_html(
             &state.render_cache,
             &state.config.prerender_dir,
@@ -805,20 +832,20 @@ async fn render_page_ppr(
         params,
     );
 
+    // Keep `forced` pending until a future host provides a durable prerender
+    // replacement; otherwise eviction would resurrect the build's stale shell.
     Ok(state.render_cache.put(cache_key, html).await)
 }
 
-pub(crate) async fn render_page_pooled(
+async fn render_page_pooled(
     state: &AppState,
     route: &RouteEntry,
-    request_path: &str,
+    request: &PageRequestContext<'_>,
     params: &RouteParams,
     styles: &str,
-    request_headers: &[(String, String)],
-    method: &str,
 ) -> Result<CachedDocument> {
     // Check render cache first
-    let cache_key = render_cache::ssr_cache_key(request_path, params);
+    let cache_key = render_cache::ssr_cache_key(request.path, params);
     if let Some(cached) = state.render_cache.get_document(&cache_key).await {
         return Ok(cached);
     }
@@ -836,11 +863,12 @@ pub(crate) async fn render_page_pooled(
             project_root: &state.config.root,
             app_dir: &state.config.app_dir,
             page_file: &route.file,
-            request_path,
+            request_path: request.path,
+            request_target: request.target,
             route_path: &route.path,
             params,
-            headers: request_headers,
-            method,
+            headers: request.headers,
+            method: request.method,
         })
         .await?;
 
@@ -879,7 +907,7 @@ pub(crate) async fn render_page_pooled(
     } else {
         ""
     };
-    let client_script = client_hydration_script(&state.config, route, request_path, params);
+    let client_script = client_hydration_script(&state.config, route, request.path, params);
     let plugin_head = render_plugin_head(&state.config.plugin_head);
     let head_content =
         format!(r#"{asset_links}{plugin_head}<style data-ruvyxa-css>{styles}</style>"#);
@@ -890,7 +918,7 @@ pub(crate) async fn render_page_pooled(
         &format!("{client_script}{hmr}"),
         state.config.i18n.as_ref(),
         route,
-        request_path,
+        request.path,
         params,
     );
 
@@ -912,8 +940,18 @@ pub(crate) async fn render_page_pooled(
 /// to walk an unbounded list on the request path.
 async fn apply_revalidations(state: &AppState, paths: Option<Vec<String>>) {
     let Some(paths) = paths else { return };
-    for path in paths.into_iter().take(MAX_REVALIDATED_PATHS) {
-        if !path.starts_with('/') || path.len() > MAX_REVALIDATED_PATH_LEN {
+    if paths.len() > MAX_REVALIDATED_PATHS {
+        let dropped = state.render_cache.revalidate_all_paths().await;
+        tracing::warn!(
+            received = paths.len(),
+            limit = MAX_REVALIDATED_PATHS,
+            dropped,
+            "oversized revalidation payload; bypassing all prerendered artifacts"
+        );
+        return;
+    }
+    for path in paths {
+        if !path.starts_with('/') || path.encode_utf16().count() > MAX_REVALIDATED_PATH_LEN {
             tracing::warn!(path, "ignoring revalidatePath() for an unusable path");
             continue;
         }
@@ -922,7 +960,8 @@ async fn apply_revalidations(state: &AppState, paths: Option<Vec<String>>) {
     }
 }
 
-/// How many paths one handler may revalidate.
+/// Public `revalidatePath()` limit; the host also enforces it defensively for
+/// payloads from older or untrusted workers without dropping a valid tail.
 const MAX_REVALIDATED_PATHS: usize = 64;
 /// Longest revalidated path accepted, matching the realtime metadata bound.
 const MAX_REVALIDATED_PATH_LEN: usize = 2_048;
@@ -1595,6 +1634,22 @@ pub(crate) fn action_file_for(route: &RouteEntry) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn revalidation_bounds_match_the_shared_host_contract() {
+        let contract: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/revalidation-conformance.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            MAX_REVALIDATED_PATHS as u64,
+            contract["maxPathsPerRequest"].as_u64().unwrap()
+        );
+        assert_eq!(
+            MAX_REVALIDATED_PATH_LEN as u64,
+            contract["maxPathLength"].as_u64().unwrap()
+        );
+    }
 
     /// The runtime no longer reads the page source to detect a missing default
     /// export, so the actionable RUV1004 has to be recovered from the module

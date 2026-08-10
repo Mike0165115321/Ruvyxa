@@ -32,6 +32,10 @@ import {
 } from './request-context.mjs'
 import { canonicalRoutePath, createCanonicalRouteMatcher } from './route-match.mjs'
 
+const MAX_REVALIDATIONS_PER_REQUEST = 64
+const MAX_REVALIDATION_PATH_LENGTH = 2_048
+const MAX_PENDING_PATH_REVALIDATIONS = 1_024
+
 /**
  * @typedef {Object} RouteEntry
  * @property {string} id
@@ -55,7 +59,7 @@ import { canonicalRoutePath, createCanonicalRouteMatcher } from './route-match.m
  * @property {(path: string, revalidate?: number) => string|{html: string, stale: boolean}|null} [readPrerendered]
  *   Synchronous read of a pre-rendered HTML file. ISR-capable adapters return
  *   freshness explicitly; a legacy string result is treated as stale.
- * @property {(path: string, html: string, revalidate: number) => void} [writePrerendered]
+ * @property {(path: string, html: string, revalidate?: number) => void|Promise<void>} [writePrerendered]
  *   Write pre-rendered HTML to ISR cache with a TTL.
  * @property {string[]} [supportedStrategies]
  *   Strategies the platform supports. Defaults to ['ssr','ssg','csr','isr','ppr','api'].
@@ -104,19 +108,69 @@ export function createHandler(options) {
   } = options
   const pendingRevalidations = new Map()
   /**
-   * URLs `revalidatePath()` named, waiting for their next request.
+   * Generation claims for URLs `revalidatePath()` named, waiting for a
+   * successful render and durable adapter write.
    *
    * Held in the instance rather than pushed to the platform's cache store,
    * because the only universal capability an adapter provides is read and
-   * write — there is no delete. The next request for one of these paths
-   * bypasses `readPrerendered` and renders fresh, and `writePrerendered` then
-   * replaces the stored document for every later request and every other
-   * instance. What this cannot do is reach an instance that is already warm
+   * write — there is no delete. Requests for one of these paths bypass
+   * `readPrerendered` until `writePrerendered` succeeds; render/status/write
+   * failures leave the exact generation pending for retry. A successful write
+   * replaces the stored document for later requests and other instances. What
+   * this cannot do is reach an instance that is already warm
    * elsewhere; that one keeps serving until its own TTL expires, which is the
    * same bound ISR already has.
    */
-  const forcedRevalidations = new Set()
+  const forcedRevalidations = new Map()
+  let nextRevalidationGeneration = 0
+  let bypassPrerendered = false
   const fetchMiddleware = createFetchMiddleware(middleware)
+
+  function failClosedRevalidations(message) {
+    if (bypassPrerendered) return
+    forcedRevalidations.clear()
+    bypassPrerendered = true
+    // The adapter contract has no universal delete operation. Bypassing every
+    // prerendered artifact is the bounded option that cannot silently serve
+    // invalidated HTML. This intentionally trades cache/CPU efficiency for
+    // correctness until the serverless instance is recycled.
+    console.warn(message)
+  }
+
+  function markForcedRevalidation(path) {
+    if (bypassPrerendered) return
+    if (
+      !forcedRevalidations.has(path) &&
+      forcedRevalidations.size >= MAX_PENDING_PATH_REVALIDATIONS
+    ) {
+      failClosedRevalidations(
+        `[ruvyxa] More than ${MAX_PENDING_PATH_REVALIDATIONS} paths are waiting for revalidation; ` +
+          'bypassing prerendered artifacts for this instance.',
+      )
+      return
+    }
+    nextRevalidationGeneration++
+    if (!Number.isSafeInteger(nextRevalidationGeneration)) {
+      failClosedRevalidations(
+        '[ruvyxa] Revalidation generation exhausted; bypassing prerendered artifacts for this instance.',
+      )
+      return
+    }
+    forcedRevalidations.set(path, nextRevalidationGeneration)
+  }
+
+  function claimForcedRevalidation(path) {
+    if (bypassPrerendered) return { all: true }
+    const generation = forcedRevalidations.get(path)
+    return generation === undefined ? null : { generation }
+  }
+
+  function acknowledgeForcedRevalidation(path, claim) {
+    if (!claim || claim.all) return
+    if (forcedRevalidations.get(path) === claim.generation) {
+      forcedRevalidations.delete(path)
+    }
+  }
 
   // Compile once through the shared matcher so browser navigation and
   // serverless dispatch use the same precedence and indexed static-route path.
@@ -227,16 +281,36 @@ export function createHandler(options) {
       url: new URL(request.url).pathname,
     })
     const result = await runWithRequestContext(context, () => handler({ request, params }))
-    for (const path of collectRevalidations(context)) forcedRevalidations.add(path)
+    const revalidations = collectRevalidations(context)
+    if (revalidations.length > MAX_REVALIDATIONS_PER_REQUEST) {
+      failClosedRevalidations(
+        `[ruvyxa] Received more than ${MAX_REVALIDATIONS_PER_REQUEST} revalidations from one request; ` +
+          'bypassing prerendered artifacts for this instance.',
+      )
+      return normalizeResponse(result)
+    }
+    for (const path of revalidations) {
+      if (
+        typeof path !== 'string' ||
+        !path.startsWith('/') ||
+        path.length > MAX_REVALIDATION_PATH_LENGTH
+      ) {
+        console.warn('[ruvyxa] Ignoring revalidatePath() for an unusable path.')
+        continue
+      }
+      markForcedRevalidation(path)
+    }
     return normalizeResponse(result)
   }
 
   async function handlePage(route, request, pathname, params, runtimeContext) {
     const strategy = route.render.strategy
+    const forcedClaim = claimForcedRevalidation(pathname)
+    const forced = forcedClaim !== null
 
     // CSR: return pre-rendered shell (no server render needed)
     if (strategy === 'csr') {
-      const cached = normalizeCacheEntry(readPrerendered?.(pathname))
+      const cached = forced ? null : normalizeCacheEntry(readPrerendered?.(pathname))
       if (cached) {
         return new Response(cached.html, {
           status: 200,
@@ -244,10 +318,13 @@ export function createHandler(options) {
         })
       }
       // Fallback: render the shell
-      return await renderPage(route, pathname, params, request)
+      const rendered = await renderPage(route, pathname, params, request)
+      if (forced && writePrerendered && rendered.status === 200 && !rendered.requestScoped) {
+        await writePrerendered(pathname, await rendered.clone().text())
+        acknowledgeForcedRevalidation(pathname, forcedClaim)
+      }
+      return rendered
     }
-
-    const forced = forcedRevalidations.delete(pathname)
 
     // SSG: serve pre-rendered HTML directly
     if (strategy === 'ssg') {
@@ -261,7 +338,8 @@ export function createHandler(options) {
       // Either nothing was pre-rendered, or `revalidatePath()` replaced it.
       const rendered = await renderPage(route, pathname, params, request)
       if (forced && writePrerendered && rendered.status === 200 && !rendered.requestScoped) {
-        writePrerendered(pathname, await rendered.clone().text())
+        await writePrerendered(pathname, await rendered.clone().text())
+        acknowledgeForcedRevalidation(pathname, forcedClaim)
       }
       return rendered
     }
@@ -301,7 +379,8 @@ export function createHandler(options) {
       // page to everyone who asks for this URL next.
       if (writePrerendered && rendered.status === 200 && !rendered.requestScoped) {
         const body = await rendered.clone().text()
-        writePrerendered(pathname, body, route.render.revalidate ?? 60)
+        await writePrerendered(pathname, body, route.render.revalidate ?? 60)
+        if (forced) acknowledgeForcedRevalidation(pathname, forcedClaim)
       }
       return rendered
     }
@@ -310,11 +389,24 @@ export function createHandler(options) {
     if (strategy === 'ppr') {
       // For serverless without streaming support, fall back to full SSR
       // Platform wrappers can override this with streaming if available
-      return await renderPage(route, pathname, params, request)
+      const rendered = await renderPage(route, pathname, params, request)
+      if (forced && writePrerendered && rendered.status === 200 && !rendered.requestScoped) {
+        await writePrerendered(
+          pathname,
+          await rendered.clone().text(),
+          route.render.revalidate ?? 60,
+        )
+        acknowledgeForcedRevalidation(pathname, forcedClaim)
+      }
+      return rendered
     }
 
     // SSR (default): full server render
-    return await renderPage(route, pathname, params, request)
+    const rendered = await renderPage(route, pathname, params, request)
+    if (forced && rendered.status >= 200 && rendered.status < 400) {
+      acknowledgeForcedRevalidation(pathname, forcedClaim)
+    }
+    return rendered
   }
 
   /**
@@ -356,7 +448,7 @@ export function createHandler(options) {
         // page built from nobody's session and caching it for everybody.
         const rendered = await mod.render({ path: pathname, params: params ?? {} })
         const html = localizeHtmlDocument(rendered, route.path, pathname, params ?? {}, i18n)
-        writePrerendered(pathname, html, route.render.revalidate ?? 60)
+        await writePrerendered(pathname, html, route.render.revalidate ?? 60)
       } catch (error) {
         console.error(`[ruvyxa] ISR revalidation failed for ${pathname}:`, error)
       } finally {

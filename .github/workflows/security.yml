@@ -1,0 +1,56 @@
+name: Security audit
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  push:
+    paths:
+      - '**/Cargo.toml'
+      - Cargo.lock
+      - '**/package.json'
+      - pnpm-lock.yaml
+      - .github/workflows/security.yml
+  pull_request:
+    paths:
+      - '**/Cargo.toml'
+      - Cargo.lock
+      - '**/package.json'
+      - pnpm-lock.yaml
+      - .github/workflows/security.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  rustsec:
+    name: RustSec production dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install RustSec cargo-audit
+        run: cargo install cargo-audit --version 0.22.2 --locked
+      - name: Audit Cargo lockfile
+        run: cargo audit --file Cargo.lock
+
+  javascript:
+    name: JavaScript production dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.12.0
+      - name: Audit production dependencies
+        run: pnpm audit --prod --audit-level low

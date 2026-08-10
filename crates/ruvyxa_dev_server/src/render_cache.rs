@@ -13,7 +13,7 @@
 //! - Values are stored behind `Arc<str>` so concurrent readers share memory
 //!   rather than cloning large HTML/JS strings.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -270,20 +270,89 @@ pub struct RenderCacheSnapshot {
     pub lru_keys: Vec<String>,
 }
 
+/// Maximum number of exact paths waiting to bypass a prerendered artifact.
+///
+/// Retaining more strings would let application input grow process memory
+/// without bound. On overflow the cache deliberately fails closed: every
+/// prerendered artifact is bypassed until restart, so correctness is preserved
+/// at the cost of cache performance rather than silently losing invalidations.
+const MAX_FORCED_REVALIDATIONS: usize = 1_024;
+
+#[derive(Debug, Default)]
+struct ForcedRevalidations {
+    paths: HashMap<String, u64>,
+    next_generation: u64,
+    bypass_prerendered: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ForcedRevalidationClaim {
+    Exact(u64),
+    All,
+}
+
+impl ForcedRevalidations {
+    /// Mark one path. Returns true when this call enters fail-closed mode.
+    fn mark(&mut self, path: &str) -> bool {
+        if self.bypass_prerendered {
+            return false;
+        }
+        if !self.paths.contains_key(path) && self.paths.len() >= MAX_FORCED_REVALIDATIONS {
+            self.fail_closed();
+            return true;
+        }
+        let Some(generation) = self.next_generation.checked_add(1) else {
+            self.fail_closed();
+            return true;
+        };
+        self.next_generation = generation;
+        self.paths.insert(path.to_string(), generation);
+        false
+    }
+
+    fn claim(&self, path: &str) -> Option<ForcedRevalidationClaim> {
+        if self.bypass_prerendered {
+            Some(ForcedRevalidationClaim::All)
+        } else {
+            self.paths
+                .get(path)
+                .copied()
+                .map(ForcedRevalidationClaim::Exact)
+        }
+    }
+
+    fn acknowledge(&mut self, path: &str, claim: ForcedRevalidationClaim) {
+        let ForcedRevalidationClaim::Exact(generation) = claim else {
+            return;
+        };
+        if self.paths.get(path) == Some(&generation) {
+            self.paths.remove(path);
+        }
+    }
+
+    fn fail_closed(&mut self) {
+        self.paths.clear();
+        self.bypass_prerendered = true;
+    }
+}
+
 /// Thread-safe LRU render cache.
 pub struct RenderCache {
     entries: RwLock<HashMap<Arc<str>, CacheEntry>>,
     /// Least-to-most recently used key order.
     order: RwLock<RecencyList>,
-    /// Request paths an application asked to revalidate, not yet re-rendered.
+    /// Generation claims for paths an application asked to revalidate.
     ///
     /// Dropping the in-memory entry is not enough for a prerendered strategy:
-    /// SSG and ISR fall back to the HTML the build wrote to disk, so the next
-    /// request would read the same stale document and re-cache it. This set
-    /// makes that one request skip the disk shortcut and render fresh. Deleting
-    /// the build artifact instead would work once and leave the deployment
-    /// without a file to serve if the fresh render then failed.
-    forced: RwLock<HashSet<String>>,
+    /// SSG, ISR, PPR, and CSR fall back to HTML the build wrote to disk, so a
+    /// bounded-memory refresh alone cannot acknowledge the claim: TTL/LRU
+    /// eviction would resurrect that stale artifact. Their claims remain and
+    /// keep bypassing disk until durable persistence exists (or bounded state
+    /// escalates to global bypass). SSR has no build artifact and acknowledges
+    /// its exact generation after a successful render. A failed render leaves
+    /// every claim intact, and generation matching prevents an older success
+    /// from clearing a newer request for the same URL.
+    forced: RwLock<ForcedRevalidations>,
     capacity: usize,
     ttl: Duration,
     hits: AtomicU64,
@@ -295,7 +364,7 @@ impl RenderCache {
         Self {
             entries: RwLock::new(HashMap::with_capacity(capacity)),
             order: RwLock::new(RecencyList::with_capacity(capacity)),
-            forced: RwLock::new(HashSet::new()),
+            forced: RwLock::new(ForcedRevalidations::default()),
             capacity,
             ttl: Duration::from_secs(ttl_secs),
             hits: AtomicU64::new(0),
@@ -502,18 +571,53 @@ impl RenderCache {
         let before = entries.len();
         entries.retain(|key, _| !matches(key));
         self.order.write().await.retain(|key| !matches(key));
+        let dropped = before - entries.len();
         drop(entries);
-        self.forced.write().await.insert(request_path.to_string());
-        before - self.entries.read().await.len()
+        if self.forced.write().await.mark(request_path) {
+            tracing::warn!(
+                limit = MAX_FORCED_REVALIDATIONS,
+                "pending path revalidations exceeded the bounded exact set; bypassing prerendered artifacts"
+            );
+        }
+        dropped
     }
 
-    /// Claim a pending revalidation for `request_path`.
+    /// Invalidate every in-memory render and bypass all build artifacts.
     ///
-    /// Consuming rather than peeking: exactly one render should bypass the
-    /// prerendered file, and it stores its result, so a second bypass would be
-    /// a duplicate render of a document already refreshed.
-    pub async fn take_forced(&self, request_path: &str) -> bool {
-        self.forced.write().await.remove(request_path)
+    /// This is the bounded defensive response to an oversized revalidation
+    /// payload from an older or untrusted worker: walking an arbitrary vector
+    /// would itself be a CPU/memory denial of service, while dropping its tail
+    /// could serve stale content.
+    pub async fn revalidate_all_paths(&self) -> usize {
+        let mut entries = self.entries.write().await;
+        let dropped = entries.len();
+        entries.clear();
+        self.order.write().await.clear();
+        drop(entries);
+        self.forced.write().await.fail_closed();
+        dropped
+    }
+
+    /// Snapshot a pending revalidation for `request_path` without consuming it.
+    ///
+    /// Several requests may receive the same claim and render concurrently.
+    /// Correctness comes first: the claim remains live until one successful
+    /// render stores fresh output and acknowledges the exact generation.
+    pub(crate) async fn forced_claim(&self, request_path: &str) -> Option<ForcedRevalidationClaim> {
+        self.forced.read().await.claim(request_path)
+    }
+
+    /// Acknowledge a forced render only after its fresh output was stored.
+    ///
+    /// Generation matching prevents a slow render from clearing a newer
+    /// `revalidatePath()` call for the same URL. Global fail-closed claims are
+    /// intentionally never acknowledged and last until process restart.
+    pub(crate) async fn acknowledge_forced(
+        &self,
+        request_path: &str,
+        claim: ForcedRevalidationClaim,
+    ) {
+        self.forced.write().await.acknowledge(request_path, claim);
     }
 
     /// Invalidate SSR/client entries belonging to a route pattern.
@@ -1145,15 +1249,67 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_revalidated_path_is_forced_once_and_then_not_again() {
-        // Exactly one render bypasses the prerendered file. That render stores
-        // its result, so a second bypass would re-render a fresh document.
+    async fn a_revalidated_path_remains_forced_until_success_is_acknowledged() {
         let cache = RenderCache::new(32, 60);
         cache.revalidate_path("/blog/hello").await;
 
-        assert!(cache.take_forced("/blog/hello").await);
-        assert!(!cache.take_forced("/blog/hello").await);
-        assert!(!cache.take_forced("/blog/never-revalidated").await);
+        let claim = cache.forced_claim("/blog/hello").await.unwrap();
+        assert_eq!(cache.forced_claim("/blog/hello").await, Some(claim));
+        cache.acknowledge_forced("/blog/hello", claim).await;
+        assert_eq!(cache.forced_claim("/blog/hello").await, None);
+        assert_eq!(cache.forced_claim("/blog/never-revalidated").await, None);
+    }
+
+    #[tokio::test]
+    async fn an_old_success_cannot_acknowledge_a_newer_revalidation() {
+        let cache = RenderCache::new(32, 60);
+        cache.revalidate_path("/blog/hello").await;
+        let old_claim = cache.forced_claim("/blog/hello").await.unwrap();
+        cache.revalidate_path("/blog/hello").await;
+        let current_claim = cache.forced_claim("/blog/hello").await.unwrap();
+        assert_ne!(old_claim, current_claim);
+
+        cache.acknowledge_forced("/blog/hello", old_claim).await;
+        assert_eq!(cache.forced_claim("/blog/hello").await, Some(current_claim));
+        cache.acknowledge_forced("/blog/hello", current_claim).await;
+        assert_eq!(cache.forced_claim("/blog/hello").await, None);
+    }
+
+    #[tokio::test]
+    async fn prerender_claims_survive_memory_eviction_until_persistence_exists() {
+        for namespace in ["ssg:", "isr:", "ppr:", "csr:"] {
+            let cache = RenderCache::new(1, 60);
+            let path = format!("/{namespace}page");
+            cache.revalidate_path(&path).await;
+            let claim = cache.forced_claim(&path).await.unwrap();
+            cache
+                .put(format!("{namespace}{path}"), "fresh-in-memory".into())
+                .await;
+            cache.put("other".into(), "evicts-fresh".into()).await;
+
+            // The build artifact was never replaced, so eviction must not make
+            // it eligible again. The strategy will bypass disk and rerender.
+            assert_eq!(cache.forced_claim(&path).await, Some(claim), "{namespace}");
+        }
+    }
+
+    #[tokio::test]
+    async fn updating_an_exact_path_at_capacity_does_not_fail_closed() {
+        let cache = RenderCache::new(1, 60);
+        for index in 0..MAX_FORCED_REVALIDATIONS {
+            cache.revalidate_path(&format!("/posts/{index}")).await;
+        }
+        let old_claim = cache.forced_claim("/posts/0").await.unwrap();
+
+        cache.revalidate_path("/posts/0").await;
+
+        let new_claim = cache.forced_claim("/posts/0").await.unwrap();
+        assert_ne!(old_claim, new_claim);
+        assert!(!cache.forced.read().await.bypass_prerendered);
+        assert_eq!(
+            cache.forced.read().await.paths.len(),
+            MAX_FORCED_REVALIDATIONS
+        );
     }
 
     #[tokio::test]
@@ -1162,7 +1318,47 @@ mod tests {
         // is correct; leaving the build's HTML in place for it is not.
         let cache = RenderCache::new(32, 60);
         assert_eq!(cache.revalidate_path("/blog/brand-new").await, 0);
-        assert!(cache.take_forced("/blog/brand-new").await);
+        assert!(cache.forced_claim("/blog/brand-new").await.is_some());
+    }
+
+    #[tokio::test]
+    async fn excessive_pending_revalidations_fail_closed_with_bounded_memory() {
+        let contract: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/revalidation-conformance.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            MAX_FORCED_REVALIDATIONS as u64,
+            contract["maxPendingExactPaths"].as_u64().unwrap()
+        );
+        let cache = RenderCache::new(32, 60);
+        for index in 0..=MAX_FORCED_REVALIDATIONS {
+            cache.revalidate_path(&format!("/posts/{index}")).await;
+        }
+
+        let forced = cache.forced.read().await;
+        assert!(forced.bypass_prerendered);
+        assert!(forced.paths.is_empty());
+        drop(forced);
+
+        // Overflow must never discard an invalidation silently. Failing closed
+        // also protects paths named after the exact set reached its limit.
+        assert!(cache.forced_claim("/posts/0").await.is_some());
+        assert!(cache.forced_claim("/posts/after-overflow").await.is_some());
+    }
+
+    #[tokio::test]
+    async fn oversized_protocol_payload_can_fail_closed_in_constant_state() {
+        let cache = RenderCache::new(32, 60);
+        cache.put("ssg:/one".into(), "one".into()).await;
+        cache.put("isr:/two".into(), "two".into()).await;
+
+        assert_eq!(cache.revalidate_all_paths().await, 2);
+        assert!(cache.entries.read().await.is_empty());
+        assert!(cache.order.read().await.is_empty());
+        let forced = cache.forced.read().await;
+        assert!(forced.bypass_prerendered);
+        assert!(forced.paths.is_empty());
     }
 
     #[test]

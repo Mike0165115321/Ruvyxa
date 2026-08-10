@@ -301,16 +301,16 @@ runtime copy at `packages/ruvyxa/runtime/route-match.mjs`. Change the source, ru
 The architecture favors small, replaceable state domains. This prevents a local failure from
 silently corrupting a larger process and makes operational limits explicit.
 
-| State domain                          | Owner and lifetime                                      | Invalidated/released by                          | Failure behavior                                                                                     |
-| ------------------------------------- | ------------------------------------------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
-| Route manifest and router             | Dev server process; refreshed on relevant source change | Watcher full/selective invalidation              | Rediscovery/validation error is reported before an invalid manifest is served.                       |
-| Render cache and compressed documents | Dev/prod server process; bounded LRU/TTL                | Route/file invalidation or TTL/eviction          | Cache miss falls through to render; cache is an optimization, not source of truth.                   |
-| Worker bundle/module caches           | One JavaScript worker process                           | Explicit invalidate or memory-pressure eviction  | Process-local; every worker must receive invalidation.                                               |
-| Worker admission queue                | One worker; active request plus bounded FIFO waiters    | Request completion or shutdown                   | Overflow is `RUV1705`; shutdown rejects parked work rather than preserving it indefinitely.          |
-| Isolated SSG module graphs            | Build worker process                                    | Worker replacement after configured render count | Prevents retained ESM graphs from accumulating across a large prerender.                             |
-| HMR reverse dependency map            | Dev server process                                      | Recomputed/refreshed on source changes           | Unknown/untracked changes choose a full reload, favoring correctness over a narrow update.           |
-| Plugin process and hook state         | Plugin host/build session                               | Hook timeout, lifecycle stop, or process exit    | A plugin fault becomes a framework error; it must not hang the Rust host forever.                    |
-| Build output                          | Temporary staging directory until commit                | Atomic replacement or cleanup guard              | Failed materialization preserves the last completed output rather than leaving a partial deployment. |
+| State domain                          | Owner and lifetime                                      | Invalidated/released by                         | Failure behavior                                                                                     |
+| ------------------------------------- | ------------------------------------------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Route manifest and router             | Dev server process; refreshed on relevant source change | Watcher full/selective invalidation             | Rediscovery/validation error is reported before an invalid manifest is served.                       |
+| Render cache and compressed documents | Dev/prod server process; bounded LRU/TTL                | Route/file invalidation or TTL/eviction         | Cache miss falls through to render; cache is an optimization, not source of truth.                   |
+| Worker bundle/module caches           | One JavaScript worker process                           | Explicit invalidate or memory-pressure eviction | Process-local; every worker must receive invalidation.                                               |
+| Worker admission queue                | One worker; active request plus bounded FIFO waiters    | Request completion or shutdown                  | Overflow is `RUV1705`; shutdown rejects parked work rather than preserving it indefinitely.          |
+| Retained ESM module graphs            | One JavaScript worker process                           | Telemetry-driven worker replacement             | Bounds non-reclaimable graphs across long dev/HMR sessions and isolated prerender builds.            |
+| HMR reverse dependency map            | Dev server process                                      | Recomputed/refreshed on source changes          | Unknown/untracked changes choose a full reload, favoring correctness over a narrow update.           |
+| Plugin process and hook state         | Plugin host/build session                               | Hook timeout, lifecycle stop, or process exit   | A plugin fault becomes a framework error; it must not hang the Rust host forever.                    |
+| Build output                          | Temporary staging directory until commit                | Atomic replacement or cleanup guard             | Failed materialization preserves the last completed output rather than leaving a partial deployment. |
 
 #### Compatibility rules that require coordinated changes
 
@@ -1694,7 +1694,7 @@ Unknown untracked file → `FullReload`.
 #### NodeWorkerPool (`worker_pool.rs`)
 
 ```rust
-pub struct NodeWorkerPool { workers, worker_script, env, runtime, next_worker, response_timeout, isolated_renders_per_worker }
+pub struct NodeWorkerPool { workers, worker_script, env, runtime, next_worker, response_timeout, retained_module_urls_per_worker }
 impl NodeWorkerPool {
     pub async fn start(root, env) -> Result<Self>;
     pub async fn start_with_runtime(root, env, runtime) -> Result<Self>;
@@ -1714,17 +1714,19 @@ Persistent Node/Bun/Deno processes communicate via NDJSON over stdin/stdout. Poo
 selected by least in-flight work with a rotating tie-break offset. Failed workers are replaced
 automatically; only idempotent requests are retried once.
 
-**Worker recycling during builds.** Production prerendering asks for an isolated module import per
-path (`render_ssg_isolated`) so page-module state cannot leak between paths. That isolation works by
+**Worker recycling.** Production prerendering asks for an isolated module import per path
+(`render_ssg_isolated`) so page-module state cannot leak between paths. That isolation works by
 importing the bundle under a fresh module URL, and Node's ESM registry never releases a URL — so
 each isolated import permanently retains one more module graph, and no cache eviction inside the
 worker can reclaim it. Replacing the process is the only operation that frees them.
 
-The build pool therefore retires a worker once it has served `RUVYXA_PRERENDER_RECYCLE_AFTER`
-isolated renders (default 32; `0` disables recycling). Retirement only happens when the worker is
-idle, because `shutdown` clears pending requests and would otherwise fail sibling renders that were
-progressing normally. The dev server passes `None` — it never requests isolated imports, so it
-retains nothing to reclaim and pays nothing for the bound.
+Every completed worker import path reports the process's actual `retainedModuleUrls` count. The
+build pool retires a worker at `RUVYXA_PRERENDER_RECYCLE_AFTER` retained URLs (default 32; `0`
+disables recycling); the isolated-render counter remains a compatibility fallback for older worker
+scripts. Normal dev/HMR imports also mint a new content-addressed URL whenever emitted code changes,
+so the long-lived dev pool retires workers at 64 retained URLs. Retirement swaps the saturated
+worker out of selection immediately, then lets its already-admitted renders and API streams drain
+before the old process is shut down.
 
 **Per-worker admission.** Inside each worker, `worker-pool.mjs` admits at most
 `RUVYXA_WORKER_MAX_CONCURRENCY` requests at a time (default: core count clamped to 2–8). The
@@ -2236,8 +2238,12 @@ hangs. `invalidate` and `ping` bypass the queue — delaying a cache invalidatio
 worker serving stale bundles exactly when it is busiest, and a health check that queues behind
 renders cannot report on them.
 
-Concurrent `ssr` and `ssg` requests for the same page are also **coalesced**: the second await joins
-the first render's promise rather than starting its own (`renderCoalesceMap`).
+Concurrent renders are also **coalesced** when their complete observable input is identical. SSR
+identity includes project/app/page files, route pattern, concrete path and query target, params,
+method, and the ordered request header pairs (with case-normalized names and duplicate values
+preserved). `requestPath` remains the canonical routing/render path while the additive
+`requestTarget` carries path plus query into `RequestContext.url`. SSG uses its page/path/params,
+render mode, and isolation flag (`renderCoalesceMap`).
 
 ---
 
@@ -2268,32 +2274,40 @@ mistaken for a complete one.
 Production prerendering uses `render_ssg_isolated`, which imports the bundle under a **fresh module
 URL** so page-module state cannot leak between paths. Node's ESM registry never releases a loaded
 URL, so each isolated import permanently retains one more module graph. No cache eviction inside the
-worker can reclaim it — the worker tracks the cost in `registeredModuleUrls` and reports it through
-`ping`, but replacing the process is the only operation that frees it.
+worker can reclaim it — the worker tracks the cost in `registeredModuleUrls` and reports it on
+terminal responses and `ping`, but replacing the process is the only operation that frees it.
 
 ```rust
 const DEFAULT_ISOLATED_RENDERS_PER_WORKER: usize = 32;
+const DEFAULT_RETAINED_MODULE_URLS_PER_DEV_WORKER: usize = 64;
 const ISOLATED_RENDER_RECYCLE_ENV: &str = "RUVYXA_PRERENDER_RECYCLE_AFTER";
 
 fn retains_an_isolated_module_graph(&self) -> bool  // Ssg { fresh: true }
-async fn retire_worker_if_saturated(&self, index: usize, worker: &Arc<Worker>)
+async fn retire_worker_if_saturated(
+    &self,
+    index: usize,
+    worker: &Arc<Worker>,
+    observed_retained_module_urls: Option<usize>,
+    isolated: bool,
+)
 ```
 
-A build worker is retired once it has served its budget of isolated renders. Two conditions guard
-it:
+A worker is retired once it reaches its retained-module budget:
 
-- **Only isolated renders count.** A normal `ssg` render reuses a cached module URL and retains
-  nothing.
-- **Only an idle worker is retired.** `shutdown` clears pending requests, so retiring a busy worker
-  would fail sibling renders that were progressing fine. Deferring costs nothing — the counter stays
-  over budget until the worker is next idle.
+- **Current workers report the actual count.** SSR, API, action, client, warmup, and SSG imports all
+  contribute when they mint a distinct URL. Framed API responses report the count at `api-start`,
+  after the route import is complete, and again on the terminal frame.
+- **Older workers remain build-compatible.** If telemetry is absent, only an isolated prerender
+  advances the compatibility counter because that request is known to mint a fresh URL.
+- **Busy workers drain safely.** The pool installs a replacement before accepting more work in that
+  slot. The saturated process remains alive until its pending map is empty, so sibling renders and
+  API body streams are not truncated.
 
 If the replacement cannot spawn, the saturated worker is kept and its counter reset: losing pool
 capacity mid-build is strictly worse than carrying the retained graphs.
 
-The dev server passes `None`, disabling recycling. It never requests isolated imports, so it retains
-nothing to reclaim and pays nothing for the bound. `RUVYXA_PRERENDER_RECYCLE_AFTER=0` disables it
-for builds too.
+The dev server uses a fixed 64-URL bound. Build pools use the configured isolated-render bound;
+`RUVYXA_PRERENDER_RECYCLE_AFTER=0` disables recycling for builds only.
 
 ---
 
@@ -2447,7 +2461,7 @@ pub struct NodeWorkerPool {
     runtime: JavaScriptRuntime,
     next_worker: AtomicU64,
     response_timeout: Duration,
-    isolated_renders_per_worker: Option<usize>,
+    retained_module_urls_per_worker: Option<usize>,
 }
 ```
 
@@ -2471,8 +2485,8 @@ runtime per render dominated the render itself.
 - Each worker admits only `RUVYXA_WORKER_MAX_CONCURRENCY` active requests and a bounded FIFO of
   `RUVYXA_WORKER_MAX_QUEUE` waiters. Queue overflow is `RUV1705`; `ping` and `invalidate` bypass the
   queue so pressure does not mask health or freshness signals.
-- `isolated_renders_per_worker` retires a worker after N isolated prerenders so per-render module
-  graphs cannot accumulate. It is `None` for the dev server, which never requests isolated imports.
+- `retained_module_urls_per_worker` retires a worker from actual ESM retention telemetry. Dev uses a
+  64-URL bound; builds default to 32 and preserve the isolated-render fallback for older scripts.
 
 ---
 

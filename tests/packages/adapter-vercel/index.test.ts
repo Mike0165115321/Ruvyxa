@@ -115,6 +115,7 @@ describe('vercel', () => {
     assert.match(String(functionArtifact!.handlerSource), /export default/)
     assert.match(String(functionArtifact!.handlerSource), /for await \(const chunk of req\)/)
     assert.match(String(functionArtifact!.handlerSource), /getSetCookie/)
+    assert.doesNotMatch(String(functionArtifact!.handlerSource), /ISR cache write failures/)
 
     // The ISR cache reads and writes files by request path, so it must go
     // through the shared containment helper rather than joining the raw

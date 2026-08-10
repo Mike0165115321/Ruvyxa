@@ -1,13 +1,19 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 const workspaceRoot = path.resolve(fileURLToPath(new URL('../../..', import.meta.url)))
 const handlerModule = path.join(workspaceRoot, 'packages/ruvyxa/runtime/serverless-handler.mjs')
+const coreServerModule = path.join(workspaceRoot, 'packages/@ruvyxa/core/src/server.ts')
 
 const { createHandler, prerenderRelativePath } = await import(
   `file://${handlerModule.replaceAll('\\', '/')}`
+)
+const { revalidatePath } = await import(`file://${coreServerModule.replaceAll('\\', '/')}`)
+const revalidationConformance = JSON.parse(
+  readFileSync(path.join(workspaceRoot, 'tests/fixtures/revalidation-conformance.json'), 'utf8'),
 )
 
 function pageRoute(id, routePath, strategy = 'ssr') {
@@ -511,6 +517,212 @@ describe('ISR cache freshness', () => {
     releaseRender()
     await new Promise((resolve) => setImmediate(resolve))
     assert.equal(writes, 1)
+  })
+
+  it('waits for asynchronous background persistence when no lifetime hook exists', async () => {
+    let releaseWrite
+    let responseSettled = false
+    const writeGate = new Promise((resolve) => {
+      releaseWrite = resolve
+    })
+    const route = pageRoute('isr', '/isr', 'isr')
+    route.render.revalidate = 60
+    const handler = createHandler({
+      routes: [route],
+      importPage: async () => ({ render: async () => '<html>new</html>' }),
+      importApi: async () => ({}),
+      readPrerendered: () => ({ html: '<html>stale</html>', stale: true }),
+      writePrerendered: async () => writeGate,
+    })
+
+    const responsePromise = handler(new Request('http://localhost/isr')).finally(() => {
+      responseSettled = true
+    })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(responseSettled, false)
+
+    releaseWrite()
+    const response = await responsePromise
+    assert.equal(await response.text(), '<html>stale</html>')
+  })
+})
+
+describe('bounded path revalidation state', () => {
+  it('keeps forced prerender claims through render and persistence failures', async () => {
+    for (const strategy of ['ssg', 'isr', 'ppr', 'csr']) {
+      let renders = 0
+      let reads = 0
+      let writes = 0
+      let stored = '<html>stale</html>'
+      const route = pageRoute(`page-${strategy}`, '/page', strategy)
+      route.render.revalidate = 60
+      const handler = createHandler({
+        routes: [
+          { id: 'invalidate', path: '/invalidate', kind: 'api', file: 'api.ts', render: {} },
+          route,
+        ],
+        importApi: async () => ({
+          GET: () => {
+            revalidatePath('/page')
+            return new Response(null, { status: 204 })
+          },
+        }),
+        importPage: async () => ({
+          render: async () => {
+            renders++
+            if (renders === 1) throw new Error(`failed ${strategy} render`)
+            return '<html>fresh</html>'
+          },
+        }),
+        readPrerendered: () => {
+          reads++
+          return strategy === 'isr' ? { html: stored, stale: false } : stored
+        },
+        writePrerendered: async (_pathname, html) => {
+          writes++
+          if (writes === 1) throw new Error(`failed ${strategy} persistence`)
+          stored = html
+        },
+      })
+
+      assert.equal(
+        (await handler(new Request('http://localhost/invalidate'))).status,
+        204,
+        strategy,
+      )
+      assert.equal((await handler(new Request('http://localhost/page'))).status, 500, strategy)
+      assert.equal(reads, 0, strategy)
+      assert.equal((await handler(new Request('http://localhost/page'))).status, 500, strategy)
+      assert.equal(reads, 0, strategy)
+      assert.equal((await handler(new Request('http://localhost/page'))).status, 200, strategy)
+      assert.equal(writes, 2, strategy)
+
+      const afterAck = await handler(new Request('http://localhost/page'))
+      assert.equal(afterAck.status, 200, strategy)
+      if (strategy === 'ppr') {
+        assert.equal(writes, 2, strategy)
+        assert.equal(reads, 0, strategy)
+      } else {
+        assert.equal(await afterAck.text(), '<html>fresh</html>', strategy)
+        assert.equal(reads, 1, strategy)
+      }
+    }
+  })
+
+  it('keeps a failed SSR claim and acknowledges only a successful render', async () => {
+    let renders = 0
+    const handler = createHandler({
+      routes: [
+        { id: 'invalidate', path: '/invalidate', kind: 'api', file: 'api.ts', render: {} },
+        pageRoute('ssr', '/page', 'ssr'),
+      ],
+      importApi: async () => ({
+        GET: () => {
+          revalidatePath('/page')
+          return new Response(null, { status: 204 })
+        },
+      }),
+      importPage: async () => ({
+        render: async () => {
+          renders++
+          if (renders === 1) throw new Error('failed SSR render')
+          return '<html>fresh</html>'
+        },
+      }),
+    })
+
+    await handler(new Request('http://localhost/invalidate'))
+    assert.equal((await handler(new Request('http://localhost/page'))).status, 500)
+    assert.equal((await handler(new Request('http://localhost/page'))).status, 200)
+  })
+
+  it('fails closed for an oversized payload from an older worker contract', async () => {
+    let prerenderReads = 0
+    const handler = createHandler({
+      routes: [
+        { id: 'legacy', path: '/legacy', kind: 'api', file: 'api.ts', render: {} },
+        pageRoute('target', '/target', 'ssg'),
+      ],
+      importApi: async () => ({
+        GET: () => {
+          const context = globalThis.__RUVYXA_REQUEST_CONTEXT__.peek()
+          for (let index = 0; index <= revalidationConformance.maxPathsPerRequest; index++) {
+            context.revalidate.add(`/legacy/${index}`)
+          }
+          return new Response(null, { status: 204 })
+        },
+      }),
+      importPage: async () => ({ render: async () => '<html>fresh</html>' }),
+      readPrerendered: () => {
+        prerenderReads++
+        return '<html>stale</html>'
+      },
+      writePrerendered() {},
+    })
+
+    assert.equal((await handler(new Request('http://localhost/legacy'))).status, 204)
+    const target = await handler(new Request('http://localhost/target'))
+    assert.equal(await target.text(), '<html>fresh</html>')
+    assert.equal(prerenderReads, 0)
+  })
+
+  it('fails closed instead of dropping invalidations when pending paths exceed the bound', async () => {
+    let renders = 0
+    let prerenderReads = 0
+    const routes = [
+      { id: 'invalidate', path: '/invalidate/[batch]', kind: 'api', file: 'api.ts', render: {} },
+      pageRoute('target', '/target', 'ssg'),
+    ]
+    const handler = createHandler({
+      routes,
+      importApi: async () => ({
+        GET: ({ params }) => {
+          for (let index = 0; index < revalidationConformance.maxPathsPerRequest; index++) {
+            revalidatePath(`/pending/${params.batch}/${index}`)
+          }
+          return new Response(null, { status: 204 })
+        },
+      }),
+      importPage: async () => ({
+        render: async () => {
+          renders++
+          return '<html>fresh</html>'
+        },
+      }),
+      readPrerendered: () => {
+        prerenderReads++
+        return '<html>stale</html>'
+      },
+      writePrerendered() {},
+    })
+
+    const batchesToCapacity = Math.floor(
+      revalidationConformance.maxPendingExactPaths / revalidationConformance.maxPathsPerRequest,
+    )
+    for (let batch = 0; batch < batchesToCapacity; batch++) {
+      const response = await handler(new Request(`http://localhost/invalidate/${batch}`))
+      assert.equal(response.status, 204)
+    }
+
+    // Updating generations for paths already pending at exact capacity must
+    // not be mistaken for adding a new key and trigger global bypass.
+    assert.equal((await handler(new Request('http://localhost/invalidate/0'))).status, 204)
+    const beforeOverflow = await handler(new Request('http://localhost/target'))
+    assert.equal(await beforeOverflow.text(), '<html>stale</html>')
+    assert.equal(prerenderReads, 1)
+    assert.equal(renders, 0)
+
+    assert.equal(
+      (await handler(new Request(`http://localhost/invalidate/${batchesToCapacity}`))).status,
+      204,
+    )
+
+    const first = await handler(new Request('http://localhost/target'))
+    const second = await handler(new Request('http://localhost/target'))
+    assert.equal(await first.text(), '<html>fresh</html>')
+    assert.equal(await second.text(), '<html>fresh</html>')
+    assert.equal(prerenderReads, 1)
+    assert.equal(renders, 2)
   })
 })
 

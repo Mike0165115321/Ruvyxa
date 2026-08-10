@@ -129,6 +129,11 @@ export interface CacheEntry {
   refreshing: boolean
 }
 
+interface PendingCacheWrite {
+  token: symbol
+  promise: Promise<unknown>
+}
+
 /** Maximum cache entries before LRU eviction kicks in. */
 const CACHE_MAX_ENTRIES = 1024
 
@@ -144,7 +149,7 @@ const CACHE_MAX_ENTRIES = 1024
 class CacheStore {
   #entries = new Map<string, CacheEntry>()
   #accessOrder: string[] = []
-  #pendingWrites = new Map<string, Set<symbol>>()
+  #pendingWrites = new Map<string, PendingCacheWrite>()
   #maxEntries: number
 
   constructor(maxEntries = CACHE_MAX_ENTRIES) {
@@ -201,26 +206,34 @@ class CacheStore {
     }
   }
 
-  beginWrite(key: string): symbol {
+  runSingleFlight<T>(
+    key: string,
+    producer: (token: symbol) => T | Promise<T>,
+  ): { promise: Promise<T>; started: boolean } {
+    const pending = this.#pendingWrites.get(key)
+    if (pending) {
+      return { promise: pending.promise as Promise<T>, started: false }
+    }
+
     const token = Symbol(key)
-    const writes = this.#pendingWrites.get(key) ?? new Set<symbol>()
-    writes.add(token)
-    this.#pendingWrites.set(key, writes)
-    return token
+    const promise = Promise.resolve()
+      .then(() => producer(token))
+      .finally(() => this.finishWrite(key, token))
+    this.#pendingWrites.set(key, { token, promise })
+    return { promise, started: true }
   }
 
   commitWrite(key: string, token: symbol, entry: CacheEntry, expectedEntry?: CacheEntry): boolean {
-    if (!this.#pendingWrites.get(key)?.has(token)) return false
+    if (this.#pendingWrites.get(key)?.token !== token) return false
     if (expectedEntry && this.#entries.get(key) !== expectedEntry) return false
     this.set(key, entry)
     return true
   }
 
   finishWrite(key: string, token: symbol): void {
-    const writes = this.#pendingWrites.get(key)
-    if (!writes) return
-    writes.delete(token)
-    if (writes.size === 0) this.#pendingWrites.delete(key)
+    if (this.#pendingWrites.get(key)?.token === token) {
+      this.#pendingWrites.delete(key)
+    }
   }
 
   /** Remove all entries that have fully expired (past staleUntil). */
@@ -346,13 +359,11 @@ export function cache(key: string): CacheBuilder {
       // Stale hit with SWR: return stale value and refresh in background
       if (cached && cached.staleUntil > now) {
         if (!cached.refreshing) {
-          cached.refreshing = true
-          const writeToken = cacheStore.beginWrite(key)
           // Fire-and-forget background refresh. All concurrent stale readers
           // receive the stale value; only the first reader starts the refresh.
-          Promise.resolve()
-            .then(() => producer())
-            .then((value) => {
+          const refresh = cacheStore.runSingleFlight(key, async (writeToken) => {
+            try {
+              const value = await producer()
               const populatedAt = Date.now()
               const committed = cacheStore.commitWrite(
                 key,
@@ -370,37 +381,40 @@ export function cache(key: string): CacheBuilder {
               // and no later reader ever starts another one, so it serves
               // stale until it falls out of the window entirely.
               if (!committed && cacheStore.peek(key) === cached) cached.refreshing = false
-            })
-            .catch(() => {
+            } catch {
               // Producer failed during background refresh — keep serving stale
               if (cacheStore.peek(key) === cached) cached.refreshing = false
-            })
-            .finally(() => cacheStore.finishWrite(key, writeToken))
+            }
+          })
+          if (refresh.started) cached.refreshing = true
+          // The task catches producer failures itself so this is only a guard
+          // against a future bookkeeping regression becoming unhandled work.
+          void refresh.promise.catch(() => {})
         }
         return cached.value as T
       }
 
       // Miss or fully expired: produce fresh value with error isolation
-      const writeToken = cacheStore.beginWrite(key)
-      try {
-        const value = await producer()
-        const populatedAt = Date.now()
-        cacheStore.commitWrite(key, writeToken, {
-          value,
-          expiresAt: populatedAt + ttlMs,
-          staleUntil: populatedAt + ttlMs + swrMs,
-          refreshing: false,
-        })
-        return value
-      } catch (error) {
-        // If we have stale data, return it rather than propagating the error
-        if (cached && cacheStore.peek(key) === cached) {
-          return cached.value as T
+      const pending = cacheStore.runSingleFlight<T>(key, async (writeToken) => {
+        try {
+          const value = await producer()
+          const populatedAt = Date.now()
+          cacheStore.commitWrite(key, writeToken, {
+            value,
+            expiresAt: populatedAt + ttlMs,
+            staleUntil: populatedAt + ttlMs + swrMs,
+            refreshing: false,
+          })
+          return value
+        } catch (error) {
+          // If we have stale data, return it rather than propagating the error
+          if (cached && cacheStore.peek(key) === cached) {
+            return cached.value as T
+          }
+          throw error
         }
-        throw error
-      } finally {
-        cacheStore.finishWrite(key, writeToken)
-      }
+      })
+      return pending.promise
     },
   }
 }
@@ -632,11 +646,17 @@ export function draftMode(): DraftMode {
  *   return new Response(null, { status: 204 })
  * }
  * ```
+ *
+ * One request may queue at most 64 distinct paths. Each path is limited to
+ * 2,048 characters; exceeding either bound throws instead of dropping work.
  */
+const MAX_REVALIDATIONS_PER_REQUEST = 64
+const MAX_REVALIDATION_PATH_LENGTH = 2_048
+
 export function revalidatePath(path: string): void {
-  if (!path.startsWith('/')) {
+  if (!path.startsWith('/') || path.length > MAX_REVALIDATION_PATH_LENGTH) {
     throw new Error(
-      `revalidatePath() needs an absolute path, got ${JSON.stringify(path)}.\n\n` +
+      `revalidatePath() needs an absolute path of at most ${MAX_REVALIDATION_PATH_LENGTH} characters, got ${JSON.stringify(path)}.\n\n` +
         'Pass the URL a visitor would request, such as "/blog/hello" — not a route ' +
         'pattern like "/blog/[slug]" and not a relative path.',
     )
@@ -650,6 +670,16 @@ export function revalidatePath(path: string): void {
         'It queues work onto the response of the API route or server action that ' +
         'calls it, so there has to be one. Calling it at module scope runs at ' +
         'import time, when there is no response to attach it to.',
+    )
+  }
+  if (
+    context.revalidate &&
+    !context.revalidate.has(path) &&
+    context.revalidate.size >= MAX_REVALIDATIONS_PER_REQUEST
+  ) {
+    throw new Error(
+      `revalidatePath() accepts at most ${MAX_REVALIDATIONS_PER_REQUEST} distinct paths in one request. ` +
+        'Split larger invalidations across requests so the host can apply every path.',
     )
   }
   context.revalidate?.add(path)

@@ -80,8 +80,12 @@ describe('Ruvyxa CLI platforms', () => {
     assert.match(workspaceManifest, /rust-version = "1\.96"/)
     assert.equal(ruvyxaPackage.engines.node, '>=22.12.0')
     assert.match(ciWorkflow, /toolchain: 1\.96\.0/)
-    assert.match(ciWorkflow, /node-version: 22(?:\s|$)/)
-    assert.doesNotMatch(ciWorkflow, /^  minimum-node:/m)
+    assert.match(ciWorkflow, /node: '22\.12\.0'/)
+    assert.match(ciWorkflow, /node-version: \$\{\{ matrix\.node \}\}/)
+    assert.match(
+      ciWorkflow,
+      /^  test:[\s\S]*?^    env:\s+^      NODE_OPTIONS: '--experimental-strip-types'/m,
+    )
   })
 
   it('does not publish an Intel macOS binary package', () => {

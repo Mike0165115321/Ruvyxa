@@ -22,7 +22,7 @@ use futures_core::Stream;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, Notify, mpsc};
 use tracing::{debug, error, info, warn};
 
 use ruvyxa_diagnostics::{Diagnostic, Result, RuvyxaError};
@@ -65,6 +65,11 @@ const WORKER_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_s
 /// bounded.
 const DEFAULT_ISOLATED_RENDERS_PER_WORKER: usize = 32;
 
+/// Distinct ESM module URLs a long-lived dev worker may retain before the pool
+/// replaces it. Node cannot unload these graphs, so process replacement is the
+/// only operation that keeps HMR memory use bounded.
+const DEFAULT_RETAINED_MODULE_URLS_PER_DEV_WORKER: usize = 64;
+
 const ISOLATED_RENDER_RECYCLE_ENV: &str = "RUVYXA_PRERENDER_RECYCLE_AFTER";
 
 /// Maximum number of decoded response frames waiting for one HTTP consumer.
@@ -95,6 +100,10 @@ pub enum WorkerRequest {
         page_file: String,
         #[serde(rename = "requestPath")]
         request_path: String,
+        /// Original path and query used to populate the ambient request
+        /// context. Routing and page rendering continue to use `requestPath`.
+        #[serde(rename = "requestTarget")]
+        request_target: String,
         /// Route pattern (`/blog/[slug]`), not the concrete URL. It keys the
         /// worker's bundle cache and the browser's client-route registry, so a
         /// per-URL value would make every dynamic request a cache miss and
@@ -317,6 +326,10 @@ pub struct WorkerResponse {
     pub pong: Option<bool>,
     pub warmed: Option<usize>,
     pub module_cache_size: Option<usize>,
+    /// Distinct module URLs retained by the worker's ESM registry. Node cannot
+    /// evict them; the host uses this telemetry to retire the process safely
+    /// before normal dev/HMR rebuilds grow memory without bound.
+    pub retained_module_urls: Option<usize>,
     pub params: Option<Vec<RouteParams>>,
     /// Set when the render read request state — a cookie, a header, draft
     /// mode. Such HTML belongs to one request and must never be stored in a
@@ -362,6 +375,7 @@ struct PendingResponse {
 struct PendingResponseSet {
     entries: Mutex<BTreeMap<String, PendingResponse>>,
     count: AtomicUsize,
+    idle: Notify,
 }
 
 impl PendingResponseSet {
@@ -378,6 +392,9 @@ impl PendingResponseSet {
         if removed.is_some() {
             let previous = self.count.fetch_sub(1, Ordering::AcqRel);
             debug_assert!(previous > 0, "pending response count underflow");
+            if previous == 1 {
+                self.idle.notify_waiters();
+            }
         }
         removed
     }
@@ -393,6 +410,7 @@ impl PendingResponseSet {
         let mut entries = self.entries.lock().await;
         let pending = std::mem::take(&mut *entries);
         self.count.store(0, Ordering::Release);
+        self.idle.notify_waiters();
         pending
     }
 
@@ -400,10 +418,21 @@ impl PendingResponseSet {
         let mut entries = self.entries.lock().await;
         entries.clear();
         self.count.store(0, Ordering::Release);
+        self.idle.notify_waiters();
     }
 
     fn len(&self) -> usize {
         self.count.load(Ordering::Acquire)
+    }
+
+    async fn wait_until_idle(&self) {
+        loop {
+            let idle = self.idle.notified();
+            if self.len() == 0 {
+                return;
+            }
+            idle.await;
+        }
     }
 }
 
@@ -582,9 +611,10 @@ struct Worker {
     pending: PendingResponses,
     child: Mutex<Option<Child>>,
     alive: Arc<AtomicBool>,
-    /// Isolated prerenders this process has served, i.e. the number of module
-    /// graphs its ESM registry is holding and can never release.
-    isolated_renders: AtomicUsize,
+    /// Latest known number of module URLs this process has retained. Older
+    /// worker scripts do not report telemetry, so isolated prerenders use this
+    /// as a compatibility counter too.
+    retained_module_urls: AtomicUsize,
 }
 
 impl Worker {
@@ -753,7 +783,7 @@ impl Worker {
             pending,
             child: Mutex::new(Some(child)),
             alive,
-            isolated_renders: AtomicUsize::new(0),
+            retained_module_urls: AtomicUsize::new(0),
         })
     }
 
@@ -947,10 +977,10 @@ pub struct NodeWorkerPool {
     runtime: JavaScriptRuntime,
     next_worker: AtomicU64,
     response_timeout: std::time::Duration,
-    /// Isolated prerenders a worker may serve before it is retired. `None`
-    /// disables recycling, which is correct for the dev server: it never asks
-    /// for isolated imports, so its workers accumulate nothing to reclaim.
-    isolated_renders_per_worker: Option<usize>,
+    /// Module URLs a worker may retain before it is retired. `None` disables
+    /// recycling. Current workers report the actual ESM registry count; the
+    /// isolated-render counter remains as compatibility for older workers.
+    retained_module_urls_per_worker: Option<usize>,
 }
 
 /// One server-side page render.
@@ -963,6 +993,9 @@ pub struct RenderSsrRequest<'a> {
     pub app_dir: &'a Path,
     pub page_file: &'a Path,
     pub request_path: &'a str,
+    /// Original path and query. Kept separate so query data reaches the
+    /// request context without changing route or render-path semantics.
+    pub request_target: &'a str,
     /// Route pattern, not the concrete URL.
     pub route_path: &'a str,
     pub params: &'a RouteParams,
@@ -1002,9 +1035,18 @@ impl NodeWorkerPool {
         runtime: JavaScriptRuntime,
     ) -> Result<Self> {
         let response_timeout = configure_worker_timeout(&mut env, DEFAULT_WORKER_TIMEOUT_MS);
-        // A long-lived server never requests isolated imports, so it retains
-        // nothing that recycling could reclaim.
-        Self::start_with_timeout(root, env, runtime, None, response_timeout, None).await
+        // Normal HMR rebuilds import changed bundles under content-addressed
+        // URLs that Node cannot unload. Bound those graphs in long-lived dev
+        // sessions by recycling only after the worker reports the real count.
+        Self::start_with_timeout(
+            root,
+            env,
+            runtime,
+            None,
+            response_timeout,
+            Some(DEFAULT_RETAINED_MODULE_URLS_PER_DEV_WORKER),
+        )
+        .await
     }
 
     /// Start a pool with an optional bounded worker count.
@@ -1038,7 +1080,7 @@ impl NodeWorkerPool {
         runtime: JavaScriptRuntime,
         worker_count: Option<usize>,
         response_timeout: std::time::Duration,
-        isolated_renders_per_worker: Option<usize>,
+        retained_module_urls_per_worker: Option<usize>,
     ) -> Result<Self> {
         let worker_script = find_worker_script(root).ok_or_else(|| {
             Diagnostic::new("RUV1702", "Worker pool script was not found")
@@ -1120,7 +1162,7 @@ impl NodeWorkerPool {
             runtime,
             next_worker: AtomicU64::new(0),
             response_timeout,
-            isolated_renders_per_worker,
+            retained_module_urls_per_worker,
         })
     }
 
@@ -1139,7 +1181,8 @@ impl NodeWorkerPool {
     pub async fn send(&self, request: WorkerRequest) -> Result<WorkerResponse> {
         let (index, worker) = self.select_worker().await?;
         let isolated = request.retains_an_isolated_module_graph();
-        let response = worker.send(&request, self.response_timeout).await;
+        let mut active_worker = Arc::clone(&worker);
+        let mut response = worker.send(&request, self.response_timeout).await;
 
         if response.is_err()
             && let Some(replacement) = self.replace_failed_worker(index, &worker).await
@@ -1149,45 +1192,113 @@ impl NodeWorkerPool {
                 failed_worker = index,
                 "retrying idempotent request on replacement worker"
             );
-            return replacement.send(&request, self.response_timeout).await;
+            active_worker = replacement;
+            response = active_worker.send(&request, self.response_timeout).await;
         }
 
-        if isolated && response.is_ok() {
-            self.retire_worker_if_saturated(index, &worker).await;
+        if let Ok(worker_response) = &response {
+            self.retire_worker_if_saturated(
+                index,
+                &active_worker,
+                worker_response.retained_module_urls,
+                isolated,
+            )
+            .await;
         }
 
         response
     }
 
     /// Replace a worker that has retained its budgeted number of module graphs.
-    ///
-    /// Only an idle worker is retired. A worker still serving sibling renders
-    /// would have its child killed and its pending requests cleared by
-    /// `shutdown`, failing renders that were progressing fine; deferring to the
-    /// next completion costs nothing because the counter stays over budget.
-    async fn retire_worker_if_saturated(&self, index: usize, worker: &Arc<Worker>) {
-        let Some(budget) = self.isolated_renders_per_worker else {
+    /// The saturated process is removed from selection immediately, but its
+    /// child stays alive until every already-admitted request has completed.
+    async fn retire_worker_if_saturated(
+        &self,
+        index: usize,
+        worker: &Arc<Worker>,
+        observed_retained_module_urls: Option<usize>,
+        isolated: bool,
+    ) {
+        let Some(budget) = self.retained_module_urls_per_worker else {
             return;
         };
-        let retained = worker.isolated_renders.fetch_add(1, Ordering::AcqRel) + 1;
-        if retained < budget || worker.in_flight() > 0 {
+        let retained = match observed_retained_module_urls {
+            Some(retained) => {
+                worker
+                    .retained_module_urls
+                    .store(retained, Ordering::Release);
+                retained
+            }
+            None if isolated => worker.retained_module_urls.fetch_add(1, Ordering::AcqRel) + 1,
+            None => return,
+        };
+        if retained < budget {
             return;
         }
 
         debug!(
             worker = index,
-            retained, budget, "retiring prerender worker to release retained module graphs"
+            retained,
+            budget,
+            in_flight = worker.in_flight(),
+            "retiring worker to release retained module graphs"
         );
-        if self.replace_failed_worker(index, worker).await.is_none() {
+        if !self.replace_saturated_worker(index, worker).await {
             // The replacement could not start. Keeping the saturated worker is
             // strictly better than losing pool capacity mid-build, so reset the
             // counter and let it try again after another full budget.
-            worker.isolated_renders.store(0, Ordering::Release);
+            worker.retained_module_urls.store(0, Ordering::Release);
             warn!(
                 worker = index,
-                "could not replace a saturated prerender worker; continuing with it"
+                "could not replace a saturated worker; continuing with it"
             );
         }
+    }
+
+    /// Remove a saturated process from selection immediately, then let every
+    /// request already using it finish before closing its stdin. This makes
+    /// recycling safe for framed API streams and concurrent SSR renders: new
+    /// work goes to the replacement while the old process drains in place.
+    async fn replace_saturated_worker(&self, index: usize, saturated: &Arc<Worker>) -> bool {
+        let replacement = match Worker::spawn(&self.worker_script, &self.env, self.runtime).await {
+            Ok(worker) => Arc::new(worker),
+            Err(error) => {
+                warn!(%error, worker = index, "failed to replace saturated Node worker");
+                return false;
+            }
+        };
+
+        let replaced = {
+            let Ok(mut workers) = self.workers.write() else {
+                warn!(
+                    worker = index,
+                    "worker pool lock poisoned during retirement"
+                );
+                replacement.shutdown().await;
+                return false;
+            };
+            if workers
+                .get(index)
+                .is_some_and(|worker| Arc::ptr_eq(worker, saturated))
+            {
+                workers[index] = Arc::clone(&replacement);
+                true
+            } else {
+                false
+            }
+        };
+
+        if !replaced {
+            replacement.shutdown().await;
+            return true;
+        }
+
+        let draining = Arc::clone(saturated);
+        tokio::spawn(async move {
+            draining.pending.wait_until_idle().await;
+            draining.shutdown().await;
+        });
+        true
     }
 
     /// Pick the worker with the fewest in-flight requests.
@@ -1365,7 +1476,7 @@ impl NodeWorkerPool {
         }
 
         let mut pending = tokio::task::JoinSet::new();
-        for worker in &workers {
+        for (index, worker) in workers.iter().enumerate() {
             let worker = worker.clone();
             let project_root = project_root.to_string();
             let routes = routes.clone();
@@ -1376,20 +1487,35 @@ impl NodeWorkerPool {
                     project_root,
                     routes,
                 };
-                worker.send(&request, response_timeout).await
+                let response = worker.send(&request, response_timeout).await;
+                (index, worker, response)
             });
         }
 
         let mut warmed = 0;
         while let Some(result) = pending.join_next().await {
             match result {
-                Ok(Ok(response)) if response.ok => {
+                Ok((index, worker, Ok(response))) if response.ok => {
                     warmed += response.warmed.unwrap_or_default();
+                    self.retire_worker_if_saturated(
+                        index,
+                        &worker,
+                        response.retained_module_urls,
+                        false,
+                    )
+                    .await;
                 }
-                Ok(Ok(response)) => {
+                Ok((index, worker, Ok(response))) => {
                     debug!(message = ?response.message, "worker warmup returned non-ok");
+                    self.retire_worker_if_saturated(
+                        index,
+                        &worker,
+                        response.retained_module_urls,
+                        false,
+                    )
+                    .await;
                 }
-                Ok(Err(_)) | Err(_) => {
+                Ok((_, _, Err(_))) | Err(_) => {
                     // Non-fatal: warmup is an optimization, not a requirement.
                 }
             }
@@ -1407,6 +1533,7 @@ impl NodeWorkerPool {
             app_dir: page.app_dir.display().to_string(),
             page_file: page.page_file.display().to_string(),
             request_path: page.request_path.to_string(),
+            request_target: page.request_target.to_string(),
             route_path: page.route_path.to_string(),
             params: page.params.clone(),
             header_pairs: page.headers.to_vec(),
@@ -1441,6 +1568,18 @@ impl NodeWorkerPool {
             .await;
         if response.is_err() {
             self.replace_failed_worker(index, &worker).await;
+        } else if let Ok(api_response) = &response {
+            // Importing the route module is complete before `api-start`, so its
+            // retention telemetry is final for this request. Remove a saturated
+            // worker from selection now; the retirement path keeps it alive
+            // until the framed body reaches api-end or is dropped.
+            self.retire_worker_if_saturated(
+                index,
+                &worker,
+                api_response.response.retained_module_urls,
+                false,
+            )
+            .await;
         }
         response
     }
@@ -1843,7 +1982,7 @@ mod tests {
             pending: Arc::new(PendingResponseSet::default()),
             child: Mutex::new(None),
             alive: Arc::new(AtomicBool::new(true)),
-            isolated_renders: AtomicUsize::new(0),
+            retained_module_urls: AtomicUsize::new(0),
         })
     }
 
@@ -1855,7 +1994,7 @@ mod tests {
             runtime: JavaScriptRuntime::Node,
             next_worker: AtomicU64::new(0),
             response_timeout: std::time::Duration::from_millis(DEFAULT_WORKER_TIMEOUT_MS),
-            isolated_renders_per_worker: None,
+            retained_module_urls_per_worker: None,
         }
     }
 
@@ -1916,15 +2055,25 @@ mod tests {
         });
     }
 
-    /// A saturated worker must not be torn down while it is still serving other
-    /// renders: `shutdown` clears pending requests, which would fail renders
-    /// that were progressing normally.
+    /// A saturated worker leaves the selection pool immediately but is not
+    /// stopped until its existing requests drain.
     #[tokio::test]
-    async fn a_saturated_worker_is_not_retired_while_it_is_still_busy() {
-        let (tx, _rx) = mpsc::channel::<String>(4);
-        let worker = stub_worker(Some(tx));
+    async fn a_saturated_worker_drains_in_flight_work_before_shutdown() {
+        let temp = tempfile::tempdir().unwrap();
+        let worker_script = temp.path().join("worker.mjs");
+        std::fs::write(
+            &worker_script,
+            "process.stdin.on('end', () => process.exit(0)); process.stdin.resume();",
+        )
+        .unwrap();
+        let worker = Arc::new(
+            Worker::spawn(&worker_script, &BTreeMap::new(), JavaScriptRuntime::Node)
+                .await
+                .unwrap(),
+        );
         let mut pool = stub_pool(vec![Arc::clone(&worker)]);
-        pool.isolated_renders_per_worker = Some(2);
+        pool.worker_script = worker_script;
+        pool.retained_module_urls_per_worker = Some(2);
 
         // Register an in-flight sibling request on the same worker.
         let (sender, _receiver) = mpsc::channel(1);
@@ -1940,21 +2089,30 @@ mod tests {
             .await;
         assert_eq!(worker.in_flight(), 1);
 
-        for _ in 0..4 {
-            pool.retire_worker_if_saturated(0, &worker).await;
-        }
+        pool.retire_worker_if_saturated(0, &worker, Some(2), false)
+            .await;
 
-        // `worker_script` does not exist, so any attempted replacement would
-        // fail and reset the counter. A busy worker must not even try.
-        assert_eq!(
-            worker.isolated_renders.load(Ordering::Acquire),
-            4,
-            "a busy worker keeps counting instead of being retired"
+        assert!(
+            !Arc::ptr_eq(&pool.workers.read().unwrap()[0], &worker),
+            "new requests must select the replacement"
         );
         assert!(
-            Arc::ptr_eq(&pool.workers.read().unwrap()[0], &worker),
-            "the busy worker must stay in the pool"
+            worker.child.lock().await.is_some(),
+            "the saturated process must stay alive while a request is pending"
         );
+
+        worker.pending.remove("sibling").await;
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if worker.child.lock().await.is_none() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the drained worker was not shut down");
+        pool.shutdown().await;
     }
 
     /// With recycling disabled the counter must not advance at all, so the dev
@@ -1964,13 +2122,14 @@ mod tests {
         let (tx, _rx) = mpsc::channel::<String>(4);
         let worker = stub_worker(Some(tx));
         let pool = stub_pool(vec![Arc::clone(&worker)]);
-        assert!(pool.isolated_renders_per_worker.is_none());
+        assert!(pool.retained_module_urls_per_worker.is_none());
 
         for _ in 0..8 {
-            pool.retire_worker_if_saturated(0, &worker).await;
+            pool.retire_worker_if_saturated(0, &worker, None, true)
+                .await;
         }
 
-        assert_eq!(worker.isolated_renders.load(Ordering::Acquire), 0);
+        assert_eq!(worker.retained_module_urls.load(Ordering::Acquire), 0);
         assert!(Arc::ptr_eq(&pool.workers.read().unwrap()[0], &worker));
     }
 
@@ -2063,6 +2222,26 @@ mod tests {
             assert_eq!(timeout, std::time::Duration::from_millis(fallback_ms));
             assert_eq!(env[WORKER_TIMEOUT_ENV], fallback_ms.to_string());
         }
+    }
+
+    #[test]
+    fn ssr_worker_request_serializes_path_and_query_separately() {
+        let request = WorkerRequest::Ssr {
+            id: "test".to_string(),
+            project_root: "/project".to_string(),
+            app_dir: "/project/app".to_string(),
+            page_file: "/project/app/search/page.tsx".to_string(),
+            request_path: "/search".to_string(),
+            request_target: "/search?q=ruvyxa".to_string(),
+            route_path: "/search".to_string(),
+            params: BTreeMap::new(),
+            header_pairs: Vec::new(),
+            method: "GET".to_string(),
+        };
+
+        let value = serde_json::to_value(request).unwrap();
+        assert_eq!(value["requestPath"], "/search");
+        assert_eq!(value["requestTarget"], "/search?q=ruvyxa");
     }
 
     #[test]
@@ -2376,7 +2555,7 @@ mod tests {
             runtime: JavaScriptRuntime::Node,
             next_worker: AtomicU64::new(0),
             response_timeout: std::time::Duration::from_millis(DEFAULT_WORKER_TIMEOUT_MS),
-            isolated_renders_per_worker: None,
+            retained_module_urls_per_worker: None,
         };
 
         pool.shutdown().await;
@@ -2390,6 +2569,150 @@ mod tests {
                 .expect("worker stdin mutex poisoned")
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn reported_module_url_growth_retires_a_normal_dev_worker() {
+        let temp = tempfile::tempdir().unwrap();
+        let worker_script = temp.path().join("worker.mjs");
+        std::fs::write(
+            &worker_script,
+            r#"
+import { createInterface } from 'node:readline'
+let retained = 0
+createInterface({ input: process.stdin }).on('line', (line) => {
+  const { id } = JSON.parse(line)
+  process.stdout.write(JSON.stringify({
+    id,
+    ok: true,
+    html: String(process.pid),
+    retainedModuleUrls: ++retained,
+  }) + '\n')
+})
+process.stdin.resume()
+"#,
+        )
+        .unwrap();
+
+        let worker = Worker::spawn(&worker_script, &BTreeMap::new(), JavaScriptRuntime::Node)
+            .await
+            .unwrap();
+        let pool = NodeWorkerPool {
+            workers: StdRwLock::new(vec![Arc::new(worker)]),
+            worker_script,
+            env: BTreeMap::new(),
+            runtime: JavaScriptRuntime::Node,
+            next_worker: AtomicU64::new(0),
+            response_timeout: std::time::Duration::from_millis(DEFAULT_WORKER_TIMEOUT_MS),
+            retained_module_urls_per_worker: Some(3),
+        };
+
+        let mut pids = Vec::new();
+        for _ in 0..6 {
+            let request = ssg_request(false);
+            assert!(
+                !request.retains_an_isolated_module_graph(),
+                "the regression must exercise normal content-addressed imports"
+            );
+            let response = pool.send(request).await.unwrap();
+            pids.push(response.html.unwrap());
+        }
+
+        assert_eq!(pids[0], pids[1], "{pids:?}");
+        assert_eq!(pids[1], pids[2], "{pids:?}");
+        assert_ne!(
+            pids[2], pids[3],
+            "reported ESM retention must replace the process: {pids:?}"
+        );
+        assert_eq!(pids[3], pids[4], "{pids:?}");
+        assert_eq!(pids[4], pids[5], "{pids:?}");
+        pool.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn api_only_retention_retires_after_the_stream_drains() {
+        let temp = tempfile::tempdir().unwrap();
+        let worker_script = temp.path().join("worker.mjs");
+        std::fs::write(
+            &worker_script,
+            r#"
+import { createInterface } from 'node:readline'
+createInterface({ input: process.stdin }).on('line', (line) => {
+  const { id } = JSON.parse(line)
+  process.stdout.write(JSON.stringify({
+    id,
+    frame: 'api-start',
+    ok: true,
+    status: 200,
+    headers: {},
+    headerPairs: [],
+    retainedModuleUrls: 2,
+  }) + '\n')
+  setTimeout(() => process.stdout.write(JSON.stringify({
+    id,
+    frame: 'api-end',
+    ok: true,
+    retainedModuleUrls: 2,
+  }) + '\n'), 500)
+})
+process.stdin.resume()
+"#,
+        )
+        .unwrap();
+
+        let worker = Arc::new(
+            Worker::spawn(&worker_script, &BTreeMap::new(), JavaScriptRuntime::Node)
+                .await
+                .unwrap(),
+        );
+        let pool = NodeWorkerPool {
+            workers: StdRwLock::new(vec![Arc::clone(&worker)]),
+            worker_script,
+            env: BTreeMap::new(),
+            runtime: JavaScriptRuntime::Node,
+            next_worker: AtomicU64::new(0),
+            response_timeout: std::time::Duration::from_secs(2),
+            retained_module_urls_per_worker: Some(2),
+        };
+        let params = BTreeMap::new();
+        let route_file = temp.path().join("route.ts");
+
+        let response = pool
+            .render_api(RenderApiRequest {
+                project_root: temp.path(),
+                route_file: &route_file,
+                method: "GET",
+                request_path: "/api/only",
+                headers: &[],
+                body: None,
+                params: &params,
+            })
+            .await
+            .unwrap();
+
+        assert!(
+            !Arc::ptr_eq(&pool.workers.read().unwrap()[0], &worker),
+            "api-start telemetry must remove the saturated worker from selection"
+        );
+        assert!(
+            worker.child.lock().await.is_some(),
+            "the old process must remain alive until api-end"
+        );
+        let body = axum::body::to_bytes(response.body.unwrap(), 1024)
+            .await
+            .unwrap();
+        assert!(body.is_empty());
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if worker.child.lock().await.is_none() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the streamed API worker was not shut down after api-end");
+        pool.shutdown().await;
     }
 
     /// Retiring the process is the only operation that releases the module
@@ -2425,7 +2748,7 @@ process.stdin.resume()
             runtime: JavaScriptRuntime::Node,
             next_worker: AtomicU64::new(0),
             response_timeout: std::time::Duration::from_millis(DEFAULT_WORKER_TIMEOUT_MS),
-            isolated_renders_per_worker: Some(3),
+            retained_module_urls_per_worker: Some(3),
         };
 
         let mut pids = Vec::new();
@@ -2527,7 +2850,7 @@ process.stdin.resume()
             runtime: JavaScriptRuntime::Node,
             next_worker: AtomicU64::new(0),
             response_timeout: std::time::Duration::from_millis(DEFAULT_WORKER_TIMEOUT_MS),
-            isolated_renders_per_worker: None,
+            retained_module_urls_per_worker: None,
         };
 
         let mut child = failed_worker.child.lock().await;
@@ -2597,7 +2920,7 @@ process.stdin.resume()
             runtime: JavaScriptRuntime::Node,
             next_worker: AtomicU64::new(0),
             response_timeout: std::time::Duration::from_millis(DEFAULT_WORKER_TIMEOUT_MS),
-            isolated_renders_per_worker: None,
+            retained_module_urls_per_worker: None,
         };
 
         // Every selection must land on the idle worker regardless of the
@@ -2638,7 +2961,7 @@ process.stdin.resume()
             runtime: JavaScriptRuntime::Node,
             next_worker: AtomicU64::new(0),
             response_timeout: std::time::Duration::from_millis(DEFAULT_WORKER_TIMEOUT_MS),
-            isolated_renders_per_worker: None,
+            retained_module_urls_per_worker: None,
         };
 
         // Request completion also needs this mutex. Routing new work must not
@@ -2706,7 +3029,7 @@ process.stdin.resume()
             runtime: JavaScriptRuntime::Node,
             next_worker: AtomicU64::new(0),
             response_timeout: std::time::Duration::from_millis(DEFAULT_WORKER_TIMEOUT_MS),
-            isolated_renders_per_worker: None,
+            retained_module_urls_per_worker: None,
         };
 
         // With every worker idle the rotating offset spreads work round-robin.

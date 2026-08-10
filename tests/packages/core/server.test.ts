@@ -107,6 +107,49 @@ describe('cache', () => {
     assert.equal(calls, 1)
   })
 
+  it('shares one producer across concurrent cold misses', async () => {
+    let calls = 0
+    let resolveProducer: (value: string) => void = () => {}
+    const producerResult = new Promise<string>((resolve) => {
+      resolveProducer = resolve
+    })
+    const producer = () => {
+      calls++
+      return producerResult
+    }
+
+    const first = cache('single-flight').ttl('10s').get(producer)
+    const second = cache('single-flight').ttl('10s').get(producer)
+    await Promise.resolve()
+
+    assert.equal(calls, 1)
+    resolveProducer('shared')
+    assert.deepEqual(await Promise.all([first, second]), ['shared', 'shared'])
+  })
+
+  it('cleans up a rejected single-flight so the key can retry', async () => {
+    let calls = 0
+    const producer = () => {
+      calls++
+      throw new Error('temporary failure')
+    }
+
+    const first = cache('single-flight-rejection').ttl('10s').get(producer)
+    const second = cache('single-flight-rejection').ttl('10s').get(producer)
+    await assert.rejects(first, /temporary failure/)
+    await assert.rejects(second, /temporary failure/)
+    assert.equal(calls, 1)
+
+    const recovered = await cache('single-flight-rejection')
+      .ttl('10s')
+      .get(() => {
+        calls++
+        return 'recovered'
+      })
+    assert.equal(recovered, 'recovered')
+    assert.equal(calls, 2)
+  })
+
   it('does not let an in-flight producer repopulate an invalidated key', async () => {
     let resolveProducer: (value: string) => void = () => {}
     const producerResult = new Promise<string>((resolve) => {
@@ -131,6 +174,42 @@ describe('cache', () => {
 
     assert.equal(current, 'current')
     assert.equal(calls, 1)
+  })
+
+  it('does not let an obsolete completion overwrite a newer generation', async () => {
+    let resolveOld: (value: string) => void = () => {}
+    let resolveCurrent: (value: string) => void = () => {}
+    const oldResult = new Promise<string>((resolve) => {
+      resolveOld = resolve
+    })
+    const currentResult = new Promise<string>((resolve) => {
+      resolveCurrent = resolve
+    })
+
+    const old = cache('ordered-generation')
+      .ttl('10s')
+      .get(() => oldResult)
+    await Promise.resolve()
+    invalidateCache('ordered-generation')
+    const current = cache('ordered-generation')
+      .ttl('10s')
+      .get(() => currentResult)
+    await Promise.resolve()
+
+    resolveCurrent('current')
+    assert.equal(await current, 'current')
+    resolveOld('obsolete')
+    assert.equal(await old, 'obsolete')
+
+    let producerCalls = 0
+    const cached = await cache('ordered-generation')
+      .ttl('10s')
+      .get(() => {
+        producerCalls++
+        return 'unexpected'
+      })
+    assert.equal(cached, 'current')
+    assert.equal(producerCalls, 0)
   })
 
   it('invalidates by exact key', async () => {

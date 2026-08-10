@@ -126,9 +126,9 @@ export default function Dashboard() {
 
 ## Revalidate ตามคำสั่ง
 
-`revalidatePath(path)` สั่งให้เซิร์ฟเวอร์ render URL หนึ่งใหม่ในคำขอถัดไป เรียกได้จาก API route หรือ
-server action — คำสั่งจะเดินทางกลับไปพร้อมกับ response ของ handler นั้น ดังนั้น client ที่นำทางต่อ
-หลังได้ผลสำเร็จจะไม่มีทางมาถึงก่อนที่ cache จะถูกล้าง
+`revalidatePath(path)` สั่งให้เซิร์ฟเวอร์ render URL หนึ่งใหม่ในคำขอถัดไปที่สำเร็จ เรียกได้จาก API
+route หรือ server action — คำสั่งจะเดินทางกลับไปพร้อมกับ response ของ handler นั้น ดังนั้น client
+ที่นำทางต่อ หลังได้ผลสำเร็จจะไม่มีทางมาถึงก่อนที่ cache จะถูกล้าง
 
 ```ts
 // app/api/revalidate/route.ts
@@ -142,9 +142,12 @@ export async function POST({ request }: { request: Request }) {
 ```
 
 อาร์กิวเมนต์คือ URL จริง (`/blog/hello`) ไม่ใช่ route pattern (`/blog/[slug]`) ครอบคลุมทุกกลยุทธ์
-การ render: เอกสารใน cache จะถูกทิ้ง และสำหรับ SSG, ISR และ PPR คำขอถัดไปจะข้าม HTML ที่ build
+การ render: เอกสารใน cache จะถูกทิ้ง และสำหรับ SSG, ISR, PPR และ CSR คำขอถัดไปจะข้าม HTML ที่ build
 เขียนลงดิสก์ด้วย — ไม่อย่างนั้นไฟล์นั้นจะถูกเสิร์ฟต่อไปเรื่อย ๆ การ revalidate URL ที่ยังไม่เคยมีใคร
-ร้องขอเป็นเรื่องปกติและเป็นเคสของ webhook ทั่วไป
+ร้องขอเป็นเรื่องปกติและเป็นเคสของ webhook ทั่วไป หนึ่ง request คิวได้สูงสุด 64 URL ที่ไม่ซ้ำกัน
+และแต่ละ URL ยาวได้ไม่เกิน 2,048 ตัวอักษร `revalidatePath()` จะ throw เมื่อเกินขอบเขตใดขอบเขตหนึ่ง
+ให้แบ่ง batch ที่ใหญ่กว่านี้เป็นหลาย request เพื่อไม่ให้ invalidation รายการใดถูกทิ้งแบบเงียบ ๆ หาก
+render หรือการเขียน persistent cache ล้มเหลว ระบบจะคง revalidation ไว้เพื่อลองใหม่ใน request ถัดไป
 
 Ruvyxa ไม่มี `revalidateTag()` ใน Next.js tag ใช้กำกับรายการใน cache ของ `fetch()` แต่ Ruvyxa ไม่มี
 fetch cache ให้กำกับ การรองรับ tag จึงต้องมีการประกาศ tag ระดับหน้าและดัชนี tag-to-route

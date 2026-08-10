@@ -45,6 +45,7 @@ describe('node', () => {
     assert.match(source, /process\.env\.HOST/)
     // ISR support: reads and writes the prerender cache
     assert.match(source, /writePrerendered/)
+    assert.doesNotMatch(source, /ISR cache write failures/)
     // Static assets served with immutable cache headers
     assert.match(source, /__ruvyxa\/client\//)
     assert.doesNotMatch(source, /npx/)

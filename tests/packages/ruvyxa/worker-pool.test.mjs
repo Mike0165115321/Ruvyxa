@@ -208,6 +208,99 @@ test('bounds concurrent requests and keeps bookkeeping requests unqueued', async
   assert.equal(afterDrain.queuedRequests, 0, 'the queue must drain')
 })
 
+test('does not coalesce SSR requests with different observable headers', async (t) => {
+  const appDir = await mkdtemp(path.join(fixtureWorkspace, 'header-coalescing-'))
+  const pageFile = path.join(appDir, 'page.tsx')
+  await writeFile(
+    pageFile,
+    `import { headers } from 'ruvyxa/server'
+export default function Page() {
+  const current = headers()
+  return <main>{current.get('accept-language')}|{current.get('x-tenant')}|{current.get('x-repeat')}</main>
+}
+`,
+  )
+
+  const { request } = startWorker(t, [appDir])
+  const base = {
+    type: 'ssr',
+    projectRoot: fixtureWorkspace,
+    appDir,
+    pageFile,
+    requestPath: '/request-context?view=full',
+    routePath: '/request-context',
+    method: 'GET',
+    params: {},
+  }
+
+  // Both requests enter the worker before the cold compile completes. Before
+  // the fix they shared a render because only cookie/authorization contributed
+  // to the key, so the second response contained the first request's values.
+  const [english, thai] = await Promise.all([
+    request({
+      ...base,
+      headerPairs: [
+        ['Accept-Language', 'en-A'],
+        ['X-Tenant', 'tenant-a'],
+        ['X-Repeat', 'one-a'],
+        ['x-repeat', 'two-a'],
+      ],
+    }),
+    request({
+      ...base,
+      headerPairs: [
+        ['accept-language', 'th-B'],
+        ['x-tenant', 'tenant-b'],
+        ['x-repeat', 'one-b'],
+        ['X-Repeat', 'two-b'],
+      ],
+    }),
+  ])
+
+  assert.equal(english.ok, true, english.message)
+  assert.equal(thai.ok, true, thai.message)
+  for (const value of ['en-A', 'tenant-a', 'one-a, two-a'])
+    assert.match(english.html, new RegExp(value))
+  for (const value of ['th-B', 'tenant-b', 'one-b, two-b'])
+    assert.match(thai.html, new RegExp(value))
+  assert.doesNotMatch(thai.html, /tenant-a/)
+})
+
+test('keeps the query target in SSR context and coalescing identity', async (t) => {
+  const appDir = await mkdtemp(path.join(fixtureWorkspace, 'query-coalescing-'))
+  const pageFile = path.join(appDir, 'page.tsx')
+  await writeFile(
+    pageFile,
+    `export default function Page() {
+  const context = (globalThis as any).__RUVYXA_REQUEST_CONTEXT__.current()
+  return <main>{context.url}</main>
+}
+`,
+  )
+
+  const { request } = startWorker(t, [appDir])
+  const base = {
+    type: 'ssr',
+    projectRoot: fixtureWorkspace,
+    appDir,
+    pageFile,
+    requestPath: '/search',
+    routePath: '/search',
+    method: 'GET',
+    params: {},
+    headerPairs: [],
+  }
+  const [first, second] = await Promise.all([
+    request({ ...base, requestTarget: '/search?q=first' }),
+    request({ ...base, requestTarget: '/search?q=second' }),
+  ])
+
+  assert.equal(first.ok, true, first.message)
+  assert.equal(second.ok, true, second.message)
+  assert.match(first.html, /\/search\?q=first/)
+  assert.match(second.html, /\/search\?q=second/)
+})
+
 test('rejects overload once the bounded admission queue is full', async (t) => {
   const projectRoot = await mkdtemp(path.join(fixtureWorkspace, 'admission-test-'))
   const appDir = path.join(projectRoot, 'app/api/slow')

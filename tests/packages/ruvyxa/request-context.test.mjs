@@ -31,6 +31,9 @@ import {
 } from '../../../packages/@ruvyxa/core/dist/server.js'
 
 const CONTEXT_KEY = '__RUVYXA_REQUEST_CONTEXT__'
+const REVALIDATION_CONFORMANCE = JSON.parse(
+  sourceOf('../../fixtures/revalidation-conformance.json'),
+)
 
 function sourceOf(relative) {
   return readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8')
@@ -225,6 +228,26 @@ describe('revalidatePath', () => {
       // The error text says so; the type system cannot.
       assert.doesNotThrow(() => revalidatePath('/blog/[slug]'))
     })
+  })
+
+  it('fails explicitly when one request exceeds revalidation bounds', () => {
+    const store = requestContext({ headerPairs: [] })
+    runWithRequestContext(store, () => {
+      for (let index = 0; index < REVALIDATION_CONFORMANCE.maxPathsPerRequest; index++) {
+        revalidatePath(`/posts/${index}`)
+      }
+      // Repeating an already queued path does not consume another slot.
+      assert.doesNotThrow(() => revalidatePath('/posts/0'))
+      assert.throws(
+        () => revalidatePath('/posts/overflow'),
+        new RegExp(`at most ${REVALIDATION_CONFORMANCE.maxPathsPerRequest} distinct paths`),
+      )
+      assert.throws(
+        () => revalidatePath(`/${'x'.repeat(REVALIDATION_CONFORMANCE.maxPathLength)}`),
+        new RegExp(`at most ${REVALIDATION_CONFORMANCE.maxPathLength} characters`),
+      )
+    })
+    assert.equal(collectRevalidations(store).length, REVALIDATION_CONFORMANCE.maxPathsPerRequest)
   })
 
   it('throws outside a request', () => {

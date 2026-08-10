@@ -84,12 +84,8 @@ const handler = createHandler({
     const relative = prerenderRelativePath(pathname);
     if (relative === null) return;
     const htmlPath = path.join(isrCacheDir, relative);
-    try {
-      mkdirSync(path.dirname(htmlPath), { recursive: true });
-      writeFileSync(htmlPath, html, 'utf8');
-    } catch {
-      // ISR cache write failures are non-fatal
-    }
+    mkdirSync(path.dirname(htmlPath), { recursive: true });
+    writeFileSync(htmlPath, html, 'utf8');
   },
   supportedStrategies: ['ssr', 'ssg', 'csr', 'isr', 'ppr', 'api'],
 });

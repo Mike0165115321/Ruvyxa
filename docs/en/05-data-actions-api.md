@@ -130,9 +130,9 @@ Both cases throw with a message naming the accessor:
 
 ## On-demand revalidation
 
-`revalidatePath(path)` asks the server to re-render one URL on its next request. Call it from an API
-route or a server action — the instruction travels back with that handler's response, so a client
-that navigates on success cannot arrive before the cache has been cleared.
+`revalidatePath(path)` asks the server to re-render one URL on its next successful request. Call it
+from an API route or a server action — the instruction travels back with that handler's response, so
+a client that navigates on success cannot arrive before the cache has been cleared.
 
 ```ts
 // app/api/revalidate/route.ts
@@ -146,9 +146,13 @@ export async function POST({ request }: { request: Request }) {
 ```
 
 The argument is a concrete URL (`/blog/hello`), not a route pattern (`/blog/[slug]`). Every
-rendering strategy is covered: the cached document is dropped, and for SSG, ISR, and PPR the next
-request additionally bypasses the HTML the build wrote to disk — otherwise that file would keep
-being served. Revalidating a URL nothing has requested yet is fine and is the normal webhook case.
+rendering strategy is covered: the cached document is dropped, and for SSG, ISR, PPR, and CSR the
+next request additionally bypasses the HTML the build wrote to disk — otherwise that file would keep
+being served. A failed render or persistent-cache write keeps the revalidation pending for retry.
+Revalidating a URL nothing has requested yet is fine and is the normal webhook case. One request may
+queue at most 64 distinct URLs, and each URL may contain at most 2,048 characters.
+`revalidatePath()` throws when either bound is exceeded; split a larger batch across requests so no
+invalidation is silently dropped.
 
 Ruvyxa has no `revalidateTag()`. In Next.js a tag labels a `fetch()` cache entry; Ruvyxa has no
 fetch cache for one to label, so tags would need a page-level tag declaration and a tag-to-route

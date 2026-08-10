@@ -88,6 +88,7 @@ describe('netlify', () => {
       // through the shared containment helper rather than joining the raw
       // pathname onto the cache directory.
       assert.match(String(functionArtifact!.handlerSource), /prerenderRelativePath/)
+      assert.doesNotMatch(String(functionArtifact!.handlerSource), /ISR cache write failures/)
       assert.doesNotMatch(
         String(functionArtifact!.handlerSource),
         /path\.join\(prerenderDir, pathname/,
