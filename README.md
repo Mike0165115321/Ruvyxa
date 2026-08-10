@@ -15,7 +15,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green?style=flat-square" alt="License" />
-  <img src="https://img.shields.io/badge/node-%3E%3D22.13-blue?style=flat-square" alt="Node 22.13+" />
+  <img src="https://img.shields.io/badge/node-%3E%3D22.12-blue?style=flat-square" alt="Node 22.12+" />
   <img src="https://img.shields.io/badge/rust-1.96%2B-orange?style=flat-square" alt="Rust 1.96+" />
   <img src="https://img.shields.io/badge/pnpm-11%2B-yellow?style=flat-square" alt="pnpm 11+" />
   <img src="https://img.shields.io/badge/TypeScript-7%2B-blue?style=flat-square" alt="TypeScript 7+" />
