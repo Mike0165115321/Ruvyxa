@@ -44,6 +44,27 @@ describe('Ruvyxa CLI platforms', () => {
     assert.match(releaseWorkflow, /RUVYXA_REQUIRE_STATIC_LINUX:/)
   })
 
+  it('publishes and verifies every official adapter required by ruvyxa', () => {
+    const releaseWorkflow = readFileSync(
+      new URL('../../../.github/workflows/release.yml', import.meta.url),
+      'utf8',
+    )
+    const adapterDependencies = Object.keys(ruvyxaPackage.dependencies).filter((name) =>
+      name.startsWith('@ruvyxa/adapter-'),
+    )
+
+    for (const adapterName of adapterDependencies) {
+      const occurrences = releaseWorkflow.match(
+        new RegExp(`^\\s{12}${adapterName.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')} \\\\?$`, 'gm'),
+      )
+      assert.equal(
+        occurrences?.length,
+        2,
+        `${adapterName} must appear in the publish and registry-verification lists`,
+      )
+    }
+  })
+
   it('does not resolve an optional package for unsupported platforms', () => {
     assert.equal(nativeBinaryPackageName('freebsd-x64'), null)
   })

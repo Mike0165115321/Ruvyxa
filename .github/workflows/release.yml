@@ -197,6 +197,7 @@ jobs:
             @ruvyxa/adapter-aws \
             @ruvyxa/adapter-bun \
             @ruvyxa/adapter-cloudflare \
+            @ruvyxa/adapter-deno \
             @ruvyxa/adapter-firebase \
             @ruvyxa/adapter-netlify \
             @ruvyxa/adapter-node \
@@ -240,6 +241,7 @@ jobs:
             @ruvyxa/adapter-aws \
             @ruvyxa/adapter-bun \
             @ruvyxa/adapter-cloudflare \
+            @ruvyxa/adapter-deno \
             @ruvyxa/adapter-firebase \
             @ruvyxa/adapter-netlify \
             @ruvyxa/adapter-node \
