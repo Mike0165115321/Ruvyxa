@@ -24,5 +24,8 @@
   "devDependencies": {
     "ruvyxa": "^1.0.29",
     "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   }
 }

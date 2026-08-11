@@ -752,20 +752,31 @@ fn interpolation_end(bytes: &[u8], start: usize) -> usize {
     bytes.len()
 }
 
+/// Skip a `'`/`"` literal, giving up at the end of its line.
+///
+/// A JavaScript string cannot contain a raw newline, so a quote with no closing
+/// partner on its own line was never a delimiter: it is an apostrophe in prose
+/// or in JSX text — `React's`, `<p>don't</p>`. Running to the next quote
+/// anywhere in the file is what used to desynchronize this scan, and the cost
+/// was silent: the swallowed region became a text span, so every import,
+/// `server-only` marker, and `process.env` read after it was invisible to the
+/// graph and to the boundary check. Resuming just past the opening quote keeps
+/// a stray apostrophe's blast radius to its own line.
+///
+/// Returns the index just past the closing quote, or just past the opening one
+/// when the line ends first.
 fn skip_string(bytes: &[u8], start: usize) -> usize {
     let quote = bytes[start];
     let mut index = start + 1;
     while index < bytes.len() {
-        if bytes[index] == b'\\' {
-            index += 2;
-            continue;
+        match bytes[index] {
+            b'\n' => break,
+            b'\\' if index + 1 < bytes.len() && bytes[index + 1] != b'\n' => index += 2,
+            byte if byte == quote => return index + 1,
+            _ => index += 1,
         }
-        if bytes[index] == quote {
-            return index + 1;
-        }
-        index += 1;
     }
-    bytes.len()
+    start + 1
 }
 
 fn is_line_prefix_whitespace(bytes: &[u8], index: usize) -> bool {
@@ -915,6 +926,41 @@ import { createElement } from "react";
                 "should not detect a default export in: {source}"
             );
         }
+    }
+
+    /// An apostrophe in prose or JSX text is not a string delimiter. Treating
+    /// it as one ran the string skip to the next quote anywhere in the file, so
+    /// the imports and `process.env` reads after it were recorded as text and
+    /// never seen — the same failure the regex case above describes, reached
+    /// through the other literal form.
+    #[test]
+    fn unclosed_quotes_do_not_hide_later_facts() {
+        let ast = parse_module(concat!(
+            "const label = <p>don't</p>;\n",
+            "import { helper } from './helper';\n",
+            "const key = process.env.DATABASE_URL;\n",
+        ));
+
+        assert_eq!(
+            ast.import_specifiers(),
+            vec!["./helper"],
+            "an apostrophe must not swallow the rest of the module"
+        );
+        assert_eq!(
+            ast.env_reads,
+            vec!["DATABASE_URL"],
+            "a private env read after an apostrophe must stay visible"
+        );
+    }
+
+    /// A string still ends at its own closing quote on the same line.
+    #[test]
+    fn same_line_strings_are_still_text() {
+        let ast = parse_module("const s = 'import x from \"./nope\"';\n");
+        assert!(
+            ast.import_specifiers().is_empty(),
+            "an import inside a closed string is text, not an edge"
+        );
     }
 
     /// A regex literal containing a quote used to start a string skip that ran

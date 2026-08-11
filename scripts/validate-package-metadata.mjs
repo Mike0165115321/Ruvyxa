@@ -65,6 +65,13 @@ const templateDirs = readdirSync('templates')
 
 for (const dir of templateDirs) {
   const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
+  // Checked before the plugin branch below. The plugin template used to skip
+  // every shared check because that branch `continue`s, and it was the one
+  // template that shipped no Node floor at all.
+  check(
+    pkg.engines?.node === requiredRuntimeNodeEngine,
+    `${dir} Node engine must match the framework requirement (${requiredRuntimeNodeEngine})`,
+  )
   if (dir === 'templates/plugin') {
     check(
       pkg.peerDependencies?.ruvyxa === `^${expectedVersion}`,
@@ -119,6 +126,43 @@ if (failures.length > 0) {
 }
 
 console.log(`Validated ${crateDirs.length} Rust crate manifests for ${expectedVersion}.`)
+
+// The README states the Node floor in prose and in a badge image. Both are
+// hand-maintained copies of `engines.node`, which is the only enforced source:
+// npm rejects an install below it. A commit lowered the badge to 22.12 while
+// every manifest, doc page, and CI job still required 22.13.0, so the first
+// thing a reader saw was the one number that would fail their install. This is
+// the same "a cross-language fact belongs in a replayed check, not a comment
+// promising the two stay in sync" rule the repo already applies to template
+// mirrors and conformance fixtures.
+const readme = readFileSync('README.md', 'utf8')
+const engineFloor = requiredRuntimeNodeEngine.replace(/^>=/, '')
+// `22.13.0` in a manifest is written `22.13` in prose and badges.
+const [major, minor] = engineFloor.split('.')
+const displayFloor = `${major}.${minor}`
+
+const badgeMatches = [...readme.matchAll(/img\.shields\.io\/badge\/node-%3E%3D([\d.]+)-/g)]
+check(badgeMatches.length > 0, 'README must carry a Node version badge')
+for (const [, badgeVersion] of badgeMatches) {
+  check(
+    badgeVersion === displayFloor,
+    `README Node badge says ${badgeVersion} but engines.node requires ${requiredRuntimeNodeEngine} (expected ${displayFloor})`,
+  )
+}
+
+for (const [claim, claimed] of readme.matchAll(/Node\.js\s\*{0,2}(\d+\.\d+)\+/g)) {
+  check(
+    claimed === displayFloor,
+    `README claims "${claim.trim()}" but engines.node requires ${requiredRuntimeNodeEngine} (expected ${displayFloor})`,
+  )
+}
+
+if (failures.length > 0) {
+  console.error(failures.map((failure) => `- ${failure}`).join('\n'))
+  process.exit(1)
+}
+
+console.log(`Validated README Node floor against engines.node (${requiredRuntimeNodeEngine}).`)
 
 function check(condition, message) {
   if (!condition) failures.push(message)
