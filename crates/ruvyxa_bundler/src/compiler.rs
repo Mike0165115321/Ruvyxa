@@ -224,9 +224,10 @@ fn compile_module(
             hook_source_map,
         }),
         CacheLookup::Miss(key) => {
-            let js = transform_with_options(&source, has_jsx, jsx_runtime).map_err(|msg| {
-                BundleError::Compiler(format!("{}: {}", module.path.display(), msg))
-            })?;
+            let js = transform_with_plan(&source, has_jsx, jsx_runtime, Some(&transform_plan))
+                .map_err(|msg| {
+                    BundleError::Compiler(format!("{}: {}", module.path.display(), msg))
+                })?;
 
             cache.store(&key, &js);
 
@@ -256,9 +257,29 @@ pub fn transform_with_options(
     has_jsx: bool,
     jsx_runtime: JsxRuntime,
 ) -> std::result::Result<String, String> {
+    transform_with_plan(source, has_jsx, jsx_runtime, None)
+}
+
+/// Transform, reusing a [`ModuleAst`] the caller already produced.
+///
+/// The compile path parses every module before it gets here — that is where
+/// `has_jsx` comes from — and [`crate::ast`] is explicit that a fact it already
+/// collected should not send a consumer back over the bytes. Passing the plan in
+/// lets decorator stripping reuse that walk instead of running a second one, and
+/// lets it gate on `has_decorators`, which is the precise answer rather than the
+/// line-scan approximation.
+pub(crate) fn transform_with_plan(
+    source: &str,
+    has_jsx: bool,
+    jsx_runtime: JsxRuntime,
+    plan: Option<&ModuleAst>,
+) -> std::result::Result<String, String> {
     // Preserve Ruvyxa's historical decorator contract: decorators are accepted
     // but removed without injecting an external runtime helper.
-    let source = strip_decorators(source);
+    let source = match plan {
+        Some(plan) => strip_decorators_with_plan(source, plan),
+        None => strip_decorators(source),
+    };
     let allocator = Allocator::default();
     let source_type = SourceType::mjs().with_typescript(true).with_jsx(has_jsx);
     let parsed = Parser::new(&allocator, &source, source_type).parse();
@@ -336,13 +357,18 @@ fn has_decorator_candidate(source: &str) -> bool {
 /// A removed decorator leaves behind exactly the newlines it spanned, so every
 /// later line keeps its original number.
 fn strip_decorators(source: &str) -> String {
-    // A plain line scan settles the overwhelming majority of modules without
-    // parsing anything: a decorator is always the first thing on its line.
+    // Only for callers with no plan of their own. A plain line scan settles the
+    // overwhelming majority of modules without parsing anything: a decorator is
+    // always the first thing on its line.
     if !has_decorator_candidate(source) {
         return source.to_string();
     }
 
-    let ast = ast::parse_module(source);
+    strip_decorators_with_plan(source, &ast::parse_module(source))
+}
+
+/// Strip decorators using facts the caller already collected.
+fn strip_decorators_with_plan(source: &str, ast: &ModuleAst) -> String {
     if !ast.has_decorators {
         return source.to_string();
     }
@@ -354,7 +380,7 @@ fn strip_decorators(source: &str) -> String {
 
     while i < len {
         if bytes[i] == b'@' && starts_line(bytes, i) && ast.is_code_offset(i) {
-            let end = skip_decorator(bytes, i, &ast);
+            let end = skip_decorator(bytes, i, ast);
             // Emit the newlines the decorator spanned and nothing else. A
             // decorator on its own line leaves the line blank; a multi-line
             // `@Component({...})` leaves as many blank lines as it occupied.
@@ -495,6 +521,28 @@ mod tests {
             "scoped specifier must survive: {out}"
         );
         assert_eq!(out, source, "a file with no decorator must be unchanged");
+    }
+
+    /// Passing a caller's plan must not change the answer. Two paths that
+    /// compute the same thing are how the regex/apostrophe split survived this
+    /// long, so the reuse path is held to the self-parsing one directly.
+    #[test]
+    fn a_caller_supplied_plan_matches_self_parsing() {
+        for source in [
+            "const tick = /`/;\n@Injectable()\nclass S {}\n",
+            "const label = <p>don't</p>;\n@Injectable()\nclass S {}\n",
+            "@Component({\n  selector: 'x',\n})\nclass S {}\n",
+            "@Inject$ed({ a: ')', b: `)` })\nclass S {}\n",
+            "class S {\n  css = `\n@media (x) {}\n`;\n}\n",
+            "const email = 'user@example.com';\n",
+            "// ค่าเริ่มต้น\n@Injectable()\nclass บริการ {}\n",
+        ] {
+            assert_eq!(
+                strip_decorators_with_plan(source, &ast::parse_module(source)),
+                strip_decorators(source),
+                "reuse path diverged for:\n{source}"
+            );
+        }
     }
 
     /// A regex literal is not a template, a comment, or a string. When this
