@@ -28,8 +28,16 @@ pub(crate) struct ProjectConfig {
     pub(crate) app_dir: Option<String>,
     pub(crate) out_dir: Option<String>,
     pub(crate) runtime: Option<BuildTarget>,
+    /// Accepted so `deny_unknown_fields` does not reject a config that sets it,
+    /// and read by nothing. Ruvyxa always renders React, so the flag selects no
+    /// behaviour. Deprecated in `RuvyxaConfig`; do not wire it to anything
+    /// without deciding what it should mean first.
     #[serde(rename = "react")]
     pub(crate) _react: Option<serde_json::Value>,
+    /// Accepted and read by nothing, for the same reason as `_react`. Note the
+    /// config renderer does not even forward `typescript`, so this is always
+    /// `None` in practice — type checking is `tsc`'s job against the project's
+    /// own `tsconfig.json`.
     #[serde(rename = "typescript")]
     pub(crate) _typescript: Option<serde_json::Value>,
     /// Generate `.ruvyxa/types/routes.d.ts` so `<Link href>` is checked against

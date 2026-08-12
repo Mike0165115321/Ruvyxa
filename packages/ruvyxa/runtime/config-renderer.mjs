@@ -14,7 +14,12 @@ import {
 const [projectRootArg] = process.argv.slice(2)
 
 if (!projectRootArg) {
-  fail('RUV1601', 'Config renderer requires a project root argument.')
+  // Awaited: `fail` is async and only exits after its NDJSON reaches stdout.
+  // Calling it bare let execution fall through to `path.resolve(undefined)`
+  // one line down, which throws outside the try block below — so the host got
+  // an unhandled `ERR_INVALID_ARG_TYPE` stack instead of the RUV1601 line this
+  // branch exists to emit.
+  await fail('RUV1601', 'Config renderer requires a project root argument.')
 }
 
 const projectRoot = path.resolve(projectRootArg)

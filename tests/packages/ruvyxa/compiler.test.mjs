@@ -36,6 +36,21 @@ const fixtureWorkspace = await createFixtureWorkspace('ruvyxa-compiler-tests-', 
 after(() => rm(fixtureWorkspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }))
 
 describe('runtime compiler', () => {
+  /// The host parses this process's stdout as NDJSON, so every exit has to be
+  /// one. `fail()` is async and only exits once its line is written; calling it
+  /// without `await` let execution reach `path.resolve(undefined)` on the next
+  /// line, which throws above the try block — the host saw an unhandled
+  /// `ERR_INVALID_ARG_TYPE` stack instead of the RUV1601 it handles.
+  it('reports a missing project root as a diagnostic rather than a crash', async () => {
+    const { code, stdout, stderr } = await runRaw(configRenderer, [])
+
+    assert.equal(code, 1)
+    assert.doesNotMatch(stderr, /ERR_INVALID_ARG_TYPE/, `unhandled throw: ${stderr}`)
+    const parsed = JSON.parse(stdout)
+    assert.equal(parsed.ok, false)
+    assert.equal(parsed.code, 'RUV1601')
+  })
+
   it('resolves runtime aliases when the runtime path contains spaces', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'ruvyxa runtime path '))
     try {
@@ -2340,6 +2355,28 @@ export const marker = 'reached'
     })
   })
 })
+
+/** Spawn a runtime script and report exactly what it wrote, ok or not. */
+function runRaw(script, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [script, ...args], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk
+    })
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk
+    })
+    child.on('error', reject)
+    child.on('close', (code) => resolve({ code, stdout, stderr }))
+    child.stdin.end('')
+  })
+}
 
 function runJson(script, args, payload) {
   return new Promise((resolve, reject) => {

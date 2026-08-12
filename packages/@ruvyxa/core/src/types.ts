@@ -3,7 +3,23 @@ export interface RuvyxaConfig {
   outDir?: string
   /** Runtime used for config, rendering, and plugins. @default 'node' */
   runtime?: 'node' | 'bun' | 'deno' | 'edge' | 'static'
+  /**
+   * Accepted and ignored.
+   *
+   * @deprecated Nothing reads this. Ruvyxa renders React unconditionally, so
+   * there is no behaviour for the flag to select. It stays in the type and in
+   * config validation only so an existing `ruvyxa.config.ts` does not start
+   * failing with "unknown config field"; setting it has never had an effect.
+   */
   react?: boolean
+  /**
+   * Accepted and ignored.
+   *
+   * @deprecated Nothing reads this. TypeScript is compiled by the bundler,
+   * which strips types without checking them, and strictness belongs to the
+   * project's own `tsconfig.json` where `tsc` can act on it. Kept only so an
+   * existing config keeps validating.
+   */
   typescript?: {
     strict?: boolean
   }

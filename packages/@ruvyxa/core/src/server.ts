@@ -173,7 +173,16 @@ class CacheStore {
     // Updating an existing key does not increase the cache size. Evicting before
     // that check would discard an unrelated LRU entry on every refresh at capacity.
     while (!this.#entries.has(key) && this.#entries.size >= this.#maxEntries) {
-      this.#evictOldest()
+      if (!this.#evictOldest()) {
+        // The access order is internal bookkeeping that every write path keeps
+        // in step with `#entries`. If a future change ever breaks that, this
+        // loop would spin forever inside a request rather than fail — so an
+        // eviction that frees nothing rebuilds the order from the entries that
+        // actually exist and tries once more. Same recovery, and same reason,
+        // as `RenderCache::put` in `crates/ruvyxa_dev_server/src/render_cache.rs`.
+        this.#accessOrder = [...this.#entries.keys()]
+        if (!this.#evictOldest()) break
+      }
     }
 
     this.#entries.set(key, entry)
@@ -264,11 +273,11 @@ class CacheStore {
     this.#accessOrder.push(key)
   }
 
-  #evictOldest(): void {
+  /** Evict the least recently used entry. `false` when nothing was freed. */
+  #evictOldest(): boolean {
     const oldest = this.#accessOrder.shift()
-    if (oldest !== undefined) {
-      this.delete(oldest)
-    }
+    if (oldest === undefined) return false
+    return this.delete(oldest)
   }
 }
 
