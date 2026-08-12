@@ -148,11 +148,14 @@ export async function POST({ request }: { request: Request }) {
 The argument is a concrete URL (`/blog/hello`), not a route pattern (`/blog/[slug]`). Every
 rendering strategy is covered: the cached document is dropped, and for SSG, ISR, PPR, and CSR the
 next request additionally bypasses the HTML the build wrote to disk — otherwise that file would keep
-being served. A failed render or persistent-cache write keeps the revalidation pending for retry.
-Revalidating a URL nothing has requested yet is fine and is the normal webhook case. One request may
-queue at most 64 distinct URLs, and each URL may contain at most 2,048 characters.
-`revalidatePath()` throws when either bound is exceeded; split a larger batch across requests so no
-invalidation is silently dropped.
+being served. That next successful render also replaces the file, so the revalidation finishes
+instead of having to bypass the same stale document for the rest of the process. A build artifact
+that does not exist is left absent rather than created. A failed render, or a prerender directory
+the server cannot write, keeps the revalidation pending for retry — a server that can never write
+one logs a warning as the pending set fills. Revalidating a URL nothing has requested yet is fine
+and is the normal webhook case. One request may queue at most 64 distinct URLs, and each URL may
+contain at most 2,048 characters. `revalidatePath()` throws when either bound is exceeded; split a
+larger batch across requests so no invalidation is silently dropped.
 
 Ruvyxa has no `revalidateTag()`. In Next.js a tag labels a `fetch()` cache entry; Ruvyxa has no
 fetch cache for one to label, so tags would need a page-level tag declaration and a tag-to-route

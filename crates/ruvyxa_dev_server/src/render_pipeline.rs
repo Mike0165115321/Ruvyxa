@@ -25,7 +25,7 @@ use crate::html_document::{
     client_hydration_script, compose_localized_document, error_page, hmr_client_script,
 };
 use crate::plugin_head::render_plugin_head;
-use crate::render_cache::{CachedDocument, RenderCache};
+use crate::render_cache::{CachedDocument, ForcedRevalidationClaim, RenderCache};
 use crate::router::RadixRouter;
 use crate::static_assets::{
     contained_public_asset, is_safe_relative_path, is_static_asset_request, public_asset_links,
@@ -421,10 +421,9 @@ async fn render_page_ssg(
         params,
     );
 
-    // The build artifact remains stale and may be read again after LRU/TTL
-    // eviction, so the forced marker intentionally remains. Only a durable
-    // prerender write could make acknowledging it safe.
-    Ok(state.render_cache.put(cache_key, html).await)
+    let document = state.render_cache.put(cache_key, html).await;
+    settle_forced_revalidation(state, request_path, forced, &document.html).await;
+    Ok(document)
 }
 
 /// ISR: serve from cache if available (stale-while-revalidate), trigger
@@ -470,9 +469,9 @@ async fn render_page_isr(
 
     // No cached version — render synchronously (blocking fallback)
     let html = render_isr_background(state, route, request_path, params, styles).await?;
-    // Keep `forced` pending: the fresh document is only in bounded memory and
-    // the build artifact on disk is still stale.
-    Ok(state.render_cache.put(cache_key, html).await)
+    let document = state.render_cache.put(cache_key, html).await;
+    settle_forced_revalidation(state, request_path, forced, &document.html).await;
+    Ok(document)
 }
 
 /// ISR background render (used both for first render and revalidation).
@@ -623,18 +622,117 @@ fn spawn_isr_revalidation(
 /// Try to serve a pre-rendered HTML file from the prerender directory.
 /// Returns `Some(html)` if the file exists, `None` otherwise.
 pub(crate) fn serve_prerendered_html(prerender_dir: &Path, request_path: &str) -> Option<String> {
+    let html_path = prerendered_document_path(prerender_dir, request_path)?;
+    let html_path = contained_public_asset(prerender_dir, &html_path)?;
+    fs::read_to_string(html_path).ok()
+}
+
+/// Where the prerendered document for `request_path` lives, before any
+/// existence or containment check.
+///
+/// The reader and the writer below derive this path from one place. A layout
+/// rule copied into both is a rule that can drift, and a writer that publishes
+/// to a file the reader never opens would retire a revalidation claim while the
+/// stale document it was supposed to replace stayed on disk.
+fn prerendered_document_path(prerender_dir: &Path, request_path: &str) -> Option<PathBuf> {
     let sanitized = request_path.trim_start_matches('/');
     if !sanitized.is_empty() && !is_safe_relative_path(sanitized) {
         return None;
     }
-    let html_path = if sanitized.is_empty() {
+    Some(if sanitized.is_empty() {
         prerender_dir.join("index.html")
     } else {
         prerender_dir.join(sanitized).join("index.html")
+    })
+}
+
+/// Whether no stale prerendered document remains for `request_path`.
+///
+/// Replaces the build's document with `html` when one exists. Only an artifact
+/// the build already published is replaced: creating one for a path the build
+/// never prerendered would add a disk fallback where none existed, and for ISR
+/// it would also restart the age its stale-while-revalidate window is measured
+/// from. A path with no artifact is already answered by a fresh render, so it
+/// reports `true` with nothing written.
+///
+/// `false` means a document is still on disk and still stale — a read-only
+/// filesystem, a permission error, a full disk.
+fn settle_prerendered_artifact(prerender_dir: &Path, request_path: &str, html: &str) -> bool {
+    let Some(candidate) = prerendered_document_path(prerender_dir, request_path) else {
+        // The reader rejects this path for the same reason, so it can never
+        // serve a document for it.
+        return true;
+    };
+    let Some(existing) = contained_public_asset(prerender_dir, &candidate) else {
+        return true;
+    };
+    // Unlike the content-addressed callers of `write_atomic`, two concurrent
+    // forced renders of one path can carry different bytes. The rename is still
+    // atomic, so a reader sees one complete document or the other, and both are
+    // fresh renders of the same URL.
+    ruvyxa_bundler::atomic_file::write_atomic(&existing, html.as_bytes()).is_ok()
+}
+
+/// Retire a `revalidatePath()` claim once the document behind it can no longer
+/// be served.
+///
+/// A claim exists to stop a request from answering with the build's HTML for a
+/// URL the application declared out of date, so it may only be retired when
+/// that HTML cannot come back. Two situations allow it:
+///
+///   - Watch mode never reads the prerender directory, so no artifact of it can
+///     reach a response.
+///   - The artifact was replaced with this render, or never existed.
+///
+/// Anything else leaves the claim pending, which is exactly what happened
+/// before this function existed. That is the safe direction — a claim that
+/// outlives its cause costs cache efficiency, while one retired too early
+/// serves content the application already invalidated.
+///
+/// There is deliberately no `requestScoped` guard here, unlike the equivalent
+/// write in `serverless-handler.mjs`. That host renders every strategy inside a
+/// request context, so an SSG page there can read a cookie and produce one
+/// visitor's document. `handleSsg` in `worker-pool.mjs` installs no context, so
+/// `cookies()`, `headers()`, and `draftMode()` throw instead of returning a
+/// value: a document that reaches this function cannot contain request state.
+/// Should that ever change, this write needs the same guard the serverless
+/// handler has, and so does the `render_cache.put` above every call site.
+async fn settle_forced_revalidation(
+    state: &AppState,
+    request_path: &str,
+    claim: Option<ForcedRevalidationClaim>,
+    html: &Arc<str>,
+) {
+    let Some(claim) = claim else {
+        return;
     };
 
-    let html_path = contained_public_asset(prerender_dir, &html_path)?;
-    fs::read_to_string(html_path).ok()
+    if !state.config.watch {
+        let prerender_dir = state.config.prerender_dir.clone();
+        let path = request_path.to_string();
+        let html = Arc::clone(html);
+        // The publish canonicalizes a path and writes a whole document, the
+        // same blocking work `read_prerendered_html` already keeps off the
+        // async worker threads.
+        let settled = tokio::task::spawn_blocking(move || {
+            settle_prerendered_artifact(&prerender_dir, &path, &html)
+        })
+        .await
+        .unwrap_or(false);
+
+        if !settled {
+            tracing::debug!(
+                path = request_path,
+                "prerendered document could not be replaced; its revalidation claim stays pending"
+            );
+            return;
+        }
+    }
+
+    state
+        .render_cache
+        .acknowledge_forced(request_path, claim)
+        .await;
 }
 
 /// Async wrapper around [`serve_prerendered_html`].
@@ -738,10 +836,12 @@ async fn render_page_csr(
     );
 
     if forced.is_some() {
-        // The build shell is still stale, so retain the marker and keep the
-        // fresh shell in bounded memory. After eviction the marker forces
-        // another fresh shell instead of resurrecting the build artifact.
-        Ok(state.render_cache.put(cache_key, shell).await)
+        // Cached rather than per-request: the claim is retired below only once
+        // the build's shell has been replaced, and the fresh shell answers the
+        // requests that arrive before then.
+        let document = state.render_cache.put(cache_key, shell).await;
+        settle_forced_revalidation(state, request_path, forced, &document.html).await;
+        Ok(document)
     } else {
         // Not cache-backed: the shell is built for this request only, so there
         // is nowhere to keep an encoded copy and the layer compresses it as before.
@@ -832,9 +932,9 @@ async fn render_page_ppr(
         params,
     );
 
-    // Keep `forced` pending until a future host provides a durable prerender
-    // replacement; otherwise eviction would resurrect the build's stale shell.
-    Ok(state.render_cache.put(cache_key, html).await)
+    let document = state.render_cache.put(cache_key, html).await;
+    settle_forced_revalidation(state, request_path, forced, &document.html).await;
+    Ok(document)
 }
 
 async fn render_page_pooled(
@@ -1837,6 +1937,86 @@ mod tests {
             read_prerendered_html(prerender_dir, "/pricing").await,
             None,
             "the test removed the file, so a second disk read would have failed"
+        );
+    }
+
+    /// The whole point of the write: a `revalidatePath()` claim can only be
+    /// retired once the document it invalidated is gone from disk. The reader
+    /// must see the fresh bytes afterwards, because that is what makes
+    /// acknowledging the claim safe.
+    #[test]
+    fn settling_replaces_the_build_document_the_reader_would_serve() {
+        let temp = tempfile::tempdir().unwrap();
+        let page_dir = temp.path().join("blog/hello");
+        std::fs::create_dir_all(&page_dir).unwrap();
+        std::fs::write(page_dir.join("index.html"), "<h1>stale</h1>").unwrap();
+
+        assert!(settle_prerendered_artifact(
+            temp.path(),
+            "/blog/hello",
+            "<h1>fresh</h1>"
+        ));
+        assert_eq!(
+            serve_prerendered_html(temp.path(), "/blog/hello").as_deref(),
+            Some("<h1>fresh</h1>"),
+            "the reader must see the replacement, not the build's document"
+        );
+    }
+
+    /// A path the build never prerendered already falls through to a fresh
+    /// render, so its claim is settled with nothing written. Creating the file
+    /// here would add a disk fallback where none existed — and for ISR it would
+    /// restart the age its stale-while-revalidate window is measured from.
+    #[test]
+    fn settling_a_path_with_no_artifact_writes_nothing() {
+        let temp = tempfile::tempdir().unwrap();
+
+        assert!(settle_prerendered_artifact(
+            temp.path(),
+            "/never-built",
+            "<h1>fresh</h1>"
+        ));
+        assert!(
+            !temp.path().join("never-built").exists(),
+            "settling must not publish an artifact the build did not produce"
+        );
+    }
+
+    /// A failed write must report unsettled. Reporting success would retire the
+    /// claim while the stale document is still the one the reader opens, which
+    /// is the one outcome this whole path exists to prevent.
+    #[test]
+    fn a_write_that_cannot_happen_leaves_the_claim_unsettled() {
+        let temp = tempfile::tempdir().unwrap();
+        // A directory where the document belongs fails both the rename and the
+        // direct write inside `write_atomic`.
+        std::fs::create_dir_all(temp.path().join("pricing/index.html")).unwrap();
+
+        assert!(!settle_prerendered_artifact(
+            temp.path(),
+            "/pricing",
+            "<h1>fresh</h1>"
+        ));
+    }
+
+    /// An escaping path is rejected by the reader too, so no document of it can
+    /// ever be served and nothing may be written outside the directory.
+    #[test]
+    fn settling_refuses_to_write_outside_the_prerender_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let prerender_dir = temp.path().join("prerender");
+        std::fs::create_dir_all(&prerender_dir).unwrap();
+        std::fs::write(temp.path().join("index.html"), "<h1>outside</h1>").unwrap();
+
+        assert!(settle_prerendered_artifact(
+            &prerender_dir,
+            "/../index.html",
+            "<h1>fresh</h1>"
+        ));
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("index.html")).unwrap(),
+            "<h1>outside</h1>",
+            "a rejected path must leave every file outside the directory alone"
         );
     }
 

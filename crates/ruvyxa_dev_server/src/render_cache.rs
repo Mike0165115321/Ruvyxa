@@ -268,6 +268,18 @@ pub struct RenderCacheSnapshot {
     pub misses: u64,
     /// Keys ordered from least to most recently used.
     pub lru_keys: Vec<String>,
+    /// Paths named by `revalidatePath()` that are still waiting for a render to
+    /// retire their claim.
+    ///
+    /// A claim keeps its path from being served out of the prerender directory,
+    /// so a number that climbs and never falls is the visible form of an
+    /// artifact that cannot be replaced — and the approach to
+    /// [`MAX_FORCED_REVALIDATIONS`], past which `bypass_prerendered` turns
+    /// on for the whole process.
+    pub forced_pending: usize,
+    /// True once the bounded claim set overflowed and every prerendered
+    /// artifact is being bypassed until the process restarts.
+    pub bypass_prerendered: bool,
 }
 
 /// Maximum number of exact paths waiting to bypass a prerendered artifact.
@@ -278,11 +290,38 @@ pub struct RenderCacheSnapshot {
 /// at the cost of cache performance rather than silently losing invalidations.
 const MAX_FORCED_REVALIDATIONS: usize = 1_024;
 
+/// Pending-claim count that earns a warning while there is still time to act.
+///
+/// Reaching [`MAX_FORCED_REVALIDATIONS`] bypasses every prerendered artifact
+/// for the life of the process, and the log line that reports it arrives after
+/// the fact. A host whose prerender directory cannot be rewritten — read-only
+/// image, wrong ownership — retires no claims and walks to that limit with no
+/// other symptom than rising render load. `RenderCacheSnapshot` carries the
+/// same numbers, but its only reader is the dev-mode DevTools endpoint, so a
+/// production server needs the log.
+const FORCED_REVALIDATION_HIGH_WATER: usize = MAX_FORCED_REVALIDATIONS * 3 / 4;
+
+/// A warning at the limit would arrive after the bypass it warns about.
+const _: () = assert!(FORCED_REVALIDATION_HIGH_WATER < MAX_FORCED_REVALIDATIONS);
+
+/// What recording one claim did to the bounded state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MarkOutcome {
+    Recorded,
+    /// The pending set just crossed [`FORCED_REVALIDATION_HIGH_WATER`].
+    HighWater,
+    /// The bounded set overflowed; every prerendered artifact is now bypassed.
+    FailedClosed,
+}
+
 #[derive(Debug, Default)]
 struct ForcedRevalidations {
     paths: HashMap<String, u64>,
     next_generation: u64,
     bypass_prerendered: bool,
+    /// Set once the high-water warning has been logged, so a server sitting
+    /// just above the mark reports it once instead of on every claim.
+    warned_high_water: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -292,22 +331,27 @@ pub(crate) enum ForcedRevalidationClaim {
 }
 
 impl ForcedRevalidations {
-    /// Mark one path. Returns true when this call enters fail-closed mode.
-    fn mark(&mut self, path: &str) -> bool {
+    /// Mark one path, reporting what that did to the bounded state.
+    fn mark(&mut self, path: &str) -> MarkOutcome {
         if self.bypass_prerendered {
-            return false;
+            return MarkOutcome::Recorded;
         }
         if !self.paths.contains_key(path) && self.paths.len() >= MAX_FORCED_REVALIDATIONS {
             self.fail_closed();
-            return true;
+            return MarkOutcome::FailedClosed;
         }
         let Some(generation) = self.next_generation.checked_add(1) else {
             self.fail_closed();
-            return true;
+            return MarkOutcome::FailedClosed;
         };
         self.next_generation = generation;
         self.paths.insert(path.to_string(), generation);
-        false
+
+        if !self.warned_high_water && self.paths.len() >= FORCED_REVALIDATION_HIGH_WATER {
+            self.warned_high_water = true;
+            return MarkOutcome::HighWater;
+        }
+        MarkOutcome::Recorded
     }
 
     fn claim(&self, path: &str) -> Option<ForcedRevalidationClaim> {
@@ -333,6 +377,9 @@ impl ForcedRevalidations {
     fn fail_closed(&mut self) {
         self.paths.clear();
         self.bypass_prerendered = true;
+        // Nothing left to warn about approaching: the limit is already behind
+        // us, and the caller logs the overflow itself.
+        self.warned_high_water = true;
     }
 }
 
@@ -345,13 +392,19 @@ pub struct RenderCache {
     ///
     /// Dropping the in-memory entry is not enough for a prerendered strategy:
     /// SSG, ISR, PPR, and CSR fall back to HTML the build wrote to disk, so a
-    /// bounded-memory refresh alone cannot acknowledge the claim: TTL/LRU
-    /// eviction would resurrect that stale artifact. Their claims remain and
-    /// keep bypassing disk until durable persistence exists (or bounded state
-    /// escalates to global bypass). SSR has no build artifact and acknowledges
-    /// its exact generation after a successful render. A failed render leaves
-    /// every claim intact, and generation matching prevents an older success
-    /// from clearing a newer request for the same URL.
+    /// bounded-memory refresh alone cannot acknowledge the claim — TTL/LRU
+    /// eviction would resurrect that stale artifact. Those strategies replace
+    /// the artifact with their fresh render before acknowledging
+    /// (`settle_forced_revalidation` in `render_pipeline.rs`); when the write
+    /// cannot happen the claim stays pending and keeps bypassing disk. SSR has
+    /// no build artifact and acknowledges its exact generation after a
+    /// successful render. A failed render leaves every claim intact, and
+    /// generation matching prevents an older success from clearing a newer
+    /// request for the same URL.
+    ///
+    /// `RenderCacheSnapshot` reports the pending count and the global bypass
+    /// flag, so a host that cannot write its prerender directory shows up as a
+    /// climbing number rather than as unexplained render load.
     forced: RwLock<ForcedRevalidations>,
     capacity: usize,
     ttl: Duration,
@@ -396,6 +449,10 @@ impl RenderCache {
             .into_iter()
             .map(|key| key.to_string())
             .collect();
+        let (forced_pending, bypass_prerendered) = {
+            let forced = self.forced.read().await;
+            (forced.paths.len(), forced.bypass_prerendered)
+        };
         RenderCacheSnapshot {
             entries,
             capacity: self.capacity,
@@ -403,6 +460,8 @@ impl RenderCache {
             hits: self.hits.load(Ordering::Relaxed),
             misses: self.misses.load(Ordering::Relaxed),
             lru_keys,
+            forced_pending,
+            bypass_prerendered,
         }
     }
 
@@ -573,11 +632,23 @@ impl RenderCache {
         self.order.write().await.retain(|key| !matches(key));
         let dropped = before - entries.len();
         drop(entries);
-        if self.forced.write().await.mark(request_path) {
-            tracing::warn!(
-                limit = MAX_FORCED_REVALIDATIONS,
-                "pending path revalidations exceeded the bounded exact set; bypassing prerendered artifacts"
-            );
+        match self.forced.write().await.mark(request_path) {
+            MarkOutcome::Recorded => {}
+            MarkOutcome::HighWater => {
+                tracing::warn!(
+                    pending = FORCED_REVALIDATION_HIGH_WATER,
+                    limit = MAX_FORCED_REVALIDATIONS,
+                    "pending path revalidations are approaching the bounded exact set; \
+                     a claim is retired only once its prerendered document is replaced, \
+                     so check that the prerender directory is writable"
+                );
+            }
+            MarkOutcome::FailedClosed => {
+                tracing::warn!(
+                    limit = MAX_FORCED_REVALIDATIONS,
+                    "pending path revalidations exceeded the bounded exact set; bypassing prerendered artifacts"
+                );
+            }
         }
         dropped
     }
@@ -1276,7 +1347,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prerender_claims_survive_memory_eviction_until_persistence_exists() {
+    async fn caching_a_fresh_render_alone_never_retires_a_prerender_claim() {
         for namespace in ["ssg:", "isr:", "ppr:", "csr:"] {
             let cache = RenderCache::new(1, 60);
             let path = format!("/{namespace}page");
@@ -1310,6 +1381,66 @@ mod tests {
             cache.forced.read().await.paths.len(),
             MAX_FORCED_REVALIDATIONS
         );
+    }
+
+    /// The approach to the limit must be reported while it can still be acted
+    /// on, and reported once. The overflow warning arrives after every
+    /// prerendered artifact is already bypassed, which is too late to be a
+    /// signal and too late to prevent.
+    #[tokio::test]
+    async fn approaching_the_claim_limit_warns_once_before_the_overflow() {
+        let cache = RenderCache::new(32, 60);
+        let mut outcomes = Vec::new();
+        for index in 0..MAX_FORCED_REVALIDATIONS {
+            outcomes.push(cache.forced.write().await.mark(&format!("/posts/{index}")));
+        }
+
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| **outcome == MarkOutcome::HighWater)
+                .count(),
+            1,
+            "the high-water mark must be reported exactly once"
+        );
+        assert_eq!(
+            outcomes[FORCED_REVALIDATION_HIGH_WATER - 1],
+            MarkOutcome::HighWater,
+            "the warning must land on the claim that crosses the mark"
+        );
+        // The next distinct path overflows the bounded set.
+        assert_eq!(
+            cache.forced.write().await.mark("/posts/overflow"),
+            MarkOutcome::FailedClosed
+        );
+    }
+
+    /// Pending claims and the global bypass have to be readable from outside
+    /// the cache. A host that cannot replace its prerendered documents keeps
+    /// accumulating claims until every artifact is bypassed process-wide, and
+    /// before this the only trace of that was one log line and unexplained
+    /// render load.
+    #[tokio::test]
+    async fn the_snapshot_reports_pending_claims_and_the_global_bypass() {
+        let cache = RenderCache::new(32, 60);
+        assert_eq!(cache.snapshot().await.forced_pending, 0);
+        assert!(!cache.snapshot().await.bypass_prerendered);
+
+        cache.revalidate_path("/blog/hello").await;
+        let claim = cache.forced_claim("/blog/hello").await.unwrap();
+        assert_eq!(cache.snapshot().await.forced_pending, 1);
+
+        cache.acknowledge_forced("/blog/hello", claim).await;
+        assert_eq!(
+            cache.snapshot().await.forced_pending,
+            0,
+            "an acknowledged claim must stop being reported as pending"
+        );
+
+        cache.revalidate_all_paths().await;
+        let snapshot = cache.snapshot().await;
+        assert!(snapshot.bypass_prerendered);
+        assert_eq!(snapshot.forced_pending, 0);
     }
 
     #[tokio::test]
