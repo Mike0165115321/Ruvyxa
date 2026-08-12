@@ -4,7 +4,7 @@
 //! manifest at `<configured-cache-dir>/graph-manifest.json`. Each module entry records:
 //!
 //! - Its canonical path
-//! - An authoritative blake3 content fingerprint plus mtime/size hints
+//! - An authoritative blake3 content fingerprint plus a source-length fast-reject
 //! - Its resolved dependency edges (list of paths)
 //! - The specifier-to-path alias map those edges were resolved through
 //!
@@ -18,12 +18,11 @@
 //! resolution. Source bytes are still hashed so timestamp-preserving edits
 //! cannot return stale edges.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::SystemTime;
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -44,10 +43,16 @@ const MANIFEST_VERSION: &str = "ruvyxa_graph_cache";
 pub struct CachedModuleEntry {
     /// Blake3 content hash (hex, 32 chars).
     pub content_hash: String,
-    /// File size in bytes.
+    /// Byte length of the source this entry was recorded from.
+    ///
+    /// Recorded from the source text rather than from the file's metadata, so
+    /// it is the same quantity [`IncrementalGraphCache::check_freshness`]
+    /// compares against. Reading it back off disk cost one `stat` per module
+    /// per build to obtain a number the caller already held, and would have
+    /// disagreed with the check the moment a caller recorded source that is not
+    /// byte-for-byte the file — turning the fast-reject into a permanent miss
+    /// rather than a fast path.
     pub size: u64,
-    /// Modification time as seconds since UNIX epoch (for fast-reject).
-    pub mtime_secs: u64,
     /// Resolved dependency paths (absolute).
     pub deps: Vec<PathBuf>,
     /// Exact source-specifier to resolved-path bindings for those edges.
@@ -241,75 +246,15 @@ impl IncrementalGraphCache {
             return;
         }
 
-        let metadata = fs::metadata(&path).ok();
-        let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
-        let mtime_secs = metadata
-            .and_then(|m| m.modified().ok())
-            .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-
         self.current.insert(
             path,
             CachedModuleEntry {
                 content_hash: content_hash(source),
-                size,
-                mtime_secs,
+                size: source.len() as u64,
                 deps,
                 aliases: Some(aliases),
             },
         );
-    }
-
-    /// Compute the set of dirty modules given a set of changed file paths.
-    ///
-    /// Returns all modules that are directly changed OR are transitive
-    /// dependents of changed modules (their output may be affected by the
-    /// change propagating through imports).
-    pub fn compute_dirty_set(&self, changed_paths: &[PathBuf]) -> BTreeSet<PathBuf> {
-        if !self.enabled {
-            // If cache disabled, everything is dirty: every module the
-            // previous manifest knows about plus the changed paths
-            // themselves. (A disabled cache loads no manifest, so the
-            // changed paths must be included explicitly — returning only
-            // `previous.modules` would yield an empty, "nothing dirty" set.)
-            return self
-                .previous
-                .modules
-                .keys()
-                .cloned()
-                .chain(changed_paths.iter().cloned())
-                .collect();
-        }
-
-        let mut dirty = BTreeSet::new();
-
-        // Mark directly changed files.
-        for path in changed_paths {
-            dirty.insert(path.clone());
-        }
-
-        // Build reverse dependency graph: module → set of modules that import it.
-        let mut reverse_deps: BTreeMap<&PathBuf, Vec<&PathBuf>> = BTreeMap::new();
-        for (path, entry) in &self.previous.modules {
-            for dep in &entry.deps {
-                reverse_deps.entry(dep).or_default().push(path);
-            }
-        }
-
-        // BFS propagation: mark all transitive dependents as dirty.
-        let mut queue: Vec<PathBuf> = changed_paths.to_vec();
-        while let Some(current) = queue.pop() {
-            if let Some(dependents) = reverse_deps.get(&current) {
-                for dependent in dependents {
-                    if dirty.insert((*dependent).clone()) {
-                        queue.push((*dependent).clone());
-                    }
-                }
-            }
-        }
-
-        dirty
     }
 
     /// Save the current build's manifest to disk.
@@ -465,112 +410,6 @@ mod tests {
     }
 
     #[test]
-    fn compute_dirty_set_propagates_transitively() {
-        let tmp = tempfile::tempdir().unwrap();
-        let app = tmp.path().join("app");
-        fs::create_dir_all(&app).unwrap();
-
-        // Graph: page → Button → utils
-        let utils = app.join("utils.ts");
-        let button = app.join("Button.tsx");
-        let page = app.join("page.tsx");
-
-        fs::write(&utils, "export function cn() {}").unwrap();
-        fs::write(&button, "import { cn } from './utils';").unwrap();
-        fs::write(&page, "import Button from './Button';").unwrap();
-
-        let cache = IncrementalGraphCache::new(tmp.path(), true);
-        cache.record_module(
-            utils.clone(),
-            "export function cn() {}",
-            vec![],
-            BTreeMap::new(),
-        );
-        cache.record_module(
-            button.clone(),
-            "import { cn } from './utils';",
-            vec![utils.clone()],
-            BTreeMap::new(),
-        );
-        cache.record_module(
-            page.clone(),
-            "import Button from './Button';",
-            vec![button.clone()],
-            BTreeMap::new(),
-        );
-        cache.save().unwrap();
-
-        // Reload and compute dirty set when utils changes.
-        let cache2 = IncrementalGraphCache::new(tmp.path(), true);
-        let dirty = cache2.compute_dirty_set(std::slice::from_ref(&utils));
-
-        // utils is directly dirty, Button imports utils, page imports Button.
-        assert!(dirty.contains(&utils));
-        assert!(dirty.contains(&button));
-        assert!(dirty.contains(&page));
-        assert_eq!(dirty.len(), 3);
-    }
-
-    #[test]
-    fn compute_dirty_set_only_affected_subtree() {
-        let tmp = tempfile::tempdir().unwrap();
-        let app = tmp.path().join("app");
-        fs::create_dir_all(&app).unwrap();
-
-        // Graph: page_a → utils, page_b → helpers (independent)
-        let utils = app.join("utils.ts");
-        let helpers = app.join("helpers.ts");
-        let page_a = app.join("page-a.tsx");
-        let page_b = app.join("page-b.tsx");
-
-        for (path, src) in [
-            (&utils, "export function cn() {}"),
-            (&helpers, "export function fmt() {}"),
-            (&page_a, "import { cn } from './utils';"),
-            (&page_b, "import { fmt } from './helpers';"),
-        ] {
-            fs::write(path, src).unwrap();
-        }
-
-        let cache = IncrementalGraphCache::new(tmp.path(), true);
-        cache.record_module(
-            utils.clone(),
-            "export function cn() {}",
-            vec![],
-            BTreeMap::new(),
-        );
-        cache.record_module(
-            helpers.clone(),
-            "export function fmt() {}",
-            vec![],
-            BTreeMap::new(),
-        );
-        cache.record_module(
-            page_a.clone(),
-            "import { cn } from './utils';",
-            vec![utils.clone()],
-            BTreeMap::new(),
-        );
-        cache.record_module(
-            page_b.clone(),
-            "import { fmt } from './helpers';",
-            vec![helpers.clone()],
-            BTreeMap::new(),
-        );
-        cache.save().unwrap();
-
-        // Only utils changed — page_b and helpers should NOT be dirty.
-        let cache2 = IncrementalGraphCache::new(tmp.path(), true);
-        let dirty = cache2.compute_dirty_set(std::slice::from_ref(&utils));
-
-        assert!(dirty.contains(&utils));
-        assert!(dirty.contains(&page_a));
-        assert!(!dirty.contains(&helpers));
-        assert!(!dirty.contains(&page_b));
-        assert_eq!(dirty.len(), 2);
-    }
-
-    #[test]
     fn cached_deps_returns_stored_edges() {
         let tmp = tempfile::tempdir().unwrap();
         let app = tmp.path().join("app");
@@ -631,6 +470,40 @@ mod tests {
         );
     }
 
+    /// `record_module` and `check_freshness` must measure the same thing.
+    ///
+    /// The recorded length used to come from the file's metadata while the
+    /// check compares the source text it is handed. For every caller today
+    /// those are the same bytes, so the fast-reject worked — but a caller that
+    /// records source the file does not literally contain would have written a
+    /// length no later check could ever match, and the entry would report stale
+    /// forever while looking like a cache hit was possible. Recording the
+    /// length of the source removes the way for the two to disagree.
+    #[test]
+    fn a_recorded_entry_is_fresh_for_the_source_it_was_recorded_from() {
+        let temp = tempfile::tempdir().unwrap();
+        let page = temp.path().join("page.tsx");
+        // On disk: something else entirely, and a different length.
+        fs::write(&page, "// placeholder").unwrap();
+        let recorded = "export default function Page() { return null }";
+
+        let cache = IncrementalGraphCache::new(temp.path(), true);
+        cache.record_module(page.clone(), recorded, vec![], BTreeMap::new());
+        cache.save().unwrap();
+
+        let reloaded = IncrementalGraphCache::new(temp.path(), true);
+        assert_eq!(
+            reloaded.check_freshness(&page, recorded),
+            FreshnessStatus::Fresh,
+            "the source that was recorded must read back as fresh"
+        );
+        assert_eq!(
+            reloaded.check_freshness(&page, "export default function Page() { return 1234 }"),
+            FreshnessStatus::Stale,
+            "same length, different bytes: the hash still has to catch it"
+        );
+    }
+
     /// An entry written before aliases were recorded cannot say how its
     /// specifiers resolved. Reading it as "no aliases" would let a warm build
     /// resolve an aliased import differently from a cold one, so it must read as
@@ -645,7 +518,10 @@ mod tests {
         fs::write(&page, source).unwrap();
 
         // A manifest from a build that predates alias recording: same identity,
-        // real edges, no `aliases` key at all.
+        // real edges, no `aliases` key at all. `mtime_secs` and `compile_key`
+        // are fields the entry format has since dropped; they stay here because
+        // an older manifest on a developer's disk still carries them, and it
+        // has to keep loading rather than discarding a whole build's edges.
         let legacy = serde_json::json!({
             "version": MANIFEST_VERSION,
             "namespace": "default",

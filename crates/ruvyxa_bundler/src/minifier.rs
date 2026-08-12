@@ -7,13 +7,11 @@
 //! text-only compressor (notably regular expressions, templates, ASI, and
 //! nested modern JavaScript expressions).
 
-#[cfg(test)]
-use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
 use oxc::{
     allocator::Allocator,
-    codegen::{Codegen, CodegenOptions},
+    codegen::{Codegen, CodegenOptions, CommentOptions, LegalComment},
     minifier::{CompressOptions, Minifier, MinifierOptions},
     parser::Parser,
     span::SourceType,
@@ -66,11 +64,44 @@ fn minify_javascript(source: &str, tree_shaking: bool) -> Result<String> {
     let result = Minifier::new(options).minify(&allocator, &mut program);
 
     Ok(Codegen::new()
-        .with_options(CodegenOptions::minify())
+        .with_options(codegen_options())
         .with_scoping(result.scoping)
         .with_private_member_mappings(result.class_private_mappings)
         .build(&program)
         .code)
+}
+
+/// Minified codegen that still emits the comments a bundle is not allowed to
+/// drop.
+///
+/// `CodegenOptions::minify()` disables every comment class, legal ones
+/// included. That silently changed what this crate ships: the text compressor
+/// oxc replaced had an explicit path for `/*!` and `//!`, and dependencies
+/// carry their licence notice in exactly that form — MIT and BSD both require
+/// the notice to travel with the distributed copy. A minifier is expected to
+/// preserve them, and every comparable tool does.
+///
+/// `Eof` rather than `Inline` so the notices are collected at the end of the
+/// bundle instead of interrupting code, which is the placement bundlers
+/// conventionally use.
+///
+/// Normal, JSDoc, and annotation comments stay off — `jsdoc: false` does not
+/// affect a JSDoc-shaped banner, because oxc classifies a comment containing
+/// `@license` or `@preserve` as legal regardless of how it opens. That matters:
+/// React's notice is a `/** @license React … */` block, not a `/*!` one.
+/// `#__PURE__` and friends were already consumed by the minifier pass just
+/// above, so keeping them would only add bytes to a browser bundle nothing
+/// reads them from again.
+fn codegen_options() -> CodegenOptions {
+    CodegenOptions {
+        comments: CommentOptions {
+            normal: false,
+            jsdoc: false,
+            annotation: false,
+            legal: LegalComment::Eof,
+        },
+        ..CodegenOptions::minify()
+    }
 }
 
 /// Apply only the tree-shaking pass.
@@ -96,38 +127,32 @@ pub(crate) fn fold_production_node_env(source: &str) -> String {
     folded
 }
 
+/// Locate one foldable `if (process.env.NODE_ENV …)` guard.
+///
+/// Every position decision is made against [`ast::masked_code`], where string,
+/// template, comment, and regex text has been blanked out but every byte offset
+/// still names the same place in `source`. Text is then read from `source`,
+/// because the condition this has to recognise *is* a string literal
+/// (`"production"`) and the folded body must be the real code.
+///
+/// This used to walk `source` with a private lexer, which is the arrangement
+/// `ast`'s module documentation exists to prevent. That lexer treated a
+/// backtick like a plain quote, so a nested template literal — `` `${m[`a`]}` ``
+/// — left it scanning template text as code; an apostrophe in that text then
+/// opened a "string" that ran to the next quote anywhere in the file, and every
+/// development-only guard past that point stopped being folded and shipped to
+/// the browser. It also read every `/` as a regex with no check for whether a
+/// value was even expected there, a decision `ast` keeps private precisely
+/// because it is only correct alongside the rest of the scan.
 fn find_node_env_conditional(source: &str) -> Option<(usize, usize, String)> {
-    let bytes = source.as_bytes();
+    let masked = crate::ast::masked_code(source);
+    let bytes = masked.as_bytes();
     let mut search = 0;
 
     while search + 1 < bytes.len() {
-        match bytes[search] {
-            b'"' | b'\'' | b'`' => {
-                search = skip_quoted_bytes(bytes, search);
-                continue;
-            }
-            b'/' if bytes.get(search + 1) == Some(&b'/') => {
-                search += 2;
-                while search < bytes.len() && !matches!(bytes[search], b'\n' | b'\r') {
-                    search += 1;
-                }
-                continue;
-            }
-            b'/' if bytes.get(search + 1) == Some(&b'*') => {
-                search = skip_block_comment_bytes(bytes, search);
-                continue;
-            }
-            b'/' => {
-                if let Some(end) = skip_slash_delimited_bytes(bytes, search) {
-                    search = end;
-                    continue;
-                }
-            }
-            b'i' if bytes.get(search + 1) == Some(&b'f') => {}
-            _ => {
-                search += 1;
-                continue;
-            }
+        if bytes[search] != b'i' || bytes.get(search + 1) != Some(&b'f') {
+            search += 1;
+            continue;
         }
 
         let start = search;
@@ -145,7 +170,7 @@ fn find_node_env_conditional(source: &str) -> Option<(usize, usize, String)> {
             search = start + 2;
             continue;
         }
-        let condition_close = matching_delimiter(source, condition_open, b'(', b')')?;
+        let condition_close = matching_delimiter(&masked, condition_open, b'(', b')')?;
         let condition = &source[condition_open + 1..condition_close];
         let Some(condition_result) = production_condition_result(condition) else {
             search = condition_close + 1;
@@ -157,16 +182,16 @@ fn find_node_env_conditional(source: &str) -> Option<(usize, usize, String)> {
             search = condition_close + 1;
             continue;
         }
-        let consequent_close = matching_delimiter(source, consequent_open, b'{', b'}')?;
+        let consequent_close = matching_delimiter(&masked, consequent_open, b'{', b'}')?;
 
         let after_consequent = skip_ascii_whitespace(bytes, consequent_close + 1);
-        let else_start = source[after_consequent..]
+        let else_start = masked[after_consequent..]
             .starts_with("else")
             .then_some(after_consequent);
         let alternative = else_start.and_then(|else_index| {
             let open = skip_ascii_whitespace(bytes, else_index + 4);
             (bytes.get(open) == Some(&b'{'))
-                .then(|| matching_delimiter(source, open, b'{', b'}').map(|close| (open, close)))?
+                .then(|| matching_delimiter(&masked, open, b'{', b'}').map(|close| (open, close)))?
         });
 
         let end = alternative
@@ -205,30 +230,17 @@ fn production_condition_result(condition: &str) -> Option<bool> {
     }
 }
 
-fn matching_delimiter(source: &str, start: usize, open: u8, close: u8) -> Option<usize> {
-    let bytes = source.as_bytes();
+/// Index of the delimiter closing the one at `start`, counted over masked code.
+///
+/// `masked` must be [`ast::masked_code`] output: a delimiter inside a string,
+/// comment, or regex has already been blanked there, so this only has to count.
+fn matching_delimiter(masked: &str, start: usize, open: u8, close: u8) -> Option<usize> {
+    let bytes = masked.as_bytes();
     let mut depth = 0usize;
     let mut index = start;
 
     while index < bytes.len() {
         match bytes[index] {
-            b'"' | b'\'' | b'`' => index = skip_quoted_bytes(bytes, index),
-            b'/' if bytes.get(index + 1) == Some(&b'/') => {
-                index += 2;
-                while index < bytes.len() && !matches!(bytes[index], b'\n' | b'\r') {
-                    index += 1;
-                }
-            }
-            b'/' if bytes.get(index + 1) == Some(&b'*') => {
-                index = skip_block_comment_bytes(bytes, index);
-            }
-            b'/' => {
-                if let Some(end) = skip_slash_delimited_bytes(bytes, index) {
-                    index = end;
-                } else {
-                    index += 1;
-                }
-            }
             byte if byte == open => {
                 depth += 1;
                 index += 1;
@@ -242,65 +254,6 @@ fn matching_delimiter(source: &str, start: usize, open: u8, close: u8) -> Option
             }
             _ => index += 1,
         }
-    }
-
-    None
-}
-
-fn skip_quoted_bytes(bytes: &[u8], start: usize) -> usize {
-    let quote = bytes[start];
-    let mut index = start + 1;
-    while index < bytes.len() {
-        if bytes[index] == b'\\' {
-            index = (index + 2).min(bytes.len());
-        } else if bytes[index] == quote {
-            return index + 1;
-        } else {
-            index += 1;
-        }
-    }
-    bytes.len()
-}
-
-fn skip_block_comment_bytes(bytes: &[u8], start: usize) -> usize {
-    let mut index = start + 2;
-    while index + 1 < bytes.len() && !(bytes[index] == b'*' && bytes[index + 1] == b'/') {
-        index += 1;
-    }
-    (index + 2).min(bytes.len())
-}
-
-fn skip_slash_delimited_bytes(bytes: &[u8], start: usize) -> Option<usize> {
-    let mut index = start + 1;
-    let mut escaped = false;
-    let mut in_character_class = false;
-
-    while index < bytes.len() {
-        let byte = bytes[index];
-        if matches!(byte, b'\n' | b'\r') {
-            return None;
-        }
-        if escaped {
-            escaped = false;
-        } else {
-            match byte {
-                b'\\' => escaped = true,
-                b'[' => in_character_class = true,
-                b']' => in_character_class = false,
-                b'/' if !in_character_class => {
-                    index += 1;
-                    while bytes
-                        .get(index)
-                        .is_some_and(|byte| is_ascii_identifier_byte(*byte))
-                    {
-                        index += 1;
-                    }
-                    return Some(index);
-                }
-                _ => {}
-            }
-        }
-        index += 1;
     }
 
     None
@@ -606,281 +559,6 @@ fn join_statements(statements: &[(String, String)]) -> String {
         .join(" ")
 }
 
-// ─────────────────────────────────────────────
-// Pass 1 – Token-aware compression
-// ─────────────────────────────────────────────
-
-#[cfg(test)]
-fn compress_javascript(source: &str) -> String {
-    let chars = source.chars().collect::<Vec<_>>();
-    let mut out = String::with_capacity(source.len());
-    let mut index = 0;
-    let mut pending_whitespace = false;
-    let mut pending_newline = false;
-    let mut previous_word = String::new();
-
-    while index < chars.len() {
-        let ch = chars[index];
-
-        if ch.is_whitespace() {
-            pending_whitespace = true;
-            pending_newline |= matches!(ch, '\n' | '\r');
-            index += 1;
-            continue;
-        }
-
-        if ch == '/' && chars.get(index + 1) == Some(&'/') {
-            let comment_start = index;
-            index += 2;
-            while index < chars.len() && !matches!(chars[index], '\n' | '\r') {
-                index += 1;
-            }
-            if chars.get(comment_start + 2) == Some(&'!') {
-                emit_pending_separator(
-                    &mut out,
-                    &chars,
-                    comment_start,
-                    pending_whitespace,
-                    pending_newline,
-                    &previous_word,
-                );
-                out.extend(chars[comment_start..index].iter());
-                out.push('\n');
-            }
-            pending_whitespace = true;
-            pending_newline = true;
-            continue;
-        }
-
-        if ch == '/' && chars.get(index + 1) == Some(&'*') {
-            let comment_start = index;
-            let legal_comment = chars.get(index + 2) == Some(&'!');
-            index += 2;
-            while index + 1 < chars.len() && !(chars[index] == '*' && chars[index + 1] == '/') {
-                pending_newline |= matches!(chars[index], '\n' | '\r');
-                index += 1;
-            }
-            index = (index + 2).min(chars.len());
-            if legal_comment {
-                emit_pending_separator(
-                    &mut out,
-                    &chars,
-                    comment_start,
-                    pending_whitespace,
-                    pending_newline,
-                    &previous_word,
-                );
-                out.extend(chars[comment_start..index].iter());
-            }
-            pending_whitespace = true;
-            continue;
-        }
-
-        emit_pending_separator(
-            &mut out,
-            &chars,
-            index,
-            pending_whitespace,
-            pending_newline,
-            &previous_word,
-        );
-        pending_whitespace = false;
-        pending_newline = false;
-
-        if matches!(ch, '"' | '\'' | '`') {
-            let end = quoted_literal_end(&chars, index, ch);
-            out.extend(chars[index..end].iter());
-            previous_word.clear();
-            index = end;
-            continue;
-        }
-
-        if ch == '/'
-            && let Some(end) = slash_delimited_end(&chars, index)
-        {
-            out.extend(chars[index..end].iter());
-            previous_word.clear();
-            index = end;
-            continue;
-        }
-
-        if is_identifier_part(ch) {
-            let start = index;
-            index += 1;
-            while index < chars.len() && is_identifier_part(chars[index]) {
-                index += 1;
-            }
-            previous_word = chars[start..index].iter().collect();
-            out.push_str(&previous_word);
-            continue;
-        }
-
-        previous_word.clear();
-        out.push(ch);
-        index += 1;
-    }
-
-    out.trim().to_string()
-}
-
-#[cfg(test)]
-fn emit_pending_separator(
-    out: &mut String,
-    chars: &[char],
-    next_index: usize,
-    pending_whitespace: bool,
-    pending_newline: bool,
-    previous_word: &str,
-) {
-    if !pending_whitespace || out.is_empty() || next_index >= chars.len() {
-        return;
-    }
-
-    let previous = out.chars().next_back().unwrap_or_default();
-    let next = chars[next_index];
-    let restricted_newline = pending_newline
-        && matches!(
-            previous_word,
-            "async" | "await" | "break" | "continue" | "return" | "throw" | "yield"
-        );
-    let postfix_newline =
-        pending_newline && matches!(next, '+' | '-') && chars.get(next_index + 1) == Some(&next);
-
-    if restricted_newline || postfix_newline {
-        out.push('\n');
-    } else if tokens_need_separator(previous, next) {
-        out.push(' ');
-    }
-}
-
-#[cfg(test)]
-fn tokens_need_separator(previous: char, next: char) -> bool {
-    (is_identifier_part(previous) && is_identifier_part(next))
-        || (previous == '+' && next == '+')
-        || (previous == '-' && next == '-')
-        || (previous == '/' && matches!(next, '/' | '*'))
-}
-
-#[cfg(test)]
-fn is_identifier_part(ch: char) -> bool {
-    ch.is_alphanumeric() || matches!(ch, '_' | '$') || (!ch.is_ascii() && ch.is_alphabetic())
-}
-
-#[cfg(test)]
-fn quoted_literal_end(chars: &[char], start: usize, quote: char) -> usize {
-    let mut index = start + 1;
-    let mut escaped = false;
-    while index < chars.len() {
-        let ch = chars[index];
-        index += 1;
-        if escaped {
-            escaped = false;
-        } else if ch == '\\' {
-            escaped = true;
-        } else if ch == quote {
-            break;
-        }
-    }
-    index
-}
-
-/// Preserve a slash-delimited span verbatim. For a regular expression this
-/// protects its body and flags. For a division chain such as `a / b / c`, the
-/// conservative span is still valid JavaScript and merely retains a few bytes.
-#[cfg(test)]
-fn slash_delimited_end(chars: &[char], start: usize) -> Option<usize> {
-    let mut index = start + 1;
-    let mut escaped = false;
-    let mut in_character_class = false;
-
-    while index < chars.len() {
-        let ch = chars[index];
-        if matches!(ch, '\n' | '\r') {
-            return None;
-        }
-        if escaped {
-            escaped = false;
-        } else {
-            match ch {
-                '\\' => escaped = true,
-                '[' => in_character_class = true,
-                ']' => in_character_class = false,
-                '/' if !in_character_class => {
-                    index += 1;
-                    while index < chars.len() && is_identifier_part(chars[index]) {
-                        index += 1;
-                    }
-                    return Some(index);
-                }
-                _ => {}
-            }
-        }
-        index += 1;
-    }
-
-    None
-}
-
-// ─────────────────────────────────────────────
-// Pass 3 – Shorten module identifiers
-// ─────────────────────────────────────────────
-
-/// Replace `__ruv_<hex16>__` identifiers with short names (`_ra`, `_rb`, …).
-#[cfg(test)]
-fn shorten_module_ids(source: &str) -> String {
-    // Collect all unique `__ruv_…__` identifiers.
-    let mut ids: Vec<String> = Vec::new();
-    let prefix = "__ruv_";
-    let mut search = source;
-
-    while let Some(start_offset) = search.find(prefix) {
-        let tail = &search[start_offset..];
-        // Find the closing `__` starting AFTER the prefix (position 6).
-        if let Some(close_offset) = tail[prefix.len()..].find("__") {
-            let end = prefix.len() + close_offset + 2; // include closing `__`
-            let id = &tail[..end];
-            if !ids.contains(&id.to_string()) {
-                ids.push(id.to_string());
-            }
-            search = &tail[end..];
-        } else {
-            break;
-        }
-    }
-
-    if ids.is_empty() {
-        return source.to_string();
-    }
-
-    // Build a replacement map.
-    let mut map: BTreeMap<String, String> = BTreeMap::new();
-    for (i, id) in ids.iter().enumerate() {
-        let short = encode_base26(i);
-        map.insert(id.clone(), format!("_r{short}"));
-    }
-
-    let mut out = source.to_string();
-    for (long, short) in &map {
-        out = out.replace(long.as_str(), short.as_str());
-    }
-
-    out
-}
-
-/// Encode a number into a short alphabetic string (`a`, `b`, …, `z`, `aa`, …).
-#[cfg(test)]
-fn encode_base26(mut n: usize) -> String {
-    let mut s = String::new();
-    loop {
-        s.insert(0, (b'a' + (n % 26) as u8) as char);
-        if n < 26 {
-            break;
-        }
-        n = n / 26 - 1;
-    }
-    s
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -923,37 +601,87 @@ export const view = createElement("main", null, "Ruvyxa");"#;
     #[test]
     fn compresses_comments_and_whitespace() {
         let src = "const   x = 1; // this is a comment\nconst y = 2;";
-        let out = compress_javascript(src);
-        assert!(!out.contains("this is a comment"));
-        assert_eq!(out, "const x=1;const y=2;");
+        let out = minify(src, BundleTarget::Client).unwrap();
+        assert!(!out.contains("this is a comment"), "{out}");
+        // Oxc merges adjacent declarations; the retired text compressor could
+        // only drop whitespace between them.
+        assert_eq!(out, "const x=1,y=2;");
     }
 
+    /// A `//` inside a URL, a template, or a regex is not a comment. Literal
+    /// *content* must survive; the quoting oxc chooses to re-emit it with is
+    /// its own business, so this asserts the text rather than the delimiter.
     #[test]
     fn preserves_literals_and_removes_only_real_comments() {
         let src = r#"const url = "https://example.test/a//b";
 const template = `keep // text and  spaces`;
 const pattern = /\n( *(at)?)[a-z/]+/gi; /* remove me */"#;
-        let out = compress_javascript(src);
-        assert!(out.contains(r#""https://example.test/a//b""#));
-        assert!(out.contains("`keep // text and  spaces`"));
-        assert!(out.contains(r#"/\n( *(at)?)[a-z/]+/gi"#));
-        assert!(!out.contains("remove me"));
+        let out = minify(src, BundleTarget::Client).unwrap();
+        assert!(out.contains("https://example.test/a//b"), "{out}");
+        assert!(out.contains("keep // text and  spaces"), "{out}");
+        assert!(out.contains(r#"/\n( *(at)?)[a-z/]+/gi"#), "{out}");
+        assert!(!out.contains("remove me"), "{out}");
     }
 
+    /// Automatic semicolon insertion has to be respected, not preserved
+    /// verbatim. Oxc parses the newline-sensitive positions and re-emits their
+    /// meaning: `return` followed by a newline returns undefined, and `1` on
+    /// its own line before `++count` is not `1++`. Asserting the original
+    /// newlines instead only described how the old text compressor coped.
     #[test]
     fn preserves_automatic_semicolon_insertion_boundaries() {
         let src = "function value() { return\n{ ok: true }; }\nlet count = 1\n++count;";
-        let out = compress_javascript(src);
-        assert!(out.contains("return\n{"));
-        assert!(out.contains("1\n++count"));
+        let out = minify(src, BundleTarget::Client).unwrap();
+        assert!(
+            !out.contains("return{") && !out.contains("return {"),
+            "the block after `return` must not become its return value: {out}"
+        );
+        assert!(
+            out.contains("count=1;++count") || out.contains("count=1;\n++count"),
+            "`1` and `++count` must stay separate statements: {out}"
+        );
     }
 
+    /// Licence notices must survive minification.
+    ///
+    /// `CodegenOptions::minify()` turns every comment class off, legal ones
+    /// included, so adopting it silently stopped shipping the notices that MIT
+    /// and BSD dependencies require to travel with the code. See
+    /// [`codegen_options`].
     #[test]
     fn preserves_legal_comments() {
         let src = "/*! library license */ const value = 1; //! directive\nvalue;";
-        let out = compress_javascript(src);
-        assert!(out.contains("/*! library license */"));
-        assert!(out.contains("//! directive"));
+        let out = minify(src, BundleTarget::Client).unwrap();
+        assert!(out.contains("library license"), "{out}");
+        assert!(out.contains("directive"), "{out}");
+    }
+
+    /// The shape that actually matters: a `/** @license … */` banner above a
+    /// `"use strict"` directive the minifier deletes.
+    ///
+    /// This is how React — and most of the ecosystem — ships its MIT notice, so
+    /// it is the case the fix has to cover. The banner survives its anchor
+    /// being compressed away and lands at the end of the bundle.
+    #[test]
+    fn a_jsdoc_license_banner_survives_its_anchor_being_compressed_away() {
+        let src = "/**\n * @license Example\n * Copyright (c) Example.\n */\n\"use strict\";\nvar x = 1;\nexport default x;";
+        let out = minify(src, BundleTarget::Client).unwrap();
+        assert!(out.contains("@license Example"), "{out:?}");
+        assert!(out.contains("Copyright (c) Example."), "{out:?}");
+        assert!(
+            out.find("export default").unwrap() < out.find("@license").unwrap(),
+            "the notice belongs after the code, not in the middle of it: {out:?}"
+        );
+    }
+
+    /// Ordinary comments are still dropped — restoring legal comments must not
+    /// turn into "keep every comment", which would inflate every bundle.
+    #[test]
+    fn ordinary_and_jsdoc_comments_are_still_dropped() {
+        let src = "/** @param {number} n */\nfunction f(n) { /* inner */ return n; }\nf(1);";
+        let out = minify(src, BundleTarget::Client).unwrap();
+        assert!(!out.contains("@param"), "{out}");
+        assert!(!out.contains("inner"), "{out}");
     }
 
     #[test]
@@ -998,19 +726,61 @@ module.exports = message;
         assert_eq!(fold_production_node_env(src), src);
     }
 
+    /// A nested template literal must not blind the folder to everything after
+    /// it.
+    ///
+    /// The private lexer this replaced treated a backtick as a plain quote, so
+    /// the inner `` `…` `` closed the outer literal and left the scanner reading
+    /// template text as code. The apostrophe in that text then opened a
+    /// "string" with no close until the next quote anywhere in the file, and
+    /// every development-only guard past it survived into the browser bundle.
+    /// Nested template literals are ordinary in minified npm packages, which is
+    /// exactly the code this folder runs on.
     #[test]
-    fn shortens_module_ids() {
-        let src = "var __ruv_abcdef1234567890__ = 1; var __ruv_1111111111111111__ = 2;";
-        let out = shorten_module_ids(src);
-        assert!(!out.contains("__ruv_abcdef1234567890__"));
-        assert!(out.contains("_ra"));
+    fn a_nested_template_literal_does_not_hide_later_guards() {
+        let src = r#"
+const label = `${map[`don't`]}`;
+if (process.env.NODE_ENV !== "production") {
+  throw new Error("development only");
+}
+"#;
+        let out = fold_production_node_env(src);
+        assert!(
+            !out.contains("development only"),
+            "a guard after a nested template literal must still fold: {out}"
+        );
+        assert!(
+            out.contains("`${map[`don't`]}`"),
+            "the literal itself must survive untouched: {out}"
+        );
     }
 
+    /// Division is not a regular expression. Reading `/` as a literal opener
+    /// with no check for whether a value is expected there swallowed the text
+    /// between two divisions on one line — the shape minified bundles are made
+    /// of — and any delimiter inside it stopped being counted.
     #[test]
-    fn encode_base26_examples() {
-        assert_eq!(encode_base26(0), "a");
-        assert_eq!(encode_base26(25), "z");
-        assert_eq!(encode_base26(26), "aa");
+    fn division_on_one_line_is_not_read_as_a_regex() {
+        let src = "function f(a,b){var x=a/2;var y=b/3;if(process.env.NODE_ENV!==\"production\"){throw new Error(\"development only\")}return x+y}";
+        let out = fold_production_node_env(src);
+        assert!(
+            !out.contains("development only"),
+            "a guard after two divisions must still fold: {out}"
+        );
+        assert!(out.contains("var x=a/2;"), "division must survive: {out}");
+    }
+
+    /// A guard inside a template interpolation is real code and folds; the
+    /// literal text around it is not and must be left alone.
+    #[test]
+    fn a_guard_inside_a_template_interpolation_still_folds() {
+        let src = r#"const html = `<p>${(() => { if (process.env.NODE_ENV !== "production") { return "development only" } return "ok" })()}</p>`;"#;
+        let out = fold_production_node_env(src);
+        assert!(
+            !out.contains("development only"),
+            "interpolated code is code: {out}"
+        );
+        assert!(out.contains("<p>"), "literal text must survive: {out}");
     }
 
     // ── Tree-shaking tests ──

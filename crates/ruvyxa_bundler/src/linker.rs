@@ -1078,9 +1078,17 @@ fn try_rewrite_export_statement(line: &str, deps: &DepIndex<'_>) -> Option<Rewri
                 });
             }
         }
-        // `export default expr;` → `__exports.default = expr;`
-        let expr = expr.trim_end_matches(';');
-        return Some(Rewrite::Inline(format!("__exports.default = {expr};")));
+        // `export default expr` → `__exports.default = expr`
+        //
+        // The line's own terminator is carried through untouched. Stripping it
+        // and appending `;` assumed the expression ended on this line, and an
+        // object or array literal usually does not: `export default {` became
+        // `__exports.default = {;`, a syntax error that failed the entire
+        // bundle at parse time with a message pointing at the linked output
+        // rather than at the module that wrote it. Leaving the terminator alone
+        // keeps the single-line form identical and lets a multi-line literal
+        // finish on the lines that follow.
+        return Some(Rewrite::Inline(format!("__exports.default = {expr}")));
     }
 
     // `export { a, b } from "./mod"` — re-export from another module
@@ -1131,6 +1139,22 @@ fn try_rewrite_export_statement(line: &str, deps: &DepIndex<'_>) -> Option<Rewri
             return Some(Rewrite::Pending {
                 line: decl.to_string(),
                 assignment: format!("__exports.{name} = {name};"),
+            });
+        }
+        // `export const { a, b } = source` binds names too. Only a plain
+        // identifier was recognised before, so a destructured export produced
+        // the declaration and no `__exports` assignment at all: the names were
+        // live inside the module and absent from its namespace, and an importer
+        // silently received `undefined` instead of a resolution error.
+        let names = destructured_binding_names(decl);
+        if !names.is_empty() {
+            return Some(Rewrite::Pending {
+                line: decl.to_string(),
+                assignment: names
+                    .iter()
+                    .map(|name| format!("__exports.{name} = {name};"))
+                    .collect::<Vec<_>>()
+                    .join(" "),
             });
         }
         return Some(Rewrite::Inline(decl.to_string()));
@@ -1550,6 +1574,145 @@ fn extract_declaration_name(decl: &str) -> Option<String> {
     if name.is_empty() { None } else { Some(name) }
 }
 
+/// Names bound by a destructuring declaration: `const { a, b: c } = …`.
+///
+/// Returns an empty vector for anything that is not a destructuring pattern, or
+/// for a pattern whose closing delimiter is not on this line — the linker
+/// rewrites line by line and cannot see the rest. Callers treat empty as "no
+/// export assignments to emit", which is the behaviour every destructured
+/// export used to get.
+fn destructured_binding_names(decl: &str) -> Vec<String> {
+    let Some(rest) = decl
+        .strip_prefix("const ")
+        .or_else(|| decl.strip_prefix("let "))
+        .or_else(|| decl.strip_prefix("var "))
+    else {
+        return Vec::new();
+    };
+    let rest = rest.trim_start();
+    let Some(pattern) = balanced_pattern(rest) else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    collect_pattern_names(pattern, &mut names);
+    names
+}
+
+/// The leading `{…}` or `[…]` of `source`, when it closes within the text.
+///
+/// Delimiters are counted over [`crate::ast::masked_code`] so a brace inside a
+/// string or a comment cannot close the pattern early.
+fn balanced_pattern(source: &str) -> Option<&str> {
+    let (open, close) = match source.as_bytes().first()? {
+        b'{' => (b'{', b'}'),
+        b'[' => (b'[', b']'),
+        _ => return None,
+    };
+    let masked = crate::ast::masked_code(source);
+    let bytes = masked.as_bytes();
+    let mut depth = 0usize;
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte == open {
+            depth += 1;
+        } else if *byte == close {
+            depth -= 1;
+            if depth == 0 {
+                return Some(&source[..=index]);
+            }
+        }
+    }
+    None
+}
+
+/// Collect the identifiers a destructuring pattern introduces.
+///
+/// Object elements bind the target after `:` when there is one and the key
+/// otherwise; array elements bind their own target; `...rest` binds `rest`; a
+/// default (`= expr`) belongs to the target, not to the names. Nested patterns
+/// recurse, which is why `{ a: { b } }` reports `b` and not `a`.
+fn collect_pattern_names(pattern: &str, names: &mut Vec<String>) {
+    let inner = &pattern[1..pattern.len().saturating_sub(1)];
+    for element in split_top_level(inner) {
+        let element = element.trim();
+        if element.is_empty() {
+            continue;
+        }
+        let element = element.strip_prefix("...").unwrap_or(element).trim();
+        // `key: target` — the binding is the target. Split before any default,
+        // so `{ a: b = 1 }` reads `b` rather than `b = 1`.
+        let target = match split_top_level_once(element, b':') {
+            Some((_, target)) => target.trim(),
+            None => element,
+        };
+        let target = match split_top_level_once(target, b'=') {
+            Some((before, _)) => before.trim(),
+            None => target,
+        };
+        if target.starts_with('{') || target.starts_with('[') {
+            if let Some(nested) = balanced_pattern(target) {
+                collect_pattern_names(nested, names);
+            }
+            continue;
+        }
+        if is_identifier(target) {
+            names.push(target.to_string());
+        }
+    }
+}
+
+/// Split on commas that sit at depth zero of `source`.
+fn split_top_level(source: &str) -> Vec<&str> {
+    let masked = crate::ast::masked_code(source);
+    let bytes = masked.as_bytes();
+    let mut parts = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0usize;
+    for (index, byte) in bytes.iter().enumerate() {
+        match byte {
+            b'{' | b'[' | b'(' => depth += 1,
+            b'}' | b']' | b')' => depth -= 1,
+            b',' if depth == 0 => {
+                parts.push(&source[start..index]);
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&source[start..]);
+    parts
+}
+
+/// Split `source` at the first depth-zero occurrence of `separator`.
+///
+/// `=` is matched only as assignment: `==`, `=>`, `<=`, `>=`, and `!=` all
+/// contain one and none of them opens a default value.
+fn split_top_level_once(source: &str, separator: u8) -> Option<(&str, &str)> {
+    let masked = crate::ast::masked_code(source);
+    let bytes = masked.as_bytes();
+    let mut depth = 0i32;
+    for (index, byte) in bytes.iter().enumerate() {
+        match byte {
+            b'{' | b'[' | b'(' => depth += 1,
+            b'}' | b']' | b')' => depth -= 1,
+            byte if *byte == separator && depth == 0 => {
+                if separator == b'='
+                    && (bytes.get(index + 1) == Some(&b'=')
+                        || bytes.get(index + 1) == Some(&b'>')
+                        || matches!(
+                            index.checked_sub(1).map(|i| bytes[i]),
+                            Some(b'=' | b'!' | b'<' | b'>')
+                        ))
+                {
+                    continue;
+                }
+                return Some((&source[..index], &source[index + 1..]));
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Extract the variable name from `const name = …` / `let name = …` / `var name = …`.
 fn extract_var_declaration_name(decl: &str) -> Option<String> {
     let rest = decl
@@ -1574,6 +1737,102 @@ mod tests {
     /// same construction path — including the single AST parse — as a real build.
     fn fixture(path: PathBuf, js: impl Into<String>, deps: Vec<PathBuf>) -> CompiledModule {
         CompiledModule::new(path, js.into(), deps, BTreeMap::new(), false, false)
+    }
+
+    fn client_input(entry: PathBuf) -> BundleInput {
+        BundleInput {
+            entry,
+            project_root: PathBuf::from("/p"),
+            app_dir: PathBuf::from("/p/app"),
+            layouts: Vec::new(),
+            request_path: "/".to_string(),
+            target: BundleTarget::Client,
+            options: crate::BundleOptions::default(),
+            specials: crate::RouteSpecials::default(),
+        }
+    }
+
+    /// An object or array literal after `export default` normally starts on the
+    /// `export` line and ends on a later one. Appending `;` to the rewritten
+    /// first line produced `__exports.default = {;` and the whole bundle
+    /// stopped parsing — the failure surfaced as an Oxc diagnostic about linked
+    /// output, naming nothing the author wrote.
+    #[test]
+    fn a_multiline_default_export_still_parses() {
+        let entry = PathBuf::from("/p/a.tsx");
+        let module = fixture(
+            entry.clone(),
+            "export default {\n\tname: \"x\"\n};\n",
+            Vec::new(),
+        );
+
+        let linked = link(&[module], &client_input(entry)).unwrap();
+
+        assert!(
+            linked.contains("__exports.default = {"),
+            "the literal must open where the export did: {linked}"
+        );
+        assert!(
+            !linked.contains("= {;"),
+            "the terminator must not be moved inside the literal: {linked}"
+        );
+        crate::minifier::minify(&linked, BundleTarget::Client)
+            .expect("the linked bundle has to be parseable JavaScript");
+    }
+
+    /// `export const { a, b } = source` binds names, and they belong in the
+    /// module namespace. Only a plain identifier was recognised, so these were
+    /// declared inside the IIFE and never assigned to `__exports` — importers
+    /// got `undefined` with no error anywhere.
+    #[test]
+    fn destructured_exports_reach_the_module_namespace() {
+        let entry = PathBuf::from("/p/a.tsx");
+        let module = fixture(
+            entry.clone(),
+            "export const { alpha, beta: renamed, gamma = 1, ...rest } = source;\nexport const [first, , third] = list;\n",
+            Vec::new(),
+        );
+
+        let linked = link(&[module], &client_input(entry)).unwrap();
+
+        for name in ["alpha", "renamed", "gamma", "rest", "first", "third"] {
+            assert!(
+                linked.contains(&format!("__exports.{name} = {name};")),
+                "`{name}` must be exported: {linked}"
+            );
+        }
+        assert!(
+            !linked.contains("__exports.beta ="),
+            "the source key is not the binding; only the local name is: {linked}"
+        );
+    }
+
+    /// A nested pattern binds the inner names, not the outer keys, and a
+    /// default value is not a binding of its own.
+    #[test]
+    fn nested_and_defaulted_patterns_report_the_bound_names() {
+        assert_eq!(
+            destructured_binding_names("const { outer: { inner } } = source;"),
+            vec!["inner".to_string()]
+        );
+        assert_eq!(
+            destructured_binding_names("const { a = compute(1, 2), b } = source;"),
+            vec!["a".to_string(), "b".to_string()]
+        );
+        assert_eq!(
+            destructured_binding_names("const [[deep], ...tail] = source;"),
+            vec!["deep".to_string(), "tail".to_string()]
+        );
+        // A brace inside a string cannot close the pattern early.
+        assert_eq!(
+            destructured_binding_names("const { a = \"}\", b } = source;"),
+            vec!["a".to_string(), "b".to_string()]
+        );
+        // Not destructuring at all.
+        assert!(destructured_binding_names("const plain = source;").is_empty());
+        // The pattern does not close on this line; the linker cannot see the
+        // rest, so it reports nothing rather than guessing.
+        assert!(destructured_binding_names("const { a,").is_empty());
     }
 
     /// Every resolution rule the index precomputes for, exercised against one

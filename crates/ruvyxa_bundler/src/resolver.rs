@@ -339,7 +339,14 @@ impl ResolveGraphCache {
         self.dependencies.len()
     }
 
-    /// Invalidate entries for specific file paths (called on file change).
+    /// Drop cached entries for specific file paths.
+    ///
+    /// The only cache that outlives a single read is the [`Self::for_build`]
+    /// snapshot, which skips metadata checks entirely, so this is how a caller
+    /// tells that snapshot a file underneath it moved. Every `BundleContext` in
+    /// the tree is built and dropped inside one bundle pass, which is why no
+    /// production caller needs it today: the snapshot cannot outlive the inputs
+    /// it froze. A longer-lived context would.
     pub fn invalidate_paths(&self, paths: &[PathBuf]) {
         for path in paths {
             self.sources.remove(path);
@@ -351,15 +358,6 @@ impl ResolveGraphCache {
             });
         }
         self.dependencies.clear();
-    }
-
-    /// Clear all cached data.
-    pub fn clear(&self) {
-        self.resolutions.clear();
-        self.sources.clear();
-        self.tsconfigs.clear();
-        self.dependencies.clear();
-        self.package_json.clear();
     }
 }
 

@@ -75,6 +75,9 @@ anywhere else corrupts the response a request is waiting on.
   `single` or `manual`.
 - Build controls include `minify`, `treeShake`, `map`, `workers`, `warm`, and `prerenderCache`.
   Image controls include quality, lossless mode, variants, worker count, and on-demand transforms.
+- `minify` drops ordinary and JSDoc comments but keeps legal ones — anything opening `/*!` or `//!`,
+  or containing `@license` or `@preserve` — and collects them at the end of each bundle. Dependency
+  licence notices therefore ship with the code that needs them.
 - The worker runtime has request coalescing and operational environment controls. Start with
   defaults, then use load tests and memory/latency data before changing pool size, concurrency,
   queue capacity, timeout, or memory limit. `RUVYXA_WORKER_MAX_CONCURRENCY` bounds active work per

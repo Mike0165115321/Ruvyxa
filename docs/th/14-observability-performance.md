@@ -75,6 +75,9 @@ worker จะเป็นการ instrument ผิด process
   `manual`
 - build control มี `minify`, `treeShake`, `map`, `workers`, `warm` และ `prerenderCache` image
   control มี quality, lossless mode, variant, worker count และ on-demand transform
+- `minify` ตัด comment ทั่วไปและ JSDoc ทิ้ง แต่เก็บ legal comment ไว้ — อะไรก็ตามที่ขึ้นต้นด้วย
+  `/*!` หรือ `//!` หรือมี `@license` หรือ `@preserve` — แล้วรวบไปไว้ท้าย bundle แต่ละก้อน licence
+  notice ของ dependency จึงเดินทางไปพร้อมโค้ดที่ต้องใช้มัน
 - worker runtime มี request coalescing และ operational environment control เริ่มจาก default แล้วใช้
   load test และข้อมูล memory/latency ก่อนเปลี่ยน pool size, concurrency, queue capacity, timeout
   หรือ memory limit `RUVYXA_WORKER_MAX_CONCURRENCY` จำกัดงาน active ต่อ process และ
