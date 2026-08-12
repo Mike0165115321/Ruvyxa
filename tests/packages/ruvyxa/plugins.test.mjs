@@ -254,6 +254,26 @@ describe('observability()', () => {
     assert.equal('search' in entries[0], false)
   })
 
+  it('reports no duration when the response hook runs without the request hook', async () => {
+    // An earlier plugin can answer the request with its own `Response`, which
+    // leaves the start header unset while this plugin's response hook still
+    // runs. `Number(null)` is `0` and `0` is finite, so the old guard let that
+    // through and reported `Date.now()` — about fifty-six years — as the
+    // request duration, in the log entry and in `Server-Timing` alike.
+    const entries = []
+    const { middleware } = register(
+      observability({
+        logger(entry) {
+          entries.push(entry)
+        },
+      }),
+    )
+    const response = await middleware[0].onResponse(request('/no-request-hook'), new Response('ok'))
+
+    assert.equal(entries[0].durationMs, 0)
+    assert.equal(response.headers.get('server-timing'), 'ruvyxa;dur=0')
+  })
+
   it('replaces untrusted request IDs and invalid trace context', async () => {
     const { middleware } = register(observability({ log: false }))
     const output = await middleware[0].onRequest(
@@ -1212,7 +1232,16 @@ describe('fonts()', () => {
     assert.equal(reported.length, 1)
     assert.equal(reported[0].level, 'warning')
     assert.match(reported[0].message, /could not self-host Google Fonts/)
-    assert.equal(existsSync(path.join(context.outDir, 'assets/fonts/fonts.css')), false)
+
+    // The `<link rel="stylesheet">` is fixed when the plugin is constructed, so
+    // it ships whether or not the download worked. Leaving the file absent
+    // pointed a render-blocking request at a 404 on every page — worse than the
+    // third-party round trip the plugin removes. An empty stylesheet keeps the
+    // reference resolvable and the page on its fallback fonts.
+    const stylesheet = path.join(context.outDir, 'assets/fonts/fonts.css')
+    assert.equal(existsSync(stylesheet), true)
+    assert.match(readFileSync(stylesheet, 'utf8'), /ruvyxa:fonts/)
+    assert.doesNotMatch(readFileSync(stylesheet, 'utf8'), /@font-face/)
   })
 
   it('rejects URLs that are not Google Fonts stylesheets', () => {

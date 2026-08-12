@@ -310,8 +310,17 @@ export function observability(options: ObservabilityOptions = {}): RuvyxaPlugin 
           const traceparent = traceContext
             ? (request.headers.get('traceparent') ?? createTraceparent())
             : (request.headers.get('traceparent') ?? '')
-          const startedAt = Number(request.headers.get(OBSERVABILITY_START_HEADER))
-          const durationMs = Number.isFinite(startedAt) ? Math.max(0, Date.now() - startedAt) : 0
+          // `Number(null)` is `0`, and `0` is finite — so an absent start
+          // header used to pass the guard and report `Date.now()` itself as the
+          // duration: every such response carried a `Server-Timing` of roughly
+          // fifty-six years, and any dashboard averaging it was ruined by one
+          // sample. The header goes missing whenever the response hook runs
+          // without the request hook, which is what happens as soon as an
+          // earlier plugin short-circuits the request with its own `Response`.
+          const startedAtHeader = request.headers.get(OBSERVABILITY_START_HEADER)
+          const startedAt = startedAtHeader === null ? Number.NaN : Number(startedAtHeader)
+          const durationMs =
+            Number.isFinite(startedAt) && startedAt > 0 ? Math.max(0, Date.now() - startedAt) : 0
           headers.set(requestIdHeader, requestId)
           if (traceContext) headers.set('traceparent', traceparent)
           if (serverTiming) appendHeaderValue(headers, 'server-timing', `ruvyxa;dur=${durationMs}`)
@@ -463,6 +472,10 @@ export function cacheRules(rules: CacheRule[]): RuvyxaPlugin {
     if (!rule.browser && !rule.cdn && !rule.vary?.length) {
       throw new TypeError(`cacheRules: rules[${index}] must set browser, cdn, and/or vary`)
     }
+    // Load-bearing despite discarding its result: `Headers.set`/`append` throw
+    // on a value no header may carry — a newline above all — so writing each
+    // configured value into a throwaway `Headers` is what rejects an injection
+    // attempt at config time instead of at the first matching response.
     const probe = new Headers()
     if (rule.browser !== undefined) probe.set('cache-control', rule.browser)
     if (rule.cdn !== undefined) probe.set('cdn-cache-control', rule.cdn)
@@ -2127,9 +2140,16 @@ export interface FontsOptions {
  * from your layout when you adopt this; leaving it in keeps the blocking
  * request the plugin exists to remove.
  *
- * The build needs network access. A failure is reported and the build
- * continues: shipping a page without the plugin's stylesheet is better than a
- * broken deploy, and the missing `<link>` is visible immediately.
+ * The build needs network access. A failure is reported as a warning and the
+ * build continues — a deploy should not be lost to a fetch — and an empty
+ * stylesheet is written in place of the real one so the pages still ship
+ * without font faces rather than with a broken reference.
+ *
+ * The stub is not cosmetic. `head` is fixed when the plugin is constructed, so
+ * the `<link rel="stylesheet">` is in every document whether or not the
+ * download succeeded; leaving the file absent pointed a render-blocking
+ * request at a 404 on every page load, which is a worse version of the
+ * third-party round trip this plugin exists to remove.
  */
 export function fonts(options: FontsOptions): RuvyxaPlugin {
   const urls = options?.google
@@ -2187,13 +2207,28 @@ export function fonts(options: FontsOptions): RuvyxaPlugin {
             code: 'RUV2103',
             message: `fonts: could not self-host Google Fonts (${
               error instanceof Error ? error.message : String(error)
-            }). The generated stylesheet is missing from this build.`,
+            }). An empty stylesheet was written in its place; pages render with fallback fonts.`,
           })
+          try {
+            writePublicAsset(context, stylesheetPath.slice(1), FONTS_FALLBACK_STYLESHEET)
+          } catch {
+            // The warning above already names the problem. Failing here would
+            // turn a missing font into a failed build, which is the trade this
+            // whole handler exists to avoid.
+          }
         }
       })
     },
   })
 }
+
+/**
+ * Written when the download fails, so the `<link>` this plugin always emits
+ * resolves instead of 404ing. Valid, empty CSS: the page falls back to the
+ * font stack its own styles declare.
+ */
+const FONTS_FALLBACK_STYLESHEET =
+  '/* ruvyxa:fonts — Google Fonts could not be downloaded during this build. */\n'
 
 /** Download every font file a stylesheet references and rewrite its URLs. */
 async function downloadFontFiles(

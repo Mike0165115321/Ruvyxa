@@ -579,8 +579,18 @@ fn webp_path(source: &Path) -> PathBuf {
 
 /// Filename for a responsive variant: `hero.png` at width 640 → `hero-640w.webp`.
 ///
-/// Mirrors `variantUrl()` in `packages/@ruvyxa/react/src/image.tsx`, so the URL
-/// the component renders is exactly the file written here.
+/// This naming is a published contract, not an internal detail: nothing in
+/// `@ruvyxa/react` constructs these URLs, so an application opting into
+/// `variantWidths` writes them into its own `srcSet` by hand. Changing the
+/// scheme silently breaks every such `srcSet`, and the manifest entry each
+/// variant is recorded in (`ImageVariant::output`) is the only other place the
+/// name appears.
+///
+/// The comment here used to claim it mirrored a `variantUrl()` in
+/// `packages/@ruvyxa/react/src/image.tsx`. No such function exists — the Static
+/// `<Image>` deliberately does not fabricate variant URLs (see
+/// [`ImageOptimizationOptions::variant_widths`]) — so the promised counterpart
+/// could never have kept it honest.
 fn variant_path(source: &Path, width: u32) -> PathBuf {
     let stem = source
         .file_stem()
