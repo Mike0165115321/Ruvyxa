@@ -978,11 +978,11 @@ fn detect_render_strategy(
 
     // Boolean false remains the zero-JS contract; string values add deferred
     // route-level hydration without changing the default.
-    let hydration = parse_hydration_mode(&source);
+    let hydration = parse_hydration_mode(&source, &code);
     let hydrate = hydration != HydrationMode::None;
 
     // 2. Check for PPR opt-in: export const ppr = true
-    if has_export_const_bool(&code, "ppr", true) {
+    if has_export_const_bool(&source, &code, "ppr", true) {
         return RenderMeta {
             strategy: RenderStrategy::Ppr,
             has_dynamic_slots: true,
@@ -993,7 +993,7 @@ fn detect_render_strategy(
     }
 
     // 3. Check for ISR: export const revalidate = <number>
-    if let Some(seconds) = parse_export_const_number(&code, "revalidate") {
+    if let Some(seconds) = parse_export_const_number(&source, &code, "revalidate") {
         let has_static_params = has_static_params_export(&code);
         return RenderMeta {
             strategy: RenderStrategy::Isr,
@@ -1046,31 +1046,24 @@ fn detect_render_strategy(
 }
 
 /// Parse the additive route hydration export while preserving boolean input.
-fn parse_hydration_mode(source: &str) -> HydrationMode {
-    let pattern = "export const hydrate";
-    for line in source.lines() {
-        let trimmed = line.trim();
-        let Some(after) = trimmed.strip_prefix(pattern) else {
-            continue;
-        };
-        let Some(value) = after.trim().strip_prefix('=') else {
-            continue;
-        };
-        let value = value.split("//").next().unwrap_or(value).trim();
-        let value = value
-            .trim_end_matches(';')
-            .trim()
-            .strip_suffix("as const")
-            .unwrap_or(value.trim_end_matches(';').trim())
-            .trim();
-        return match value.trim_matches(['\'', '"']) {
-            "false" | "none" => HydrationMode::None,
-            "idle" => HydrationMode::Idle,
-            "visible" => HydrationMode::Visible,
-            _ => HydrationMode::Load,
-        };
+///
+/// `hydrate` decides whether a page ships a client bundle at all, so reading it
+/// wrongly in either direction is expensive: a missed opt-out ships JavaScript
+/// the author disabled, and a false positive drops the hydration a working page
+/// depends on. Both happened while this read the raw source — see
+/// [`export_const_value`].
+fn parse_hydration_mode(source: &str, masked: &str) -> HydrationMode {
+    let Some(value) = export_const_value(source, masked, "hydrate") else {
+        return HydrationMode::Load;
+    };
+    let value = value.trim_end_matches(';').trim();
+    let value = value.strip_suffix("as const").unwrap_or(value).trim();
+    match value.trim_matches(['\'', '"']) {
+        "false" | "none" => HydrationMode::None,
+        "idle" => HydrationMode::Idle,
+        "visible" => HydrationMode::Visible,
+        _ => HydrationMode::Load,
     }
-    HydrationMode::Load
 }
 
 /// Return all statically reachable route and layout source after stripping strings/comments.
@@ -1136,43 +1129,154 @@ fn has_dynamic_data_markers(code: &str) -> bool {
     MARKERS.iter().any(|marker| code.contains(marker))
 }
 
-/// Check if `export const <name> = true|false` exists.
-fn has_export_const_bool(code: &str, name: &str, expected: bool) -> bool {
-    let pattern = format!("export const {name}");
-    for line in code.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with(&pattern) {
-            let after = trimmed[pattern.len()..].trim();
-            if let Some(rest) = after.strip_prefix('=') {
-                let value = rest.trim().trim_end_matches(';').trim();
-                if expected && value == "true" {
-                    return true;
-                }
-                if !expected && value == "false" {
-                    return true;
-                }
-            }
+/// Right-hand side of `export const <name> = …`, taken from the real source.
+///
+/// Two things have to be true at once, and doing only one of them is how every
+/// route-export scanner here used to get the answer wrong.
+///
+/// *The statement must be code.* Positions are found in `masked` — the shared
+/// [`code_without_strings_and_comments`] view, where comment and literal text is
+/// blanked but every byte offset still names the same place in `source`. Reading
+/// the raw text instead made a commented-out `export const hydrate = false`, or
+/// one quoted inside a documentation snippet, switch off the real page's
+/// hydration.
+///
+/// *The value must be the source's.* Masking blanks string contents, so
+/// `'idle'` reads as `'    '`. The span is located in `masked` and then sliced
+/// out of `source`, which is what lets a string-valued export be recognised at
+/// all.
+///
+/// A TypeScript annotation between the name and `=` is skipped. `has_export_function`
+/// already tolerated one; these did not, so `export const revalidate: number = 3600`
+/// silently lost its ISR opt-in and `export const ppr: boolean = true` its PPR opt-in.
+///
+/// Returns `None` when the declaration does not finish on its own line — the
+/// scan is line-based and will not guess at a continuation.
+fn export_const_value<'a>(source: &'a str, masked: &str, name: &str) -> Option<&'a str> {
+    debug_assert_eq!(
+        source.len(),
+        masked.len(),
+        "masked_code preserves length, which is what makes these offsets shared"
+    );
+    let prefix = format!("export const {name}");
+    let mut line_start = 0usize;
+
+    for line in masked.lines() {
+        let start = line_start;
+        // `masked_code` keeps every `\n` in place and turns a `\r` into a space,
+        // so one byte always separates consecutive lines in both strings.
+        line_start += line.len() + 1;
+
+        let indent = line.len() - line.trim_start().len();
+        let Some(after) = line[indent..].strip_prefix(prefix.as_str()) else {
+            continue;
+        };
+        // `export const hydrateAll` is a different export.
+        if after
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_alphanumeric() || matches!(character, '_' | '$'))
+        {
+            continue;
         }
+        let Some(equals) = assignment_offset(after) else {
+            continue;
+        };
+
+        let value_start = indent + prefix.len() + equals + 1;
+        let masked_tail = &line[value_start..];
+        let raw_tail = &source[start + value_start..start + line.len()];
+
+        // Where the value ends depends on what masking left behind. When any
+        // code survives — `false`, `3600`, `'idle' as const` — the last
+        // non-blank byte is the end, and a trailing comment is already blank.
+        // When nothing survives the value is one string literal, whose own text
+        // was blanked; only then is the literal measured directly, over a span
+        // masking has already proven holds no code.
+        let end = if masked_tail.trim().is_empty() {
+            quoted_literal_end(raw_tail)?
+        } else {
+            masked_tail.trim_end().len()
+        };
+        let value = raw_tail.get(..end)?.trim();
+        return (!value.is_empty()).then_some(value);
     }
-    false
+    None
 }
 
-/// Parse `export const <name> = <number>` and return the number.
-fn parse_export_const_number(code: &str, name: &str) -> Option<u64> {
-    let pattern = format!("export const {name}");
-    for line in code.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with(&pattern) {
-            let after = trimmed[pattern.len()..].trim();
-            if let Some(rest) = after.strip_prefix('=') {
-                let value = rest.trim().trim_end_matches(';').trim();
-                if let Ok(n) = value.parse::<u64>() {
-                    return Some(n);
-                }
-            }
+/// Byte just past the quoted literal that starts `tail`, if one does.
+///
+/// Only reached for a value masking reported as entirely non-code, so this
+/// measures one literal rather than lexing a program — there is no second
+/// scanner here to drift from [`code_without_strings_and_comments`].
+fn quoted_literal_end(tail: &str) -> Option<usize> {
+    let bytes = tail.as_bytes();
+    let start = bytes.iter().position(|byte| !byte.is_ascii_whitespace())?;
+    let quote = bytes[start];
+    if !matches!(quote, b'\'' | b'"' | b'`') {
+        return None;
+    }
+    let mut index = start + 1;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index += 2,
+            byte if byte == quote => return Some(index + 1),
+            _ => index += 1,
         }
     }
     None
+}
+
+/// Offset of the assignment `=` in `after`, skipping any type annotation.
+///
+/// `=` also appears in `=>`, `==`, `<=`, `>=`, and `!=`, all of which occur
+/// inside a type (`: Record<string, () => void>`), so only a bare `=` outside
+/// every bracket pair counts.
+///
+/// `<` and `>` are deliberately not counted as a pair. They are not reliably
+/// balanced in TypeScript — `=>` alone would close a depth nothing opened, and
+/// comparison operators do the same — so tracking them turned an ordinary
+/// annotation into a negative depth and lost the assignment entirely. The three
+/// bracket pairs that are always balanced are enough to keep a `=` inside a
+/// parameter list or object type from being mistaken for the assignment.
+fn assignment_offset(after: &str) -> Option<usize> {
+    let bytes = after.as_bytes();
+    let mut depth = 0i32;
+    for (index, byte) in bytes.iter().enumerate() {
+        match byte {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b'=' if depth == 0 => {
+                let follows = bytes.get(index + 1);
+                let precedes = index.checked_sub(1).map(|previous| bytes[previous]);
+                if follows == Some(&b'=')
+                    || follows == Some(&b'>')
+                    || matches!(precedes, Some(b'=' | b'!' | b'<' | b'>'))
+                {
+                    continue;
+                }
+                return Some(index);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Check if `export const <name> = true|false` exists.
+fn has_export_const_bool(source: &str, masked: &str, name: &str, expected: bool) -> bool {
+    export_const_value(source, masked, name)
+        .map(|value| value.trim_end_matches(';').trim())
+        .is_some_and(|value| value == if expected { "true" } else { "false" })
+}
+
+/// Parse `export const <name> = <number>` and return the number.
+fn parse_export_const_number(source: &str, masked: &str, name: &str) -> Option<u64> {
+    export_const_value(source, masked, name)?
+        .trim_end_matches(';')
+        .trim()
+        .parse::<u64>()
+        .ok()
 }
 
 /// Check if `export function <name>` or `export async function <name>` exists.
@@ -1246,6 +1350,118 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    fn hydration_of(source: &str) -> HydrationMode {
+        parse_hydration_mode(source, &code_without_strings_and_comments(source))
+    }
+
+    /// A route export only counts where it is real code.
+    ///
+    /// These scanners read the raw source, so an `export const hydrate = false`
+    /// sitting in a block comment or quoted inside a documentation snippet
+    /// switched off the surrounding page's hydration. The same shape already
+    /// broke the linker once, which is why `masked_code` exists.
+    #[test]
+    fn a_route_export_inside_a_comment_or_literal_is_not_an_export() {
+        assert_eq!(
+            hydration_of("export const hydrate = false\n"),
+            HydrationMode::None,
+            "the real declaration must still be read"
+        );
+        assert_eq!(
+            hydration_of("/*\nexport const hydrate = false\n*/\nexport default function P() {}\n"),
+            HydrationMode::Load,
+            "a commented-out opt-out must not disable hydration"
+        );
+        assert_eq!(
+            hydration_of("const docs = `\nexport const hydrate = false\n`;\n"),
+            HydrationMode::Load,
+            "a code sample inside a template literal is text, not an export"
+        );
+
+        let quoted_ppr = "const docs = `export const ppr = true`;\n";
+        assert!(
+            !has_export_const_bool(
+                quoted_ppr,
+                &code_without_strings_and_comments(quoted_ppr),
+                "ppr",
+                true
+            ),
+            "a quoted opt-in must not switch the route to PPR"
+        );
+    }
+
+    /// A TypeScript annotation between the name and `=` is ordinary TS, and
+    /// `has_export_function` beside these already tolerated one. These did not,
+    /// so an annotated opt-in was read as absent and the route silently fell
+    /// back to a different rendering strategy.
+    #[test]
+    fn an_annotated_route_export_is_still_the_export() {
+        assert_eq!(
+            hydration_of("export const hydrate: HydrationMode = false\n"),
+            HydrationMode::None
+        );
+        assert_eq!(
+            hydration_of("export const hydrate: 'idle' | 'visible' = 'idle'\n"),
+            HydrationMode::Idle,
+            "a union type contains no assignment; the value after it does"
+        );
+
+        let ppr = "export const ppr: boolean = true\n";
+        assert!(has_export_const_bool(
+            ppr,
+            &code_without_strings_and_comments(ppr),
+            "ppr",
+            true
+        ));
+
+        let revalidate = "export const revalidate: number = 3600\n";
+        assert_eq!(
+            parse_export_const_number(
+                revalidate,
+                &code_without_strings_and_comments(revalidate),
+                "revalidate"
+            ),
+            Some(3600)
+        );
+
+        // An arrow inside the annotation is not the assignment.
+        let typed_arrow =
+            "export const revalidate: (() => number) extends never ? 1 : number = 60\n";
+        assert_eq!(
+            parse_export_const_number(
+                typed_arrow,
+                &code_without_strings_and_comments(typed_arrow),
+                "revalidate"
+            ),
+            Some(60)
+        );
+    }
+
+    /// A longer identifier that merely starts with the same characters is a
+    /// different export, and a trailing comment is not part of the value.
+    #[test]
+    fn route_export_matching_stops_at_the_identifier_and_the_comment() {
+        assert_eq!(
+            hydration_of("export const hydrateAll = false\n"),
+            HydrationMode::Load,
+            "`hydrateAll` is not `hydrate`"
+        );
+        assert_eq!(
+            hydration_of("export const hydrate = false // keep this page static\n"),
+            HydrationMode::None
+        );
+
+        let commented = "export const revalidate = 120 // refresh every two minutes\n";
+        assert_eq!(
+            parse_export_const_number(
+                commented,
+                &code_without_strings_and_comments(commented),
+                "revalidate"
+            ),
+            Some(120)
+        );
+    }
 
     /// Scanner tests assert on source text directly. Production reads both
     /// facts off one cached `ModuleAst`; these shadow the module-level helpers
