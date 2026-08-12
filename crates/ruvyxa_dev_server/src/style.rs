@@ -257,7 +257,9 @@ fn append_style(walk: &mut StyleWalk<'_>, file: &Path) -> Result<()> {
         source
     };
 
-    let imports = css_imports(&source);
+    // One comment scan feeds both the import collection and the removal below.
+    let mask = css_code_mask(&source);
+    let imports = css_imports(&source, &mask);
     for specifier in &imports {
         if is_remote_style(specifier) {
             continue;
@@ -279,7 +281,7 @@ fn append_style(walk: &mut StyleWalk<'_>, file: &Path) -> Result<()> {
     }
 
     walk.css
-        .push_str(&remove_local_css_imports(&source, &imports));
+        .push_str(&remove_local_css_imports(&source, &mask, &imports));
     walk.css.push('\n');
     walk.record_file(file);
     Ok(())
@@ -423,10 +425,17 @@ fn resolve_style_import(
         .then(|| canonical_or_original(candidate))
 }
 
-fn css_imports(source: &str) -> Vec<String> {
-    source
-        .lines()
-        .filter_map(|line| {
+/// `@import` specifiers declared by this stylesheet.
+///
+/// `mask` gates each line on being real code. Without it a block-commented
+/// import was followed like a live one: the target got inlined, and when the
+/// file it named had since been deleted the build failed with `RUV1403`
+/// pointing inside a comment. Commenting a block of imports out and removing
+/// the files is ordinary work; it must not break the build.
+fn css_imports(source: &str, mask: &[bool]) -> Vec<String> {
+    css_lines_with_offsets(source)
+        .filter(|(line, start)| line_is_code(mask, *start, line))
+        .filter_map(|(line, _)| {
             let trimmed = line.trim_start();
             if !trimmed.starts_with("@import") {
                 return None;
@@ -446,18 +455,26 @@ fn css_imports(source: &str) -> Vec<String> {
         .collect()
 }
 
-fn remove_local_css_imports(source: &str, imports: &[String]) -> String {
-    source
-        .lines()
-        .filter(|line| {
+/// Drop the `@import` lines whose target was inlined above.
+///
+/// Judges "is this line an import" with the same `mask` [`css_imports`] used, so
+/// the two cannot disagree about which lines are code. A line only the remover
+/// recognised would delete a commented-out import out of its comment; a line
+/// only the collector recognised would inline a stylesheet and leave the
+/// browser-level `@import` behind to fetch it a second time.
+fn remove_local_css_imports(source: &str, mask: &[bool], imports: &[String]) -> String {
+    css_lines_with_offsets(source)
+        .filter(|(line, start)| {
             let trimmed = line.trim_start();
-            !trimmed.starts_with("@import")
+            !line_is_code(mask, *start, line)
+                || !trimmed.starts_with("@import")
                 || !imports.iter().any(|specifier| {
                     !is_remote_style(specifier)
                         && (is_css_specifier(specifier) || is_preprocessor_specifier(specifier))
                         && trimmed.contains(specifier)
                 })
         })
+        .map(|(line, _)| line)
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -628,51 +645,103 @@ pub fn minify_css(source: &str) -> String {
     collapse_css_whitespace(&no_comments)
 }
 
-/// Remove `/* ... */` block comments from CSS, respecting string literals.
-fn strip_css_comments(source: &str) -> String {
-    let mut out = String::with_capacity(source.len());
+/// Byte ranges of `source` that are CSS code rather than comment text.
+///
+/// The one place this file decides where a `/* … */` begins and ends. Both
+/// consumers — comment stripping for minification and the `@import` scan — read
+/// the answer from here, because they disagreed before: the Sass scanner skipped
+/// comments and the CSS one did not, so a commented-out `@import` was still
+/// followed. Every delimiter involved is ASCII, and a UTF-8 continuation byte is
+/// always `>= 0x80`, so scanning bytes cannot mistake part of a character for
+/// one of them.
+fn css_code_spans(source: &str) -> Vec<(usize, usize)> {
     let bytes = source.as_bytes();
     let len = bytes.len();
-    let mut i = 0;
+    let mut spans = Vec::new();
+    let mut start = 0usize;
+    let mut index = 0usize;
 
-    while i < len {
-        // String literal: preserve contents verbatim.
-        if bytes[i] == b'"' || bytes[i] == b'\'' {
-            let quote = bytes[i];
-            out.push(quote as char);
-            i += 1;
-            while i < len && bytes[i] != quote {
-                if bytes[i] == b'\\' && i + 1 < len {
-                    out.push(bytes[i] as char);
-                    i += 1;
-                }
-                out.push(bytes[i] as char);
-                i += 1;
+    while index < len {
+        // A `/*` inside a string is content, so strings are skipped whole.
+        if bytes[index] == b'"' || bytes[index] == b'\'' {
+            let quote = bytes[index];
+            index += 1;
+            while index < len && bytes[index] != quote {
+                index += if bytes[index] == b'\\' { 2 } else { 1 };
             }
-            if i < len {
-                out.push(bytes[i] as char);
-                i += 1;
-            }
+            index = (index + 1).min(len);
             continue;
         }
 
-        // Block comment start.
-        if i + 1 < len && bytes[i] == b'/' && bytes[i + 1] == b'*' {
-            // Skip until closing `*/`.
-            i += 2;
-            while i + 1 < len && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                i += 1;
+        if index + 1 < len && bytes[index] == b'/' && bytes[index + 1] == b'*' {
+            if index > start {
+                spans.push((start, index));
             }
-            if i + 1 < len {
-                i += 2; // skip `*/`
+            index += 2;
+            while index + 1 < len && !(bytes[index] == b'*' && bytes[index + 1] == b'/') {
+                index += 1;
             }
+            index = (index + 2).min(len);
+            start = index;
             continue;
         }
 
-        out.push(bytes[i] as char);
-        i += 1;
+        index += 1;
     }
 
+    if start < len {
+        spans.push((start, len));
+    }
+    spans
+}
+
+/// Per-byte "this is code" view of `source`, for the line-oriented scans below.
+fn css_code_mask(source: &str) -> Vec<bool> {
+    let mut mask = vec![false; source.len()];
+    for (start, end) in css_code_spans(source) {
+        mask[start..end].fill(true);
+    }
+    mask
+}
+
+/// Whether the first non-space byte of the line starting at `line_start` is code.
+fn line_is_code(mask: &[bool], line_start: usize, line: &str) -> bool {
+    let indent = line.len() - line.trim_start().len();
+    mask.get(line_start + indent).copied().unwrap_or(false)
+}
+
+/// Each line of `source` with the byte offset it starts at.
+///
+/// `str::lines` strips a trailing `\r`, so a CRLF file advances by two bytes
+/// between lines and a bare `\n` file by one. Getting that wrong shifts every
+/// offset after the first CRLF and the mask lookups stop naming the right byte.
+fn css_lines_with_offsets(source: &str) -> impl Iterator<Item = (&str, usize)> {
+    let mut offset = 0usize;
+    source.lines().map(move |line| {
+        let start = offset;
+        offset += line.len()
+            + if source[offset + line.len()..].starts_with("\r\n") {
+                2
+            } else {
+                1
+            };
+        (line, start)
+    })
+}
+
+/// Remove `/* ... */` block comments from CSS, respecting string literals.
+///
+/// Copies byte *slices* rather than casting each byte to a `char`. The previous
+/// `bytes[i] as char` reinterpreted every UTF-8 continuation byte as a Latin-1
+/// code point and re-encoded it, so `content: "→"` came out of a production
+/// build as `content: "â†’"` — every non-ASCII character in every minified
+/// stylesheet, including arrows, bullets, and non-Latin font names.
+fn strip_css_comments(source: &str) -> String {
+    let spans = css_code_spans(source);
+    let mut out = String::with_capacity(source.len());
+    for (start, end) in spans {
+        out.push_str(&source[start..end]);
+    }
     out
 }
 
@@ -756,6 +825,84 @@ fn ends_with_css_punct(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Minification must not rewrite the characters it is compressing.
+    ///
+    /// The comment stripper copied `bytes[i] as char`, which reads each UTF-8
+    /// continuation byte as a Latin-1 code point and re-encodes it. Every
+    /// non-ASCII character in every minified stylesheet came out as mojibake —
+    /// `content: "→"` shipped as `content: "â†’"`, and non-Latin font names with
+    /// it. Only production builds minify, so it was invisible in dev.
+    #[test]
+    fn minification_preserves_non_ascii_content() {
+        let source = ".a::after { content: \"\u{2192}\" }\n.b { font-family: \"\u{0e44}\u{0e17}\u{0e22}\" }\n";
+
+        let minified = minify_css(source);
+
+        assert!(
+            minified.contains('\u{2192}'),
+            "an arrow in `content` must survive: {minified:?}"
+        );
+        assert!(
+            minified.contains("\u{0e44}\u{0e17}\u{0e22}"),
+            "a non-Latin font name must survive: {minified:?}"
+        );
+    }
+
+    /// A comment survives minification's removal but must keep its bytes intact
+    /// on the way through everything else.
+    #[test]
+    fn comment_stripping_keeps_surrounding_bytes_and_respects_strings() {
+        assert_eq!(
+            strip_css_comments(".a{content:\"/* not a comment */\"}/* real */\n.b{}"),
+            ".a{content:\"/* not a comment */\"}\n.b{}",
+            "a comment sequence inside a string is content"
+        );
+        assert_eq!(
+            strip_css_comments(".a{content:\"\u{2192}\"}"),
+            ".a{content:\"\u{2192}\"}"
+        );
+    }
+
+    /// A commented-out `@import` is not an import.
+    ///
+    /// The CSS scanner matched any line starting with `@import`, including one
+    /// inside a block comment, while the Sass scanner beside it skipped comments
+    /// correctly. Following the dead import inlined a stylesheet nobody asked
+    /// for, and — once the file it named was deleted — failed the build with
+    /// `RUV1403` pointing at a line inside a comment.
+    #[test]
+    fn a_commented_out_import_is_neither_followed_nor_removed() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let app = root.join("app");
+        fs::create_dir_all(&app).unwrap();
+        fs::write(app.join("page.tsx"), "import './global.css'").unwrap();
+        fs::write(
+            app.join("global.css"),
+            "/*\n@import \"./deleted.css\";\n*/\n@import \"./live.css\";\nbody { margin: 0 }\n",
+        )
+        .unwrap();
+        fs::write(app.join("live.css"), ".live { color: red }").unwrap();
+
+        let collection = collect_styles(root, &app, &[]).expect("a dead import must not fail");
+
+        assert!(
+            collection.css.contains(".live { color: red }"),
+            "the live import must still be inlined: {}",
+            collection.css
+        );
+        assert!(
+            !collection.css.contains("@import \"./live.css\""),
+            "the live import line must be removed once inlined: {}",
+            collection.css
+        );
+        assert!(
+            collection.css.contains("@import \"./deleted.css\""),
+            "the commented line is not an import and must be left alone: {}",
+            collection.css
+        );
+    }
 
     #[test]
     fn collects_imported_css_outside_app_and_nested_css_imports() {
