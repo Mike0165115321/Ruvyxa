@@ -35,6 +35,8 @@ use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 
+mod collab;
+use collab::{CollabRegistry, FrameRateLimiter, ParsedFrame, parse_client_frame};
 mod devtools;
 mod dynamic_image;
 mod env_file;
@@ -525,6 +527,7 @@ struct AppState {
     hmr_tracker: Arc<HmrTracker>,
     plugin_runtime: Option<Arc<PluginHost>>,
     realtime: Option<RealtimeRuntime>,
+    presence: Option<PresenceRuntime>,
     devtools: Arc<DevToolsMetrics>,
     dynamic_image_cache: Arc<DynamicImageCache>,
 }
@@ -534,6 +537,15 @@ struct RealtimeRuntime {
     path: String,
     heartbeat: Duration,
     tx: broadcast::Sender<String>,
+}
+
+/// Collaboration rooms live for the process, not for one connection, so the
+/// registry is owned by the shared app state rather than the socket handler.
+#[derive(Clone)]
+struct PresenceRuntime {
+    path: String,
+    heartbeat: Duration,
+    registry: CollabRegistry,
 }
 
 /// Framework endpoints registered on the router before the plugin realtime
@@ -851,6 +863,41 @@ pub async fn serve(config: ServerConfig) -> Result<()> {
             })
         })
         .transpose()?;
+    let presence = plugin_runtime
+        .as_ref()
+        .and_then(|runtime| runtime.descriptor().presence())
+        .map(|descriptor| {
+            if !descriptor.path.starts_with('/')
+                || descriptor.path.contains(['?', '#', '*'])
+                || !(5_000..=120_000).contains(&descriptor.heartbeat_ms)
+            {
+                return Err(RuvyxaError::Message(
+                    "RUV1701 TypeScript plugin host returned invalid presence configuration".into(),
+                ));
+            }
+            if RESERVED_FRAMEWORK_ROUTES.contains(&descriptor.path.as_str()) {
+                return Err(RuvyxaError::Message(format!(
+                    "RUV1701 presence path {} collides with a reserved framework route",
+                    descriptor.path
+                )));
+            }
+            Ok(PresenceRuntime {
+                path: descriptor.path.clone(),
+                heartbeat: Duration::from_millis(descriptor.heartbeat_ms),
+                registry: CollabRegistry::new(),
+            })
+        })
+        .transpose()?;
+    // Realtime and presence are separate transports, so a project that claims
+    // both must not point them at one path; axum would panic on the duplicate.
+    if let (Some(realtime), Some(presence)) = (realtime.as_ref(), presence.as_ref())
+        && realtime.path == presence.path
+    {
+        return Err(RuvyxaError::Message(format!(
+            "RUV1701 presence path {} collides with the realtime transport",
+            presence.path
+        )));
+    }
     let state = AppState {
         config: config.clone(),
         reload_tx,
@@ -865,6 +912,7 @@ pub async fn serve(config: ServerConfig) -> Result<()> {
         hmr_tracker,
         plugin_runtime,
         realtime,
+        presence,
         devtools: Arc::new(DevToolsMetrics::default()),
         dynamic_image_cache: Arc::new(DynamicImageCache::default()),
     };
@@ -888,6 +936,7 @@ pub async fn serve(config: ServerConfig) -> Result<()> {
     };
 
     let realtime_path = state.realtime.as_ref().map(|runtime| runtime.path.clone());
+    let presence_path = state.presence.as_ref().map(|runtime| runtime.path.clone());
     let state = Arc::new(state);
     let mut app = Router::new()
         .route("/__ruvyxa/hmr", get(hmr_ws))
@@ -907,6 +956,9 @@ pub async fn serve(config: ServerConfig) -> Result<()> {
     }
     if let Some(path) = realtime_path {
         app = app.route(&path, get(realtime_ws));
+    }
+    if let Some(path) = presence_path {
+        app = app.route(&path, get(presence_ws));
     }
     let app = app.fallback(handle_request).with_state(state);
 
@@ -1349,6 +1401,138 @@ async fn realtime_ws(
             }
         }
     })
+}
+
+#[derive(Deserialize)]
+struct PresenceQuery {
+    room: Option<String>,
+}
+
+/// Serve one collaboration room membership over a bidirectional socket.
+///
+/// Unlike the realtime transport, this socket reads. Everything a client sends
+/// is validated, rate limited, and applied to process-local room state before
+/// it is fanned out, so a peer can never make the server retain unbounded data
+/// or forward a frame the room's own encoder did not produce.
+async fn presence_ws(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<PresenceQuery>,
+    axum::extract::ConnectInfo(peer_addr): axum::extract::ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(runtime) = state.presence.clone() else {
+        return (StatusCode::NOT_FOUND, "Presence is not enabled").into_response();
+    };
+    if hmr_origin_is_cross_site(&headers, &state.config, peer_addr.ip()) {
+        return with_security_headers(
+            (
+                StatusCode::FORBIDDEN,
+                "Cross-origin presence connection blocked",
+            )
+                .into_response(),
+        );
+    }
+    let Some(room) = query.room.filter(|room| collab::valid_room_id(room)) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Presence requires a room of 1-128 letters, digits, colon, dot, underscore, slash, or dash",
+        )
+            .into_response();
+    };
+    ws.on_upgrade(move |socket| async move {
+        use futures_util::{SinkExt, StreamExt};
+
+        let registry = runtime.registry;
+        let (mut sender, mut receiver) = socket.split();
+        // Seat the peer only once the upgrade succeeded, so a handshake that
+        // never completes cannot leave an occupant behind in the room.
+        let seat = match registry.join(&room) {
+            Ok(seat) => seat,
+            Err(message) => {
+                let _ = sender.send(Message::Text(error_frame(message).into())).await;
+                let _ = sender.close().await;
+                return;
+            }
+        };
+        if sender
+            .send(Message::Text(seat.welcome.clone().into()))
+            .await
+            .is_err()
+        {
+            registry.leave(&room, &seat.peer);
+            return;
+        }
+        let mut feed = seat.receiver;
+        let mut heartbeat = tokio::time::interval(runtime.heartbeat);
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut limiter = FrameRateLimiter::new(Instant::now());
+
+        loop {
+            tokio::select! {
+                broadcast = feed.recv() => {
+                    match broadcast {
+                        Ok(payload) => {
+                            if sender.send(Message::Text(payload.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => {
+                            // The peer fell behind the room's frame buffer, so
+                            // its view is now unreconstructable from the feed
+                            // alone; tell it to reconnect for a fresh snapshot.
+                            let _ = sender.send(Message::Text(
+                                r#"{"version":1,"type":"resync","reason":"lagged"}"#.into(),
+                            )).await;
+                            break;
+                        }
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+                inbound = receiver.next() => {
+                    let Some(Ok(message)) = inbound else { break };
+                    let Message::Text(payload) = message else { continue };
+                    if !limiter.allow(Instant::now()) {
+                        let _ = sender.send(Message::Text(
+                            error_frame("Collaboration frame rate exceeded").into(),
+                        )).await;
+                        break;
+                    }
+                    let frame = match parse_client_frame(&payload) {
+                        Ok(frame) => frame,
+                        Err(message) => {
+                            if sender.send(Message::Text(error_frame(message).into())).await.is_err() {
+                                break;
+                            }
+                            continue;
+                        }
+                    };
+                    match frame {
+                        ParsedFrame::Presence(presence) => {
+                            registry.update_presence(&room, &seat.peer, presence);
+                        }
+                        ParsedFrame::Set(entries) => {
+                            if let Err(message) = registry.write_state(&room, &seat.peer, entries)
+                                && sender.send(Message::Text(error_frame(message).into())).await.is_err()
+                            {
+                                break;
+                            }
+                        }
+                    }
+                }
+                _ = heartbeat.tick() => {
+                    if sender.send(Message::Ping(Vec::new().into())).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+        registry.leave(&room, &seat.peer);
+    })
+}
+
+fn error_frame(message: &str) -> String {
+    serde_json::json!({ "version": 1, "type": "error", "message": message }).to_string()
 }
 
 fn parse_realtime_channels(

@@ -187,10 +187,16 @@ importers:
       '@ruvyxa/core':
         specifier: workspace:^
         version: link:../core
+      react:
+        specifier: 19.2.8
+        version: 19.2.8
     devDependencies:
       '@types/node':
         specifier: ^26.2.0
         version: 26.2.0
+      '@types/react':
+        specifier: ^19.2.18
+        version: 19.2.18
 
   packages/@ruvyxa/testing:
     devDependencies:

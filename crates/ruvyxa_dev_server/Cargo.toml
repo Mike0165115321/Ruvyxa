@@ -21,6 +21,7 @@ flate2 = "1.1.9"
 tokio-util = { version = "0.7.19", features = ["io"] }
 blake3.workspace = true
 futures-core.workspace = true
+futures-util.workspace = true
 image.workspace = true
 notify.workspace = true
 parking_lot.workspace = true

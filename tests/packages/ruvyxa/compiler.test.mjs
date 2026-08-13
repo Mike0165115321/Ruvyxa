@@ -1809,6 +1809,81 @@ export const marker = 'reached'
     })
   })
 
+  it('describes a native presence transport alongside realtime', async () => {
+    await withFixture(async ({ root }) => {
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `export default {
+          plugins: [
+            { name: 'realtime', register({ native }) { native.claim('realtime@1') } },
+            { name: 'collab', register({ native }) { native.claim('presence@1', { path: '/rooms', heartbeatMs: 15000 }) } },
+          ],
+        }`,
+      )
+
+      const described = await runJson(pluginRuntime, [root, 'describe'], {})
+      // Both transports are separate capabilities, so a project may claim one,
+      // the other, or both.
+      assert.deepEqual(described.result.capabilities, [
+        {
+          id: 'realtime@1',
+          plugin: 'realtime',
+          path: '/__ruvyxa/realtime',
+          heartbeatMs: 25_000,
+          capacity: 256,
+        },
+        { id: 'presence@1', plugin: 'collab', path: '/rooms', heartbeatMs: 15_000 },
+      ])
+    })
+  })
+
+  it('rejects invalid, reserved, or duplicate presence registrations', async () => {
+    await withFixture(async ({ root }) => {
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `export default {
+          plugins: [{ name: 'one', register({ native }) { native.claim('presence@1', { path: 'rooms' }) } }],
+        }`,
+      )
+      const invalid = await runJsonResult(pluginRuntime, [root, 'describe'], {})
+      assert.equal(invalid.exitCode, 1)
+      assert.match(invalid.parsed.message, /presence path must be an exact absolute path/)
+
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `export default {
+          plugins: [{ name: 'one', register({ native }) { native.claim('presence@1', { heartbeatMs: 1000 }) } }],
+        }`,
+      )
+      const heartbeat = await runJsonResult(pluginRuntime, [root, 'describe'], {})
+      assert.equal(heartbeat.exitCode, 1)
+      assert.match(heartbeat.parsed.message, /presence heartbeatMs must be between 5000 and 120000/)
+
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `export default {
+          plugins: [{ name: 'one', register({ native }) { native.claim('presence@1', { path: '/__ruvyxa/image' }) } }],
+        }`,
+      )
+      const reserved = await runJsonResult(pluginRuntime, [root, 'describe'], {})
+      assert.equal(reserved.exitCode, 1)
+      assert.match(reserved.parsed.message, /collides with a reserved framework route/)
+
+      await writeFile(
+        path.join(root, 'ruvyxa.config.ts'),
+        `export default {
+          plugins: [
+            { name: 'one', register({ native }) { native.claim('presence@1') } },
+            { name: 'two', register({ native }) { native.claim('presence@1') } },
+          ],
+        }`,
+      )
+      const duplicate = await runJsonResult(pluginRuntime, [root, 'describe'], {})
+      assert.equal(duplicate.exitCode, 1)
+      assert.match(duplicate.parsed.message, /already owned by plugin "one"/)
+    })
+  })
+
   it('rejects invalid or duplicate realtime transport registrations', async () => {
     await withFixture(async ({ root }) => {
       await writeFile(

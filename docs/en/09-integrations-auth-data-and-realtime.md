@@ -73,6 +73,71 @@ firebase, netlify, static, and vercel adapters with `RUV3201`. `@ruvyxa/realtime
 `createRealtimeClient`; it caps active channels at 16 and reconnects with bounded exponential
 backoff.
 
+## Real-time collaboration
+
+`@ruvyxa/realtime/plugin` also exports `collab()`, which claims the native `presence@1` capability
+and serves bidirectional collaboration rooms at `/__ruvyxa/collab`. It carries the same deployment
+constraint as `realtime()` and fails the same builds with `RUV3201`.
+
+```ts
+import { config } from 'ruvyxa/config'
+import { collab } from '@ruvyxa/realtime'
+
+export default config({ plugins: [collab()] })
+```
+
+A room carries two kinds of state, and they behave differently on purpose:
+
+| State        | Retained            | Semantics                                         |
+| ------------ | ------------------- | ------------------------------------------------- |
+| Presence     | For the connection  | Replaced wholesale; dropped when the peer leaves  |
+| Shared state | For the room's life | Last-writer-wins per key, sequenced by the server |
+
+The server is the only sequencer, so "last writer" means "last frame to reach the process" — no
+client clock is involved, and two peers writing one key converge on the same winner. **Shared state
+is not a CRDT.** Concurrent writes to one key do not merge; the later write replaces the earlier
+one. Split a document across many keys when concurrent edits must all survive.
+
+`@ruvyxa/realtime/react` exports `CollabProvider`, `usePresence`, `useSharedState`, `useCollabRoom`,
+and `useCollabClient`. One provider owns one socket; hooks read it through `useSyncExternalStore`.
+
+```tsx
+import { CollabProvider, usePresence, useSharedState } from '@ruvyxa/realtime/react'
+
+function Editor() {
+  const others = usePresence({ cursor: [x, y], name: 'Ada' })
+  const [title, setTitle] = useSharedState('title', 'Untitled')
+  return (
+    <>
+      <input value={title} onChange={(event) => setTitle(event.target.value)} />
+      {others.map((peer) => (
+        <Cursor key={peer.id} state={peer.state} />
+      ))}
+    </>
+  )
+}
+
+export default function Page() {
+  return (
+    <CollabProvider room="doc:1">
+      <Editor />
+    </CollabProvider>
+  )
+}
+```
+
+`@ruvyxa/realtime/collab` exports `createCollabClient` for use without React.
+
+Rooms are process-local and ephemeral: they hold no storage, and a room is discarded once its last
+peer leaves. Two server processes behind a load balancer own two unrelated copies of every room, so
+a collaborative deployment must pin one room's peers to one process. Persist anything that must
+survive the last peer through a loader or Server Action.
+
+Server-enforced limits: 64 peers and 256 shared-state keys per room, 1024 rooms per process, 32 keys
+per write, 32 KiB per frame, and 120 frames per second per connection. A connection that exceeds the
+frame budget is closed; a peer that falls behind the room's broadcast buffer receives a `resync` and
+reconnects for a fresh snapshot.
+
 First-party adapter packages exist for Node, Bun, Deno, static, Vercel, Netlify, Cloudflare,
 Railway, Render, Firebase, and AWS. Build selection is `npm run build -- --adapter <name>` or config
 `adapter`; see [Deploy, run, and operate](15-deploy-run-and-operate.md). `@ruvyxa/testing` exports

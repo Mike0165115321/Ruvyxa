@@ -1186,7 +1186,7 @@ export interface ContentEngineOptions {
   feedPath?: string
   /** @default "/sitemap.xml" */
   sitemapPath?: string
-  /** Experimental agent discovery index. Set false to disable. @default "/llms.txt" */
+  /** Agent discovery index in llms.txt format. Set false to disable. @default "/llms.txt" */
   llmsPath?: string | false
   language?: string
 }
@@ -1495,7 +1495,7 @@ function createLlmsText(
   ]
   for (const document of documents) {
     lines.push(
-      `- [${escapeMarkdownText(document.title)}](<${document.url}>): ${document.description}`,
+      `- [${escapeMarkdownText(document.title)}](<${document.url}>): ${escapeMarkdownText(document.description)}`,
     )
     for (const answer of document.answers) {
       lines.push(

@@ -111,6 +111,12 @@ pub enum NativeCapabilityDescriptor {
         heartbeat_ms: u64,
         capacity: usize,
     },
+    #[serde(rename = "presence@1", rename_all = "camelCase")]
+    Presence {
+        plugin: String,
+        path: String,
+        heartbeat_ms: u64,
+    },
 }
 
 /// Descriptor for the plugin registry contract.
@@ -134,22 +140,48 @@ pub struct RealtimeDescriptor {
     pub capacity: usize,
 }
 
+/// Native presence registration exposed to the development server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PresenceDescriptor {
+    pub plugin: String,
+    pub path: String,
+    pub heartbeat_ms: u64,
+}
+
 impl PluginRegistryDescriptor {
     pub fn realtime(&self) -> Option<RealtimeDescriptor> {
         self.capabilities
-            .first()
-            .map(|capability| match capability {
+            .iter()
+            .find_map(|capability| match capability {
                 NativeCapabilityDescriptor::Realtime {
                     plugin,
                     path,
                     heartbeat_ms,
                     capacity,
-                } => RealtimeDescriptor {
+                } => Some(RealtimeDescriptor {
                     plugin: plugin.clone(),
                     path: path.clone(),
                     heartbeat_ms: *heartbeat_ms,
                     capacity: *capacity,
-                },
+                }),
+                _ => None,
+            })
+    }
+
+    pub fn presence(&self) -> Option<PresenceDescriptor> {
+        self.capabilities
+            .iter()
+            .find_map(|capability| match capability {
+                NativeCapabilityDescriptor::Presence {
+                    plugin,
+                    path,
+                    heartbeat_ms,
+                } => Some(PresenceDescriptor {
+                    plugin: plugin.clone(),
+                    path: path.clone(),
+                    heartbeat_ms: *heartbeat_ms,
+                }),
+                _ => None,
             })
     }
 }

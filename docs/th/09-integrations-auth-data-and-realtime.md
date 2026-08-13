@@ -70,6 +70,71 @@ framework ไม่มี database server, migration engine หรือ backup 
 static และ vercel ด้วย `RUV3201` `@ruvyxa/realtime/client` export `createRealtimeClient`; จำกัด
 active channel ที่ 16 และ reconnect ด้วย bounded exponential backoff
 
+## Real-time collaboration
+
+`@ruvyxa/realtime/plugin` export `collab()` ด้วย ซึ่ง claim native capability `presence@1` และ serve
+collaboration room แบบสองทางที่ `/__ruvyxa/collab` มันมีข้อจำกัดการ deploy เหมือน `realtime()` และ
+ปฏิเสธ build ชุดเดียวกันด้วย `RUV3201`
+
+```ts
+import { config } from 'ruvyxa/config'
+import { collab } from '@ruvyxa/realtime'
+
+export default config({ plugins: [collab()] })
+```
+
+room หนึ่งมี state สองแบบ ซึ่งตั้งใจให้ทำงานต่างกัน:
+
+| State        | เก็บไว้นานแค่ไหน    | ความหมาย                                         |
+| ------------ | ------------------- | ------------------------------------------------ |
+| Presence     | เท่าอายุ connection | แทนที่ทั้งก้อน และถูกทิ้งเมื่อ peer ออกจากห้อง   |
+| Shared state | เท่าอายุ room       | last-writer-wins ต่อ key โดย server เป็นผู้ลำดับ |
+
+server เป็นผู้ลำดับเพียงผู้เดียว ดังนั้น "last writer" หมายถึง "frame สุดท้ายที่มาถึง process"
+ไม่มีนาฬิกาฝั่ง client เข้ามาเกี่ยว และ peer สองตัวที่เขียน key เดียวกันจะได้ผู้ชนะตัวเดียวกัน
+**shared state ไม่ใช่ CRDT** การเขียน key เดียวกันพร้อมกันจะไม่ merge; ตัวที่มาทีหลังทับตัวก่อนหน้า
+ถ้าต้องการให้การแก้ไขพร้อมกันอยู่รอดทั้งคู่ ให้แตกเอกสารออกเป็นหลาย key
+
+`@ruvyxa/realtime/react` export `CollabProvider`, `usePresence`, `useSharedState`, `useCollabRoom`
+และ `useCollabClient` หนึ่ง provider เป็นเจ้าของหนึ่ง socket; hook อ่านผ่าน `useSyncExternalStore`
+
+```tsx
+import { CollabProvider, usePresence, useSharedState } from '@ruvyxa/realtime/react'
+
+function Editor() {
+  const others = usePresence({ cursor: [x, y], name: 'Ada' })
+  const [title, setTitle] = useSharedState('title', 'Untitled')
+  return (
+    <>
+      <input value={title} onChange={(event) => setTitle(event.target.value)} />
+      {others.map((peer) => (
+        <Cursor key={peer.id} state={peer.state} />
+      ))}
+    </>
+  )
+}
+
+export default function Page() {
+  return (
+    <CollabProvider room="doc:1">
+      <Editor />
+    </CollabProvider>
+  )
+}
+```
+
+`@ruvyxa/realtime/collab` export `createCollabClient` สำหรับใช้งานโดยไม่มี React
+
+room เป็น process-local และ ephemeral: ไม่มี storage และจะถูกทิ้งเมื่อ peer สุดท้ายออก server
+สองตัวหลัง load balancer จะเป็นเจ้าของ room คนละชุดที่ไม่รู้จักกัน ดังนั้น deployment ที่ใช้
+collaboration ต้อง pin peer ของ room เดียวกันไว้ที่ process เดียว ข้อมูลที่ต้องอยู่รอดหลัง peer
+สุดท้ายออกให้บันทึกผ่าน loader หรือ Server Action
+
+ขีดจำกัดที่ server บังคับ: 64 peer และ 256 shared-state key ต่อ room, 1024 room ต่อ process, 32 key
+ต่อการเขียนหนึ่งครั้ง, 32 KiB ต่อ frame และ 120 frame ต่อวินาทีต่อ connection connection ที่เกิน
+frame budget จะถูกปิด ส่วน peer ที่ตามหลัง broadcast buffer ของ room จะได้รับ `resync` แล้ว
+reconnect เพื่อรับ snapshot ใหม่
+
 มี first-party adapter package สำหรับ Node, Bun, Deno, static, Vercel, Netlify, Cloudflare, Railway,
 Render, Firebase และ AWS เลือก build ด้วย `npm run build -- --adapter <name>` หรือ config `adapter`;
 ดู [Deploy, run และ operate](15-deploy-run-and-operate.md) `@ruvyxa/testing` export `mockLoader`,

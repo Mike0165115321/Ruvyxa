@@ -1,5 +1,107 @@
 # Changelog
 
+## v1.0.30 (2026-08-13)
+
+### Real-time collaboration
+
+Ruvyxa now ships collaboration rooms as a native transport rather than an integration you assemble.
+`@ruvyxa/realtime` exports `collab()`, which claims the new `presence@1` capability and serves a
+bidirectional WebSocket at `/__ruvyxa/collab`. The existing `realtime()` transport is unchanged and
+remains send-only; the two are separate capabilities and a project may claim either or both.
+
+```ts
+import { config } from 'ruvyxa/config'
+import { collab } from '@ruvyxa/realtime'
+
+export default config({ plugins: [collab()] })
+```
+
+- A room carries **presence** (ephemeral per-connection state such as cursors, selections, and
+  names) and **shared state** (retained for the room's life, last-writer-wins per key). Presence is
+  dropped when a peer disconnects; shared state survives until the last peer leaves.
+- The server is the only sequencer. Every accepted write takes the next room version, so "last
+  writer wins" means "last frame to reach the process", no client clock is involved, and two peers
+  writing one key converge on the same value. Shared state is **not** a CRDT: concurrent writes to
+  one key replace rather than merge, so a document that needs concurrent edits to all survive should
+  be split across keys.
+- A joining peer receives a full room snapshot, so late arrivals never replay history. A peer that
+  falls behind the room's broadcast buffer receives `resync` and reconnects for a fresh snapshot.
+- `@ruvyxa/realtime/react` exports `CollabProvider`, `usePresence`, `useSharedState`,
+  `useCollabRoom`, and `useCollabClient`. One provider owns one socket and hooks read it through
+  `useSyncExternalStore`, so a room with many subscribers still holds a single connection. React is
+  an optional peer dependency; `@ruvyxa/realtime/collab` exports `createCollabClient` for use
+  without React.
+- Outgoing presence is throttled into one trailing frame per window (`presenceThrottleMs`, default
+  50 ms) so a cursor stream cannot exhaust the server's frame budget, and local presence is
+  reflected immediately rather than a network hop late.
+- Server-enforced limits: 64 peers and 256 shared-state keys per room, 1024 rooms per process, 32
+  keys per write, 32 KiB per frame, and 120 frames per second per connection.
+- Rooms are process-local and hold no storage. `collab()` fails the build with `RUV3201` on targets
+  that are not long-lived Node/Bun output, and a deployment running several processes must pin one
+  room's peers to one process.
+
+### Content Engine `/llms.txt` is no longer experimental
+
+- The `contentEngine()` agent discovery index is now a supported artifact with a stable output
+  shape: an H1 title, a blockquote summary, and a single `## Content` section listing every
+  non-draft page with its author-written answers. `llmsPath: false` still disables it.
+- Page descriptions are now escaped in `/llms.txt` the same way titles and answers already were, so
+  bracket and backslash characters from frontmatter can no longer inject Markdown link syntax into
+  the index.
+
+### Correctness: source scanning no longer trusts strings and comments
+
+Three separate scanners were reading source text line by line and treating commented-out or quoted
+constructs as real code. All three now analyze a masked copy of the source that distinguishes code
+bytes from string and comment bytes.
+
+- `ruvyxa_graph` route-export parsing shares that masked source through a new `export_const_value`
+  helper. This fixes ISR and PPR opt-in being silently lost when the export carried a type
+  annotation (`export const revalidate: number = 3600`, `export const ppr: boolean = true`), and
+  stops commented-out exports and documentation strings from registering as real ones.
+- The dev server's CSS scanner masks comment spans before collecting and removing `@import`
+  statements, so a commented-out import is no longer followed. Builds previously failed when such an
+  import pointed at a deleted file. Import collection and removal now share one mask, so the two
+  passes can no longer disagree about which lines are code, and comment stripping operates on byte
+  slices for correct UTF-8 handling.
+- The bundler's AST string scanner stops at line boundaries when a quote is never closed, instead of
+  consuming the rest of the file. An unbalanced apostrophe in a comment no longer swallows the code
+  after it.
+
+### Reliability
+
+- `copy_dir_all` now refuses an output directory nested inside its source directory and reports
+  `RUV1604` with an actionable message, instead of recursing until the build dies.
+- The `observability()` plugin reports a zero duration when its response hook runs without a
+  matching request hook, rather than deriving a duration from a missing header.
+- The image optimizer serves an empty stylesheet in place of a missing Google Fonts sheet, so a font
+  request cannot 404 a page that would otherwise render with fallback fonts.
+- `cacheRules()` validates header values at config time by probing a `Headers` object, so an
+  injection attempt fails during configuration rather than at request time.
+- Forced-revalidation claim state is now observable: `RenderCacheSnapshot` exposes `forced_pending`
+  and `bypass_prerendered`, `mark()` returns a `MarkOutcome` instead of a boolean, and the server
+  logs one high-water warning at 75% of the bounded claim set before it fails closed.
+- `_react` and `_typescript` in `ProjectConfig` are documented as accepted but unused. They are
+  deprecated, remain deserializable so existing configs keep loading, and must not be wired to new
+  behavior.
+
+### Performance
+
+- The incremental bundler cache no longer stats files for mtime and size. Freshness is decided from
+  the source text's own length, which removes a filesystem metadata read per module and keeps the
+  recorded size consistent with the check that uses it. `compute_dirty_set` and its transitive
+  dependency tracking are gone.
+- Decorator stripping reuses the `ModuleAst` the compile phase already parsed through the new
+  `transform_with_plan()` and `strip_decorators_with_plan()`, eliminating a redundant parsing walk.
+  `transform_with_options()` remains as a wrapper.
+
+### Toolchain
+
+- Node.js 22.13.0 is now the minimum, updated across CI workflows, README badges, and the plugin
+  package template.
+- Release workflows gained OIDC permissions, npm publish order moved into a validation script, and
+  registry propagation handling was made more resilient.
+
 ## v1.0.29 (2026-08-10)
 
 ### Breaking: shortened adapter factory exports

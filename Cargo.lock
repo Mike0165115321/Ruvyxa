@@ -2542,6 +2542,7 @@ dependencies = [
  "fast_image_resize",
  "flate2",
  "futures-core",
+ "futures-util",
  "image",
  "notify",
  "parking_lot",

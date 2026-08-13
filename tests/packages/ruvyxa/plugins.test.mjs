@@ -985,7 +985,28 @@ Ruvyxa ships **fast content** for everyone.
     assert.throws(() => buildComplete[0](context), /must use http\(s\)/)
   })
 
-  it('can disable the experimental llms.txt artifact', async () => {
+  it('escapes markdown syntax in llms.txt titles and descriptions', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'ruvyxa-content-engine-'))
+    tempDirs.push(root)
+    const file = path.join(root, 'app', 'notes', 'page.md')
+    mkdirSync(path.dirname(file), { recursive: true })
+    writeFileSync(
+      file,
+      "---\ntitle: 'Notes [draft]'\ndescription: 'See [the guide](/docs) for C:\\paths.'\n---\n# Notes\n",
+    )
+    const registered = register(contentEngine(options))
+    const context = { plugin: 'ruvyxa:content-engine', root }
+    const response = await registered.middleware[0].onRequest(request('/llms.txt'), context)
+    const body = await response.text()
+    assert.ok(
+      body.includes(
+        '- [Notes \\[draft\\]](<https://example.com/notes>): See \\[the guide\\](/docs) for C:\\\\paths.',
+      ),
+      `llms.txt entry was not escaped: ${body}`,
+    )
+  })
+
+  it('can disable the llms.txt artifact', async () => {
     const root = contentProject()
     const registered = register(contentEngine({ ...options, llmsPath: false }))
     assert.doesNotMatch(registered.middleware[0].routes.join(','), /llms\.txt/)

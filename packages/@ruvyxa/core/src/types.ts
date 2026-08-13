@@ -206,7 +206,7 @@ export interface ContentEngineConfig {
   feedPath?: string
   /** @default "/sitemap.xml" */
   sitemapPath?: string
-  /** Experimental agent discovery index. Set false to disable. @default "/llms.txt" */
+  /** Agent discovery index in llms.txt format. Set false to disable. @default "/llms.txt" */
   llmsPath?: string | false
   /** Feed language. Defaults to `site.language`. */
   language?: string
@@ -654,6 +654,21 @@ export interface RealtimePluginOptions {
   capacity?: number
 }
 
+/**
+ * Native self-hosted collaboration transport requested by a first-party plugin.
+ *
+ * Unlike {@link RealtimePluginOptions}, this transport is bidirectional: peers
+ * publish presence and write shared state, and the server sequences every
+ * write. Rooms are process-local and ephemeral, so a multi-process deployment
+ * gives each process its own rooms.
+ */
+export interface PresencePluginOptions {
+  /** WebSocket endpoint. Must be an absolute application path. @default "/__ruvyxa/collab" */
+  path?: string
+  /** WebSocket heartbeat interval in milliseconds. @default 25000 */
+  heartbeatMs?: number
+}
+
 export interface PluginDevFileChangeContext {
   readonly root: string
   readonly paths: readonly string[]
@@ -690,16 +705,19 @@ export interface PluginDiagnosticsSocket {
   report(diagnostic: PluginDiagnostic): void
 }
 
-export type PluginNativeCapability = 'realtime@1'
+export type PluginNativeCapability = 'realtime@1' | 'presence@1'
 
 export interface PluginNativeSocket {
   claim(capability: 'realtime@1', options?: RealtimePluginOptions): void
+  claim(capability: 'presence@1', options?: PresencePluginOptions): void
 }
 
 /** Framework-owned native capabilities requested declaratively by a plugin. */
 export interface PluginNativeDefinition {
   /** Enable the self-hosted realtime capability; `true` uses its defaults. */
   realtime?: RealtimePluginOptions | true
+  /** Enable the self-hosted collaboration capability; `true` uses its defaults. */
+  presence?: PresencePluginOptions | true
 }
 
 /** Grouped extension sockets available while a plugin registers itself. */

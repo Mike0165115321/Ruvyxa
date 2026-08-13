@@ -1,13 +1,21 @@
 {
   "name": "@ruvyxa/realtime",
   "version": "1.0.29",
-  "description": "Native action-driven WebSocket realtime transport for self-hosted Ruvyxa applications.",
+  "description": "Native WebSocket realtime and collaboration rooms for self-hosted Ruvyxa applications.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": ["dist", "src", "README.md"],
-  "keywords": ["ruvyxa", "realtime", "websocket", "server-actions", "subscriptions"],
+  "keywords": [
+    "ruvyxa",
+    "realtime",
+    "websocket",
+    "server-actions",
+    "subscriptions",
+    "collaboration",
+    "presence"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/thirawat27/ruvyxa.git",
@@ -35,13 +43,22 @@
     "./plugin": {
       "types": "./dist/plugin.d.ts",
       "default": "./dist/plugin.js"
+    },
+    "./collab": {
+      "types": "./dist/collab.d.ts",
+      "default": "./dist/collab.js"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "default": "./dist/react.js"
     }
   },
   "dependencies": {
     "@ruvyxa/core": "workspace:^"
   },
   "devDependencies": {
-    "@types/node": "^26.2.0"
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -49,5 +66,13 @@
     "test": "pnpm run build && node --test \"../../../tests/packages/realtime/**/*.test.ts\"",
     "format": "tsc -p tsconfig.check.json",
     "prepack": "pnpm run build"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   }
 }

@@ -33,6 +33,14 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock", "s
 clap = { version = "4.6.4", features = ["derive"] }
 dashmap = "6.2.1"
 futures-core = "0.3.33"
+# Already compiled as part of axum's dependency tree; declaring it directly adds
+# no crate to the build and lets a bidirectional WebSocket be split into an
+# independent sender and receiver, which `tokio::select!` cannot do with a
+# single mutably borrowed socket.
+#
+# `default-features = false` is load-bearing: the defaults pull in the
+# `async-await` macros and their proc-macro chain, which are not in the tree.
+futures-util = { version = "0.3.33", default-features = false, features = ["sink"] }
 grass = "0.13.4"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
 # SIMD (AVX2/SSE4.1/NEON) convolution resize. `default-features = false` is

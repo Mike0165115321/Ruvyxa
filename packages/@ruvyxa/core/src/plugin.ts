@@ -50,6 +50,7 @@ export type {
   PluginRegistrationApi,
   PluginRoutePattern,
   PluginTransformContext,
+  PresencePluginOptions,
   RealtimePluginOptions,
   RuvyxaPlugin,
   RuvyxaPluginDefinition,
@@ -100,6 +101,9 @@ export function definePlugin(definition: RuvyxaPluginDefinition): RuvyxaPlugin {
       for (const diagnostic of diagnostics ?? []) api.diagnostics.report(diagnostic)
       if (native?.realtime) {
         api.native.claim('realtime@1', native.realtime === true ? {} : native.realtime)
+      }
+      if (native?.presence) {
+        api.native.claim('presence@1', native.presence === true ? {} : native.presence)
       }
       return definition.register?.(api)
     },
@@ -296,8 +300,10 @@ function normalizeNative(
   if (!native || typeof native !== 'object' || Array.isArray(native)) {
     throw new TypeError(`RUV2102 Ruvyxa plugin "${pluginName}" native must be an object.`)
   }
-  if (!native.realtime) {
-    throw new TypeError(`RUV2102 Ruvyxa plugin "${pluginName}" native must declare realtime.`)
+  if (!native.realtime && !native.presence) {
+    throw new TypeError(
+      `RUV2102 Ruvyxa plugin "${pluginName}" native must declare realtime or presence.`,
+    )
   }
   return native
 }

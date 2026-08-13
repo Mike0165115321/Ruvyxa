@@ -14,6 +14,7 @@ import type {
   PluginNativeCapability,
   PluginRegistrationApi,
   PluginRoutePattern,
+  PresencePluginOptions,
   RealtimePluginOptions,
   RuvyxaPlugin,
   TransformResult,
@@ -45,7 +46,7 @@ import type {
 export interface HarnessNativeClaim {
   plugin: string
   capability: PluginNativeCapability
-  options: RealtimePluginOptions
+  options: RealtimePluginOptions | PresencePluginOptions
 }
 
 /** A diagnostic a plugin reported during registration. */

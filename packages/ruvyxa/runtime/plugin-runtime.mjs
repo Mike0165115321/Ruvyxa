@@ -232,7 +232,8 @@ function createRegistrationApi(registry, plugin, routeOwners) {
     }),
     native: Object.freeze({
       claim(capability, options = {}) {
-        if (capability !== 'realtime@1') {
+        const normalize = nativeCapabilityNormalizer(capability)
+        if (!normalize) {
           throw new TypeError(
             `plugin "${plugin}" requested unsupported native capability "${String(capability)}"`,
           )
@@ -243,7 +244,7 @@ function createRegistrationApi(registry, plugin, routeOwners) {
             `plugin "${plugin}" cannot claim ${capability}; it is already owned by plugin "${owner.plugin}"`,
           )
         }
-        registry.capabilities.set(capability, normalizeRealtime(plugin, options))
+        registry.capabilities.set(capability, normalize(plugin, options))
       },
     }),
   }
@@ -380,13 +381,64 @@ function normalizeRealtime(plugin, value) {
   if (!Number.isInteger(capacity) || capacity < 16 || capacity > 4096) {
     throw new TypeError(`plugin "${plugin}" realtime capacity must be between 16 and 4096`)
   }
-  const reserved = ['/__ruvyxa/hmr', '/__ruvyxa/client', '/__ruvyxa/action', '/__ruvyxa/trace']
-  if (reserved.includes(pathValue)) {
+  if (isReservedNativePath(pathValue)) {
     throw new TypeError(
       `plugin "${plugin}" realtime path "${pathValue}" collides with a reserved framework route`,
     )
   }
   return Object.freeze({ id: 'realtime@1', plugin, path: pathValue, heartbeatMs, capacity })
+}
+
+function normalizePresence(plugin, value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError(`plugin "${plugin}" native.claim('presence@1') expects an options object`)
+  }
+  const pathValue = value.path ?? '/__ruvyxa/collab'
+  const heartbeatMs = value.heartbeatMs ?? 25_000
+  if (!isExactApplicationPath(pathValue)) {
+    throw new TypeError(`plugin "${plugin}" presence path must be an exact absolute path`)
+  }
+  if (!Number.isInteger(heartbeatMs) || heartbeatMs < 5_000 || heartbeatMs > 120_000) {
+    throw new TypeError(`plugin "${plugin}" presence heartbeatMs must be between 5000 and 120000`)
+  }
+  if (isReservedNativePath(pathValue)) {
+    throw new TypeError(
+      `plugin "${plugin}" presence path "${pathValue}" collides with a reserved framework route`,
+    )
+  }
+  return Object.freeze({ id: 'presence@1', plugin, path: pathValue, heartbeatMs })
+}
+
+/**
+ * Resolve the normalizer for a claimed capability, or `undefined` when the id
+ * is not one this runtime serves.
+ *
+ * A hoisted function rather than a lookup object on purpose: this module
+ * evaluates the plugin registry in a top-level `await`, so a `const` map
+ * declared below that point is still in its temporal dead zone when the first
+ * plugin calls `native.claim`.
+ */
+/**
+ * Framework endpoints a native transport must not register over. Kept in sync
+ * with `RESERVED_FRAMEWORK_ROUTES` in the native server, which panics inside
+ * axum if a second handler claims one of these paths.
+ */
+function isReservedNativePath(value) {
+  return [
+    '/__ruvyxa/hmr',
+    '/__ruvyxa/client',
+    '/__ruvyxa/action',
+    '/__ruvyxa/trace',
+    '/__ruvyxa/devtools',
+    '/__ruvyxa/devtools/data',
+    '/__ruvyxa/image',
+  ].includes(value)
+}
+
+function nativeCapabilityNormalizer(capability) {
+  if (capability === 'realtime@1') return normalizeRealtime
+  if (capability === 'presence@1') return normalizePresence
+  return undefined
 }
 
 async function runPersistent(registry) {

@@ -198,11 +198,11 @@ export default config({
 
 `content: true` automatically enables Content Engine without duplicate plugin wiring. The explicit
 `contentEngine(options)` plugin remains available for programmatic composition. Content Engine also
-publishes explicit answer metadata and an experimental `/llms.txt` index from the same Markdown/MDX
-graph. Build-generated files are written before adapters materialize deployment artifacts, so PWA,
-RSS, search-index, OpenAPI, sitemap, robots, and `llms.txt` outputs ship with static and hybrid
-adapters. See the English and Thai plugin guides for complete options, including independent OpenAI
-search/training crawler policy.
+publishes explicit answer metadata and an `/llms.txt` agent discovery index from the same
+Markdown/MDX graph. Build-generated files are written before adapters materialize deployment
+artifacts, so PWA, RSS, search-index, OpenAPI, sitemap, robots, and `llms.txt` outputs ship with
+static and hybrid adapters. See the English and Thai plugin guides for complete options, including
+independent OpenAI search/training crawler policy.
 
 ## Runtime Architecture
 
